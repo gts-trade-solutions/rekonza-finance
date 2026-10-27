@@ -23,11 +23,21 @@ const DIR = path.join(process.cwd(), 'db', 'migrations');
 
 const settings = connectionSettings();
 console.log(`Migrating ${settings.database} on ${settings.host}:${settings.port}${settings.ssl ? " over TLS" : ""}.`);
-const conn = await mysql.createConnection({
-  ...settings,
-  // Migration files hold many statements; the app pool never enables this.
-  multipleStatements: true,
-});
+// Migration files hold many statements; the app pool never enables this.
+const open = (s) => mysql.createConnection({ ...s, multipleStatements: true });
+let conn;
+try {
+  conn = await open(settings);
+} catch (err) {
+  // A fresh hosted database server may not have the database yet: make it.
+  if (err.code !== 'ER_BAD_DB_ERROR') throw err;
+  const { database, ...server } = settings;
+  const bare = await open(server);
+  await bare.query(`CREATE DATABASE IF NOT EXISTS \`${database.replace(/`/g, '')}\` DEFAULT CHARSET utf8mb4 COLLATE utf8mb4_unicode_ci`);
+  await bare.end();
+  console.log(`Created database ${database}.`);
+  conn = await open(settings);
+}
 
 await conn.query(`
   CREATE TABLE IF NOT EXISTS schema_migrations (

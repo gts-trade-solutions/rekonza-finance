@@ -103,9 +103,9 @@ The TDS return's FVU text file: the return is laid out as rows for the governmen
 
 Vercel runs the app; it does not run the database. You need:
 
-1. **A hosted MySQL 8** in Mumbai (the Companies Act wants the books and their backups in India), with foreign keys and triggers — Aiven, AWS RDS, DigitalOcean or Railway. Run the migrations against it from your machine: `DB_HOST=… DB_USER=… DB_PASSWORD=… DB_NAME=… DB_SSL=true npm run db:migrate`.
+1. **A hosted MySQL 8** in Mumbai (the Companies Act wants the books and their backups in India) — Aiven, AWS RDS, DigitalOcean or Railway, or for a demo the free TiDB Cloud from Vercel's Storage tab. A single `DATABASE_URL` (`mysql://user:password@host:port/name`, as Vercel's integrations set it) is used ahead of the `DB_*` settings, with TLS. Put it in `.env.production.local` and run the migrations and the demo book against it from your machine: `node --env-file=.env.production.local scripts/migrate.mjs`, then `npx tsx --conditions=react-server --env-file=.env.production.local scripts/seed.ts`.
 2. **A Vercel Blob store** (private, Mumbai) connected to the project, for attachments. Vercel adds `BLOB_READ_WRITE_TOKEN` itself.
-3. **Environment variables** in the Vercel project: the `DB_*` set with `DB_SSL=true` (and `DB_SSL_CA` if the provider asks), `SESSION_SECRET`, `FIELD_ENCRYPTION_KEY`, `CRON_SECRET`, `NEXT_PUBLIC_SITE_URL`. See `.env.example`.
+3. **Environment variables** in the Vercel project: `DATABASE_URL` (a Vercel database integration adds it), or the `DB_*` set with `DB_SSL=true` (and `DB_SSL_CA` if the provider asks), `SESSION_SECRET`, `FIELD_ENCRYPTION_KEY`, `CRON_SECRET`, `NEXT_PUBLIC_SITE_URL`. See `.env.example`.
 
 `vercel.json` runs the functions in Mumbai (`bom1`) and calls `/api/cron/sweep` once a day for the background work (scheduled entries, retries, webhooks, reports, stock alerts, reminders). On a Pro plan, make it every ten minutes: `"*/10 * * * *"`. Backups are the database host's: turn on its daily backups and point-in-time recovery; `npm run db:backup` is for a server you run yourself.
 

@@ -217,7 +217,7 @@ export function toResponse(err: unknown): NextResponse {
     'ER_ACCESS_DENIED_ERROR', 'ER_BAD_DB_ERROR', 'HANDSHAKE_SSL_ERROR', 'HANDSHAKE_NO_SSL_SUPPORT'].includes(code)) {
     console.error('[db] cannot reach the database:', code);
     return NextResponse.json(
-      { error: 'The server cannot reach its database, so nothing could be done. Check the database settings (DB_HOST and the rest) on the server.', code: 'database_unreachable' },
+      { error: 'The server cannot reach its database, so nothing could be done. Check the database settings (DATABASE_URL, or DB_HOST and the rest) on the server.', code: 'database_unreachable' },
       { status: 503 },
     );
   }
