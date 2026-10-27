@@ -23,18 +23,32 @@ declare global {
   var __rekonzaDb: Kysely<DB> | undefined;
 }
 
+/**
+ * Where the database is. One DATABASE_URL (mysql://user:password@host:port/name,
+ * as a hosting provider's integration hands it over) wins over the separate
+ * DB_* settings when it is set.
+ */
+export function connectionSettings() {
+  const url = process.env.DATABASE_URL ? new URL(process.env.DATABASE_URL) : null;
+  // A hosted database is reached over TLS: DB_SSL=true, or a URL that asks for
+  // it; with DB_SSL_CA (the provider's certificate, as PEM text) when it is not
+  // one the system trusts.
+  const tls = process.env.DB_SSL === 'true' || (!!url && (/ssl/i.test(url.search) || /tidbcloud\.com$/i.test(url.hostname)));
+  return {
+    host: url ? url.hostname : process.env.DB_HOST || 'localhost',
+    port: url ? Number(url.port) || 3306 : Number(process.env.DB_PORT) || 3306,
+    user: url ? decodeURIComponent(url.username) : process.env.DB_USER || 'finora_user',
+    password: url ? decodeURIComponent(url.password) : process.env.DB_PASSWORD || '',
+    database: url ? decodeURIComponent(url.pathname.replace(/^\//, '')) || 'rekonza' : process.env.DB_NAME || 'rekonza',
+    ...(tls
+      ? { ssl: process.env.DB_SSL_CA ? { ca: process.env.DB_SSL_CA.replace(/\\n/g, '\n'), rejectUnauthorized: true } : { minVersion: 'TLSv1.2', rejectUnauthorized: true } }
+      : {}),
+  };
+}
+
 function createPool(): mysql.Pool {
   const pool = mysql.createPool({
-    host: process.env.DB_HOST || 'localhost',
-    port: Number(process.env.DB_PORT) || 3306,
-    user: process.env.DB_USER || 'finora_user',
-    password: process.env.DB_PASSWORD || '',
-    database: process.env.DB_NAME || 'rekonza',
-    // A hosted database is reached over TLS: DB_SSL=true, with DB_SSL_CA (the
-    // provider's certificate, as PEM text) when it is not one the system trusts.
-    ...(process.env.DB_SSL === 'true'
-      ? { ssl: process.env.DB_SSL_CA ? { ca: process.env.DB_SSL_CA.replace(/\\n/g, '\n'), rejectUnauthorized: true } : { rejectUnauthorized: true } }
-      : {}),
+    ...connectionSettings(),
     waitForConnections: true,
     // Serverless runs many copies at once, each with its own pool: keep each small.
     connectionLimit: Number(process.env.DB_CONNECTION_LIMIT) || (process.env.VERCEL ? 5 : 20),

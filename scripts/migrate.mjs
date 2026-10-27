@@ -14,23 +14,17 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 import mysql from 'mysql2/promise';
 import { config } from 'dotenv';
+import { connectionSettings } from './db-connection.mjs';
 
 config({ path: '.env.local', quiet: true });
 config({ path: '.env', quiet: true });
 
 const DIR = path.join(process.cwd(), 'db', 'migrations');
 
+const settings = connectionSettings();
+console.log(`Migrating ${settings.database} on ${settings.host}:${settings.port}${settings.ssl ? " over TLS" : ""}.`);
 const conn = await mysql.createConnection({
-  host: process.env.DB_HOST || 'localhost',
-  port: Number(process.env.DB_PORT) || 3306,
-  user: process.env.DB_USER || 'finora_user',
-  password: process.env.DB_PASSWORD || '',
-  database: process.env.DB_NAME || 'rekonza',
-  // A hosted database is reached over TLS: DB_SSL=true, with DB_SSL_CA (the
-  // provider's certificate, as PEM text) when it is not one the system trusts.
-  ...(process.env.DB_SSL === 'true'
-    ? { ssl: process.env.DB_SSL_CA ? { ca: process.env.DB_SSL_CA.replace(/\\n/g, '\n'), rejectUnauthorized: true } : { rejectUnauthorized: true } }
-    : {}),
+  ...settings,
   // Migration files hold many statements; the app pool never enables this.
   multipleStatements: true,
 });
