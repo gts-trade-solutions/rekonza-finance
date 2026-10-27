@@ -210,6 +210,17 @@ export function toResponse(err: unknown): NextResponse {
       { status: 409 },
     );
   }
+  // The database cannot be reached at all (a new deployment with no DB_* set,
+  // a wrong host or password, the database server down). Saying so plainly
+  // saves an hour of guessing; it names no host or user.
+  if (code && ['ECONNREFUSED', 'ENOTFOUND', 'ETIMEDOUT', 'EHOSTUNREACH', 'PROTOCOL_CONNECTION_LOST',
+    'ER_ACCESS_DENIED_ERROR', 'ER_BAD_DB_ERROR', 'HANDSHAKE_SSL_ERROR', 'HANDSHAKE_NO_SSL_SUPPORT'].includes(code)) {
+    console.error('[db] cannot reach the database:', code);
+    return NextResponse.json(
+      { error: 'The server cannot reach its database, so nothing could be done. Check the database settings (DB_HOST and the rest) on the server.', code: 'database_unreachable' },
+      { status: 503 },
+    );
+  }
   if (code === 'ER_NO_REFERENCED_ROW_2' || code === 'ER_ROW_IS_REFERENCED_2') {
     return NextResponse.json(
       { error: 'That record is linked to something else and cannot be changed this way.', code: 'conflict' },
