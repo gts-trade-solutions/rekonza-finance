@@ -1,0 +1,10 @@
+# Store text files with LF in the repo; check out native on each platform.
+# Keeps diffs clean between Windows and macOS/Linux collaborators.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.svg text

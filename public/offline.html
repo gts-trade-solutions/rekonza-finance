@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Offline · Rekonza</title>
+<style>
+  :root { color-scheme: light dark; --bg: #f4f6f9; --card: #ffffff; --fg: #0f172a; --muted: #5b6475; --accent: #002F6E; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #0b1220; --card: #111a2c; --fg: #e5e9f0; --muted: #94a0b4; --accent: #7fb0ff; } }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--bg); color: var(--fg);
+         font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; padding: 16px; box-sizing: border-box; }
+  main { max-width: 420px; background: var(--card); border-radius: 8px; padding: 28px; box-shadow: 0 1px 3px rgba(0,0,0,.08); text-align: center; }
+  img { width: 56px; height: 56px; }
+  h1 { font-size: 18px; margin: 16px 0 8px; }
+  p { color: var(--muted); margin: 0 0 16px; }
+  button { background: var(--accent); color: #fff; border: 0; border-radius: 6px; padding: 9px 18px; font: inherit; cursor: pointer; }
+</style>
+</head>
+<body>
+<main>
+  <img src="/icon-192.png" alt="">
+  <h1>You are offline</h1>
+  <p>This page has not been opened on this device before, so there is no copy to show. Pages you have opened can still be read; nothing can be saved until the connection is back.</p>
+  <button onclick="location.reload()">Try again</button>
+</main>
+</body>
+</html>

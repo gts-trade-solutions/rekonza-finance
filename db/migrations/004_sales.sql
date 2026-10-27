@@ -1,0 +1,323 @@
+-- 004_sales.sql
+-- Invoices, quotes, sales orders, delivery challans, credit notes, retainers.
+--
+-- Each document keeps its own lines table rather than one polymorphic
+-- document_lines. That costs some repeated columns and buys real foreign keys:
+-- in a ledger, an orphaned line is a number that appears in a total and
+-- belongs to nothing, and no report will ever tell you it is there.
+--
+-- Tax on a line is stored, not recomputed. A filed invoice must always report
+-- the tax it was filed with, even after somebody edits the item's rate.
+
+CREATE TABLE IF NOT EXISTS invoices (
+  id                BIGINT AUTO_INCREMENT PRIMARY KEY,
+  org_id            BIGINT        NOT NULL,
+  branch_id         BIGINT        NOT NULL,
+  number            VARCHAR(50)   NOT NULL,
+  customer_id       BIGINT        NOT NULL,
+  invoice_date      DATE          NOT NULL,
+  due_date          DATE          NOT NULL,
+  place_of_supply   CHAR(2)       NOT NULL,
+  supply_type       ENUM('intra','inter','export_lut','export_with_tax','sez','nil_or_exempt') NOT NULL,
+  supply_kind       ENUM('goods','service','both') NOT NULL DEFAULT 'goods',
+  status            ENUM('draft','approved','sent','partially_paid','paid','overdue','void') NOT NULL DEFAULT 'draft',
+  subtotal          DECIMAL(19,4) NOT NULL DEFAULT 0,
+  doc_discount      DECIMAL(19,4) NOT NULL DEFAULT 0,
+  cgst              DECIMAL(19,4) NOT NULL DEFAULT 0,
+  sgst              DECIMAL(19,4) NOT NULL DEFAULT 0,
+  igst              DECIMAL(19,4) NOT NULL DEFAULT 0,
+  cess              DECIMAL(19,4) NOT NULL DEFAULT 0,
+  tcs               DECIMAL(19,4) NOT NULL DEFAULT 0,
+  shipping_charge   DECIMAL(19,4) NOT NULL DEFAULT 0,
+  adjustment        DECIMAL(19,4) NOT NULL DEFAULT 0,
+  adjustment_label  VARCHAR(60)   NULL,
+  round_off         DECIMAL(19,4) NOT NULL DEFAULT 0,
+  total             DECIMAL(19,4) NOT NULL DEFAULT 0,
+  amount_paid       DECIMAL(19,4) NOT NULL DEFAULT 0,
+  order_number      VARCHAR(60)   NULL,
+  subject           VARCHAR(300)  NULL,
+  payment_terms     VARCHAR(20)   NULL,
+  salesperson_id    BIGINT        NULL,
+  notes             VARCHAR(2000) NULL,
+  terms             VARCHAR(2000) NULL,
+  eway_bill_no      VARCHAR(20)   NULL,
+  source_doc_type   VARCHAR(20)   NULL,
+  source_doc_id     BIGINT        NULL,
+  journal_entry_id  BIGINT        NULL,
+  voided_at         DATETIME      NULL,
+  created_by_user_id BIGINT       NULL,
+  created_at        TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at        TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT fk_inv_org FOREIGN KEY (org_id) REFERENCES organizations(id),
+  CONSTRAINT fk_inv_branch FOREIGN KEY (branch_id) REFERENCES branches(id),
+  CONSTRAINT fk_inv_customer FOREIGN KEY (customer_id) REFERENCES contacts(id),
+  CONSTRAINT fk_inv_entry FOREIGN KEY (journal_entry_id) REFERENCES journal_entries(id),
+  -- A duplicate invoice number inside one GST registration is a filing
+  -- failure, so uniqueness is enforced per branch rather than per org.
+  UNIQUE KEY uq_inv_branch_number (org_id, branch_id, number),
+  KEY idx_inv_org_date (org_id, invoice_date),
+  KEY idx_inv_customer (org_id, customer_id, invoice_date),
+  KEY idx_inv_status (org_id, status, due_date)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS invoice_lines (
+  id            BIGINT AUTO_INCREMENT PRIMARY KEY,
+  org_id        BIGINT        NOT NULL,
+  invoice_id    BIGINT        NOT NULL,
+  line_no       SMALLINT      NOT NULL,
+  item_id       BIGINT        NULL,
+  description   VARCHAR(1000) NULL,
+  hsn_sac       VARCHAR(8)    NULL,
+  qty           DECIMAL(19,6) NOT NULL DEFAULT 1,
+  uqc           VARCHAR(10)   NULL,
+  rate          DECIMAL(19,4) NOT NULL DEFAULT 0,
+  discount_pct  DECIMAL(9,4)  NOT NULL DEFAULT 0,
+  gst_rate_pct  DECIMAL(6,3)  NOT NULL DEFAULT 0,
+  taxable       DECIMAL(19,4) NOT NULL DEFAULT 0,
+  cgst          DECIMAL(19,4) NOT NULL DEFAULT 0,
+  sgst          DECIMAL(19,4) NOT NULL DEFAULT 0,
+  igst          DECIMAL(19,4) NOT NULL DEFAULT 0,
+  cess          DECIMAL(19,4) NOT NULL DEFAULT 0,
+  line_total    DECIMAL(19,4) NOT NULL DEFAULT 0,
+  CONSTRAINT fk_invl_invoice FOREIGN KEY (invoice_id) REFERENCES invoices(id) ON DELETE CASCADE,
+  CONSTRAINT fk_invl_item FOREIGN KEY (item_id) REFERENCES items(id),
+  UNIQUE KEY uq_invl (invoice_id, line_no),
+  KEY idx_invl_item (org_id, item_id),
+  KEY idx_invl_hsn (org_id, hsn_sac)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS estimates (
+  id                BIGINT AUTO_INCREMENT PRIMARY KEY,
+  org_id            BIGINT        NOT NULL,
+  branch_id         BIGINT        NOT NULL,
+  number            VARCHAR(50)   NOT NULL,
+  customer_id       BIGINT        NOT NULL,
+  estimate_date     DATE          NOT NULL,
+  expiry_date       DATE          NOT NULL,
+  place_of_supply   CHAR(2)       NOT NULL,
+  supply_type       ENUM('intra','inter','export_lut','export_with_tax','sez','nil_or_exempt') NOT NULL,
+  status            ENUM('draft','sent','accepted','declined','expired','converted') NOT NULL DEFAULT 'draft',
+  subtotal          DECIMAL(19,4) NOT NULL DEFAULT 0,
+  cgst              DECIMAL(19,4) NOT NULL DEFAULT 0,
+  sgst              DECIMAL(19,4) NOT NULL DEFAULT 0,
+  igst              DECIMAL(19,4) NOT NULL DEFAULT 0,
+  cess              DECIMAL(19,4) NOT NULL DEFAULT 0,
+  total             DECIMAL(19,4) NOT NULL DEFAULT 0,
+  notes             VARCHAR(2000) NULL,
+  converted_to_type VARCHAR(20)   NULL,
+  converted_to_id   BIGINT        NULL,
+  created_by_user_id BIGINT       NULL,
+  created_at        TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at        TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT fk_est_org FOREIGN KEY (org_id) REFERENCES organizations(id),
+  CONSTRAINT fk_est_branch FOREIGN KEY (branch_id) REFERENCES branches(id),
+  CONSTRAINT fk_est_customer FOREIGN KEY (customer_id) REFERENCES contacts(id),
+  UNIQUE KEY uq_est_branch_number (org_id, branch_id, number),
+  KEY idx_est_org_date (org_id, estimate_date),
+  KEY idx_est_customer (org_id, customer_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS estimate_lines (
+  id            BIGINT AUTO_INCREMENT PRIMARY KEY,
+  org_id        BIGINT        NOT NULL,
+  estimate_id   BIGINT        NOT NULL,
+  line_no       SMALLINT      NOT NULL,
+  item_id       BIGINT        NULL,
+  description   VARCHAR(1000) NULL,
+  hsn_sac       VARCHAR(8)    NULL,
+  qty           DECIMAL(19,6) NOT NULL DEFAULT 1,
+  uqc           VARCHAR(10)   NULL,
+  rate          DECIMAL(19,4) NOT NULL DEFAULT 0,
+  discount_pct  DECIMAL(9,4)  NOT NULL DEFAULT 0,
+  gst_rate_pct  DECIMAL(6,3)  NOT NULL DEFAULT 0,
+  taxable       DECIMAL(19,4) NOT NULL DEFAULT 0,
+  cgst          DECIMAL(19,4) NOT NULL DEFAULT 0,
+  sgst          DECIMAL(19,4) NOT NULL DEFAULT 0,
+  igst          DECIMAL(19,4) NOT NULL DEFAULT 0,
+  cess          DECIMAL(19,4) NOT NULL DEFAULT 0,
+  line_total    DECIMAL(19,4) NOT NULL DEFAULT 0,
+  CONSTRAINT fk_estl_estimate FOREIGN KEY (estimate_id) REFERENCES estimates(id) ON DELETE CASCADE,
+  CONSTRAINT fk_estl_item FOREIGN KEY (item_id) REFERENCES items(id),
+  UNIQUE KEY uq_estl (estimate_id, line_no)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS sales_orders (
+  id                BIGINT AUTO_INCREMENT PRIMARY KEY,
+  org_id            BIGINT        NOT NULL,
+  branch_id         BIGINT        NOT NULL,
+  number            VARCHAR(50)   NOT NULL,
+  customer_id       BIGINT        NOT NULL,
+  order_date        DATE          NOT NULL,
+  expected_ship_date DATE         NULL,
+  place_of_supply   CHAR(2)       NOT NULL,
+  supply_type       ENUM('intra','inter','export_lut','export_with_tax','sez','nil_or_exempt') NOT NULL,
+  status            ENUM('open','partially_invoiced','invoiced','closed','cancelled') NOT NULL DEFAULT 'open',
+  subtotal          DECIMAL(19,4) NOT NULL DEFAULT 0,
+  cgst              DECIMAL(19,4) NOT NULL DEFAULT 0,
+  sgst              DECIMAL(19,4) NOT NULL DEFAULT 0,
+  igst              DECIMAL(19,4) NOT NULL DEFAULT 0,
+  cess              DECIMAL(19,4) NOT NULL DEFAULT 0,
+  total             DECIMAL(19,4) NOT NULL DEFAULT 0,
+  -- How much of the order has been billed. The gap is committed revenue that
+  -- is not yet in receivables, because no invoice exists for it.
+  invoiced_amount   DECIMAL(19,4) NOT NULL DEFAULT 0,
+  source_estimate_id BIGINT       NULL,
+  created_by_user_id BIGINT       NULL,
+  created_at        TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at        TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT fk_so_org FOREIGN KEY (org_id) REFERENCES organizations(id),
+  CONSTRAINT fk_so_branch FOREIGN KEY (branch_id) REFERENCES branches(id),
+  CONSTRAINT fk_so_customer FOREIGN KEY (customer_id) REFERENCES contacts(id),
+  CONSTRAINT fk_so_estimate FOREIGN KEY (source_estimate_id) REFERENCES estimates(id),
+  UNIQUE KEY uq_so_branch_number (org_id, branch_id, number),
+  KEY idx_so_org_date (org_id, order_date),
+  KEY idx_so_customer (org_id, customer_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS sales_order_lines (
+  id            BIGINT AUTO_INCREMENT PRIMARY KEY,
+  org_id        BIGINT        NOT NULL,
+  sales_order_id BIGINT       NOT NULL,
+  line_no       SMALLINT      NOT NULL,
+  item_id       BIGINT        NULL,
+  description   VARCHAR(1000) NULL,
+  hsn_sac       VARCHAR(8)    NULL,
+  qty           DECIMAL(19,6) NOT NULL DEFAULT 1,
+  uqc           VARCHAR(10)   NULL,
+  rate          DECIMAL(19,4) NOT NULL DEFAULT 0,
+  discount_pct  DECIMAL(9,4)  NOT NULL DEFAULT 0,
+  gst_rate_pct  DECIMAL(6,3)  NOT NULL DEFAULT 0,
+  taxable       DECIMAL(19,4) NOT NULL DEFAULT 0,
+  cgst          DECIMAL(19,4) NOT NULL DEFAULT 0,
+  sgst          DECIMAL(19,4) NOT NULL DEFAULT 0,
+  igst          DECIMAL(19,4) NOT NULL DEFAULT 0,
+  cess          DECIMAL(19,4) NOT NULL DEFAULT 0,
+  line_total    DECIMAL(19,4) NOT NULL DEFAULT 0,
+  CONSTRAINT fk_sol_so FOREIGN KEY (sales_order_id) REFERENCES sales_orders(id) ON DELETE CASCADE,
+  CONSTRAINT fk_sol_item FOREIGN KEY (item_id) REFERENCES items(id),
+  UNIQUE KEY uq_sol (sales_order_id, line_no)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- A challan moves goods without billing them: job work, approval sales, branch
+-- transfers. It carries no journal entry, because nothing has been sold yet.
+CREATE TABLE IF NOT EXISTS delivery_challans (
+  id                BIGINT AUTO_INCREMENT PRIMARY KEY,
+  org_id            BIGINT        NOT NULL,
+  branch_id         BIGINT        NOT NULL,
+  number            VARCHAR(50)   NOT NULL,
+  customer_id       BIGINT        NOT NULL,
+  challan_date      DATE          NOT NULL,
+  challan_type      ENUM('job_work','supply_on_approval','liquid_gas','other') NOT NULL DEFAULT 'other',
+  place_of_supply   CHAR(2)       NOT NULL,
+  status            ENUM('open','invoiced','returned','cancelled') NOT NULL DEFAULT 'open',
+  total             DECIMAL(19,4) NOT NULL DEFAULT 0,
+  notes             VARCHAR(2000) NULL,
+  created_by_user_id BIGINT       NULL,
+  created_at        TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at        TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT fk_dc_org FOREIGN KEY (org_id) REFERENCES organizations(id),
+  CONSTRAINT fk_dc_branch FOREIGN KEY (branch_id) REFERENCES branches(id),
+  CONSTRAINT fk_dc_customer FOREIGN KEY (customer_id) REFERENCES contacts(id),
+  UNIQUE KEY uq_dc_branch_number (org_id, branch_id, number),
+  KEY idx_dc_org_date (org_id, challan_date)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS challan_lines (
+  id            BIGINT AUTO_INCREMENT PRIMARY KEY,
+  org_id        BIGINT        NOT NULL,
+  challan_id    BIGINT        NOT NULL,
+  line_no       SMALLINT      NOT NULL,
+  item_id       BIGINT        NULL,
+  description   VARCHAR(1000) NULL,
+  hsn_sac       VARCHAR(8)    NULL,
+  qty           DECIMAL(19,6) NOT NULL DEFAULT 1,
+  uqc           VARCHAR(10)   NULL,
+  rate          DECIMAL(19,4) NOT NULL DEFAULT 0,
+  line_total    DECIMAL(19,4) NOT NULL DEFAULT 0,
+  CONSTRAINT fk_dcl_challan FOREIGN KEY (challan_id) REFERENCES delivery_challans(id) ON DELETE CASCADE,
+  CONSTRAINT fk_dcl_item FOREIGN KEY (item_id) REFERENCES items(id),
+  UNIQUE KEY uq_dcl (challan_id, line_no)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS credit_notes (
+  id                BIGINT AUTO_INCREMENT PRIMARY KEY,
+  org_id            BIGINT        NOT NULL,
+  branch_id         BIGINT        NOT NULL,
+  number            VARCHAR(50)   NOT NULL,
+  customer_id       BIGINT        NOT NULL,
+  note_date         DATE          NOT NULL,
+  -- GST requires a reason on every credit note; it is reported in GSTR-1.
+  reason            VARCHAR(200)  NOT NULL,
+  against_invoice_id BIGINT       NULL,
+  place_of_supply   CHAR(2)       NOT NULL,
+  supply_type       ENUM('intra','inter','export_lut','export_with_tax','sez','nil_or_exempt') NOT NULL,
+  status            ENUM('open','applied','refunded','void') NOT NULL DEFAULT 'open',
+  subtotal          DECIMAL(19,4) NOT NULL DEFAULT 0,
+  cgst              DECIMAL(19,4) NOT NULL DEFAULT 0,
+  sgst              DECIMAL(19,4) NOT NULL DEFAULT 0,
+  igst              DECIMAL(19,4) NOT NULL DEFAULT 0,
+  cess              DECIMAL(19,4) NOT NULL DEFAULT 0,
+  total             DECIMAL(19,4) NOT NULL DEFAULT 0,
+  applied_amount    DECIMAL(19,4) NOT NULL DEFAULT 0,
+  journal_entry_id  BIGINT        NULL,
+  created_by_user_id BIGINT       NULL,
+  created_at        TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at        TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT fk_cn_org FOREIGN KEY (org_id) REFERENCES organizations(id),
+  CONSTRAINT fk_cn_branch FOREIGN KEY (branch_id) REFERENCES branches(id),
+  CONSTRAINT fk_cn_customer FOREIGN KEY (customer_id) REFERENCES contacts(id),
+  CONSTRAINT fk_cn_invoice FOREIGN KEY (against_invoice_id) REFERENCES invoices(id),
+  CONSTRAINT fk_cn_entry FOREIGN KEY (journal_entry_id) REFERENCES journal_entries(id),
+  UNIQUE KEY uq_cn_branch_number (org_id, branch_id, number),
+  KEY idx_cn_org_date (org_id, note_date),
+  KEY idx_cn_customer (org_id, customer_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS credit_note_lines (
+  id            BIGINT AUTO_INCREMENT PRIMARY KEY,
+  org_id        BIGINT        NOT NULL,
+  credit_note_id BIGINT       NOT NULL,
+  line_no       SMALLINT      NOT NULL,
+  item_id       BIGINT        NULL,
+  description   VARCHAR(1000) NULL,
+  hsn_sac       VARCHAR(8)    NULL,
+  qty           DECIMAL(19,6) NOT NULL DEFAULT 1,
+  uqc           VARCHAR(10)   NULL,
+  rate          DECIMAL(19,4) NOT NULL DEFAULT 0,
+  discount_pct  DECIMAL(9,4)  NOT NULL DEFAULT 0,
+  gst_rate_pct  DECIMAL(6,3)  NOT NULL DEFAULT 0,
+  taxable       DECIMAL(19,4) NOT NULL DEFAULT 0,
+  cgst          DECIMAL(19,4) NOT NULL DEFAULT 0,
+  sgst          DECIMAL(19,4) NOT NULL DEFAULT 0,
+  igst          DECIMAL(19,4) NOT NULL DEFAULT 0,
+  cess          DECIMAL(19,4) NOT NULL DEFAULT 0,
+  line_total    DECIMAL(19,4) NOT NULL DEFAULT 0,
+  CONSTRAINT fk_cnl_note FOREIGN KEY (credit_note_id) REFERENCES credit_notes(id) ON DELETE CASCADE,
+  CONSTRAINT fk_cnl_item FOREIGN KEY (item_id) REFERENCES items(id),
+  UNIQUE KEY uq_cnl (credit_note_id, line_no)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- A retainer is money taken before any work is done. It is a liability, not
+-- income, until a real invoice draws it down.
+CREATE TABLE IF NOT EXISTS retainer_invoices (
+  id                BIGINT AUTO_INCREMENT PRIMARY KEY,
+  org_id            BIGINT        NOT NULL,
+  branch_id         BIGINT        NOT NULL,
+  number            VARCHAR(50)   NOT NULL,
+  customer_id       BIGINT        NOT NULL,
+  retainer_date     DATE          NOT NULL,
+  status            ENUM('draft','sent','paid','partially_applied','applied','void') NOT NULL DEFAULT 'draft',
+  description       VARCHAR(500)  NOT NULL,
+  amount            DECIMAL(19,4) NOT NULL DEFAULT 0,
+  applied_amount    DECIMAL(19,4) NOT NULL DEFAULT 0,
+  journal_entry_id  BIGINT        NULL,
+  created_by_user_id BIGINT       NULL,
+  created_at        TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at        TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT fk_ret_org FOREIGN KEY (org_id) REFERENCES organizations(id),
+  CONSTRAINT fk_ret_branch FOREIGN KEY (branch_id) REFERENCES branches(id),
+  CONSTRAINT fk_ret_customer FOREIGN KEY (customer_id) REFERENCES contacts(id),
+  CONSTRAINT fk_ret_entry FOREIGN KEY (journal_entry_id) REFERENCES journal_entries(id),
+  UNIQUE KEY uq_ret_branch_number (org_id, branch_id, number),
+  KEY idx_ret_org_date (org_id, retainer_date)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

@@ -1,0 +1,355 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-topbar: var(--topbar);
+  --color-topbar-foreground: var(--topbar-foreground);
+  --color-surface: var(--surface);
+  --color-field-label: var(--field-label);
+  --color-required: var(--required);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-info: var(--info);
+  --radius-sm: 1px;
+  --radius-md: var(--radius);
+  --radius-lg: calc(var(--radius) + 2px);
+  --radius-xl: calc(var(--radius) + 4px);
+  --font-sans: var(--font-sans-src), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-mono-src), ui-monospace, "Cascadia Code", monospace;
+}
+
+/*
+  ── Nordic Slate ───────────────────────────────────────────────────────────
+  A cool blue-grey workspace with near-square corners and monospaced figures.
+  The look is engineered rather than decorated: structure comes from precise
+  2px geometry, thin accent bars and uppercase micro-labels, not from colour
+  washes or rounded cards.
+
+  Semantic colour is held apart from the brand accent, so a negative figure
+  never reads as "branded" and a primary button never reads as "positive".
+*/
+:root {
+  --radius: 0.125rem;                    /* 2px — near-square */
+
+  --background: oklch(0.945 0.007 240);  /* cool slate canvas */
+  --surface: oklch(1 0 0);
+  --foreground: oklch(0.24 0.017 250);   /* cool near-black   */
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.24 0.017 250);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.24 0.017 250);
+
+  --primary: oklch(0.48 0.15 249);       /* precise cobalt */
+  --primary-foreground: oklch(1 0 0);
+
+  --secondary: oklch(0.955 0.008 240);
+  --secondary-foreground: oklch(0.32 0.018 250);
+  --muted: oklch(0.958 0.007 240);
+  --muted-foreground: oklch(0.5 0.016 248);
+  --accent: oklch(0.935 0.014 244);
+  --accent-foreground: oklch(0.29 0.03 250);
+
+  --destructive: oklch(0.53 0.19 26);
+  --destructive-foreground: oklch(1 0 0);
+  --success: oklch(0.5 0.12 160);
+  --warning: oklch(0.66 0.13 65);
+  --info: oklch(0.5 0.13 240);
+
+  --border: oklch(0.885 0.01 242);
+  --input: oklch(0.855 0.012 242);
+  --ring: oklch(0.48 0.15 249);
+
+  --field-label: oklch(0.45 0.016 248);
+  --required: oklch(0.53 0.19 26);
+
+  /* Charts: cool, technical, evenly spaced in hue. */
+  --chart-1: oklch(0.48 0.15 249);
+  --chart-2: oklch(0.58 0.11 205);
+  --chart-3: oklch(0.6 0.1 165);
+  --chart-4: oklch(0.66 0.12 62);
+  --chart-5: oklch(0.53 0.16 300);
+
+  /* Analytics. Eight categorical hues in a fixed, validated order — lightness
+     band, chroma floor, colour-blind separation between neighbours and the
+     normal-vision floor all pass against this theme's card (#ffffff). Three
+     sit under 3:1 on white, which is why every chart also has a table view.
+     Never cycled: a ninth series folds into "Other", which is grey. */
+  --viz-1: #2a78d6;
+  --viz-2: #eb6834;
+  --viz-3: #1baf7a;
+  --viz-4: #eda100;
+  --viz-5: #e87ba4;
+  --viz-6: #008300;
+  --viz-7: #4a3aa7;
+  --viz-8: #e34948;
+  --viz-other: #a8aeb6;
+  /* Magnitude: one hue, light (near zero) to dark. */
+  --viz-seq-1: #cde2fb;
+  --viz-seq-2: #9ec5f4;
+  --viz-seq-3: #6da7ec;
+  --viz-seq-4: #3987e5;
+  --viz-seq-5: #256abf;
+  --viz-seq-6: #184f95;
+  --viz-seq-7: #0d366b;
+  /* Polarity: two opposite hues and a grey middle. */
+  --viz-div-pos: #2a78d6;
+  --viz-div-neg: #e34948;
+  --viz-div-mid: #e6e8eb;
+
+  /* Chrome: the same slate family, one step cooler than the canvas. */
+  --topbar: oklch(1 0 0);
+  --topbar-foreground: oklch(0.28 0.018 250);
+  --sidebar: oklch(0.972 0.006 240);
+  --sidebar-foreground: oklch(0.42 0.016 248);
+  --sidebar-primary: oklch(0.48 0.15 249);
+  --sidebar-primary-foreground: oklch(1 0 0);
+  --sidebar-accent: oklch(0.925 0.014 244);
+  --sidebar-accent-foreground: oklch(0.25 0.028 250);
+  --sidebar-border: oklch(0.88 0.01 242);
+  --sidebar-ring: oklch(0.48 0.15 249);
+}
+
+.dark {
+  --background: oklch(0.17 0.015 250);
+  --surface: oklch(0.208 0.016 250);
+  --foreground: oklch(0.93 0.007 240);
+  --card: oklch(0.208 0.016 250);
+  --card-foreground: oklch(0.93 0.007 240);
+  --popover: oklch(0.218 0.016 250);
+  --popover-foreground: oklch(0.93 0.007 240);
+
+  --primary: oklch(0.63 0.15 249);
+  --primary-foreground: oklch(1 0 0);
+
+  --secondary: oklch(0.26 0.018 250);
+  --secondary-foreground: oklch(0.93 0.007 240);
+  --muted: oklch(0.25 0.016 250);
+  --muted-foreground: oklch(0.67 0.014 244);
+  --accent: oklch(0.29 0.026 250);
+  --accent-foreground: oklch(0.94 0.007 240);
+
+  --destructive: oklch(0.64 0.18 26);
+  --destructive-foreground: oklch(1 0 0);
+  --success: oklch(0.66 0.13 160);
+  --warning: oklch(0.75 0.13 65);
+  --info: oklch(0.65 0.13 240);
+
+  --border: oklch(0.3 0.018 250);
+  --input: oklch(0.33 0.018 250);
+  --ring: oklch(0.63 0.15 249);
+
+  --field-label: oklch(0.7 0.014 244);
+  --required: oklch(0.66 0.17 26);
+
+  --chart-1: oklch(0.63 0.15 249);
+  --chart-2: oklch(0.68 0.11 205);
+  --chart-3: oklch(0.7 0.1 165);
+  --chart-4: oklch(0.75 0.12 62);
+  --chart-5: oklch(0.65 0.15 300);
+
+  /* Analytics, dark: the same eight hues stepped for the dark card (#12181f)
+     and validated as a set there — all clear 3:1. Selected, not inverted. */
+  --viz-1: #3987e5;
+  --viz-2: #d95926;
+  --viz-3: #199e70;
+  --viz-4: #c98500;
+  --viz-5: #d55181;
+  --viz-6: #008300;
+  --viz-7: #9085e9;
+  --viz-8: #e66767;
+  --viz-other: #5d6671;
+  /* On a dark card, "near zero" recedes into the surface, so the ramp runs
+     from the dark end up to the light one. */
+  --viz-seq-1: #184f95;
+  --viz-seq-2: #1c5cab;
+  --viz-seq-3: #256abf;
+  --viz-seq-4: #2a78d6;
+  --viz-seq-5: #5598e7;
+  --viz-seq-6: #86b6ef;
+  --viz-seq-7: #b7d3f6;
+  --viz-div-pos: #3987e5;
+  --viz-div-neg: #e66767;
+  --viz-div-mid: #2a323b;
+
+  --topbar: oklch(0.208 0.016 250);
+  --topbar-foreground: oklch(0.91 0.008 240);
+  --sidebar: oklch(0.185 0.015 250);
+  --sidebar-foreground: oklch(0.71 0.014 244);
+  --sidebar-primary: oklch(0.63 0.15 249);
+  --sidebar-primary-foreground: oklch(1 0 0);
+  --sidebar-accent: oklch(0.26 0.02 250);
+  --sidebar-accent-foreground: oklch(0.94 0.007 240);
+  --sidebar-border: oklch(0.29 0.018 250);
+  --sidebar-ring: oklch(0.63 0.15 249);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+    -webkit-font-smoothing: antialiased;
+  }
+  /* Figures are monospaced everywhere — that is what makes columns compare. */
+  .tabular {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.01em;
+  }
+}
+
+@layer utilities {
+  .num {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+  }
+
+  /* Uppercase micro-label — the engineered counterpart to a heading. */
+  .micro-label {
+    @apply text-[10px] font-semibold uppercase tracking-[0.11em] text-muted-foreground;
+  }
+  .display-xl {
+    @apply text-[26px] font-semibold leading-tight tracking-[-0.02em];
+  }
+  .display-lg {
+    @apply text-[18px] font-semibold leading-tight tracking-[-0.015em];
+  }
+
+  /* Thin scrollbars for dense data screens */
+  .thin-scroll::-webkit-scrollbar { width: 10px; height: 10px; }
+  .thin-scroll::-webkit-scrollbar-thumb {
+    background: color-mix(in oklab, var(--muted-foreground) 30%, transparent);
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+  .thin-scroll::-webkit-scrollbar-thumb:hover {
+    background: color-mix(in oklab, var(--muted-foreground) 50%, transparent);
+    background-clip: content-box;
+  }
+  .thin-scroll::-webkit-scrollbar-track { background: transparent; }
+
+  /* Cards are flat planes with a hairline; depth is not the language here. */
+  .surface-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+  }
+  .surface-raised {
+    box-shadow:
+      0 1px 2px oklch(0.24 0.017 250 / 0.06),
+      0 6px 16px oklch(0.24 0.017 250 / 0.08);
+  }
+  .footer-bar {
+    box-shadow: 0 -1px 0 var(--border);
+  }
+
+  /* A 2px accent bar on the leading edge, used to mark and to categorise. */
+  .accent-bar {
+    position: relative;
+    padding-left: calc(var(--spacing) * 4);
+  }
+  .accent-bar::before {
+    content: "";
+    position: absolute;
+    inset-block: 0;
+    inset-inline-start: 0;
+    width: 2px;
+    background: var(--bar, var(--primary));
+  }
+}
+
+/* ── The assistant's corner button ─────────────────────────────────────────
+   It sits over the bottom-right corner of every screen. A page gets room at
+   its end so its last row can scroll clear of it; a form's sticky footer keeps
+   its right end free, and the button drops into that space as just its icon —
+   the labelled version is wider than a footer can spare beside its total. */
+@media screen {
+  body:has([data-slot='ai-launcher']) .app-page:not(:has(.footer-bar)) { padding-bottom: 6rem; }
+  body:has([data-slot='ai-launcher']) .footer-bar { padding-right: 6rem; }
+  body:has(.footer-bar) [data-slot='ai-launcher'] { bottom: 0.5rem; width: 3rem; padding-inline: 0; }
+  body:has(.footer-bar) [data-slot='ai-launcher-label'] { display: none; }
+}
+
+/* ── Print: invoice/report output only ──────────────────────────────────── */
+@media print {
+  /* No right to print on this page (components/layout/output-guard.tsx). */
+  body[data-no-print] > * { display: none !important; }
+  body[data-no-print]::before { content: 'Printing is not allowed for your role. Ask an admin if you need a copy.'; display: block; padding: 24mm; font: 14px sans-serif; }
+  .no-print { display: none !important; }
+  .print-only { display: block !important; }
+  body { background: #fff !important; }
+  .print-sheet {
+    box-shadow: none !important;
+    border: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    max-width: 100% !important;
+  }
+  @page { size: A4; margin: 14mm; }
+
+  /* An Analytics report in presentation mode prints as a board pack: only the
+     report, landscape, and no chart split across two pages. The presentation
+     is rendered straight into <body>, so everything else can be taken out of
+     the layout entirely — hidden-but-present content would print as blank
+     trailing pages. */
+  body:has(> .print-root) > *:not(.print-root) { display: none !important; }
+  .print-root {
+    position: static !important;
+    inset: auto !important;
+    height: auto !important;
+    overflow: visible !important;
+    page: board;
+    /* Legend swatches, heatmap cells and variance bars are coloured boxes, and
+       browsers drop background colours on paper unless told otherwise. */
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+    /* …which would also print the grey screen backdrop. Paper is white. */
+    background: #fff !important;
+  }
+  .print-root .analytics-tile { grid-column: span var(--span) / span var(--span) !important; }
+  .analytics-tile { break-inside: avoid; }
+}
+@page board { size: A4 landscape; margin: 10mm; }
+
+/* Presenting lays tiles out by their own width rather than the window's, so
+   what is on screen is what prints — Chrome judges print media queries
+   against the default page, not the landscape one, and would reflow the board. */
+@media (min-width: 768px) {
+  .print-root .analytics-tile { grid-column: span var(--span) / span var(--span); }
+}
+.print-only { display: none; }

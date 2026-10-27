@@ -1,0 +1,73 @@
+# Every push and pull request: lint, type-check, the full ledger test suite
+# against a real MySQL, and a production build. A red run means a change broke
+# the books' rules somewhere — the tests are the accounting, not decoration.
+
+name: CI
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: rekonza_ci
+          MYSQL_USER: rekonza
+          MYSQL_PASSWORD: rekonza
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot"
+          --health-interval=5s --health-timeout=5s --health-retries=30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      - name: Environment for the tests
+        run: |
+          {
+            echo "APP_ENV=test"
+            echo "DB_HOST=127.0.0.1"
+            echo "DB_PORT=3306"
+            echo "DB_USER=rekonza"
+            echo "DB_PASSWORD=rekonza"
+            echo "DB_NAME=rekonza_ci"
+            echo "SESSION_SECRET=$(openssl rand -hex 32)"
+            echo "INTEGRATION_KEY=$(openssl rand -hex 32)"
+            echo "FIELD_ENCRYPTION_KEY=$(openssl rand -hex 32)"
+            echo "FILE_STORAGE_DIR=${RUNNER_TEMP}/rekonza-files"
+          } > .env.local
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Type-check
+        run: npx tsc --noEmit -p tsconfig.json
+
+      - name: Migrate
+        run: npm run db:migrate
+
+      - name: Ledger and service tests
+        run: npm run test:unit
+
+      - name: Build
+        run: npm run build
+        env:
+          NEXT_TELEMETRY_DISABLED: 1
