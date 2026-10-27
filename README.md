@@ -99,6 +99,12 @@ Live IRN registration needs a contract with a GST Suvidha Provider. Automatic ba
 
 The TDS return's FVU text file: the return is laid out as rows for the government's Return Preparation Utility, whose file layout Protean publishes and changes.
 
+## The online demo (no database)
+
+A Vercel deployment with no database configured plays a recording of the demo book instead: every screen and report opens with real figures, and anything that would save says that saving is switched off. `middleware.ts` answers `/api` from the files in `public/demo-snapshot`; nothing else changes. `DEMO_SNAPSHOT=1` turns it on anywhere, `DEMO_SNAPSHOT=0` turns it off.
+
+To record it again after a change, with the app running against a seeded database: `BASE=http://localhost:5001 npx tsx scripts/demo-snapshot.ts`. It opens the demo book through its own door, visits every screen, and blocks every write, so the books are left as they were.
+
 ## Deploying to Vercel
 
 Vercel runs the app; it does not run the database. You need:

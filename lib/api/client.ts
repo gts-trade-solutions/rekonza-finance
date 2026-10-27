@@ -152,6 +152,8 @@ export interface SessionResponse {
     pincode: string | null;
     isPrimary: boolean;
   }[];
+  /** Set only in the recorded online demo (lib/demo-snapshot.ts), where nothing can be saved. */
+  demoSnapshot?: boolean;
 }
 
 export interface InvoiceListItem {

@@ -1,0 +1,1 @@
+{"webhooks":[],"eventTypes":["invoice","bill","payment","credit_note","vendor_credit","contact","item","expense","journal_entry","purchase_order","sales_order","estimate","goods_receipt","payment_batch","einvoice","eway_bill"]}

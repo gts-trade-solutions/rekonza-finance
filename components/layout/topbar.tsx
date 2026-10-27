@@ -147,9 +147,10 @@ export function Topbar() {
           {serverSession.org?.isDemo && (
             <span
               data-slot="demo-banner"
-              className="mr-1 hidden rounded-full border border-warning/40 bg-warning/10 px-2.5 py-1 text-[11px] text-warning xl:inline"
+              className={`mr-1 hidden rounded-full border border-warning/40 bg-warning/10 px-2.5 py-1 text-[11px] text-warning ${serverSession.demoSnapshot ? 'md:inline' : 'xl:inline'}`}
             >
-              Demo book · nothing here is filed with any portal
+              {/* The recorded online demo has nowhere to save, so it says so before anyone fills in a form. */}
+              {serverSession.demoSnapshot ? 'Online demo · look around; saving is switched off' : 'Demo book · nothing here is filed with any portal'}
             </span>
           )}
 
