@@ -2,57 +2,30 @@
 // uncaught exceptions. Uses the Chrome already installed on the machine, so no
 // browser download is needed.
 //
-//   node scripts/smoke.mjs            (expects the dev server on :5000)
+//   node scripts/smoke.mjs                       (the app on :5001, or SMOKE_BASE)
+//   SMOKE_LOGIN=demo node scripts/smoke.mjs      (in by the demo door: the online demo has no passwords)
 
+import { readdirSync, statSync } from 'node:fs';
+import path from 'node:path';
 import { chromium } from 'playwright';
 
 const BASE = process.env.SMOKE_BASE || 'http://localhost:5001';
 
+// Every screen in the app, found from its folders rather than kept as a list
+// that falls behind: each page.tsx under app/(app) is a route, route groups
+// add nothing to the address, and a [segment] is a record, sampled below.
+function screens(dir, prefix = '') {
+  const out = [];
+  for (const name of readdirSync(dir)) {
+    const full = path.join(dir, name);
+    if (statSync(full).isDirectory()) out.push(...screens(full, /^(.*)$/.test(name) ? prefix : `${prefix}/${name}`));
+    else if (name === 'page.tsx') out.push(prefix || '/');
+  }
+  return out;
+}
 const ROUTES = [
-  '/dashboard',
-  // Sales
-  '/sales/customers', '/sales/customers/new', '/sales/items',
-  '/sales/estimates', '/sales/sales-orders', '/sales/challans',
-  '/sales/invoices', '/sales/invoices/new', '/sales/retainers',
-  '/sales/payments', '/sales/payments/new', '/sales/credit-notes',
-  '/sales/recurring',
-  // Purchases
-  '/purchases/vendors', '/purchases/expenses', '/purchases/purchase-orders', '/purchases/goods-receipts', '/settings/invoice-print', '/approvals', '/settings/import',
-  '/purchases/bills', '/purchases/bills/new', '/purchases/payments',
-  '/purchases/payments/new', '/purchases/vendor-credits', '/purchases/msme-tracker',
-  // Banking
-  '/banking', '/banking/reconcile', '/banking/imports',
-  '/banking/rules', '/banking/transfers', '/banking/cheques',
-  // Accountant
-  '/accountant/journals', '/accountant/recurring-journals',
-  '/accountant/chart-of-accounts', '/accountant/opening-balances',
-  '/accountant/budgets', '/accountant/transaction-locking',
-  '/accountant/period-close', '/accountant/audit-trail',
-  // GST
-  '/gst/einvoices', '/gst/eway-bills', '/gst/gstr1', '/gst/gstr3b',
-  '/gst/itc-reconciliation', '/gst/tds-tcs', '/gst/iff', '/gst/gstr9',
-  // Inventory
-  '/inventory/stock', '/inventory/adjustments', '/inventory/warehouses',
-  // Reports
-  '/reports', '/reports/profit-and-loss', '/reports/balance-sheet',
-  '/reports/cash-flow', '/reports/trial-balance', '/reports/general-ledger',
-  '/reports/day-book', '/reports/journal-report', '/reports/ar-ageing',
-  '/reports/ap-ageing', '/reports/sales-by-customer', '/reports/sales-by-item',
-  '/reports/purchases-by-vendor', '/reports/expenses-by-category',
-  '/reports/account-transactions', '/reports/account-type-summary',
-  '/reports/movement-of-equity', '/reports/business-ratios',
-  '/reports/customer-balances', '/reports/vendor-balances',
-  '/reports/invoice-details', '/reports/bill-details',
-  '/reports/payments-received', '/reports/payments-made',
-  '/reports/expense-details', '/reports/sales-by-salesperson',
-  '/reports/credit-note-details', '/reports/ar-ageing-details',
-  '/reports/retainer-details', '/reports/sales-order-details',
-  '/reports/estimate-details', '/reports/time-to-get-paid',
-  '/reports/refund-history', '/reports/schedule-iii',
-  // Analytics
-  '/analytics', '/analytics/new',
-  // Depth
-  '/ai', '/settings', '/settings/hsn-codes', '/settings/tax-rates', '/settings/billing', '/portal',
+  ...screens(path.join('app', '(app)')).filter((r) => !r.includes('[')).sort(),
+  '/portal',
   // The signed-out surface. Visited last, and while signed in, which is fine:
   // none of the three redirects on a session, and a console error on the
   // landing page is the one a prospective customer would see first.
@@ -86,13 +59,30 @@ page.on('pageerror', (err) => {
 
 // ── Sign in once; the session cookie carries across the whole context.
 current = '/login';
-await page.goto(`${BASE}/login`, { waitUntil: 'networkidle' });
-// Real credentials now — the role picker was a demo affordance and is gone.
-await page.locator('#email').fill('arun@raceautospares.in');
-await page.locator('#password').fill(process.env.DEMO_PASSWORD || 'Rekonza@2026');
-await page.getByRole('button', { name: /^Sign in$/ }).click();
-await page.waitForURL('**/dashboard', { timeout: 30000 });
+if (process.env.SMOKE_LOGIN === 'demo') {
+  await page.goto(`${BASE}/login?demo=1`, { waitUntil: 'networkidle' });
+  await page.locator('[data-slot="demo-account"]').first().click();
+} else {
+  await page.goto(`${BASE}/login`, { waitUntil: 'networkidle' });
+  await page.locator('#email').fill(process.env.SMOKE_EMAIL || 'arun@raceautospares.in');
+  await page.locator('#password').fill(process.env.DEMO_PASSWORD || 'Rekonza@2026');
+  await page.getByRole('button', { name: /^Sign in$/ }).click();
+}
+await page.waitForURL('**/dashboard', { timeout: 60000 });
 await page.waitForTimeout(1200);
+
+// A record of each kind, so the screens behind [id] are opened too.
+const sample = async (api, key, make) => {
+  const body = await page.evaluate(async (u) => (await fetch(u)).json().catch(() => null), api).catch(() => null);
+  const first = body?.[key]?.[0];
+  return first ? [make(first.id)] : [];
+};
+ROUTES.splice(ROUTES.length - 3, 0,
+  ...await sample('/api/invoices?limit=5', 'invoices', (id) => `/sales/invoices/${id}`),
+  ...await sample('/api/invoices?limit=5', 'invoices', (id) => `/sales/invoices/${id}/print`),
+  ...await sample('/api/bills?limit=5', 'bills', (id) => `/purchases/bills/${id}`),
+  ...await sample('/api/contacts?kind=customer', 'contacts', (id) => `/sales/customers/${id}`),
+);
 
 const results = [];
 for (const route of ROUTES) {
