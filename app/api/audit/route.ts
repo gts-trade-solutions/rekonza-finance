@@ -43,6 +43,7 @@ export const GET = route(
           eb('actor_name', 'like', term),
           eb('target_label', 'like', term),
           eb('detail', 'like', term),
+          eb('reason', 'like', term),
         ]),
       );
     }
@@ -51,7 +52,7 @@ export const GET = route(
       base
         .select([
           'id', 'actor_user_id', 'actor_name', 'action', 'target_type', 'target_id',
-          'target_label', 'detail', 'ip', 'created_at', 'payload',
+          'target_label', 'detail', 'reason', 'ip', 'created_at', 'payload',
         ])
         .orderBy('created_at', 'desc')
         .orderBy('id', 'desc')
@@ -89,6 +90,7 @@ export const GET = route(
         targetId: r.target_id,
         targetLabel: r.target_label ?? '—',
         detail: r.detail ?? '',
+        reason: r.reason,
         ip: r.ip,
         changes: changesIn(r.payload),
       })),

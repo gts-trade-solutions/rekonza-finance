@@ -72,3 +72,14 @@ export function passwordProblems(plain: string): string[] {
   if (!/[0-9]/.test(plain)) problems.push('Include a digit.');
   return problems;
 }
+
+/** "Changed" at this moment means "never chosen by its owner": a temporary password, to be changed before going on. */
+export const MUST_CHANGE = new Date('1970-01-01T00:00:01Z');
+
+/** Has this password to be changed before the person goes on? (Here, not in password-policy.ts, so the session layer can ask.) */
+export function passwordExpired(changedAt: Date | string | null, expiryDays: number, now = Date.now()): boolean {
+  if (!changedAt) return false;
+  const at = new Date(changedAt).getTime();
+  if (at <= MUST_CHANGE.getTime() + 1000) return true;
+  return expiryDays > 0 && now - at > expiryDays * 86_400_000;
+}

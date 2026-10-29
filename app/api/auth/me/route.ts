@@ -35,6 +35,7 @@ export const GET = route(async ({ user }) => {
       branchId: user.homeBranchId ? asId(user.homeBranchId) : null,
       activeBranchId: user.activeBranchId ? asId(user.activeBranchId) : null,
       mfaSetupRequired: !!user.mfaSetupRequired,
+      passwordChangeRequired: !!user.passwordChangeRequired,
       /** A custom role's grants; null means the built-in role's. */
       permissions: user.permissions ?? null,
       customRoleName: user.customRoleName ?? null,

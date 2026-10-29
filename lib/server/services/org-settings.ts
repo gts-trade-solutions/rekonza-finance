@@ -60,7 +60,49 @@ export interface OrgPolicies {
    * backups and restore drills under Settings → Backups.
    */
   recovery: { rpoHours: number; rtoMinutes: number };
+  /** Internal controls an auditor looks for: see services/exceptions.ts and the Controls page. */
+  controls: {
+    /** Ask why whenever a record is changed or removed, and keep the answer in the audit trail. */
+    changeReasons: boolean;
+    /** Paying a bill you entered or approved: whoever makes, approves and pays should be different people. */
+    segregation: Enforcement;
+    /** Send an invoice for its IRN as soon as it is issued, instead of waiting for someone to press Register. */
+    autoIrn: boolean;
+    /** Invoicing a customer who has something this many days past due; 0 never stops it. */
+    creditHoldDays: number;
+    creditHold: Enforcement;
+    /** Bills falling due within this many days are raised for whoever pays them. */
+    billsDueDays: number;
+    /** A customer owing more than this share of all receivables is raised as a concentration risk. */
+    concentrationPct: number;
+    /** Days an exception may sit past its date before it goes to the admins. */
+    escalateAfterDays: number;
+    /** Post each month's depreciation by itself when the month ends. */
+    autoDepreciation: boolean;
+  };
+  /** Passwords: how long, how often changed, and how many old ones may not come back. */
+  password: { minLength: number; expiryDays: number; history: number };
+  /**
+   * Stock in the ledger. Periodic, as Tally does it: purchases are expensed and
+   * stock on hand is worked out for the statements. Perpetual: every sale
+   * posts its cost and every purchase of stock goes to the Inventory account,
+   * from `from` on. Changed only through services/stock-ledger.ts, which posts
+   * the stock already on hand into the ledger when it switches.
+   */
+  stockAccounting: { method: 'periodic' | 'perpetual'; from: string | null };
 }
+
+export const DEFAULT_CONTROLS: OrgPolicies['controls'] = {
+  changeReasons: false,
+  segregation: 'warn',
+  autoIrn: true,
+  creditHoldDays: 90,
+  creditHold: 'warn',
+  billsDueDays: 7,
+  concentrationPct: 25,
+  escalateAfterDays: 3,
+  autoDepreciation: false,
+};
 
 export const DEFAULT_POLICIES: OrgPolicies = {
   features: { inventory: true, fixedAssets: true, tdsTcs: true, ewayBills: true, approvals: true, tally: true, analytics: true, payroll: true, gst: true, multiCurrency: true, costCentres: true },
@@ -74,8 +116,11 @@ export const DEFAULT_POLICIES: OrgPolicies = {
   overdueGraceDays: 0,
   stockValuation: 'average',
   signIn: { allowedIps: [], adminsAnywhere: true, maxSessions: 0, alertNewDevice: true },
-  reminders: { enabled: false, stages: [-3, 0, 7, 15, 30], channel: 'whatsapp' },
+  reminders: { enabled: false, stages: [-3, 0, 15, 30, 60, 90], channel: 'whatsapp' },
   recovery: { rpoHours: 24, rtoMinutes: 240 },
+  controls: DEFAULT_CONTROLS,
+  password: { minLength: 8, expiryDays: 0, history: 0 },
+  stockAccounting: { method: 'periodic', from: null },
 };
 
 // The driver hands JSON columns back already parsed, so a stored "block" arrives
@@ -86,7 +131,10 @@ function parsed(value: unknown): unknown {
 }
 
 const SCOPE = 'policy';
-const KEYS = ['features', 'creditLimit', 'negativeStock', 'cashLimits', 'sessionIdleMinutes', 'requireMfa', 'msmeBankRatePct', 'overdueInterestPct', 'overdueGraceDays', 'stockValuation', 'signIn', 'reminders', 'recovery'] as const;
+// stockAccounting is not here: switching it posts stock into the ledger, so only
+// services/stock-ledger.ts writes it.
+const KEYS = ['features', 'creditLimit', 'negativeStock', 'cashLimits', 'sessionIdleMinutes', 'requireMfa', 'msmeBankRatePct', 'overdueInterestPct', 'overdueGraceDays', 'stockValuation', 'signIn', 'reminders', 'recovery', 'controls', 'password'] as const;
+const ENFORCEMENTS = ['off', 'warn', 'block'];
 
 export async function getPolicies(ex: Executor, orgId: number): Promise<OrgPolicies> {
   const rows = await ex.selectFrom('settings').select(['setting_key', 'value'])
@@ -108,6 +156,9 @@ export async function getPolicies(ex: Executor, orgId: number): Promise<OrgPolic
       case 'signIn': out.signIn = { ...out.signIn, ...(v as Partial<OrgPolicies['signIn']>) }; break;
       case 'reminders': out.reminders = { ...out.reminders, ...(v as Partial<OrgPolicies['reminders']>) }; break;
       case 'recovery': out.recovery = { ...out.recovery, ...(v as Partial<OrgPolicies['recovery']>) }; break;
+      case 'controls': out.controls = { ...out.controls, ...(v as Partial<OrgPolicies['controls']>) }; break;
+      case 'password': out.password = { ...out.password, ...(v as Partial<OrgPolicies['password']>) }; break;
+      case 'stockAccounting': out.stockAccounting = { ...out.stockAccounting, ...(v as Partial<OrgPolicies['stockAccounting']>) }; break;
     }
   }
   return out;
@@ -142,6 +193,29 @@ export async function setPolicies(trx: Trx, orgId: number, userId: number | null
       if (s.allowedIps.length > 50) throw badRequest('At most fifty addresses or ranges.');
       if (!(Number.isInteger(s.maxSessions) && s.maxSessions >= 0 && s.maxSessions <= 20)) throw badRequest('Sessions a person may keep open: 0 (no limit) to 20.');
       value = s;
+    }
+    if (key === 'controls') {
+      const c = { ...current.controls, ...(patch.controls ?? {}) };
+      if (!ENFORCEMENTS.includes(c.segregation) || !ENFORCEMENTS.includes(c.creditHold)) throw badRequest('A control is off, warns or blocks.');
+      const whole = (n: number, lo: number, hi: number) => Number.isInteger(n) && n >= lo && n <= hi;
+      if (!whole(c.creditHoldDays, 0, 365)) throw badRequest('Credit hold is 0 (never) to 365 days past due.');
+      if (!whole(c.billsDueDays, 0, 60)) throw badRequest('Bills are raised 0 to 60 days before they fall due.');
+      if (!(c.concentrationPct >= 5 && c.concentrationPct <= 100)) throw badRequest('Customer concentration is a share of receivables, 5 to 100 per cent.');
+      if (!whole(c.escalateAfterDays, 1, 60)) throw badRequest('Escalation is 1 to 60 days after an exception falls due.');
+      value = c;
+    }
+    if (key === 'password') {
+      const p = { ...current.password, ...(patch.password ?? {}) };
+      if (!(Number.isInteger(p.minLength) && p.minLength >= 8 && p.minLength <= 64)) throw badRequest('A password is at least 8 characters; the minimum may go up to 64.');
+      if (!(Number.isInteger(p.expiryDays) && p.expiryDays >= 0 && p.expiryDays <= 365)) throw badRequest('Passwords expire after 0 (never) to 365 days.');
+      if (!(Number.isInteger(p.history) && p.history >= 0 && p.history <= 24)) throw badRequest('Remember 0 to 24 old passwords.');
+      // Passwords set before the book had an expiry rule have no date: their
+      // clock starts now, rather than every one of them expiring at once.
+      if (p.expiryDays > 0) {
+        await trx.updateTable('users').set({ password_changed_at: new Date() })
+          .where('org_id', '=', orgId).where('password_changed_at', 'is', null).execute();
+      }
+      value = p;
     }
     if (key === 'sessionIdleMinutes') {
       const n = Number(value);

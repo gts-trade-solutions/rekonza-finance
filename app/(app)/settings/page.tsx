@@ -24,6 +24,8 @@ import { IntegrationsPanel } from '@/components/settings/integrations-panel';
 import { NumberingPanel, type SeriesRow } from '@/components/settings/numbering-panel';
 import { BackupsPanel } from '@/components/settings/backups-panel';
 import { PoliciesPanel } from '@/components/settings/policies-panel';
+import { ControlsPanel } from '@/components/settings/controls-panel';
+import { HealthPanel } from '@/components/settings/health-panel';
 import { SignInsPanel } from '@/components/settings/sign-ins-panel';
 import { TwoStepPanel } from '@/components/settings/two-step-panel';
 import { ChangePasswordCard, UsersPanel } from '@/components/settings/users-panel';
@@ -179,6 +181,8 @@ export default function SettingsPage() {
               <TabsTrigger value="integrations">Integrations</TabsTrigger>
               <TabsTrigger value="backups">Backups</TabsTrigger>
               <TabsTrigger value="policies">Policies</TabsTrigger>
+              <TabsTrigger value="controls">Controls</TabsTrigger>
+              {canEdit && <TabsTrigger value="health">System health</TabsTrigger>}
               <TabsTrigger value="sign-ins">Sign-ins</TabsTrigger>
               <TabsTrigger value="privacy">Privacy</TabsTrigger>
               {canEdit && <TabsTrigger value="developer">Developer</TabsTrigger>}
@@ -455,6 +459,16 @@ export default function SettingsPage() {
             <TabsContent value="policies" className="mt-4">
               <PoliciesPanel canEdit={canEdit} />
             </TabsContent>
+
+            <TabsContent value="controls" className="mt-4">
+              <ControlsPanel canEdit={canEdit} />
+            </TabsContent>
+
+            {canEdit && (
+              <TabsContent value="health" className="mt-4">
+                <HealthPanel />
+              </TabsContent>
+            )}
 
             <TabsContent value="statutory" className="mt-4">
               <StatutoryPanel canEdit={canEdit} />

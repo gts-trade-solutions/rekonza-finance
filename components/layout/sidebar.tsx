@@ -45,6 +45,7 @@ function useBadgeCounts(): NavCounts {
     unmatched: 0,
     msmeRisk: 0,
     complianceDue: 0,
+    exceptions: 0,
   });
 
   useEffect(() => {
@@ -143,7 +144,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
 
       <nav className="thin-scroll flex-1 space-y-0.5 overflow-y-auto px-3 pb-4">
         {TOP_LEVEL.filter((i) => visible(i.module, i.feature)).map((item) => (
-          <NavRow key={item.href} item={item} />
+          <NavRow key={item.href} item={item} count={item.badge ? counts[item.badge] : undefined} />
         ))}
 
         {NAV_GROUPS.filter((g) => visible(g.module, g.feature)).map((group) => {

@@ -19,6 +19,7 @@ import { cookies } from 'next/headers';
 import type { RoleName } from '../../types';
 import type { CustomPermissions } from '../../rbac';
 import { db } from '../db';
+import { passwordExpired } from './password';
 
 // Not 'rekonza_session': the original finance app runs on localhost too, and
 // cookies are shared across ports, so the two would sign each other out.
@@ -38,6 +39,8 @@ export interface SessionUser {
   sessionId?: string;
   /** The book requires two-step sign-in of this user and they have not set it up: nothing else is allowed until they do. */
   mfaSetupRequired?: boolean;
+  /** Their password has expired, or is a temporary one an admin gave: nothing else until it is changed. */
+  passwordChangeRequired?: boolean;
   /** A custom role's grants, which replace the built-in role's matrix. Null for the built-in roles. */
   permissions?: CustomPermissions | null;
   customRoleName?: string | null;
@@ -111,6 +114,7 @@ export async function resolveSession(token: string | undefined): Promise<Session
       'users.home_branch_id',
       'users.is_active',
       'users.mfa_enabled_at',
+      'users.password_changed_at',
       'custom_roles.name as custom_role_name',
       'custom_roles.permissions as custom_permissions',
     ])
@@ -152,19 +156,24 @@ export async function resolveSession(token: string | undefined): Promise<Session
       : null,
     customRoleName: row.role !== 'admin' ? row.custom_role_name : null,
     mfaSetupRequired: !row.mfa_enabled_at && (policy.requireMfa === 'everyone' || (policy.requireMfa === 'admins' && row.role === 'admin')),
+    passwordChangeRequired: passwordExpired(row.password_changed_at, policy.passwordExpiryDays),
   };
 }
 
 /** Idle sign-out and the two-step requirement, in one read. */
-async function sessionPolicy(orgId: number): Promise<{ idleMinutes: number; requireMfa: string }> {
+async function sessionPolicy(orgId: number): Promise<{ idleMinutes: number; requireMfa: string; passwordExpiryDays: number }> {
   const rows = await db.selectFrom('settings').select(['setting_key', 'value'])
-    .where('org_id', '=', orgId).where('scope', '=', 'policy').where('setting_key', 'in', ['sessionIdleMinutes', 'requireMfa']).execute();
+    .where('org_id', '=', orgId).where('scope', '=', 'policy').where('setting_key', 'in', ['sessionIdleMinutes', 'requireMfa', 'password']).execute();
   const get = (k: string) => {
     const v = rows.find((r) => r.setting_key === k)?.value;
     if (typeof v !== 'string') return v;
     try { return JSON.parse(v); } catch { return v; }
   };
-  return { idleMinutes: Number(get('sessionIdleMinutes') ?? 0) || 0, requireMfa: String(get('requireMfa') ?? 'off') };
+  return {
+    idleMinutes: Number(get('sessionIdleMinutes') ?? 0) || 0,
+    requireMfa: String(get('requireMfa') ?? 'off'),
+    passwordExpiryDays: Number((get('password') as { expiryDays?: number } | undefined)?.expiryDays ?? 0) || 0,
+  };
 }
 
 /** The current request's session, by its hash: what moving it to another company changes. */

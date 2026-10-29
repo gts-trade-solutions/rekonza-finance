@@ -39,6 +39,9 @@ const MATRIX: Record<RoleName, Record<string, Action[]>> = {
     // Analytics works on copies, never the ledger, so building reports is
     // open to anyone who can see the figures they are built from.
     analytics: ['view', 'create', 'edit', 'void'],
+    // Exceptions: the problems the scheduler finds. Working one is editing it;
+    // handing it to someone else or waiving it is approving.
+    exceptions: ['view', 'edit', 'approve'],
   },
   sales: {
     sales: ['view', 'create', 'edit'],
@@ -46,12 +49,14 @@ const MATRIX: Record<RoleName, Record<string, Action[]>> = {
     inventory: ['view'],
     ai: ['view'],
     analytics: ['view', 'create', 'edit'],
+    exceptions: ['view', 'edit'],
   },
   staff: {
     sales: ['view', 'create'],
     purchases: ['view', 'create'],
     inventory: ['view'],
     ai: ['view'],
+    exceptions: ['view', 'edit'],
   },
   viewer: {
     sales: ['view'],
@@ -65,6 +70,7 @@ const MATRIX: Record<RoleName, Record<string, Action[]>> = {
     // Auditors and stakeholders read the board pack; they do not edit it.
     analytics: ['view'],
     tally: ['view'],
+    exceptions: ['view'],
   },
 };
 
@@ -129,6 +135,7 @@ export const PERMISSION_MODULES: { key: string; label: string; actions: Action[]
   { key: 'reports.banking', label: 'Reports: banking', actions: ['view', 'print', 'export'] },
   { key: 'analytics', label: 'Analytics', actions: ['view', 'create', 'edit', 'void', 'export'] },
   { key: 'tally', label: 'Tally', actions: ['view', 'edit'] },
+  { key: 'exceptions', label: 'Exceptions (work, assign, waive)', actions: ['view', 'edit', 'approve'] },
   { key: 'ai', label: 'AI assistant', actions: ['view', 'create'] },
   { key: 'settings', label: 'Settings', actions: ['view'] },
 ];

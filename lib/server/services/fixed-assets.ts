@@ -26,7 +26,7 @@ import 'server-only';
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { sql } from 'kysely';
-import type { Executor, Trx } from '../db';
+import { db, transaction, type Executor, type Trx } from '../db';
 import type { Paise } from '../../types';
 import { toPaiseFromSql, toSqlFromPaise } from '../money-sql';
 import { nextSequence, postEntry, reverseEntry, type DraftLine } from '../ledger/posting';
@@ -34,6 +34,7 @@ import { CODE, accountIds, requireAccount } from '../ledger/chart-of-accounts';
 import { badRequest, conflict, notFound } from '../http';
 import { booksStartDate } from './opening-balances';
 import { createInvoice } from './sales';
+import { getPolicies } from './org-settings';
 
 // ── Dates ────────────────────────────────────────────────────────────────────
 
@@ -776,4 +777,35 @@ export async function listRuns(ex: Executor, orgId: number) {
     from: String(r.period_from).slice(0, 10), to: String(r.period_to).slice(0, 10), totalPaise: toPaiseFromSql(r.total),
     reversed: !!r.reversed, entryId: r.journal_entry_id ? String(r.journal_entry_id) : null,
   }));
+}
+
+/**
+ * Month-end depreciation without anyone running it (Settings → Controls):
+ * each branch is charged up to the last day of the month just ended, once.
+ * A branch already charged that far, or a month that is locked, is left alone
+ * — the run would be refused for a person too, and the exceptions register is
+ * where a stuck book shows.
+ */
+export async function runAutoDepreciation(now = new Date()): Promise<number> {
+  const today = new Date(now.getTime() + 330 * 60_000).toISOString().slice(0, 10);
+  const monthEnd = addDays(`${today.slice(0, 7)}-01`, -1);
+  const orgs = await db.selectFrom('organizations').select('id').execute();
+  let runs = 0;
+  for (const o of orgs) {
+    const orgId = Number(o.id);
+    try {
+      if (!(await getPolicies(db, orgId)).controls.autoDepreciation) continue;
+      const branches = await db.selectFrom('fixed_assets').select('branch_id').distinct()
+        .where('org_id', '=', orgId).where('status', '=', 'in_use').execute();
+      for (const b of branches) {
+        const from = await nextRunFrom(db, orgId, Number(b.branch_id));
+        if (!from || from > monthEnd) continue;
+        const done = await transaction((trx) => runDepreciation(trx, orgId, null, Number(b.branch_id), monthEnd));
+        if (done.runId) runs++;
+      }
+    } catch (err) {
+      console.error(`[depreciation] org ${o.id}`, err instanceof Error ? err.message : err);
+    }
+  }
+  return runs;
 }

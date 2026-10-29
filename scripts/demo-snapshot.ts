@@ -51,6 +51,12 @@ const kinds = routes
   .filter((r) => r.includes('['))
   .map((r) => ({ route: r, re: new RegExp(`^${r.replace(/\[[^\]]+\]/g, '(?!new(?:/|$))[^/]+')}$`) }));
 
+/** Lists whose records open in a dialog, and the reply each dialog asks for. */
+const DIALOGS = [
+  { list: '/api/exceptions?view=active', detail: '/api/exceptions/[id]' },
+  { list: '/api/exceptions?view=closed', detail: '/api/exceptions/[id]' },
+];
+
 /** Lists whose records open from a row, and the screen each record opens on. */
 const ROWS = [
   { api: '/api/contacts?kind=customer&limit=500', screen: '/sales/customers/[id]' },
@@ -176,6 +182,21 @@ async function main() {
       for (const sub of kinds) if (sub.route.startsWith(`${kind.route}/`)) hrefs.push(route + sub.route.slice(kind.route.length));
     }
     for (const href of hrefs) enqueue(href.split(/[?#]/)[0]);
+  }
+
+  // Records that open in a dialog, not on a page of their own: fetched from the
+  // page as the dialog would, so the replies are recorded like any other.
+  for (const { list, detail } of DIALOGS) {
+    const ids = await page.evaluate(async (url) => {
+      const r = await fetch(url);
+      if (!r.ok) return [] as string[];
+      const body = await r.json();
+      const rows = Array.isArray(body) ? body : Object.values(body).find(Array.isArray) ?? [];
+      return (rows as { id: string }[]).map((x) => String(x.id));
+    }, list).catch(() => [] as string[]);
+    for (const id of ids.slice(0, PER_KIND)) {
+      await page.evaluate((url) => fetch(url).then((r) => r.text()), detail.replace('[id]', id)).catch(() => {});
+    }
   }
 
   await page.evaluate(() => fetch('/api/auth/logout', { method: 'POST' })).catch(() => {});

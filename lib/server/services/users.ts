@@ -17,6 +17,7 @@ import type { RoleName } from '../../types';
 import { PERMISSION_MODULES, type Action, type CustomPermissions } from '../../rbac';
 import { badRequest, conflict, notFound } from '../http';
 import { hashPassword } from '../auth/password';
+import { recordPasswordSet } from '../auth/password-policy';
 import { resetMfa } from '../auth/mfa';
 
 const ROLES: RoleName[] = ['admin', 'accountant', 'sales', 'staff', 'viewer'];
@@ -132,6 +133,8 @@ export async function addUser(
     ...(await roleFor(trx, orgId, input.role, input.customRoleId)),
     home_branch_id: await branchOk(trx, orgId, input.homeBranchId), password_hash: await hashPassword(temporary),
   }).executeTakeFirstOrThrow()).insertId);
+  // Theirs to replace at the first sign-in: an admin knows this one.
+  await recordPasswordSet(trx, id, '', { temporary: true });
   return { id, temporaryPassword: temporary };
 }
 
@@ -176,6 +179,7 @@ export async function resetPassword(trx: Trx, orgId: number, id: number) {
   if (!u) throw notFound('That user was not found.');
   const temporary = temporaryPassword();
   await trx.updateTable('users').set({ password_hash: await hashPassword(temporary), failed_logins: 0, locked_until: null }).where('id', '=', id).execute();
+  await recordPasswordSet(trx, id, '', { temporary: true });
   await endSessions(trx, id, 'password_reset');
   return temporary;
 }

@@ -26,6 +26,18 @@ Under the screens sits a real double-entry ledger in MySQL. Every invoice, bill 
 - **Money never drifts.** Every amount is held as integer paise end to end — `DECIMAL(19,4)` in the database, string and BigInt arithmetic in between. No floating point touches a rupee value.
 - **TDS thresholds accumulate across the year.** Bill a contractor past ₹1,00,000 in a financial year and the app starts withholding, at the rate the vendor's PAN status actually earns.
 
+## Internal controls
+
+After an auditor's review, the controls around the books are built in and shown, area by area with the evidence, under **Settings → Controls** (`lib/server/services/controls.ts`):
+
+- **Exceptions** (`/exceptions`, `services/exceptions.ts`) — the scheduler finds what is wrong (invoices without an IRN, customers 15/30/60/90 days past due, bills falling due, MSME bills nearing day 45, concentration and credit-limit risks, unreconciled bank lines, bad GSTINs, expiring documents, system errors), gives each an owner and a date, escalates it to the admins when the date passes, and closes it with a resolution — or by itself when the problem goes away.
+- **IRNs register themselves** as soon as an invoice is issued (`gst/auto-irn.ts`); a refusal becomes an exception.
+- **Perpetual inventory** (`services/stock-ledger.ts`) — each sale posts its cost to Cost of Goods Sold, stock purchases go to Inventory, month end brings Inventory into line with the valuation. Profit is identical to the periodic (Tally) method, which stays the default.
+- **Segregation of duties** — whoever entered or approved a bill does not pay it; nobody approves what they submitted.
+- **Why, not only who and when** — a book can require a reason for every change; it is kept in the audit trail.
+- **Validation** — GSTIN check digit, state and PAN; duplicate GSTINs refused, repeated PANs and names flagged.
+- **Credit hold** on customers long past due; **password rules** (length, expiry, history); **error log** with references and resolutions (Settings → System health); **document library** with expiry; **risk analytics** (`/analytics/risk`): journal anomalies, customer risk scores, collections by each customer's own lateness; **dashboard cached** until the books change.
+
 ## A five-minute walkthrough
 
 Open the demo book as **Admin** from the sign-in page.

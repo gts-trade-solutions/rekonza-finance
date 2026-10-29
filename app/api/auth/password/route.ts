@@ -1,7 +1,8 @@
 import { z } from 'zod';
 import { db } from '@/lib/server/db';
 import { route, body, badRequest } from '@/lib/server/http';
-import { hashPassword, passwordProblems, verifyPassword } from '@/lib/server/auth/password';
+import { hashPassword, verifyPassword } from '@/lib/server/auth/password';
+import { newPasswordProblems, recordPasswordSet } from '@/lib/server/auth/password-policy';
 import { logAudit, auditMeta } from '@/lib/server/audit';
 
 // Change one's own password. The other sessions end; this one carries on.
@@ -12,10 +13,13 @@ export const POST = route(async ({ user, req }) => {
   const { current, next } = await body(req, Input);
   const u = await db.selectFrom('users').select('password_hash').where('id', '=', user.userId).executeTakeFirstOrThrow();
   if (!u.password_hash || !(await verifyPassword(u.password_hash, current))) throw badRequest('The current password is not right.');
-  const problems = passwordProblems(next);
-  if (problems.length) throw badRequest(problems.join(' '));
   if (next === current) throw badRequest('Choose a password different from the current one.');
-  await db.updateTable('users').set({ password_hash: await hashPassword(next) }).where('id', '=', user.userId).execute();
+  // The book's own rules: its minimum length, and none of the last few again.
+  const problems = await newPasswordProblems(db, user.orgId, user.userId, next);
+  if (problems.length) throw badRequest(problems.join(' '));
+  const hash = await hashPassword(next);
+  await db.updateTable('users').set({ password_hash: hash }).where('id', '=', user.userId).execute();
+  await recordPasswordSet(db, user.userId, hash);
   const others = await db.selectFrom('sessions').select('token_hash').where('user_id', '=', user.userId).where('revoked_at', 'is', null).execute();
   const mine = user.sessionId ?? '';
   for (const s of others) {

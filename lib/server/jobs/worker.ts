@@ -20,6 +20,10 @@ import { deliverDueWebhooks } from '../integrations/webhooks';
 import { runDueReports } from '../services/report-schedules';
 import { runStockAlerts } from '../services/stock-alerts';
 import { runReminders } from '../services/reminders';
+import { runExceptions } from '../services/exceptions';
+import { runAutoIrn } from '../gst/auto-irn';
+import { runAutoDepreciation } from '../services/fixed-assets';
+import { runStockTrueUp } from '../services/stock-ledger';
 
 const TICK_MS = Number(process.env.JOBS_TICK_MS) || 15_000;
 /** How often the scheduler looks for post-dated entries and recurring profiles due. */
@@ -66,6 +70,10 @@ export function startJobWorker(): void {
     try {
       if (Date.now() - lastSweep >= SCHEDULE_MS) {
         lastSweep = Date.now();
+        // Invoices the routes did not queue for their IRN (recurring, approved
+        // later): queued here and registered on the next tick.
+        const irns = await runAutoIrn();
+        if (irns) console.info('[auto-irn] queued:', irns);
         const r = await runScheduledPostings();
         if (r.posted || r.held || r.failed || r.behind) console.info('[scheduler]', r);
         const reports = await runDueReports();
@@ -74,6 +82,13 @@ export function startJobWorker(): void {
         if (alerts) console.info('[scheduler] stock alerts sent:', alerts);
         const reminders = await runReminders();
         if (reminders) console.info('[scheduler] payment reminders queued:', reminders);
+        const depreciation = await runAutoDepreciation();
+        if (depreciation) console.info('[scheduler] depreciation runs posted:', depreciation);
+        const stock = await runStockTrueUp();
+        if (stock) console.info('[scheduler] stock brought into line:', stock);
+        // Last, so it sees what the rest of the sweep did.
+        const raised = await runExceptions();
+        if (raised) console.info('[scheduler] exceptions raised:', raised);
       }
     } catch (err) {
       console.error('[scheduler] sweep failed', err);

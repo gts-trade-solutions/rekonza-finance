@@ -296,6 +296,7 @@ export interface AuditLog {
   ip: string | null;
   org_id: number;
   payload: Json | null;
+  reason: string | null;
   target_id: string | null;
   target_label: string | null;
   target_type: string | null;
@@ -762,6 +763,7 @@ export interface Contacts {
   notes: string | null;
   opening_balance: Generated<Decimal>;
   org_id: number;
+  owner_user_id: number | null;
   pan: string | null;
   pan_checked_on: ColumnType<string | null, string | null, string | null>;
   pan_status: Generated<"inoperative" | "operative" | "unverified">;
@@ -921,6 +923,22 @@ export interface DepreciationRuns {
   total: Decimal;
 }
 
+export interface Documents {
+  archived_at: Date | null;
+  category: Generated<"agreement" | "certificate" | "contract" | "licence" | "other" | "policy" | "statutory">;
+  contact_id: number | null;
+  created_at: Generated<Date>;
+  created_by_user_id: number | null;
+  expires_on: ColumnType<string | null, string | null, string | null>;
+  id: Generated<number>;
+  issued_on: ColumnType<string | null, string | null, string | null>;
+  notes: string | null;
+  org_id: number;
+  reference: string | null;
+  title: string;
+  updated_at: Generated<Date>;
+}
+
 export interface Einvoices {
   ack_date: Date | null;
   ack_no: string | null;
@@ -1002,6 +1020,27 @@ export interface EmployeeSalaries {
   id: Generated<number>;
   other: Generated<Decimal>;
   special: Generated<Decimal>;
+}
+
+export interface ErrorEvents {
+  error_name: string | null;
+  fingerprint: string;
+  first_seen_at: Generated<Date>;
+  id: Generated<number>;
+  last_seen_at: Generated<Date>;
+  last_user_id: number | null;
+  message: string | null;
+  method: string | null;
+  occurrences: Generated<number>;
+  org_id: number | null;
+  path: string | null;
+  ref: string;
+  resolution: string | null;
+  resolved_at: Date | null;
+  resolved_by_user_id: number | null;
+  root_cause: string | null;
+  stack: string | null;
+  status: Generated<"investigating" | "open" | "resolved">;
 }
 
 export interface EstimateLines {
@@ -1091,6 +1130,40 @@ export interface EwayBills {
   updated_at: Generated<Date>;
   valid_until: Date | null;
   vehicle_no: string | null;
+}
+
+export interface ExceptionEvents {
+  action: string;
+  created_at: Generated<Date>;
+  exception_id: number;
+  id: Generated<number>;
+  note: string | null;
+  org_id: number;
+  user_id: number | null;
+}
+
+export interface Exceptions {
+  amount: Decimal | null;
+  closed_at: Date | null;
+  closed_by_user_id: number | null;
+  detail: string | null;
+  detected_at: Generated<Date>;
+  due_at: Date | null;
+  escalated_at: Date | null;
+  escalation_level: Generated<number>;
+  href: string | null;
+  id: Generated<number>;
+  kind: string;
+  last_seen_at: Generated<Date>;
+  open_key: string | null;
+  org_id: number;
+  owner_user_id: number | null;
+  resolution: string | null;
+  severity: Generated<"critical" | "high" | "low" | "medium">;
+  status: Generated<"in_progress" | "open" | "resolved" | "waived">;
+  subject_id: Generated<number>;
+  subject_type: string;
+  title: string;
 }
 
 export interface ExchangeRates {
@@ -1796,6 +1869,13 @@ export interface Organizations {
   updated_at: Generated<Date>;
   upi_id: string | null;
   upi_payee_name: string | null;
+}
+
+export interface PasswordHistory {
+  created_at: Generated<Date>;
+  id: Generated<number>;
+  password_hash: string;
+  user_id: number;
 }
 
 export interface PaymentAllocations {
@@ -2628,6 +2708,7 @@ export interface Users {
   mfa_secret: string | null;
   name: string;
   org_id: number;
+  password_changed_at: Date | null;
   password_hash: string | null;
   phone: string | null;
   role: Generated<"accountant" | "admin" | "sales" | "staff" | "viewer">;
@@ -2779,14 +2860,18 @@ export interface DB {
   delivery_challans: DeliveryChallans;
   depreciation_lines: DepreciationLines;
   depreciation_runs: DepreciationRuns;
+  documents: Documents;
   einvoices: Einvoices;
   employee_loans: EmployeeLoans;
   employee_salaries: EmployeeSalaries;
   employees: Employees;
+  error_events: ErrorEvents;
   estimate_lines: EstimateLines;
   estimates: Estimates;
   eway_bill_events: EwayBillEvents;
   eway_bills: EwayBills;
+  exception_events: ExceptionEvents;
+  exceptions: Exceptions;
   exchange_rates: ExchangeRates;
   expenses: Expenses;
   files: Files;
@@ -2825,6 +2910,7 @@ export interface DB {
   number_series: NumberSeries;
   opening_documents: OpeningDocuments;
   organizations: Organizations;
+  password_history: PasswordHistory;
   payment_allocations: PaymentAllocations;
   payment_batch_lines: PaymentBatchLines;
   payment_batches: PaymentBatches;

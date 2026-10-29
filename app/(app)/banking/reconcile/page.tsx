@@ -171,6 +171,20 @@ function ReconcileInner() {
         actions={
           <>
             <Refreshing active={state.refreshing} />
+            {/* Rules, invoice numbers in the narration, and payments already entered (banking.ts). */}
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={!accountId || act.busy}
+              title={accountId ? 'Match what can be matched without a person' : 'Choose an account first'}
+              onClick={async () => {
+                const r = await act.run({ action: 'auto_match', bankAccountId: accountId }) as unknown as { matched?: number } | undefined;
+                if (r) toast.success(r.matched ? `${r.matched} line${r.matched === 1 ? '' : 's'} matched automatically` : 'Nothing more could be matched automatically');
+                await refresh();
+              }}
+            >
+              Auto-match
+            </Button>
             <div className="w-56">
               <Combobox
                 options={accountOptions}

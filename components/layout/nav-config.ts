@@ -4,7 +4,7 @@ import {
   ReceiptIndianRupee, Repeat, ScrollText, Settings, ShieldCheck, ShoppingCart,
   Truck, Users, Wallet, FileCheck2, HandCoins, ClipboardList, CalendarClock,
   FileMinus, Building, AlertTriangle, Split, Lock, ChartColumnBig, MonitorDown, PackageCheck, Scale, CalendarDays, LifeBuoy,
-  ScanBarcode, BellRing,
+  ScanBarcode, BellRing, AlertOctagon, FolderOpen, Radar,
 } from 'lucide-react';
 
 export interface NavItem {
@@ -13,7 +13,7 @@ export interface NavItem {
   icon: LucideIcon;
   /** RBAC module key checked with hasPermission(role, module, 'view'). */
   module: string;
-  badge?: 'einvoicePending' | 'msmeRisk' | 'unmatched' | 'complianceDue';
+  badge?: 'einvoicePending' | 'msmeRisk' | 'unmatched' | 'complianceDue' | 'exceptions';
   /** Shown only to a book with this GST registration: the returns differ. */
   registration?: 'regular' | 'composition';
   /** A part of the app a book can switch off (Settings → Policies). */
@@ -94,6 +94,8 @@ export const NAV_GROUPS: NavGroup[] = [
       { label: 'Fixed Assets', href: '/accountant/fixed-assets', icon: Building, module: 'accountant', feature: 'fixedAssets' },
       { label: 'Budgets', href: '/accountant/budgets', icon: BarChart3, module: 'accountant' },
       { label: 'Approvals', href: '/approvals', icon: ShieldCheck, module: 'accountant', feature: 'approvals' },
+      { label: 'Documents', href: '/documents', icon: FolderOpen, module: 'accountant' },
+      { label: 'Risk & Anomalies', href: '/analytics/risk', icon: Radar, module: 'analytics', feature: 'analytics' },
       { label: 'Transaction Locking', href: '/accountant/transaction-locking', icon: Lock, module: 'accountant' },
       { label: 'Foreign Currency', href: '/accountant/foreign-currency', icon: Banknote, module: 'accountant', feature: 'multiCurrency' },
       { label: 'Cost Centres', href: '/accountant/cost-centres', icon: Split, module: 'accountant', feature: 'costCentres' },
@@ -156,6 +158,7 @@ export const NAV_GROUPS: NavGroup[] = [
 
 export const TOP_LEVEL: NavItem[] = [
   { label: 'Dashboard', href: '/dashboard', icon: LayoutDashboard, module: 'sales' },
+  { label: 'Exceptions', href: '/exceptions', icon: AlertOctagon, module: 'exceptions', badge: 'exceptions' },
 ];
 
 export const BOTTOM_LEVEL: NavItem[] = [

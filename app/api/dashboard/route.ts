@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { db } from '@/lib/server/db';
 import { route, query, asId } from '@/lib/server/http';
+import { booksVersion, cachedFor } from '@/lib/server/cache';
 import { toPaiseFromSql } from '@/lib/server/money-sql';
 import { profitAndLoss, trialBalance, ageing } from '@/lib/server/reports/statements';
 import {
@@ -24,6 +25,14 @@ const Q = z.object({
 export const GET = route(
   async ({ orgId, req }) => {
     const q = query(req, Q);
+    // Kept until the book changes (cache.ts): opening the app again recomputes nothing.
+    const version = await booksVersion(db, orgId);
+    return cachedFor(`dashboard:${orgId}:${q.from}:${q.to}:${q.fyStart}`, version, () => dashboard(orgId, q));
+  },
+  { permission: { module: 'reports', action: 'view' } },
+);
+
+async function dashboard(orgId: number, q: z.infer<typeof Q>) {
     const win = { from: q.from, to: q.to };
     const prev = previousWindow(win);
 
@@ -126,6 +135,4 @@ export const GET = route(
         balancePaise: toPaiseFromSql(r.total) - toPaiseFromSql(r.amount_paid),
       })),
     };
-  },
-  { permission: { module: 'reports', action: 'view' } },
-);
+}

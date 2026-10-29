@@ -100,6 +100,27 @@ export async function enqueueRetry(
   return { id: Number(inserted.insertId), runAfter };
 }
 
+/**
+ * Queue a first attempt to run at once — registering an invoice for its IRN
+ * as soon as it is issued — unless a job for the document is already waiting.
+ * It then retries an outage on the same schedule as a person's failed attempt.
+ */
+export async function enqueueNow(
+  ex: Executor,
+  args: { orgId: number; kind: JobKind; key: string; payload: Record<string, unknown>; userId: number | null; now?: Date },
+): Promise<number | null> {
+  const existing = await ex.selectFrom('jobs').select('id')
+    .where('org_id', '=', args.orgId).where('kind', '=', args.kind)
+    .where('status', 'in', ['queued', 'running']).where(sql<boolean>`${jobKey} = ${args.key}`).executeTakeFirst();
+  if (existing) return null;
+  const inserted = await ex.insertInto('jobs').values({
+    org_id: args.orgId, kind: args.kind, payload: JSON.stringify({ ...args.payload, key: args.key }), status: 'queued',
+    // The first try and then the usual retries.
+    max_attempts: MAX_RETRIES + 1, run_after: args.now ?? new Date(), created_by_user_id: args.userId,
+  }).executeTakeFirstOrThrow();
+  return Number(inserted.insertId);
+}
+
 const parsePayload = (v: unknown): Record<string, unknown> =>
   typeof v === 'string' ? (JSON.parse(v) as Record<string, unknown>) : ((v ?? {}) as Record<string, unknown>);
 

@@ -198,13 +198,16 @@ test('matching a line to an existing payment posts nothing', async () => {
 
     const before = await verifyLedgerBalances(trx, orgId);
 
-    await importStatement(trx, orgId, null, bankId, 'aug.csv', [
+    // The import itself matches the line: it is the one payment of that amount
+    // in that account within days (matchEnteredPayments).
+    const imported = await importStatement(trx, orgId, null, bankId, 'aug.csv', [
       { date: '2026-08-01', narration: 'NEFT FROM CUSTOMER A', depositPaise: inv.totalPaise },
     ]);
+    assert.equal(imported.autoMatched, 1);
     const line = await trx.selectFrom('bank_transactions')
-      .select('id').where('org_id', '=', orgId).executeTakeFirstOrThrow();
-
-    await matchToPayment(trx, orgId, null, line.id, pay.id);
+      .select(['id', 'matched_id']).where('org_id', '=', orgId).executeTakeFirstOrThrow();
+    assert.equal(Number(line.matched_id), pay.id);
+    await assert.rejects(matchToPayment(trx, orgId, null, line.id, pay.id), /already matched/);
 
     const after = await verifyLedgerBalances(trx, orgId);
     // The payment already posted when it was recorded. Posting again on match

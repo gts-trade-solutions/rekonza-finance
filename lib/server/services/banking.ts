@@ -159,7 +159,8 @@ export async function importStatement(
       .execute();
   }
 
-  const autoMatched = await applyRules(trx, orgId, userId, bankAccountId) + await matchInvoicePayments(trx, orgId, userId, bankAccountId);
+  const autoMatched = await applyRules(trx, orgId, userId, bankAccountId) + await matchInvoicePayments(trx, orgId, userId, bankAccountId)
+    + await matchEnteredPayments(trx, orgId, userId, bankAccountId);
 
   await trx
     .updateTable('bank_statement_imports')
@@ -176,6 +177,37 @@ export async function importStatement(
     periodFrom,
     periodTo,
   };
+}
+
+/**
+ * A statement line equal to a payment already entered — the same account, the
+ * same amount, the same direction, within three days — is that payment, and is
+ * matched to it. Only when exactly one payment fits and it is not matched to
+ * another line already: two cheques of ₹10,000 the same week are left for a
+ * person to tell apart.
+ */
+export async function matchEnteredPayments(trx: Trx, orgId: number, userId: number | null, bankAccountId: number): Promise<number> {
+  const lines = await trx.selectFrom('bank_transactions').select(['id', 'txn_date', 'deposit', 'withdrawal'])
+    .where('org_id', '=', orgId).where('bank_account_id', '=', bankAccountId).where('status', '=', 'unmatched').execute();
+  if (!lines.length) return 0;
+  const taken = new Set((await trx.selectFrom('bank_transactions').select('matched_id')
+    .where('org_id', '=', orgId).where('matched_type', '=', 'payment').where('status', '=', 'matched').execute()).map((r) => Number(r.matched_id)));
+  const payments = (await trx.selectFrom('payments').select(['id', 'kind', 'amount', 'payment_date'])
+    .where('org_id', '=', orgId).where('bank_account_id', '=', bankAccountId).where('status', '<>', 'void').execute())
+    .filter((p) => !taken.has(Number(p.id)));
+  const day = (d: unknown) => Date.parse(String(d instanceof Date ? d.toISOString() : d).slice(0, 10));
+  let matched = 0;
+  for (const l of lines) {
+    const deposit = toPaiseFromSql(l.deposit);
+    const amount = deposit || toPaiseFromSql(l.withdrawal);
+    const fits = payments.filter((p) => !taken.has(Number(p.id)) && (p.kind === 'received') === deposit > 0
+      && toPaiseFromSql(p.amount) === amount && Math.abs(day(p.payment_date) - day(l.txn_date)) <= 3 * 86_400_000);
+    if (fits.length !== 1) continue;
+    await matchToPayment(trx, orgId, userId, l.id, Number(fits[0].id));
+    taken.add(Number(fits[0].id));
+    matched++;
+  }
+  return matched;
 }
 
 /** Letters and digits only, in capitals: how an invoice number survives a bank's narration. */

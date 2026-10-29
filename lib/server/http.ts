@@ -12,6 +12,7 @@ import 'server-only';
 
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { claimKey, releaseKey, settleKey } from './idempotency';
+import { withChangeReason } from './request-context';
 import { NextResponse } from 'next/server';
 import { ZodError, type ZodType } from 'zod';
 import type { RoleName } from '../types';
@@ -97,10 +98,11 @@ export function route(handler: Handler, options: RouteOptions = {}) {
     req: Request,
     context: { params: Promise<Record<string, string>> },
   ): Promise<NextResponse> => {
+    let user: SessionUser | null = null;
+    const path = new URL(req.url).pathname;
     try {
       const params = context?.params ? await context.params : {};
 
-      let user: SessionUser | null = null;
       if (!options.public) {
         user = await currentUser();
         // Other software signs in with an API key instead of a session cookie.
@@ -108,7 +110,6 @@ export function route(handler: Handler, options: RouteOptions = {}) {
           const keys = await import('./auth/api-keys');
           const byKey = await keys.apiKeyUser(req);
           if (byKey) {
-            const path = new URL(req.url).pathname;
             if (keys.KEY_FORBIDDEN.some((p) => path.startsWith(p))) throw forbidden('An API key cannot use this endpoint; sign in to the app instead.');
             if (keys.overLimit(byKey.apiKeyId)) throw new ApiError(429, 'Too many requests for this key. Wait a minute and try again.', 'rate_limited');
             user = byKey;
@@ -117,6 +118,9 @@ export function route(handler: Handler, options: RouteOptions = {}) {
         if (!user) throw unauthorized();
         if (user.mfaSetupRequired && !options.duringMfaSetup) {
           throw new ApiError(403, 'This book requires two-step sign-in. Set it up to carry on.', 'mfa_setup_required');
+        }
+        if (user.passwordChangeRequired && !options.duringMfaSetup) {
+          throw new ApiError(403, 'Your password has to be changed before you carry on.', 'password_change_required');
         }
 
         if (options.permission) {
@@ -138,24 +142,34 @@ export function route(handler: Handler, options: RouteOptions = {}) {
         }
       }
 
+      // Why: kept in the audit trail beside who and when. A book can insist on
+      // it for every change, and the browser then asks before sending again.
+      const reason = readReason(req);
+      if (user && !reason && CHANGES.has(req.method) && !NO_REASON.test(path)) {
+        const [{ getPolicies }, { db }] = await Promise.all([import('./services/org-settings'), import('./db')]);
+        if ((await getPolicies(db, user.orgId)).controls.changeReasons) {
+          throw new ApiError(428, 'Say why you are making this change. The reason is kept in the audit trail.', 'reason_required');
+        }
+      }
+
       // The same request sent again under its key gets the first one's reply (idempotency.ts).
       const idem = user && req.method !== 'GET' ? req.headers.get('idempotency-key')?.trim().slice(0, 80) || null : null;
       if (user && idem) {
-        const prior = await claimKey(user.orgId, user.userId, idem, new URL(req.url).pathname);
+        const prior = await claimKey(user.orgId, user.userId, idem, path);
         if (prior === 'running') throw new ApiError(409, 'This entry is still being saved. Try again in a moment.', 'in_progress');
         if (prior) return new NextResponse(prior.body, { status: prior.status, headers: { 'Content-Type': 'application/json', 'Idempotent-Replay': 'true' } });
       }
 
       let result: unknown;
       try {
-        result = await requestRole.run((user?.role ?? 'viewer') as RoleName, () => requestPermissions.run(user?.permissions ?? null, () => handler({
+        result = await requestRole.run((user?.role ?? 'viewer') as RoleName, () => requestPermissions.run(user?.permissions ?? null, () => withChangeReason(reason, () => handler({
           user: user as SessionUser,
           orgId: user?.orgId ?? 0,
           branchId: user?.activeBranchId ?? user?.homeBranchId ?? 0,
           role: (user?.role ?? 'viewer') as RoleName,
           req,
           params,
-        })));
+        }))));
       } catch (err) {
         if (user && idem) await releaseKey(user.orgId, user.userId, idem);
         throw err;
@@ -169,13 +183,41 @@ export function route(handler: Handler, options: RouteOptions = {}) {
       if (user && idem) await settleKey(user.orgId, user.userId, idem, 200, json);
       return new NextResponse(json, { status: 200, headers: { 'Content-Type': 'application/json' } });
     } catch (err) {
-      return toResponse(err);
+      // Kept where an admin will see it, under a reference the person is given.
+      const ref = isUnexpected(err)
+        ? await (await import('./error-log')).recordError(err, { orgId: user?.orgId ?? null, userId: user?.userId ?? null, method: req.method, path })
+        : null;
+      return toResponse(err, ref);
     }
   };
 }
 
+/** Requests that change something, and so may be asked why. */
+const CHANGES = new Set(['PATCH', 'PUT', 'DELETE']);
+/** Changes that are not to the books: reading a notification, one's own sign-in, the assistant. */
+const NO_REASON = /^\/api\/(notifications|auth|ai|exceptions)(\/|$)/;
+
+function readReason(req: Request): string | null {
+  const raw = req.headers.get('x-change-reason');
+  if (!raw) return null;
+  let text = raw;
+  try { text = decodeURIComponent(raw); } catch { /* sent plain */ }
+  return text.trim().slice(0, 500) || null;
+}
+
+const UNREACHABLE = ['ECONNREFUSED', 'ENOTFOUND', 'ETIMEDOUT', 'EHOSTUNREACH', 'PROTOCOL_CONNECTION_LOST',
+  'ER_ACCESS_DENIED_ERROR', 'ER_BAD_DB_ERROR', 'HANDSHAKE_SSL_ERROR', 'HANDSHAKE_NO_SSL_SUPPORT'];
+
+/** An error toResponse has no message of its own for: a fault, not a refusal. */
+export function isUnexpected(err: unknown): boolean {
+  if (err instanceof ApiError || err instanceof UnbalancedEntryError || err instanceof PeriodLockedError
+    || err instanceof NumberingError || err instanceof ZodError) return false;
+  const code = (err as { code?: string })?.code;
+  return !(code === 'ER_DUP_ENTRY' || code === 'ER_NO_REFERENCED_ROW_2' || code === 'ER_ROW_IS_REFERENCED_2' || (code && UNREACHABLE.includes(code)));
+}
+
 /** An error as the JSON response a route returns. Exported for streaming routes. */
-export function toResponse(err: unknown): NextResponse {
+export function toResponse(err: unknown, ref: string | null = null): NextResponse {
   if (err instanceof ApiError) {
     return NextResponse.json(
       { error: err.message, code: err.code, details: err.details },
@@ -213,8 +255,7 @@ export function toResponse(err: unknown): NextResponse {
   // The database cannot be reached at all (a new deployment with no DB_* set,
   // a wrong host or password, the database server down). Saying so plainly
   // saves an hour of guessing; it names no host or user.
-  if (code && ['ECONNREFUSED', 'ENOTFOUND', 'ETIMEDOUT', 'EHOSTUNREACH', 'PROTOCOL_CONNECTION_LOST',
-    'ER_ACCESS_DENIED_ERROR', 'ER_BAD_DB_ERROR', 'HANDSHAKE_SSL_ERROR', 'HANDSHAKE_NO_SSL_SUPPORT'].includes(code)) {
+  if (code && UNREACHABLE.includes(code)) {
     console.error('[db] cannot reach the database:', code);
     return NextResponse.json(
       { error: 'The server cannot reach its database, so nothing could be done. Check the database settings (DATABASE_URL, or DB_HOST and the rest) on the server.', code: 'database_unreachable' },
@@ -228,9 +269,13 @@ export function toResponse(err: unknown): NextResponse {
     );
   }
 
-  console.error('[api] unhandled', err);
+  console.error('[api] unhandled', ref ? `ref ${ref}` : '', err);
   return NextResponse.json(
-    { error: 'Something went wrong on our side. Nothing was saved.', code: 'internal' },
+    {
+      error: `Something went wrong on our side. Nothing was saved.${ref ? ` If you report it, quote reference ${ref}.` : ''}`,
+      code: 'internal',
+      ...(ref ? { ref } : {}),
+    },
     { status: 500 },
   );
 }

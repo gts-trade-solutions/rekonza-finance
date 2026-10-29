@@ -15,6 +15,7 @@ import { db, transaction } from '../lib/server/db';
 import { bootstrap } from '../lib/server/seed/bootstrap';
 import { seedDemoBook } from '../lib/server/seed/demo-book';
 import { seedDemoDocuments } from '../lib/server/seed/demo-documents';
+import { turnOnDemoControls } from '../lib/server/seed/demo-controls';
 import { verifyLedgerBalances } from '../lib/server/ledger/posting';
 
 const fresh = process.argv.includes('--fresh');
@@ -124,6 +125,8 @@ async function main() {
     // The surrounding documents come second: the credit notes attach to real
     // invoices and the retainer is applied against one.
     const around = masters ? null : await seedDemoDocuments(trx, created);
+    // Last: perpetual inventory takes the stock the documents above left on hand.
+    if (!masters) await turnOnDemoControls(trx, created.orgId);
     return { ids: created, book: history, docs: around };
   });
 

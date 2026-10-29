@@ -4,6 +4,7 @@ import { db, transaction } from '@/lib/server/db';
 import { route, body, query, asId } from '@/lib/server/http';
 import { toPaiseFromSql } from '@/lib/server/money-sql';
 import { createInvoice } from '@/lib/server/services/sales';
+import { queueIrns } from '@/lib/server/gst/auto-irn';
 import { hasPermission } from '@/lib/rbac';
 import { logAudit, auditMeta } from '@/lib/server/audit';
 
@@ -297,6 +298,10 @@ export const POST = route(
       detail: `Created invoice ${created.number}`,
       ...auditMeta(req),
     });
+
+    // Off for its IRN at once, now that the invoice is committed (gst/auto-irn.ts).
+    // The scheduler would find it anyway; this saves the wait.
+    await queueIrns(db, orgId, { invoiceId: created.id, userId: user.userId }).catch((err) => console.error('[auto-irn]', err));
 
     return {
       id: asId(created.id),

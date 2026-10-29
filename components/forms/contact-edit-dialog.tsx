@@ -23,6 +23,7 @@ import {
 import { Field, MoneyInput } from '@/components/shared/form-bits';
 import { api, contacts, type ContactRow } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
+import { useAppStore } from '@/lib/store';
 import { stateOptions } from '@/lib/options';
 import { TDS_SECTIONS } from '@/lib/tax/tds';
 
@@ -57,6 +58,8 @@ export function ContactEditDialog({ contact, onClose, onSaved }: {
   const [errors, setErrors] = useState<Record<string, string>>({});
   useEffect(() => { setF(contact); setErrors({}); }, [contact]);
   const priceLists = useApi<{ lists: { id: string; name: string; isActive: boolean }[] }>(() => api.get('/api/price-lists'), []);
+  // The book's people, for the account owner (exceptions about this customer go to them).
+  const users = useAppStore((st) => st.users);
 
   if (!f) return <Dialog open={false} />;
   const isVendor = f.kind !== 'customer';
@@ -73,6 +76,7 @@ export function ContactEditDialog({ contact, onClose, onSaved }: {
         expectedUpdatedAt: f.updatedAt, displayName: f.displayName.trim(), legalName: n(f.legalName), gstin: n(f.gstin) ?? '', pan: n(f.pan) ?? '',
         gstTreatment: f.gstTreatment, stateCode: f.stateCode, email: n(f.email) ?? '', phone: n(f.phone),
         paymentTerms: f.paymentTerms, creditLimitPaise: f.creditLimitPaise, billWise: f.billWise !== false,
+        ownerUserId: f.kind !== 'vendor' ? f.ownerUserId ?? null : undefined,
         isMsme: isVendor ? f.isMsme : false,
         msmeUdyamNo: isVendor && f.isMsme ? n(f.msmeUdyamNo) : null,
         msmeCategory: isVendor && f.isMsme ? f.msmeCategory : null,
@@ -125,6 +129,15 @@ export function ContactEditDialog({ contact, onClose, onSaved }: {
             {f.kind !== 'vendor' && (
               <Field label="Credit limit" hint="Invoices beyond it are flagged">
                 <MoneyInput valuePaise={f.creditLimitPaise} onChangePaise={(p) => set('creditLimitPaise', p)} />
+              </Field>
+            )}
+            {f.kind !== 'vendor' && (
+              <Field label="Account owner" hint="Their overdue invoices and credit risks are raised to this person">
+                <select className="h-9 w-full rounded-md border bg-background px-2 text-sm" value={f.ownerUserId ?? ''}
+                  onChange={(e) => set('ownerUserId', e.target.value || null)} aria-label="Account owner">
+                  <option value="">Whoever handles receivables</option>
+                  {users.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+                </select>
               </Field>
             )}
             <label className="flex items-start gap-2 text-sm sm:col-span-2">

@@ -48,6 +48,8 @@ export const ATTACHABLE = {
   // The bills behind an expense claim, and the proofs behind a tax declaration.
   reimbursement_claim: { table: 'reimbursement_claims', module: 'payroll', label: 'expense claim' },
   tax_declaration: { table: 'tax_declarations', module: 'payroll', label: 'investment declaration' },
+  // The document library: contracts, agreements, certificates, licences.
+  document: { table: 'documents', module: 'accountant', label: 'document' },
 } as const;
 
 export type AttachableType = keyof typeof ATTACHABLE;

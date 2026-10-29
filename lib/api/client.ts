@@ -11,6 +11,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { enqueue, OFFLINE_PATHS } from '../offline/outbox';
+import { toastWarnings } from './warnings';
 
 export class ApiError extends Error {
   readonly status: number;
@@ -35,6 +36,16 @@ export class ApiError extends Error {
   get isAuthFailure(): boolean {
     return this.status === 401;
   }
+}
+
+/**
+ * Asks the person why they are making a change, for a book that keeps a reason
+ * with every change (the server answers 428 reason_required). Set by
+ * components/layout/reason-prompt.tsx; null means nobody can be asked.
+ */
+let askReason: (() => Promise<string | null>) | null = null;
+export function setReasonAsker(fn: (() => Promise<string | null>) | null) {
+  askReason = fn;
 }
 
 interface Options extends Omit<RequestInit, 'body'> {
@@ -92,6 +103,13 @@ async function request<T>(path: string, options: Options = {}): Promise<T> {
 
   if (!res.ok) {
     const b = (parsed ?? {}) as { error?: string; code?: string; details?: Record<string, string> };
+    // The book keeps a reason with every change: ask, and send it again with one.
+    const asked = !!(headers as Record<string, string> | undefined)?.['X-Change-Reason'];
+    if (res.status === 428 && b.code === 'reason_required' && askReason && !asked) {
+      const reason = await askReason();
+      if (!reason) throw new ApiError(0, 'Not saved: a reason is needed for this change.', 'reason_cancelled');
+      return request<T>(path, { ...options, headers: { ...(headers as Record<string, string> | undefined), 'X-Change-Reason': encodeURIComponent(reason) } });
+    }
     throw new ApiError(
       res.status,
       b.error || `Request failed (${res.status}).`,
@@ -123,6 +141,8 @@ export interface SessionResponse {
     activeBranchId?: string | null;
     /** The book requires two-step sign-in of this user, not yet set up. */
     mfaSetupRequired?: boolean;
+    /** The password has expired or was a temporary one: it is changed before anything else. */
+    passwordChangeRequired?: boolean;
     /** A custom role's grants, which replace the built-in role's. */
     permissions?: Record<string, ('view' | 'create' | 'edit' | 'approve' | 'void')[]> | null;
     customRoleName?: string | null;
@@ -564,6 +584,8 @@ export interface ContactRow {
   phone: string | null;
   paymentTerms: string | null;
   creditLimitPaise: number;
+  /** Who chases their overdue invoices: exceptions about this customer go to them. */
+  ownerUserId?: string | null;
   /** Off: payments settle the oldest open documents first, with no bills named. */
   billWise?: boolean;
   isMsme: boolean;
@@ -685,8 +707,9 @@ export const contacts = {
   get: (id: string) => api.get<ContactDetail>(`/api/contacts/${id}`),
   list: (params?: { kind?: 'customer' | 'vendor' | 'both' | 'all'; search?: string; archived?: boolean; limit?: number }) =>
     api.get<{ contacts: ContactRow[] }>('/api/contacts', params),
-  create: (input: unknown) => api.post<{ id: string; displayName: string }>('/api/contacts', input),
-  update: (input: unknown) => api.patch<{ id: string }>('/api/contacts', input),
+  // A possible duplicate (same PAN or name) is saved but flagged: shown as it comes back.
+  create: (input: unknown) => api.post<{ id: string; displayName: string; warnings?: string[] }>('/api/contacts', input).then((r) => (toastWarnings(r), r)),
+  update: (input: unknown) => api.patch<{ id: string; warnings?: string[] }>('/api/contacts', input).then((r) => (toastWarnings(r), r)),
   archive: (id: string) => api.patch<{ id: string }>('/api/contacts', { id, isArchived: true }),
 };
 
@@ -1062,6 +1085,8 @@ export interface AuditEventRow {
   targetId: string | null;
   targetLabel: string;
   detail: string;
+  /** Why, as the person who made the change said. */
+  reason: string | null;
   ip: string | null;
   /** For an edit: each field that changed, with its old and new value. */
   changes: Record<string, { from: unknown; to: unknown }> | null;
@@ -2141,6 +2166,8 @@ export interface NavCounts {
   unmatched: number;
   msmeRisk: number;
   complianceDue: number;
+  /** Open exceptions waiting on this person (on anyone, for a manager). */
+  exceptions: number;
 }
 
 export const navCounts = {
@@ -2175,7 +2202,8 @@ export const search = {
 export type AttachableType =
   | 'invoice' | 'credit_note' | 'estimate' | 'sales_order' | 'challan' | 'bill' | 'expense'
   | 'vendor_credit' | 'purchase_order' | 'payment' | 'journal' | 'contact' | 'organization' | 'tds_certificate'
-  | 'goods_receipt' | 'payment_batch' | 'fixed_asset' | 'employee' | 'payroll_run' | 'reimbursement_claim' | 'tax_declaration';
+  | 'goods_receipt' | 'payment_batch' | 'fixed_asset' | 'employee' | 'payroll_run' | 'reimbursement_claim' | 'tax_declaration'
+  | 'document';
 
 export interface Attachment {
   id: string;

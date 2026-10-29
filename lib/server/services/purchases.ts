@@ -31,6 +31,7 @@ import { computeTds } from '../../tax/tds';
 import { hsnRateHistory, tdsRateOn } from '../tax/rates';
 import { certificateRate } from '../tax/tds-certificates';
 import { checkCashPayment } from './guards';
+import { stockPurchaseAccount } from './stock-ledger';
 import { voidReason, voidStamp } from './void-reason';
 import { registrationOn } from './statutory';
 import { findOrCreateBatch, type BatchInput } from './batches';
@@ -400,8 +401,12 @@ export async function postBill(
   // only blocked (s.17(5)) and composition purchases carry their tax as cost.
   const claimable = (l: { itc_eligibility: string }) => l.itc_eligibility === 'eligible' || l.itc_eligibility === 'capital_goods';
 
+  // On perpetual inventory a stock line goes to Inventory, not to an expense (stock-ledger.ts).
+  const stock = await stockPurchaseAccount(trx, orgId, String(bill.bill_date).slice(0, 10), lines.map((l) => l.item_id));
   for (const l of lines) {
-    const expenseAccount = l.account_id ?? requireAccount(acc, CODE.PURCHASES);
+    const expenseAccount = stock && l.item_id && stock.items.has(l.item_id)
+      ? stock.accountId
+      : l.account_id ?? requireAccount(acc, CODE.PURCHASES);
     const lineTax = p(l.cgst) + p(l.sgst) + p(l.igst) + p(l.cess);
 
     if (claimable(l) && lineTax > 0 && !isRcm) {

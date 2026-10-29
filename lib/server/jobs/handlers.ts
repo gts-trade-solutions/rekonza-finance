@@ -32,7 +32,7 @@ export const HANDLERS: Record<string, JobHandler> = {
       action: 'approve',
       targetType: 'einvoice',
       targetId: invoiceId,
-      detail: `IRN registered via ${result.provider} on automatic retry ${job.attempts}: ${result.irn.slice(0, 16)}…`,
+      detail: `IRN registered automatically via ${result.provider} (attempt ${job.attempts}): ${result.irn.slice(0, 16)}…`,
     });
     return { irn: result.irn };
   },

@@ -2,6 +2,7 @@ import { db } from '@/lib/server/db';
 import { route } from '@/lib/server/http';
 import { hasPermission } from '@/lib/rbac';
 import { msmeOpenBills } from '@/lib/server/services/msme';
+import { activeCount } from '@/lib/server/services/exceptions';
 import { complianceCalendar } from '@/lib/server/tax/compliance-calendar';
 import '@/lib/server/jobs/boot';
 
@@ -26,10 +27,10 @@ import '@/lib/server/jobs/boot';
 //                    yet marked done on the compliance calendar.
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const GET = route(async ({ orgId, role }) => {
+export const GET = route(async ({ orgId, role, user }) => {
   const today = new Date().toISOString().slice(0, 10);
 
-  const [einvoice, bank, msme, due] = await Promise.all([
+  const [einvoice, bank, msme, due, exceptions] = await Promise.all([
     hasPermission(role, 'gst', 'view')
       ? db
           .selectFrom('einvoices')
@@ -57,6 +58,11 @@ export const GET = route(async ({ orgId, role }) => {
         new Date(Date.now() + 7 * 86_400_000).toISOString().slice(0, 10), today)
         .then((c) => ({ n: c.rows.filter((r) => r.status === 'overdue' || r.status === 'due_soon').filter((r) => !r.optional).length }))
       : null,
+
+    // Exceptions waiting on this person; on anyone, for a manager.
+    hasPermission(role, 'exceptions', 'view')
+      ? activeCount(db, orgId, user.userId, hasPermission(role, 'exceptions', 'approve')).then((n) => ({ n }))
+      : null,
   ]);
 
   return {
@@ -64,5 +70,6 @@ export const GET = route(async ({ orgId, role }) => {
     unmatched: Number(bank?.n ?? 0),
     msmeRisk: Number(msme?.n ?? 0),
     complianceDue: Number(due?.n ?? 0),
+    exceptions: Number(exceptions?.n ?? 0),
   };
 });

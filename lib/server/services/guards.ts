@@ -138,3 +138,57 @@ export async function checkCashPayment(
     `${rupees(day)} paid in cash to one person on ${date}. Above ${rupees(limit)} in a day, section 40A(3) disallows the expense.`,
     warnings, conflict);
 }
+
+/**
+ * Segregation of duties: the person who entered a bill, or approved it, is not
+ * the one who pays it. With one person able to make, approve and pay the same
+ * bill, a made-up supplier and its bill can be paid out with nobody else ever
+ * seeing it — the plainest of payment frauds, and the first thing an auditor
+ * tests for.
+ *
+ * A book with one active user cannot split the duties at all, so it is not
+ * told to; the Controls page shows that instead.
+ */
+export async function checkSegregation(
+  ex: Executor, orgId: number, userId: number, billIds: number[], warnings: string[],
+) {
+  if (!billIds.length) return;
+  const policy = (await getPolicies(ex, orgId)).controls.segregation;
+  if (policy === 'off') return;
+  const people = await ex.selectFrom('users').select((eb) => eb.fn.countAll<string>().as('n'))
+    .where('org_id', '=', orgId).where('is_active', '=', 1).executeTakeFirstOrThrow();
+  if (Number(people.n) < 2) return;
+  const own = await ex.selectFrom('bills').select(['internal_no', 'created_by_user_id', 'approved_by_user_id'])
+    .where('org_id', '=', orgId).where('id', 'in', billIds)
+    .where((eb) => eb.or([eb('created_by_user_id', '=', userId), eb('approved_by_user_id', '=', userId)]))
+    .execute();
+  if (!own.length) return;
+  const names = own.map((b) => b.internal_no).join(', ');
+  const role = own.every((b) => Number(b.approved_by_user_id) === userId) ? 'approved' : 'entered';
+  enforce(policy,
+    `You ${role} ${names}. Someone else should pay ${own.length === 1 ? 'it' : 'them'}, so no one person makes, approves and pays the same bill.`,
+    warnings, (m) => Object.assign(conflict(m), { code: 'segregation' }));
+}
+
+/**
+ * Credit hold: a customer with something long past due is not given more on
+ * credit until it is collected. A receivable 306 days old is a collection
+ * failure that started with the invoice raised on day 91; this is the check
+ * that stops that invoice (Settings → Controls: the days, and off, warn or block).
+ */
+export async function checkCreditHold(
+  ex: Executor, orgId: number, customerId: number, date: string, warnings: string[], override = false,
+) {
+  const c = (await getPolicies(ex, orgId)).controls;
+  if (c.creditHold === 'off' || c.creditHoldDays <= 0) return;
+  const late = await ex.selectFrom('invoices').select(['number', 'due_date', sql<string>`total - amount_paid`.as('due')])
+    .where('org_id', '=', orgId).where('customer_id', '=', customerId).where('status', 'not in', ['draft', 'void'])
+    .where(sql<boolean>`total > amount_paid`).where(sql<boolean>`due_date <= DATE_SUB(${date}, INTERVAL ${c.creditHoldDays} DAY)`)
+    .orderBy('due_date').execute();
+  if (!late.length) return;
+  const owed = late.reduce((t, r) => t + toPaiseFromSql(r.due), 0);
+  const oldest = late[0];
+  const message = `This customer has ${rupees(owed)} more than ${c.creditHoldDays} days past due (oldest ${oldest.number}, due ${String(oldest.due_date).slice(0, 10)}). Collect it before supplying more on credit.`;
+  // An override is a manager's decision to supply anyway: let through, but said.
+  enforce(override ? 'warn' : c.creditHold, message, warnings, (m) => Object.assign(conflict(m), { code: 'credit_hold' }));
+}

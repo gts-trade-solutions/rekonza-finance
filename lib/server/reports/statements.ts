@@ -101,6 +101,28 @@ async function balances(
   });
 }
 
+/**
+ * What the Inventory account holds at the end of a date.
+ *
+ * Stock enters the statements from the documents (stock.ts). A book on
+ * perpetual inventory (services/stock-ledger.ts) also posts it: every sale's
+ * cost out of Inventory, every purchase of stock into it, and a month-end entry
+ * that brings the account into line with the documents. The statements then
+ * add only what the ledger does not already carry — the stock value less this
+ * — so a figure is never counted twice, and a periodic book, whose Inventory
+ * account is empty, reads exactly as it always has.
+ */
+export async function inventoryInLedger(ex: Executor, orgId: number, asOf: string, branchId?: number): Promise<Paise> {
+  const { rows } = await sql<{ v: string }>`
+    SELECT COALESCE(SUM(jl.debit - jl.credit), 0) AS v
+      FROM accounts a
+      JOIN journal_lines jl ON jl.org_id = a.org_id AND jl.account_id = a.id AND jl.entry_date <= ${asOf}
+      ${branchId ? sql`JOIN journal_entries e ON e.id = jl.entry_id AND e.branch_id = ${branchId}` : sql``}
+     WHERE a.org_id = ${orgId} AND a.code = ${CODE.INVENTORY}
+  `.execute(ex);
+  return toPaiseFromSql(rows[0]?.v ?? '0');
+}
+
 // ── Trial balance ────────────────────────────────────────────────────────────
 
 export interface TrialBalance {
@@ -172,10 +194,12 @@ export async function profitAndLoss(
   to: string,
   branchId?: number,
 ): Promise<ProfitAndLoss> {
-  const [all, opening, closing] = await Promise.all([
+  const [all, opening, closing, postedOpening, postedClosing] = await Promise.all([
     balances(ex, orgId, { from, to, branchId }),
     stockPosition(ex, orgId, dayBefore(from), { branchId, includeArchived: true }),
     stockPosition(ex, orgId, to, { branchId, includeArchived: true }),
+    inventoryInLedger(ex, orgId, dayBefore(from), branchId),
+    inventoryInLedger(ex, orgId, to, branchId),
   ]);
 
   const incomeRows = all.filter((r) => r.type === 'income' && r.balancePaise !== 0);
@@ -192,8 +216,9 @@ export async function profitAndLoss(
     .filter((r) => directCodes.has(r.code))
     .reduce((t, r) => t + r.balancePaise, 0);
 
-  const openingStockPaise = opening.totalValuePaise;
-  const closingStockPaise = closing.totalValuePaise;
+  // Only the stock the ledger does not carry already (inventoryInLedger).
+  const openingStockPaise = opening.totalValuePaise - postedOpening;
+  const closingStockPaise = closing.totalValuePaise - postedClosing;
   const costOfGoodsSoldPaise = directCost + openingStockPaise - closingStockPaise;
 
   return {
@@ -266,11 +291,13 @@ export async function balanceSheet(
   const fyStart = fyStartFor(asOf, await fiscalStartMonth(ex, orgId));
   const lastYearEnd = dayBefore(fyStart);
 
-  const [all, beforeYear, stockNow, stockAtYearStart] = await Promise.all([
+  const [all, beforeYear, stockNow, stockAtYearStart, postedNow, postedAtYearStart] = await Promise.all([
     balances(ex, orgId, { to: asOf, branchId }),
     balances(ex, orgId, { to: lastYearEnd, branchId }),
     stockPosition(ex, orgId, asOf, { branchId, includeArchived: true }),
     stockPosition(ex, orgId, lastYearEnd, { branchId, includeArchived: true }),
+    inventoryInLedger(ex, orgId, asOf, branchId),
+    inventoryInLedger(ex, orgId, lastYearEnd, branchId),
   ]);
 
   const profitIn = (rows: AccountBalance[]) =>
@@ -278,14 +305,16 @@ export async function balanceSheet(
     rows.filter((r) => r.type === 'expense').reduce((t, r) => t + r.balancePaise, 0);
 
   const openingStock = stockNow.bookOpeningValuePaise;
-  const closingStockPaise = stockNow.totalValuePaise;
-  const priorYearsEarnings = profitIn(beforeYear) + stockAtYearStart.totalValuePaise - openingStock;
+  // The part of stock the Inventory account does not already hold (inventoryInLedger).
+  const closingStockPaise = stockNow.totalValuePaise - postedNow;
+  const stockAtYearStartPaise = stockAtYearStart.totalValuePaise - postedAtYearStart;
+  const priorYearsEarnings = profitIn(beforeYear) + stockAtYearStartPaise - openingStock;
   const currentPeriodEarnings =
-    profitIn(all) - profitIn(beforeYear) + closingStockPaise - stockAtYearStart.totalValuePaise;
+    profitIn(all) - profitIn(beforeYear) + closingStockPaise - stockAtYearStartPaise;
 
   const assetRows = all.filter((r) => r.type === 'asset' && r.balancePaise !== 0);
   if (closingStockPaise !== 0) {
-    assetRows.push(computedRow('closing-stock', 'Closing stock (weighted average cost)', 'asset', 'stock', closingStockPaise));
+    assetRows.push(computedRow('closing-stock', postedNow ? 'Stock not yet in the ledger' : 'Closing stock (weighted average cost)', 'asset', 'stock', closingStockPaise));
   }
   const liabilityRows = all.filter((r) => r.type === 'liability' && r.balancePaise !== 0);
   const equityRows = all.filter((r) => r.type === 'equity' && r.balancePaise !== 0);

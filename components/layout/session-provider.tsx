@@ -59,6 +59,10 @@ export function SessionGate({
         // Every permission check in the browser reads the custom role from here.
         setCustomPermissionSource(() => session.user.permissions ?? null);
         // Nothing else will answer until two-step sign-in is set up.
+        if (session.user.passwordChangeRequired) {
+          router.replace('/change-password');
+          return;
+        }
         if (session.user.mfaSetupRequired) {
           router.replace('/two-step-setup');
           return;

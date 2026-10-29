@@ -18,7 +18,8 @@ import { sql } from 'kysely';
 import type { Trx } from '../db';
 import type { Paise, SupplyKind, SupplyType } from '../../types';
 import { computeLineTax, placeOfSupplyFor, resolveSupplyType, totalTaxPaise } from '../../tax/gst';
-import { checkCreditLimit, checkMrp, checkStock } from './guards';
+import { checkCreditHold, checkCreditLimit, checkMrp, checkStock } from './guards';
+import { saleCostLines } from './stock-ledger';
 import { checkSerials, recordSerials } from './serials';
 import { checkGodown } from './godowns';
 import { voidReason, voidStamp } from './void-reason';
@@ -322,6 +323,7 @@ export async function createInvoice(
   const warnings: string[] = [];
   if (status !== 'draft') {
     await checkCreditLimit(trx, orgId, input.customerId, rounded, warnings, input.overrideLimits);
+    await checkCreditHold(trx, orgId, input.customerId, input.date, warnings, input.overrideLimits);
     await checkStock(trx, orgId, input.branchId, input.date, input.lines, warnings);
   }
   await checkMrp(trx, orgId, computed, warnings);
@@ -530,6 +532,10 @@ export async function postInvoice(
   const adjustment = p(inv.adjustment);
   if (adjustment > 0) lines.push({ accountId: requireAccount(acc, CODE.OTHER_INCOME), credit: adjustment });
   else if (adjustment < 0) lines.push({ accountId: requireAccount(acc, CODE.DISCOUNT_ALLOWED), debit: -adjustment });
+
+  // On perpetual inventory, what the goods cost leaves Inventory for cost of
+  // goods sold in this same entry, so a void takes it back too (stock-ledger.ts).
+  lines.push(...await saleCostLines(trx, orgId, String(inv.invoice_date).slice(0, 10), invoiceId));
 
   const entry = await postEntry(trx, {
     orgId,

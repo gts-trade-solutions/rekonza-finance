@@ -6,6 +6,7 @@ import { toPaiseFromSql } from '@/lib/server/money-sql';
 import { seal, unseal } from '@/lib/server/crypto/fields';
 import { assertFresh } from '@/lib/server/concurrency';
 import { logAudit, auditMeta, snapshot, changesBetween, describeChanges } from '@/lib/server/audit';
+import { isValidGstin } from '@/lib/tax/gst';
 
 const ListQuery = z.object({
   kind: z.enum(['customer', 'vendor', 'both', 'all']).optional(),
@@ -52,7 +53,7 @@ export const GET = route(
     const rows = await base
       .select([
         'id', 'kind', 'display_name', 'legal_name', 'gstin', 'pan', 'gst_treatment', 'state_code',
-        'email', 'phone', 'payment_terms', 'credit_limit', 'is_msme', 'msme_udyam_no',
+        'email', 'phone', 'payment_terms', 'credit_limit', 'owner_user_id', 'is_msme', 'msme_udyam_no',
         'msme_category', 'msme_activity', 'msme_agreement_days', 'bank_account_name', 'bank_account_no', 'bank_ifsc', 'bank_name', 'currency', 'price_list_id',
         'tds_applicable', 'tds_section', 'billing_address', 'shipping_address', 'notes', 'is_archived', 'updated_at', 'bill_wise',
       ])
@@ -111,6 +112,7 @@ export const GET = route(
         phone: c.phone,
         paymentTerms: c.payment_terms,
         creditLimitPaise: toPaiseFromSql(c.credit_limit),
+        ownerUserId: c.owner_user_id ? asId(c.owner_user_id) : null,
         billWise: !!c.bill_wise,
         isMsme: !!c.is_msme,
         msmeUdyamNo: c.msme_udyam_no,
@@ -182,6 +184,8 @@ const ContactInput = z.object({
   billingAddress: z.string().trim().max(500).nullish(),
   shippingAddress: z.string().trim().max(500).nullish(),
   notes: z.string().trim().max(1000).nullish(),
+  /** Who chases this customer's overdue invoices (services/exceptions.ts). */
+  ownerUserId: z.coerce.number().int().positive().nullish(),
 });
 
 const CreateInput = ContactInput;
@@ -222,6 +226,7 @@ function toRow(input: z.infer<typeof ContactInput>) {
     billing_address: input.billingAddress ?? null,
     shipping_address: input.shippingAddress ?? null,
     notes: input.notes ?? null,
+    owner_user_id: input.ownerUserId ?? null,
   };
 }
 
@@ -243,12 +248,55 @@ function checkGstin(input: Partial<z.infer<typeof ContactInput>>) {
         'The first two digits of a GSTIN are the state code.',
     );
   }
+  // The fifteenth character is a check digit over the other fourteen: a GSTIN
+  // with one character mistyped fails it, and an invoice carrying it is refused
+  // by the IRP and leaves the buyer without their input credit.
+  if (input.gstin && !isValidGstin(input.gstin)) {
+    throw badRequest(`${input.gstin} fails the GSTIN check digit, so a character is wrong. Check it against the party's registration certificate.`);
+  }
+  // Characters 3 to 12 of a GSTIN are the holder's PAN.
+  const panInGstin = input.gstin?.slice(2, 12);
+  if (input.pan && panInGstin && /^[A-Z]{5}\d{4}[A-Z]$/.test(panInGstin) && panInGstin !== input.pan) {
+    throw badRequest(`The PAN inside the GSTIN is ${panInGstin}, not ${input.pan}. One of them is wrong.`);
+  }
+}
+
+/**
+ * The same party entered twice is how one bill gets paid twice and how a
+ * customer's dues end up split where no credit limit sees them. The same GSTIN
+ * is refused outright; the same PAN (another state's registration, which is
+ * proper) or the same name is let through with a warning to look first.
+ */
+async function duplicates(orgId: number, input: { displayName?: string; gstin?: string | null; pan?: string | null }, exceptId?: number) {
+  const warnings: string[] = [];
+  const others = (q: ReturnType<typeof contactsOf>) => (exceptId ? q.where('id', '<>', exceptId) : q);
+  function contactsOf() {
+    return db.selectFrom('contacts').select(['id', 'display_name', 'kind']).where('org_id', '=', orgId).where('is_archived', '=', 0);
+  }
+  if (input.gstin) {
+    const same = await others(contactsOf().where('gstin', '=', input.gstin)).executeTakeFirst();
+    if (same) {
+      throw conflict(`${same.display_name} already has GSTIN ${input.gstin}. Open that ${same.kind} instead — if they are both a customer and a vendor, make them "both".`);
+    }
+  }
+  if (input.pan) {
+    const same = await others(contactsOf().where('pan', '=', input.pan)).execute();
+    if (same.length) warnings.push(`Same PAN as ${same.map((c) => c.display_name).join(', ')}. Right for another state's registration; otherwise this may be a duplicate.`);
+  }
+  if (input.displayName) {
+    // Compared as letters and digits only, so "Sharma Traders Pvt. Ltd." meets "SHARMA TRADERS PVT LTD".
+    const key = input.displayName.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const same = (await others(contactsOf()).execute()).filter((c) => c.display_name.toLowerCase().replace(/[^a-z0-9]/g, '') === key);
+    if (same.length) warnings.push(`There is already a ${same[0].kind} called ${same[0].display_name}. Check this is not the same party entered twice.`);
+  }
+  return warnings;
 }
 
 export const POST = route(
   async ({ orgId, user, req }) => {
     const input = await body(req, CreateInput);
     checkGstin(input);
+    const warnings = await duplicates(orgId, input);
 
     const inserted = await db
       .insertInto('contacts')
@@ -268,7 +316,7 @@ export const POST = route(
       ...auditMeta(req),
     });
 
-    return { id: asId(id), displayName: input.displayName };
+    return { id: asId(id), displayName: input.displayName, warnings };
   },
   { permission: { module: 'sales', action: 'create' } },
 );
@@ -280,7 +328,7 @@ export const PATCH = route(
 
     const existing = await db
       .selectFrom('contacts')
-      .select(['id', 'display_name', 'gstin', 'state_code', 'gst_treatment'])
+      .select(['id', 'display_name', 'gstin', 'pan', 'state_code', 'gst_treatment'])
       .where('id', '=', id)
       .where('org_id', '=', orgId)
       .executeTakeFirst();
@@ -292,7 +340,15 @@ export const PATCH = route(
       gstin: input.gstin ?? existing.gstin ?? undefined,
       stateCode: input.stateCode ?? existing.state_code,
       gstTreatment: (input.gstTreatment ?? existing.gst_treatment) as never,
+      pan: input.pan ?? existing.pan ?? undefined,
     });
+    // Only what the edit changes is checked against the others: the party
+    // already on file is not its own duplicate.
+    const warnings = await duplicates(orgId, {
+      gstin: input.gstin && input.gstin !== existing.gstin ? input.gstin : null,
+      pan: input.pan && input.pan !== existing.pan ? input.pan : null,
+      displayName: input.displayName && input.displayName !== existing.display_name ? input.displayName : undefined,
+    }, id);
 
     const patch: Record<string, unknown> = {};
     const set = <K extends string>(col: K, v: unknown) => {
@@ -326,6 +382,7 @@ export const PATCH = route(
     set('billing_address', input.billingAddress);
     set('shipping_address', input.shippingAddress);
     set('notes', input.notes);
+    set('owner_user_id', input.ownerUserId);
     set('is_archived', input.isArchived === undefined ? undefined : input.isArchived ? 1 : 0);
 
     if (input.isArchived) {
@@ -369,7 +426,7 @@ export const PATCH = route(
       ...auditMeta(req),
     });
 
-    return { id: asId(id) };
+    return { id: asId(id), warnings };
   },
   { permission: { module: 'sales', action: 'edit' } },
 );

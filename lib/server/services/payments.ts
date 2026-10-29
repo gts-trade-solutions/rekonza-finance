@@ -22,7 +22,7 @@ import { allocateOrgNumber, postEntry, reverseEntry, type DraftLine } from '../l
 import { CODE, accountIds, requireAccount } from '../ledger/chart-of-accounts';
 import { ApiError, badRequest, notFound } from '../http';
 import { fyLabelFor } from './sales';
-import { checkCashPayment, checkCashReceipt } from './guards';
+import { checkCashPayment, checkCashReceipt, checkSegregation } from './guards';
 import { voidReason, voidStamp } from './void-reason';
 
 export type PaymentMode =
@@ -233,6 +233,11 @@ async function recordPayment(
   // oldest open documents first, as far as it goes.
   if (!contact.bill_wise && !allocations.length && !fx) {
     allocations = await oldestFirst(trx, orgId, input.contactId, kind, input.amountPaise + tds);
+  }
+
+  // Whoever entered or approved a bill does not pay it too (guards.ts).
+  if (kind === 'made' && userId) {
+    await checkSegregation(trx, orgId, userId, allocations.filter((a) => a.targetType === 'bill').map((a) => a.targetId), warnings);
   }
 
   // The settling power of a receipt is the cash plus the TDS: both reduce what

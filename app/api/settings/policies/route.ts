@@ -38,6 +38,22 @@ const Input = z.object({
     maxSessions: z.number().int().min(0).max(20).optional(),
     alertNewDevice: z.boolean().optional(),
   }).optional(),
+  controls: z.object({
+    changeReasons: z.boolean(),
+    segregation: Enforcement,
+    autoIrn: z.boolean(),
+    creditHoldDays: z.number().int().min(0).max(365),
+    creditHold: Enforcement,
+    billsDueDays: z.number().int().min(0).max(60),
+    concentrationPct: z.number().min(5).max(100),
+    escalateAfterDays: z.number().int().min(1).max(60),
+    autoDepreciation: z.boolean(),
+  }).partial().optional(),
+  password: z.object({
+    minLength: z.number().int().min(8).max(64),
+    expiryDays: z.number().int().min(0).max(365),
+    history: z.number().int().min(0).max(24),
+  }).partial().optional(),
 });
 
 export const PUT = route(

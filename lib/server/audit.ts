@@ -17,6 +17,7 @@ import 'server-only';
 
 import { sql } from 'kysely';
 import { db, type Executor } from './db';
+import { changeReason } from './request-context';
 
 export type AuditAction =
   | 'create' | 'update' | 'void' | 'approve' | 'send' | 'match' | 'login' | 'export' | 'import';
@@ -33,6 +34,8 @@ export interface AuditInput {
   payload?: unknown;
   ip?: string | null;
   userAgent?: string | null;
+  /** Why. Taken from the request (X-Change-Reason) when not given. */
+  reason?: string | null;
   /** Pass a transaction to tie the audit row to the action it records. */
   trx?: Executor;
 }
@@ -51,6 +54,7 @@ export async function logAudit(input: AuditInput): Promise<void> {
         target_id: input.targetId != null ? String(input.targetId) : null,
         target_label: input.targetLabel ?? null,
         detail: input.detail ?? null,
+        reason: (input.reason ?? changeReason())?.slice(0, 500) ?? null,
         payload: input.payload === undefined ? null : JSON.stringify(input.payload),
         ip: input.ip ?? null,
         user_agent: input.userAgent?.slice(0, 500) ?? null,

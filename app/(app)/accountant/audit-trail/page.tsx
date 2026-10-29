@@ -75,6 +75,9 @@ const columns: Column<AuditEventRow>[] = [
     cell: (r) => (
       <div className="space-y-1">
         <span className="text-sm text-muted-foreground">{r.detail}</span>
+        {r.reason && (
+          <p className="text-xs"><span className="font-medium">Why:</span> {r.reason}</p>
+        )}
         {r.changes && (
           <ul className="space-y-0.5 text-xs">
             {Object.entries(r.changes).map(([field, c]) => (

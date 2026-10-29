@@ -34,6 +34,9 @@ const LIST: Record<string, string> = {
   opening: '/accountant/opening-balances',
   opening_balance: '/accountant/opening-balances',
   opening_document: '/accountant/opening-balances',
+  // Perpetual inventory's own entries (services/stock-ledger.ts).
+  stock_valuation: '/inventory/stock',
+  stock_opening: '/inventory/stock',
 };
 
 export function sourceHref(sourceType: string, sourceId: string | null): string | null {

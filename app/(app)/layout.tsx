@@ -11,6 +11,7 @@ import { CreditsProvider } from '@/components/ai/credits-provider';
 import { AssistantLauncher } from '@/components/ai/assistant-launcher';
 import { OutputGuard } from '@/components/layout/output-guard';
 import { OfflineSync } from '@/components/layout/offline-sync';
+import { ReasonPrompt } from '@/components/layout/reason-prompt';
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   // The server decides whether there is a session. A client-side check would
@@ -63,6 +64,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           <AssistantLauncher />
           <OutputGuard />
           <OfflineSync />
+          <ReasonPrompt />
         </CreditsProvider>
         </TooltipProvider>
         </MastersGate>

@@ -27,6 +27,7 @@ import { roundToRupee } from '../../money';
 import { toPaiseFromSql, toSqlFromPaise } from '../money-sql';
 import { allocateNumber, allocateOrgNumber, assertGstDocNumber, postEntry, reverseEntry, type DraftLine } from '../ledger/posting';
 import { seriesFor } from './voucher-types';
+import { returnCostLines } from './stock-ledger';
 import { CODE, accountIds, requireAccount } from '../ledger/chart-of-accounts';
 import { costLines, type DocumentLineInput } from './lines';
 import { fyLabelFor, createInvoice } from './sales';
@@ -552,6 +553,10 @@ export async function createCreditNote(
   const roundOff = rounded - rawTotal;
   if (roundOff > 0) lines.push({ accountId: requireAccount(acc, CODE.ROUNDING), debit: roundOff });
   else if (roundOff < 0) lines.push({ accountId: requireAccount(acc, CODE.ROUNDING), credit: -roundOff });
+
+  // Goods coming back go back into Inventory at their cost, on a perpetual book.
+  lines.push(...await returnCostLines(trx, orgId, input.date,
+    input.lines.map((l) => ({ itemId: l.itemId ? Number(l.itemId) : null, qty: Number(l.qty) }))));
 
   const entry = await postEntry(trx, {
     orgId,

@@ -4,7 +4,7 @@ import { db, transaction } from '@/lib/server/db';
 import { route, body, query, asId } from '@/lib/server/http';
 import { toPaiseFromSql } from '@/lib/server/money-sql';
 import {
-  categoriseTransaction, matchToPayment, unmatchTransaction,
+  categoriseTransaction, matchToPayment, unmatchTransaction, applyRules, matchInvoicePayments, matchEnteredPayments,
 } from '@/lib/server/services/banking';
 import { logAudit, auditMeta } from '@/lib/server/audit';
 
@@ -148,11 +148,28 @@ const ActionInput = z.discriminatedUnion('action', [
     action: z.literal('unmatch'),
     transactionId: z.string(),
   }),
+  // Run the automatic matching again over lines already imported: rules,
+  // invoice numbers in the narration, and payments already entered.
+  z.object({
+    action: z.literal('auto_match'),
+    bankAccountId: z.string(),
+  }),
 ]);
 
 export const POST = route(
   async ({ orgId, user, req }) => {
     const input = await body(req, ActionInput);
+    if (input.action === 'auto_match') {
+      const bankAccountId = Number(input.bankAccountId);
+      const matched = await transaction(async (trx) => await applyRules(trx, orgId, user.userId, bankAccountId)
+        + await matchInvoicePayments(trx, orgId, user.userId, bankAccountId)
+        + await matchEnteredPayments(trx, orgId, user.userId, bankAccountId));
+      await logAudit({
+        orgId, actorUserId: user.userId, actorName: user.name, action: 'match', targetType: 'bank_account', targetId: bankAccountId,
+        detail: `Automatic matching: ${matched} statement line${matched === 1 ? '' : 's'} matched`, ...auditMeta(req),
+      });
+      return { matched };
+    }
     const txnId = Number(input.transactionId);
 
     const result = await transaction(async (trx) => {
