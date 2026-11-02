@@ -211,7 +211,8 @@ export async function portalExtras(ex: Executor, orgId: number, contactId: numbe
     fromYou: f.folder === PORTAL_UPLOAD_FOLDER, at: new Date(f.created_at).toISOString(),
   }));
 
-  // Comments on the contact's own documents, oldest first under each.
+  // The portal conversation on the contact's own documents, oldest first under
+  // each: what they wrote and the business's replies, never its staff notes.
   const loadComments = async (all: { type: string; id: string }[]) => {
     const comments: Record<string, { author: string; body: string; at: string; fromPortal: boolean }[]> = {};
     const byType = new Map<string, number[]>();
@@ -219,7 +220,7 @@ export async function portalExtras(ex: Executor, orgId: number, contactId: numbe
     for (const [type, ids] of byType) {
       if (!ids.length) continue;
       const rows = await ex.selectFrom('comments').select(['target_id', 'author_name', 'body', 'created_at', 'user_id'])
-        .where('org_id', '=', orgId).where('target_type', '=', type).where('target_id', 'in', ids).orderBy('created_at').execute();
+        .where('org_id', '=', orgId).where('target_type', '=', type).where('target_id', 'in', ids).where('portal_visible', '=', 1).orderBy('created_at').execute();
       for (const r of rows) {
         const k = `${type}:${r.target_id}`;
         (comments[k] ??= []).push({ author: r.author_name, body: r.body, at: new Date(r.created_at).toISOString(), fromPortal: r.user_id === null });
@@ -284,7 +285,7 @@ export async function portalComment(
   if (!rows.length) throw notFound(`That ${o.label} is not yours.`);
   await trx.insertInto('comments').values({
     org_id: orgId, target_type: input.targetType, target_id: input.targetId, user_id: null,
-    author_name: `${authorName} (portal)`.slice(0, 150), body: body.slice(0, 2000),
+    author_name: `${authorName} (portal)`.slice(0, 150), body: body.slice(0, 2000), portal_visible: 1,
   }).execute();
   return { label: o.label, number: rows[0].number };
 }
@@ -308,9 +309,22 @@ export async function updatePortalProfile(
   const set = Object.fromEntries(Object.entries(values).filter(([, v]) => v !== undefined)) as Record<string, string | null>;
   if (!Object.keys(set).length) throw badRequest('Nothing to change.');
   const before = await trx.selectFrom('contacts').selectAll().where('id', '=', contactId).where('org_id', '=', orgId).executeTakeFirstOrThrow();
-  await trx.updateTable('contacts').set(set).where('id', '=', contactId).where('org_id', '=', orgId).execute();
+  // A new email waits for the business, as new bank details do: it is where
+  // invoices and sign-in codes go, so whoever holds a link must not move it.
+  let emailPending: string | null = null;
+  if ('email' in set) {
+    const wanted = set.email;
+    delete set.email;
+    if (wanted && wanted.toLowerCase() !== (before.email ?? '').toLowerCase()) {
+      await trx.updateTable('portal_requests').set({ status: 'rejected', decided_at: new Date() })
+        .where('org_id', '=', orgId).where('contact_id', '=', contactId).where('kind', '=', 'email').where('status', '=', 'pending').execute();
+      await trx.insertInto('portal_requests').values({ org_id: orgId, contact_id: contactId, kind: 'email', payload: JSON.stringify({ email: wanted }) }).execute();
+      emailPending = wanted;
+    }
+  }
+  if (Object.keys(set).length) await trx.updateTable('contacts').set(set).where('id', '=', contactId).where('org_id', '=', orgId).execute();
   const changed = Object.keys(set).filter((k) => (before as unknown as Record<string, unknown>)[k] !== set[k]);
-  return { changed: changed.map((k) => k.replace(/_/g, ' ')) };
+  return { changed: changed.map((k) => k.replace(/_/g, ' ')), emailPending };
 }
 
 /**
@@ -342,28 +356,33 @@ export async function listPortalRequests(ex: Executor, orgId: number, contactId?
     .where('r.org_id', '=', orgId).$if(!!contactId, (q) => q.where('r.contact_id', '=', contactId!))
     .orderBy('r.created_at', 'desc').orderBy('r.id', 'desc').limit(50).execute();
   return rows.map((r) => {
-    const p = (typeof r.payload === 'string' ? JSON.parse(r.payload) : r.payload) as { bankName: string; accountName: string; accountNo: string; ifsc: string };
-    const acct = unseal(p.accountNo) ?? '';
+    const p = (typeof r.payload === 'string' ? JSON.parse(r.payload) : r.payload) as { bankName?: string; accountName?: string; accountNo?: string; ifsc?: string; email?: string };
+    const acct = r.kind === 'bank_details' ? unseal(p.accountNo ?? null) ?? '' : '';
     return {
       id: String(r.id), contactId: String(r.contact_id), contact: r.display_name, kind: r.kind, status: r.status,
-      bankName: p.bankName, accountName: p.accountName, accountNoMasked: acct ? `••••${acct.slice(-4)}` : '', ifsc: p.ifsc,
+      bankName: p.bankName ?? '', accountName: p.accountName ?? '', accountNoMasked: acct ? `••••${acct.slice(-4)}` : '', ifsc: p.ifsc ?? '',
+      email: p.email ?? null,
       at: new Date(r.created_at).toISOString(), decidedAt: r.decided_at ? new Date(r.decided_at).toISOString() : null, decidedBy: r.decided_by,
     };
   });
 }
 
-/** The business approves or turns down a vendor's request; approving writes the new bank details. */
+/** The business approves or turns down a request; approving writes the new bank details, or the new email. */
 export async function decidePortalRequest(trx: Trx, orgId: number, userId: number, requestId: number, decision: 'applied' | 'rejected') {
   const r = await trx.selectFrom('portal_requests').selectAll().where('id', '=', requestId).where('org_id', '=', orgId).forUpdate().executeTakeFirst();
   if (!r) throw notFound('That request was not found.');
   if (r.status !== 'pending') throw conflict(`That request was already ${r.status}.`);
-  const p = (typeof r.payload === 'string' ? JSON.parse(r.payload) : r.payload) as { bankName: string; accountName: string; accountNo: string; ifsc: string };
+  const p = (typeof r.payload === 'string' ? JSON.parse(r.payload) : r.payload) as { bankName?: string; accountName?: string; accountNo?: string; ifsc?: string; email?: string };
   if (decision === 'applied') {
-    await trx.updateTable('contacts').set({ bank_name: p.bankName, bank_account_name: p.accountName, bank_account_no: p.accountNo, bank_ifsc: p.ifsc })
-      .where('id', '=', r.contact_id).where('org_id', '=', orgId).execute();
+    if (r.kind === 'email') {
+      await trx.updateTable('contacts').set({ email: p.email ?? null }).where('id', '=', r.contact_id).where('org_id', '=', orgId).execute();
+    } else {
+      await trx.updateTable('contacts').set({ bank_name: p.bankName ?? null, bank_account_name: p.accountName ?? null, bank_account_no: p.accountNo ?? null, bank_ifsc: p.ifsc ?? null })
+        .where('id', '=', r.contact_id).where('org_id', '=', orgId).execute();
+    }
   }
   await trx.updateTable('portal_requests').set({ status: decision, decided_by_user_id: userId, decided_at: new Date() }).where('id', '=', requestId).execute();
-  return { contactId: r.contact_id, accountLast4: (unseal(p.accountNo) ?? '').slice(-4) };
+  return { contactId: r.contact_id, kind: r.kind, email: p.email ?? null, accountLast4: (unseal(p.accountNo ?? null) ?? '').slice(-4) };
 }
 
 /** A vendor accepting or declining a purchase order, while it is still open. */
@@ -406,7 +425,7 @@ export async function contactPortalComments(ex: Executor, orgId: number, contact
     const { rows } = await sql<{ id: number; target_id: number; author_name: string; body: string; created_at: Date; user_id: number | null; number: string }>`
       SELECT cm.id, cm.target_id, cm.author_name, cm.body, cm.created_at, cm.user_id, ${sql.ref(`d.${o.numberCol}`)} AS number
         FROM comments cm JOIN ${sql.table(o.table)} d ON d.id = cm.target_id AND d.org_id = cm.org_id
-       WHERE cm.org_id = ${orgId} AND cm.target_type = ${type} AND ${sql.ref(`d.${o.owner}`)} = ${contactId}
+       WHERE cm.org_id = ${orgId} AND cm.target_type = ${type} AND ${sql.ref(`d.${o.owner}`)} = ${contactId} AND cm.portal_visible = 1
        ORDER BY cm.created_at DESC LIMIT 30`.execute(ex);
     for (const r of rows) {
       out.push({
@@ -432,6 +451,7 @@ export async function replyOnPortal(
   if (!rows.length) throw notFound(`That ${o.label} is not this contact's.`);
   await trx.insertInto('comments').values({
     org_id: orgId, target_type: input.targetType, target_id: input.targetId, user_id: user.userId, author_name: user.name.slice(0, 150), body: body.slice(0, 2000),
+    portal_visible: 1,
   }).execute();
   return { label: o.label, number: rows[0].number };
 }

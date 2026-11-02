@@ -1,9 +1,12 @@
 import { db, transaction } from '@/lib/server/db';
-import { route, badRequest, notFound } from '@/lib/server/http';
+import { route, badRequest, notFound, ApiError } from '@/lib/server/http';
 import { logAudit, auditMeta } from '@/lib/server/audit';
 import { logPortalActivity, openPortal, PORTAL_UPLOAD_FOLDER } from '@/lib/server/services/portal';
 import { attachFile, MAX_FILE_BYTES } from '@/lib/server/files/attachments';
 import { notify, usersWhoCan } from '@/lib/server/services/notifications';
+import { bucket, count, overLimit } from '@/lib/server/auth/throttle';
+
+const UPLOADS_PER_DAY = 50;
 
 // A customer or vendor sending a file in from the portal — a vendor's bill, a
 // customer's purchase order or remittance advice. It goes onto the contact's
@@ -22,6 +25,10 @@ export const POST = route(
     const note = String(form.get('note') ?? '').slice(0, 300);
     if (!(file instanceof File)) throw badRequest('Choose the file to send.');
     if (file.size > MAX_FILE_BYTES) throw badRequest(`Files can be up to ${MAX_FILE_BYTES / 1024 / 1024} MB.`);
+    // A day's uploads per contact: a link in the wrong hands cannot fill the business's storage.
+    const daily = bucket('portal-upload', `${p.orgId}:${p.contactId}`);
+    if (await overLimit(db, daily, UPLOADS_PER_DAY, 24 * 60)) throw new ApiError(429, `That is ${UPLOADS_PER_DAY} files today, the most one day allows. Send the rest tomorrow, or email them.`, 'rate_limited');
+    await count(db, daily, 24 * 60);
     const contact = await db.selectFrom('contacts').select('display_name').where('id', '=', p.contactId).executeTakeFirstOrThrow();
     const bytes = Buffer.from(await file.arrayBuffer());
     const vendor = p.side === 'vendor';

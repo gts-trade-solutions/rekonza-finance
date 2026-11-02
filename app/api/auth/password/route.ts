@@ -18,9 +18,16 @@ export const POST = route(async ({ user, req }) => {
   const problems = await newPasswordProblems(db, user.orgId, user.userId, next);
   if (problems.length) throw badRequest(problems.join(' '));
   const hash = await hashPassword(next);
-  await db.updateTable('users').set({ password_hash: hash }).where('id', '=', user.userId).execute();
-  await recordPasswordSet(db, user.userId, hash);
-  const others = await db.selectFrom('sessions').select('token_hash').where('user_id', '=', user.userId).where('revoked_at', 'is', null).execute();
+  // The same person in their other companies, wherever they used this same
+  // password (a new company starts with it): the old one must stop opening
+  // those too. A company where they chose a different password keeps it.
+  const sameEmail = await db.selectFrom('users').select(['id', 'password_hash']).where('email', '=', user.email).where('id', '<>', user.userId).execute();
+  const alsoMine: number[] = [];
+  for (const o of sameEmail) if (o.password_hash && (await verifyPassword(o.password_hash, current))) alsoMine.push(o.id);
+  const ids = [user.userId, ...alsoMine];
+  await db.updateTable('users').set({ password_hash: hash }).where('id', 'in', ids).execute();
+  for (const id of ids) await recordPasswordSet(db, id, hash);
+  const others = await db.selectFrom('sessions').select('token_hash').where('user_id', 'in', ids).where('revoked_at', 'is', null).execute();
   const mine = user.sessionId ?? '';
   for (const s of others) {
     if (s.token_hash.startsWith(mine) && mine) continue;

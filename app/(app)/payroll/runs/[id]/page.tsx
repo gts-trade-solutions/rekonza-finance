@@ -7,7 +7,7 @@
 
 import Link from 'next/link';
 import { use, useState } from 'react';
-import { AlertTriangle, ArrowLeft, Banknote, CheckCircle2, Download, FileText, Loader2, Mail, MessageCircle, Printer, Undo2, Upload, Users, Wallet } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, Banknote, CheckCircle2, Download, FileText, Loader2, Mail, MessageCircle, Printer, Undo2, Unlink, Upload, Users, Wallet } from 'lucide-react';
 import { whatsappNumber } from '@/components/sales/send-invoice';
 import Papa from 'papaparse';
 import { toast } from 'sonner';
@@ -80,6 +80,16 @@ export default function PayrollRunPage({ params }: { params: Promise<{ id: strin
       else window.open(`mailto:${encodeURIComponent(l.email ?? '')}?subject=${encodeURIComponent(`Payslip for ${monthName(run.month)}`)}&body=${encodeURIComponent(text)}`, '_self');
     } catch (e) {
       toast.error('Not sent', { description: err(e) });
+    }
+  };
+  // A payslip link sent to the wrong person stops working at once.
+  const withdrawSlip = async (run: Run, l: RunLine) => {
+    if (!window.confirm(`Stop every link to ${l.name}'s payslip for ${monthName(run.month)} working?`)) return;
+    try {
+      const r = await api.patch<{ revoked: number }>('/api/share', { payslip: { runId: run.id, employeeId: l.employeeId } });
+      toast.success(r.revoked ? `${r.revoked} link${r.revoked === 1 ? '' : 's'} withdrawn` : 'There were no live links');
+    } catch (e) {
+      toast.error('Not done', { description: err(e) });
     }
   };
   const [editing, setEditing] = useState<RunLine | null>(null);
@@ -256,6 +266,8 @@ export default function PayrollRunPage({ params }: { params: Promise<{ id: strin
                             onClick={() => void sendSlip(run, l, 'whatsapp')}><MessageCircle className="size-3.5" /></Button>
                           <Button size="xs" variant="ghost" title={l.email ? `Email to ${l.email}` : 'No email on file'} disabled={!l.email}
                             onClick={() => void sendSlip(run, l, 'email')}><Mail className="size-3.5" /></Button>
+                          <Button size="xs" variant="ghost" title="Withdraw the links already sent" data-slot="withdraw-payslip"
+                            onClick={() => void withdrawSlip(run, l)}><Unlink className="size-3.5" /></Button>
                         </td>
                       )}
                     </tr>

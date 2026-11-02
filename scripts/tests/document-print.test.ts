@@ -25,12 +25,15 @@ import { wipeOrganizations } from '../../lib/server/seed/wipe';
 import { GET as shareGet } from '../../app/api/share/[token]/route';
 import { GET as portalDocGet } from '../../app/api/portal/[token]/document/[kind]/[id]/route';
 
+const gstinFor = (orgId: number) => `33AABCP${String(orgId % 10_000).padStart(4, '0')}P1Z4`;
+
 interface Book { orgId: number; branchId: number; customer: number; vendor: number; bankId: number; acc: Record<string, number> }
 
 async function makeBook(trx: Trx, name: string): Promise<Book> {
   const orgId = Number((await trx.insertInto('organizations').values({ name }).executeTakeFirstOrThrow()).insertId);
   const branchId = Number((await trx.insertInto('branches').values({
-    org_id: orgId, name: 'HQ', state_code: '33', is_primary: 1, gstin: '33AABCP9494P1Z4', address: '1 Mount Road', city: 'Chennai', pincode: '600002',
+    // Unique to this book: another test file running alongside may hold a branch with any fixed GSTIN.
+    org_id: orgId, name: 'HQ', state_code: '33', is_primary: 1, gstin: gstinFor(orgId), address: '1 Mount Road', city: 'Chennai', pincode: '600002',
   }).executeTakeFirstOrThrow()).insertId);
   await installChartOfAccounts(trx, orgId);
   const acc = await accountIds(trx, orgId) as Record<string, number>;
@@ -69,7 +72,7 @@ test('each of the ten documents prints from what is stored: title, number, party
     assert.deepEqual(q.facts.map((f) => f.label), ['Quote no.', 'Quote date', 'Valid until']);
     assert.equal(q.facts[2].value, '16 Oct 2026');
     assert.equal(q.party.name, 'Kumar Stores');
-    assert.equal(q.seller.gstin, '33AABCP9494P1Z4');
+    assert.equal(q.seller.gstin, gstinFor(orgId));
     assert.equal(q.lines[0].qty, 2);
     assert.equal(q.lines[0].taxablePaise, 1000_00);
     assert.equal(q.lines[0].cgstPaise, 90_00);

@@ -303,6 +303,12 @@ export interface AuditLog {
   user_agent: string | null;
 }
 
+export interface AuthThrottle {
+  bucket: string;
+  hits: Generated<number>;
+  window_start: Generated<Date>;
+}
+
 export interface BackupRuns {
   bytes: number | null;
   detail: string | null;
@@ -752,6 +758,7 @@ export interface Comments {
   created_at: Generated<Date>;
   id: Generated<number>;
   org_id: number;
+  portal_visible: Generated<number>;
   target_id: number;
   target_type: string;
   user_id: number | null;
@@ -2334,7 +2341,7 @@ export interface PortalRequests {
   decided_at: Date | null;
   decided_by_user_id: number | null;
   id: Generated<number>;
-  kind: "bank_details";
+  kind: "bank_details" | "email";
   org_id: number;
   payload: Json;
   status: Generated<"applied" | "pending" | "rejected">;
@@ -3280,6 +3287,7 @@ export interface DB {
   asset_costs: AssetCosts;
   asset_verifications: AssetVerifications;
   audit_log: AuditLog;
+  auth_throttle: AuthThrottle;
   backup_runs: BackupRuns;
   balance_confirmations: BalanceConfirmations;
   bank_accounts: BankAccounts;

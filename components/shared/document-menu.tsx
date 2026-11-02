@@ -9,7 +9,7 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
-import { Copy, CopyPlus, Loader2, Mail, MessageCircle, MoreHorizontal, Printer } from 'lucide-react';
+import { Copy, CopyPlus, Loader2, Mail, MessageCircle, MoreHorizontal, Printer, Unlink } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import {
@@ -74,6 +74,12 @@ function useDocumentActions(kind: PrintKind, id: string, onChanged?: () => void)
       await navigator.clipboard.writeText(url).catch(() => {});
       toast.success('Link copied', { description: `It opens the ${PRINT_NOUN[kind]} for thirty days, without signing in.` });
     }),
+    canWithdraw: usePermission(area, 'edit'),
+    withdraw: () => run(async () => {
+      if (!window.confirm(`Stop every link to this ${PRINT_NOUN[kind]} working? Anyone who has one will be told to ask for a new one.`)) return;
+      const r = await api.patch<{ revoked: number }>('/api/share', { document: { kind, id } });
+      toast.success(r.revoked ? `${r.revoked} link${r.revoked === 1 ? '' : 's'} withdrawn` : 'There were no live links');
+    }),
     clone: () => run(async () => {
       const r = await api.post<{ id: string; number: string }>('/api/clone', { kind, id });
       toast.success(`${cap(PRINT_NOUN[kind])} ${r.number} made`, { description: 'A copy dated today, with the same lines and prices.' });
@@ -124,6 +130,7 @@ function SendItems({ a, separated = false }: { a: ReturnType<typeof useDocumentA
         </>
       )}
       <DropdownMenuItem onClick={() => void a.copyLink()} data-slot="menu-copy-link"><Copy className="mr-2 size-4" /> Copy a link</DropdownMenuItem>
+      {a.canWithdraw && <DropdownMenuItem onClick={() => void a.withdraw()} data-slot="menu-withdraw"><Unlink className="mr-2 size-4" /> Withdraw links</DropdownMenuItem>}
     </>
   );
 }

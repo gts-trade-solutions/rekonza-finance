@@ -14,7 +14,7 @@
     "db:protect": "node scripts/db-protect.mjs",
     "db:backup": "node scripts/db-backup.mjs",
     "fields:seal": "tsx --conditions=react-server --env-file=.env.local scripts/seal-fields.ts",
-    "test:unit": "tsx --conditions=react-server --env-file=.env.local --test scripts/tests/money-sql.test.ts scripts/tests/posting.test.ts scripts/tests/purchases.test.ts scripts/tests/banking-reports.test.ts scripts/tests/sales-documents.test.ts scripts/tests/gst-integration.test.ts scripts/tests/nic-einvoice.test.ts scripts/tests/analytics.test.ts scripts/tests/ai-billing.test.ts scripts/tests/einvoice-cancel.test.ts scripts/tests/eway-bill-changes.test.ts scripts/tests/jobs.test.ts scripts/tests/ai-reports.test.ts scripts/tests/tally.test.ts scripts/tests/tally-connector.test.ts scripts/tests/tally-export.test.ts scripts/tests/closing-stock.test.ts scripts/tests/tax-rates.test.ts scripts/tests/gstr2b.test.ts scripts/tests/returns.test.ts scripts/tests/gstr1-json.test.ts scripts/tests/attachments.test.ts scripts/tests/upi.test.ts scripts/tests/advances.test.ts scripts/tests/opening-balances.test.ts scripts/tests/order-flow.test.ts scripts/tests/approvals.test.ts scripts/tests/imports.test.ts scripts/tests/tds-returns.test.ts scripts/tests/schedule-iii.test.ts scripts/tests/cheques.test.ts scripts/tests/numbering.test.ts scripts/tests/audit-trail.test.ts scripts/tests/tds-certificates.test.ts scripts/tests/gstr9c.test.ts scripts/tests/fixed-assets.test.ts scripts/tests/msme.test.ts scripts/tests/year-end.test.ts scripts/tests/guards.test.ts scripts/tests/sessions.test.ts scripts/tests/statutory.test.ts scripts/tests/working-capital.test.ts scripts/tests/compliance-calendar.test.ts scripts/tests/composition.test.ts scripts/tests/payroll.test.ts scripts/tests/itc-reversals.test.ts scripts/tests/overdue-interest.test.ts scripts/tests/cash-book.test.ts scripts/tests/fx.test.ts scripts/tests/stock-transfers.test.ts scripts/tests/price-lists.test.ts scripts/tests/manufacturing.test.ts scripts/tests/batches.test.ts scripts/tests/voucher-types.test.ts scripts/tests/xlsx.test.ts scripts/tests/place-of-supply.test.ts scripts/tests/journals.test.ts scripts/tests/held-journals.test.ts scripts/tests/payment-batches.test.ts scripts/tests/cash-forecast.test.ts scripts/tests/mfa.test.ts scripts/tests/custom-roles.test.ts scripts/tests/privacy.test.ts scripts/tests/open-api.test.ts scripts/tests/scheduled-reports.test.ts scripts/tests/bill-capture.test.ts scripts/tests/record-locking.test.ts scripts/tests/leave-fnf.test.ts scripts/tests/print-languages.test.ts scripts/tests/cost-centres.test.ts scripts/tests/item-master.test.ts scripts/tests/payroll-more.test.ts scripts/tests/masters-more.test.ts scripts/tests/security-more.test.ts scripts/tests/share-remind.test.ts scripts/tests/companies.test.ts scripts/tests/stock-more.test.ts scripts/tests/sync.test.ts scripts/tests/tally-vouchers.test.ts scripts/tests/demo-snapshot.test.ts scripts/tests/controls.test.ts scripts/tests/statements.test.ts scripts/tests/receipts-debit-notes.test.ts scripts/tests/recurring-purchases.test.ts scripts/tests/projects.test.ts scripts/tests/custom-fields.test.ts scripts/tests/bill-of-entry.test.ts scripts/tests/mail.test.ts scripts/tests/payment-links.test.ts scripts/tests/workflows.test.ts scripts/tests/checklist-gaps.test.ts scripts/tests/zoho-rest.test.ts scripts/tests/portal-zoho.test.ts scripts/tests/zoho-reports.test.ts scripts/tests/accountant-tools.test.ts scripts/tests/email-templates.test.ts scripts/tests/timesheet-timer.test.ts scripts/tests/imports-more.test.ts scripts/tests/contact-addresses.test.ts scripts/tests/ai-assistant.test.ts scripts/tests/gstr3b-form.test.ts scripts/tests/statement-groups.test.ts scripts/tests/json-import-export.test.ts scripts/tests/bank-bulk.test.ts scripts/tests/documents-library.test.ts scripts/tests/ai-optimisation.test.ts scripts/tests/gst-returns-api.test.ts scripts/tests/org-wipe.test.ts scripts/tests/document-print.test.ts scripts/tests/cash-basis.test.ts scripts/tests/contact-merge.test.ts scripts/tests/fx-feed.test.ts scripts/tests/landed-cost.test.ts",
+    "test:unit": "tsx --conditions=react-server --env-file=.env.local --test scripts/tests/money-sql.test.ts scripts/tests/posting.test.ts scripts/tests/purchases.test.ts scripts/tests/banking-reports.test.ts scripts/tests/sales-documents.test.ts scripts/tests/gst-integration.test.ts scripts/tests/nic-einvoice.test.ts scripts/tests/analytics.test.ts scripts/tests/ai-billing.test.ts scripts/tests/einvoice-cancel.test.ts scripts/tests/eway-bill-changes.test.ts scripts/tests/jobs.test.ts scripts/tests/ai-reports.test.ts scripts/tests/tally.test.ts scripts/tests/tally-connector.test.ts scripts/tests/tally-export.test.ts scripts/tests/closing-stock.test.ts scripts/tests/tax-rates.test.ts scripts/tests/gstr2b.test.ts scripts/tests/returns.test.ts scripts/tests/gstr1-json.test.ts scripts/tests/attachments.test.ts scripts/tests/upi.test.ts scripts/tests/advances.test.ts scripts/tests/opening-balances.test.ts scripts/tests/order-flow.test.ts scripts/tests/approvals.test.ts scripts/tests/imports.test.ts scripts/tests/tds-returns.test.ts scripts/tests/schedule-iii.test.ts scripts/tests/cheques.test.ts scripts/tests/numbering.test.ts scripts/tests/audit-trail.test.ts scripts/tests/tds-certificates.test.ts scripts/tests/gstr9c.test.ts scripts/tests/fixed-assets.test.ts scripts/tests/msme.test.ts scripts/tests/year-end.test.ts scripts/tests/guards.test.ts scripts/tests/sessions.test.ts scripts/tests/statutory.test.ts scripts/tests/working-capital.test.ts scripts/tests/compliance-calendar.test.ts scripts/tests/composition.test.ts scripts/tests/payroll.test.ts scripts/tests/itc-reversals.test.ts scripts/tests/overdue-interest.test.ts scripts/tests/cash-book.test.ts scripts/tests/fx.test.ts scripts/tests/stock-transfers.test.ts scripts/tests/price-lists.test.ts scripts/tests/manufacturing.test.ts scripts/tests/batches.test.ts scripts/tests/voucher-types.test.ts scripts/tests/xlsx.test.ts scripts/tests/place-of-supply.test.ts scripts/tests/journals.test.ts scripts/tests/held-journals.test.ts scripts/tests/payment-batches.test.ts scripts/tests/cash-forecast.test.ts scripts/tests/mfa.test.ts scripts/tests/custom-roles.test.ts scripts/tests/privacy.test.ts scripts/tests/open-api.test.ts scripts/tests/scheduled-reports.test.ts scripts/tests/bill-capture.test.ts scripts/tests/record-locking.test.ts scripts/tests/leave-fnf.test.ts scripts/tests/print-languages.test.ts scripts/tests/cost-centres.test.ts scripts/tests/item-master.test.ts scripts/tests/payroll-more.test.ts scripts/tests/masters-more.test.ts scripts/tests/security-more.test.ts scripts/tests/share-remind.test.ts scripts/tests/companies.test.ts scripts/tests/stock-more.test.ts scripts/tests/sync.test.ts scripts/tests/tally-vouchers.test.ts scripts/tests/demo-snapshot.test.ts scripts/tests/controls.test.ts scripts/tests/statements.test.ts scripts/tests/receipts-debit-notes.test.ts scripts/tests/recurring-purchases.test.ts scripts/tests/projects.test.ts scripts/tests/custom-fields.test.ts scripts/tests/bill-of-entry.test.ts scripts/tests/mail.test.ts scripts/tests/payment-links.test.ts scripts/tests/workflows.test.ts scripts/tests/checklist-gaps.test.ts scripts/tests/zoho-rest.test.ts scripts/tests/portal-zoho.test.ts scripts/tests/zoho-reports.test.ts scripts/tests/accountant-tools.test.ts scripts/tests/email-templates.test.ts scripts/tests/timesheet-timer.test.ts scripts/tests/imports-more.test.ts scripts/tests/contact-addresses.test.ts scripts/tests/ai-assistant.test.ts scripts/tests/gstr3b-form.test.ts scripts/tests/statement-groups.test.ts scripts/tests/json-import-export.test.ts scripts/tests/bank-bulk.test.ts scripts/tests/documents-library.test.ts scripts/tests/ai-optimisation.test.ts scripts/tests/gst-returns-api.test.ts scripts/tests/org-wipe.test.ts scripts/tests/document-print.test.ts scripts/tests/cash-basis.test.ts scripts/tests/contact-merge.test.ts scripts/tests/fx-feed.test.ts scripts/tests/landed-cost.test.ts scripts/tests/security-fixes.test.ts",
     "einvoice:sandbox": "tsx --conditions=react-server --env-file=.env.local scripts/einvoice-sandbox.ts",
     "tally:simulate": "tsx --conditions=react-server --env-file=.env.local scripts/tally-simulate.ts",
     "tally:connector": "tsx connector/src/main.ts",
@@ -27,7 +27,8 @@
     "onboarding": "node scripts/onboarding.mjs",
     "db:seed": "tsx --conditions=react-server --env-file=.env.local scripts/seed.ts",
     "test:api": "tsx --test scripts/tests/api.test.ts",
-    "bench:reports": "tsx --conditions=react-server --env-file=.env.local scripts/bench-reports.ts"
+    "bench:reports": "tsx --conditions=react-server --env-file=.env.local scripts/bench-reports.ts",
+    "golive": "tsx --conditions=react-server --env-file=.env.local scripts/golive.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",
@@ -43,9 +44,9 @@
     "kysely": "^0.28.17",
     "lucide-react": "^1.29.0",
     "mysql2": "^3.24.2",
-    "next": "15.5.23",
+    "next": "15.5.28",
     "next-themes": "^0.4.6",
-    "nodemailer": "^6.9.16",
+    "nodemailer": "^10.3.1",
     "papaparse": "^5.5.4",
     "qrcode.react": "^4.2.0",
     "react": "19.1.0",
@@ -55,7 +56,6 @@
     "recharts": "^3.10.1",
     "remark-gfm": "^4.0.1",
     "server-only": "^0.0.1",
-    "shadcn": "^4.16.2",
     "sonner": "^2.0.7",
     "tailwind-merge": "^3.6.0",
     "tw-animate-css": "^1.4.0",
@@ -66,17 +66,29 @@
     "@eslint/eslintrc": "^3",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
-    "@types/nodemailer": "^6.4.17",
+    "@types/nodemailer": "^8.0.2",
     "@types/papaparse": "^5.5.2",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
-    "eslint-config-next": "15.5.23",
+    "eslint-config-next": "15.5.28",
     "kysely-codegen": "^0.20.0",
     "playwright": "^1.62.1",
     "postject": "^1.0.0-alpha.6",
+    "shadcn": "^4.16.2",
     "tailwindcss": "^4",
     "tsx": "^4.23.12",
     "typescript": "^5"
+  },
+  "overrides": {
+    "@vercel/cli-config": {
+      "zod": "$zod"
+    },
+    "next": {
+      "postcss": "^8.5.23"
+    }
+  },
+  "engines": {
+    "node": ">=20.18.1"
   }
 }

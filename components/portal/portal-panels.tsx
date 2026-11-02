@@ -202,8 +202,10 @@ export function ProfilePanel({ token, side, profile, bank, bankChangePendingSinc
   const save = async () => {
     setBusy(true);
     try {
-      const r = await portalPost<{ changed: string[] }>(token, { action: 'profile', ...form });
-      toast.success(r.changed.length ? 'Your details are updated' : 'Nothing had changed');
+      const r = await portalPost<{ changed: string[]; emailPending: string | null }>(token, { action: 'profile', ...form });
+      if (r.emailPending) toast.info(`We will confirm ${r.emailPending} before invoices and sign-in codes go there`);
+      if (r.changed.length) toast.success('Your details are updated');
+      else if (!r.emailPending) toast.success('Nothing had changed');
       onSaved();
     } catch (e) {
       toast.error(errorText(e));

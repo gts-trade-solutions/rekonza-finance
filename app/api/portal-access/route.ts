@@ -92,9 +92,11 @@ export const POST = route(async ({ orgId, user, role, req }) => {
       if (r.contactId !== contactId) throw badRequest('That request is for another contact.');
       await logAudit({
         trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'update', targetType: 'contact', targetId: contactId,
-        detail: input.decision === 'applied'
-          ? `Approved the vendor's new bank account ending ${r.accountLast4}, asked for on the portal`
-          : `Turned down the vendor's request, on the portal, to be paid into an account ending ${r.accountLast4}`,
+        detail: r.kind === 'email'
+          ? (input.decision === 'applied' ? `Approved the new email ${r.email}, asked for on the portal` : `Turned down the request, on the portal, to change the email to ${r.email}`)
+          : input.decision === 'applied'
+            ? `Approved the vendor's new bank account ending ${r.accountLast4}, asked for on the portal`
+            : `Turned down the vendor's request, on the portal, to be paid into an account ending ${r.accountLast4}`,
         ...auditMeta(req),
       });
       return { decision: input.decision };

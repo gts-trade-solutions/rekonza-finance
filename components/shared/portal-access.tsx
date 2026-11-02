@@ -17,7 +17,7 @@ import { api } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
 
 interface Link { id: string; side: string; email: string | null; createdAt: string; expiresAt: string; live: boolean; opens: number; lastOpenedAt: string | null }
-interface Request { id: string; status: 'pending' | 'applied' | 'rejected'; bankName: string; accountName: string; accountNoMasked: string; ifsc: string; at: string; decidedAt: string | null; decidedBy: string | null }
+interface Request { id: string; kind: 'bank_details' | 'email'; status: 'pending' | 'applied' | 'rejected'; bankName: string; accountName: string; accountNoMasked: string; ifsc: string; email: string | null; at: string; decidedAt: string | null; decidedBy: string | null }
 interface SharedFile { id: string; filename: string; sizeBytes: number; shared: boolean; at: string }
 interface Activity { action: string; detail: string | null; at: string }
 interface Comment { id: string; targetType: string; targetId: string; label: string; number: string; author: string; body: string; at: string; fromPortal: boolean }
@@ -109,7 +109,19 @@ export function PortalAccess({ contactId, side, defaultEmail, canEdit }: { conta
         </div>
       </div>
 
-      {pending.map((r) => (
+      {pending.filter((r) => r.kind === 'email').map((r) => (
+        <div key={r.id} className="space-y-2 rounded-md border border-amber-500/50 bg-amber-500/10 p-3 text-sm" data-slot="email-change-request">
+          <p className="font-medium">They asked to change their email to <span className="font-mono">{r.email}</span></p>
+          <p className="flex items-start gap-1.5 text-xs"><ShieldAlert className="mt-0.5 size-3.5 shrink-0" /> Invoices, statements and portal sign-in codes go to this address. Check with them on a number you already had before approving.</p>
+          {canEdit && (
+            <div className="flex gap-2">
+              <Button size="sm" disabled={busy} onClick={() => post({ action: 'decide', requestId: r.id, decision: 'applied' }, 'New email approved and saved')}>Approve</Button>
+              <Button size="sm" variant="outline" disabled={busy} onClick={() => post({ action: 'decide', requestId: r.id, decision: 'rejected' }, 'Request turned down')}>Turn down</Button>
+            </div>
+          )}
+        </div>
+      ))}
+      {pending.filter((r) => r.kind !== 'email').map((r) => (
         <div key={r.id} className="space-y-2 rounded-md border border-amber-500/50 bg-amber-500/10 p-3 text-sm" data-slot="bank-change-request">
           <p className="flex items-center gap-1.5 font-medium"><Landmark className="size-4" /> They asked to be paid into a new bank account</p>
           <dl className="grid grid-cols-[110px_1fr] gap-y-0.5 text-xs">

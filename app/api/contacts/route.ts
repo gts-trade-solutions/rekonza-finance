@@ -3,7 +3,8 @@ import { sql } from 'kysely';
 import { db } from '@/lib/server/db';
 import { route, body, query, asId, badRequest, conflict } from '@/lib/server/http';
 import { toPaiseFromSql } from '@/lib/server/money-sql';
-import { seal, unseal } from '@/lib/server/crypto/fields';
+import { seal } from '@/lib/server/crypto/fields';
+import { bankNumberFor, isMasked } from '@/lib/server/bank-mask';
 import { assertFresh } from '@/lib/server/concurrency';
 import { logAudit, auditMeta, snapshot, changesBetween, describeChanges } from '@/lib/server/audit';
 import { isValidGstin } from '@/lib/tax/gst';
@@ -26,7 +27,7 @@ const ListQuery = z.object({
  * first few hundred.
  */
 export const GET = route(
-  async ({ orgId, req }) => {
+  async ({ orgId, req, role }) => {
     const q = query(req, ListQuery);
 
     let base = db.selectFrom('contacts').where('org_id', '=', orgId);
@@ -120,7 +121,7 @@ export const GET = route(
         msmeActivity: c.msme_activity,
         msmeAgreementDays: c.msme_agreement_days,
         bankAccountName: c.bank_account_name,
-        bankAccountNo: unseal(c.bank_account_no),
+        bankAccountNo: bankNumberFor(role, c.bank_account_no),
         bankIfsc: c.bank_ifsc,
         updatedAt: new Date(c.updated_at).toISOString(),
         currency: c.currency,
@@ -171,8 +172,9 @@ const ContactInput = z.object({
   /** The credit period agreed in writing; leave empty when there is none. */
   msmeAgreementDays: z.number().int().min(1).max(45, 'The MSMED Act caps an agreed period at 45 days.').nullish(),
   bankAccountName: z.string().trim().max(150).nullish(),
-  bankAccountNo: z.string().trim().regex(/^[0-9A-Za-z]{6,34}$/, 'An account number is 6 to 34 letters and digits.').nullish()
-    .or(z.literal('').transform(() => null)),
+  // A masked number (••••1234) comes back from a form that was shown one: leave the stored number as it is.
+  bankAccountNo: z.preprocess((v) => (isMasked(v) ? undefined : v), z.string().trim().regex(/^[0-9A-Za-z]{6,34}$/, 'An account number is 6 to 34 letters and digits.').nullish()
+    .or(z.literal('').transform(() => null))),
   bankIfsc: z.string().trim().toUpperCase().regex(/^[A-Z]{4}0[A-Z0-9]{6}$/, 'An IFSC is four letters, a zero, then six letters or digits.').nullish()
     .or(z.literal('').transform(() => null)),
   bankName: z.string().trim().max(120).nullish(),

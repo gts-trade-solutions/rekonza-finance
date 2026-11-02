@@ -75,6 +75,10 @@ export async function sendMail(
   const bad = [...to, ...(mail.cc ?? [])].find((t) => !EMAIL.test(t));
   if (!to.length) throw new ApiError(400, 'There is no email address to send to.', 'bad_request');
   if (bad) throw new ApiError(400, `${bad} is not an email address.`, 'bad_request');
+  // Anyone can open the demo book, so it sends nothing: otherwise it would be a
+  // way to send any words to anyone, from this server's own mail account.
+  const book = await (log.ex ?? db).selectFrom('organizations').select('is_demo').where('id', '=', orgId).executeTakeFirst();
+  if (book?.is_demo) throw new ApiError(403, 'The demo book does not send email. Create your own account to send from your books.', 'demo_no_mail');
   const status = mailStatus();
   if (!override && !status.configured) {
     throw new ApiError(409, 'Email is not set up on this server. Add SMTP_HOST, SMTP_USER, SMTP_PASSWORD and MAIL_FROM to its environment.', 'mail_not_configured');

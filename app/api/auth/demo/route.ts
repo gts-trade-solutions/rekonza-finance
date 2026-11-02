@@ -4,6 +4,7 @@ import { db } from '@/lib/server/db';
 import { createSession, cookieOptions, SESSION_COOKIE } from '@/lib/server/auth/session';
 import { route, body, ApiError, asId } from '@/lib/server/http';
 import { logAudit } from '@/lib/server/audit';
+import { clientIp } from '@/lib/server/client-ip';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // The demo door.
@@ -31,7 +32,13 @@ const DemoInput = z.object({
 export const POST = route(
   async ({ req }) => {
     const { role } = await body(req, DemoInput);
-    const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? null;
+    // Shut on a production server unless asked for (DEMO_DOOR=1): real books
+    // and a door anyone may walk through do not share a database. The online
+    // demo answers this from its recording (middleware.ts) and never gets here.
+    if (process.env.APP_ENV === 'production' && process.env.DEMO_DOOR !== '1') {
+      throw new ApiError(503, 'The demo book is not available on this server. Create an account to start your own.', 'no_demo');
+    }
+    const ip = clientIp(req);
     const userAgent = req.headers.get('user-agent');
 
     const org = await db

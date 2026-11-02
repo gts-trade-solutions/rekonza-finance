@@ -83,6 +83,14 @@ export const POST = route(
       void _a;
       return transaction(async (trx) => {
         const r = await updatePortalProfile(trx, p.orgId, p.contactId, fields);
+        if (r.emailPending) {
+          await audit(trx, 'contact', p.contactId, `Asked on the portal to change the email to ${r.emailPending}`);
+          await logPortalActivity(trx, { ...p, action: 'profile_updated', targetType: 'contact', targetId: p.contactId, detail: `Asked to change their email to ${r.emailPending}`, ip });
+          await notify(trx, p.orgId, await usersWhoCan(trx, p.orgId, p.side === 'customer' ? 'sales' : 'purchases', 'edit'), {
+            kind: 'portal', title: `${contact.display_name} asked to change their email`, body: `To ${r.emailPending}: approve it on their page.`,
+            href: p.side === 'customer' ? `/sales/customers/${p.contactId}` : `/purchases/vendors/${p.contactId}`,
+          });
+        }
         if (r.changed.length) {
           await audit(trx, 'contact', p.contactId, `Updated on the portal: ${r.changed.join(', ')}`);
           await logPortalActivity(trx, { ...p, action: 'profile_updated', targetType: 'contact', targetId: p.contactId, detail: `Updated their ${r.changed.join(', ')}`, ip });

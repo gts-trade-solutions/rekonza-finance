@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { db, transaction } from '@/lib/server/db';
 import { route, body, query, forbidden } from '@/lib/server/http';
 import { logAudit, auditMeta } from '@/lib/server/audit';
-import { createDocumentLink, createPayslipLink, createShareLink, listShareLinks, revokeShareLinks } from '@/lib/server/services/sharing';
+import { createDocumentLink, createPayslipLink, createShareLink, listShareLinks, revokeDocumentLinks, revokePayslipLinks, revokeShareLinks } from '@/lib/server/services/sharing';
 import { PRINT_KINDS, PRINT_NOUN, PRINT_SIDE, type PrintKind } from '@/lib/print-doc';
 import { hasPermission } from '@/lib/rbac';
 
@@ -67,17 +67,45 @@ export const POST = route(
   {},
 );
 
+// Withdrawing links: an invoice's, one document's, or one employee's payslip.
+// Each needs the right to edit where the record lives.
 export const PATCH = route(
-  async ({ orgId, user, req }) => {
-    const input = await body(req, z.object({ invoiceId: z.coerce.number().int().positive() }));
+  async ({ orgId, user, role, req }) => {
+    const input = await body(req, z.object({
+      invoiceId: z.coerce.number().int().positive().optional(),
+      document: z.object({ kind: z.enum(PRINT_KINDS as [PrintKind, ...PrintKind[]]), id: z.coerce.number().int().positive() }).optional(),
+      payslip: z.object({ runId: z.coerce.number().int().positive(), employeeId: z.coerce.number().int().positive() }).optional(),
+    }));
+    if (input.document) {
+      const d = input.document;
+      const area = PRINT_SIDE[d.kind] === 'customer' ? 'sales' : 'purchases';
+      if (!hasPermission(role, area, 'edit')) throw forbidden(`Withdrawing links needs the right to edit in ${area}.`);
+      return transaction(async (trx) => {
+        const n = await revokeDocumentLinks(trx, orgId, d.kind, d.id);
+        await logAudit({ trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'update', targetType: d.kind, targetId: d.id, detail: `${n} link${n === 1 ? '' : 's'} to the ${PRINT_NOUN[d.kind]} withdrawn`, ...auditMeta(req) });
+        return { revoked: n };
+      });
+    }
+    if (input.payslip) {
+      const s = input.payslip;
+      if (!hasPermission(role, 'payroll', 'export')) throw forbidden('Withdrawing payslip links needs the right to send them.');
+      return transaction(async (trx) => {
+        const n = await revokePayslipLinks(trx, orgId, s.runId, s.employeeId);
+        await logAudit({ trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'update', targetType: 'payroll', targetId: s.runId, detail: `${n} payslip link${n === 1 ? '' : 's'} for employee ${s.employeeId} withdrawn`, ...auditMeta(req) });
+        return { revoked: n };
+      });
+    }
+    if (!input.invoiceId) throw forbidden('Say which invoice, document or payslip.');
+    if (!hasPermission(role, 'sales', 'edit')) throw forbidden('Withdrawing invoice links needs the right to edit in sales.');
+    const invoiceId = input.invoiceId;
     return transaction(async (trx) => {
-      const n = await revokeShareLinks(trx, orgId, input.invoiceId);
+      const n = await revokeShareLinks(trx, orgId, invoiceId);
       await logAudit({
-        trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'update', targetType: 'invoice', targetId: input.invoiceId,
+        trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'update', targetType: 'invoice', targetId: invoiceId,
         detail: `${n} share link${n === 1 ? '' : 's'} revoked`, ...auditMeta(req),
       });
       return { revoked: n };
     });
   },
-  { permission: { module: 'sales', action: 'edit' } },
+  {},
 );

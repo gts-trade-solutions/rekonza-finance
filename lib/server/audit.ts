@@ -18,6 +18,7 @@ import 'server-only';
 import { sql } from 'kysely';
 import { db, type Executor } from './db';
 import { changeReason } from './request-context';
+import { clientIp } from './client-ip';
 
 export type AuditAction =
   | 'create' | 'update' | 'void' | 'approve' | 'send' | 'match' | 'login' | 'export' | 'import' | 'comment';
@@ -143,7 +144,7 @@ export function describeChanges(changes: Changes): string {
 /** Request metadata worth recording alongside an action. */
 export function auditMeta(req: Request): { ip: string | null; userAgent: string | null } {
   return {
-    ip: req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? null,
+    ip: clientIp(req),
     userAgent: req.headers.get('user-agent'),
   };
 }

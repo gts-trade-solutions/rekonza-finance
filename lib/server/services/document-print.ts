@@ -391,6 +391,15 @@ function singleLineWith(description: string | null, hsnSac: string | null, qty: 
   return { ...singleLine(description, totalPaise), hsnSac, qty, uqc, ratePaise };
 }
 
+/**
+ * A document as someone outside the business may see it — through a link or
+ * the portal. The notes on a bill or a payment are the business's own, for its
+ * staff; a quote's or an order's notes are written for the customer and stay.
+ */
+export function forOutside(doc: PrintDoc): PrintDoc {
+  return doc.kind === 'bill' || doc.kind === 'payment-made' || doc.kind === 'payment-received' ? { ...doc, notes: null } : doc;
+}
+
 /** The customer or vendor a document belongs to, for checking a portal's claim on it. */
 const PARTY_OF: Record<PrintKind, [table: string, column: string, paymentKind?: 'received' | 'made']> = {
   estimate: ['estimates', 'customer_id'], 'sales-order': ['sales_orders', 'customer_id'], challan: ['delivery_challans', 'customer_id'],

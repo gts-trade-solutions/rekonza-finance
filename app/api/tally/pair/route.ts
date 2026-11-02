@@ -3,6 +3,7 @@ import { logAudit } from '@/lib/server/audit';
 import { body, route } from '@/lib/server/http';
 import { redeemPairingCode } from '@/lib/server/tally/connectors';
 import { PairRequest, type PairReply } from '@/lib/tally/protocol';
+import { clientIp } from '@/lib/server/client-ip';
 
 // The connector trades a pairing code for its token. Public — the connector
 // has no session — and guarded by the code itself: random, single-use, and
@@ -22,7 +23,7 @@ export const POST = route(
       targetId: paired.connectorId,
       targetLabel: input.machineName,
       detail: `Tally connector ${input.connectorVersion} paired from ${input.machineName}`,
-      ip: req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? null,
+      ip: clientIp(req),
       userAgent: req.headers.get('user-agent'),
     });
     return { token: paired.token, organisation: paired.organisation, connectorId: String(paired.connectorId) };

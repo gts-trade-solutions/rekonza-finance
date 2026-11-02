@@ -175,7 +175,7 @@ test('bank details: a vendor’s new account waits, sealed, for the business to 
       const userId = Number((await trx.insertInto('users').values({ org_id: orgId, name: 'AP', email: `ap-${orgId}@example.test`, role: 'accountant' }).executeTakeFirstOrThrow()).insertId);
       await assert.rejects(decidePortalRequest(trx, orgId, userId, first.id, 'applied'), /already rejected/);
       const done = await decidePortalRequest(trx, orgId, userId, second.id, 'applied');
-      assert.deepEqual(done, { contactId: vendor, accountLast4: '9012' });
+      assert.deepEqual(done, { contactId: vendor, kind: 'bank_details', email: null, accountLast4: '9012' });
       c = await trx.selectFrom('contacts').select(['bank_account_no', 'bank_ifsc']).where('id', '=', vendor).executeTakeFirstOrThrow();
       assert.ok(isSealed(c.bank_account_no), 'written to the vendor sealed');
       assert.equal(unseal(c.bank_account_no), '123456789012');

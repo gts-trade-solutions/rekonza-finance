@@ -45,6 +45,8 @@ export const CHILD_TABLES: ReadonlyArray<readonly [string, string, string]> = [
 export const GLOBAL_TABLES: ReadonlySet<string> = new Set([
   'organizations', 'schema_migrations', 'backup_runs', 'billing_counters', 'billing_plan_links',
   'portal_login_codes',
+  // Sign-in attempts per address and email (auth/throttle.ts): about people, not books.
+  'auth_throttle',
 ]);
 
 async function tablesWhere(ex: Kysely<DB>, hasOrgId: boolean): Promise<string[]> {

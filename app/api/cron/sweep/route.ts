@@ -11,6 +11,7 @@ import { runAutoIrn } from '@/lib/server/gst/auto-irn';
 import { runAutoDepreciation } from '@/lib/server/services/fixed-assets';
 import { runStockTrueUp } from '@/lib/server/services/stock-ledger';
 import { runFxFeeds } from '@/lib/server/services/fx-feed';
+import { safeEqual } from '@/lib/server/auth/session';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // The background work, run on a schedule where no server stays up between
@@ -29,7 +30,7 @@ export const maxDuration = 60;
 
 export async function GET(req: Request) {
   const secret = process.env.CRON_SECRET;
-  if (!secret || req.headers.get('authorization') !== `Bearer ${secret}`) {
+  if (!secret || !safeEqual(req.headers.get('authorization') ?? '', `Bearer ${secret}`)) {
     return NextResponse.json({ error: 'Not allowed.' }, { status: 401 });
   }
   const done: Record<string, unknown> = {};

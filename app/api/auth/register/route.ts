@@ -8,6 +8,7 @@ import { createSession, cookieOptions, SESSION_COOKIE } from '@/lib/server/auth/
 import { route, body, ApiError, asId } from '@/lib/server/http';
 import { logAudit } from '@/lib/server/audit';
 import { GST_STATES, isValidGstin } from '@/lib/tax/gst';
+import { clientIp } from '@/lib/server/client-ip';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Sign up: create an organisation, its first GST registration, and its owner.
@@ -48,7 +49,7 @@ const SIGNUPS_PER_IP_PER_HOUR = 5;
 export const POST = route(
   async ({ req }) => {
     const input = await body(req, RegisterInput);
-    const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? null;
+    const ip = clientIp(req);
     const userAgent = req.headers.get('user-agent');
 
     // ── Password ─────────────────────────────────────────────────────────────

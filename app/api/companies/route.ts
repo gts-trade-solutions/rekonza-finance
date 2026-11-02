@@ -3,11 +3,12 @@ import { db, transaction } from '@/lib/server/db';
 import { route, body, unauthorized } from '@/lib/server/http';
 import { currentSessionHash } from '@/lib/server/auth/session';
 import { createCompany, myCompanies, switchCompany } from '@/lib/server/auth/companies';
+import { clientIp } from '@/lib/server/client-ip';
 
 // The companies the signed-in person works in: listing them, moving between
 // them, and making a new one.
 
-export const GET = route(async ({ user }) => ({ current: String(user.orgId), companies: await myCompanies(db, user.email) }));
+export const GET = route(async ({ user }) => ({ current: String(user.orgId), companies: await myCompanies(db, user.email, user.orgId) }));
 
 const Input = z.discriminatedUnion('action', [
   z.object({ action: z.literal('switch'), orgId: z.coerce.number().int().positive(), code: z.string().trim().max(20).nullish() }),
@@ -19,7 +20,7 @@ const Input = z.discriminatedUnion('action', [
 
 export const POST = route(async ({ user, req }) => {
   const input = await body(req, Input);
-  const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? null;
+  const ip = clientIp(req);
   const userAgent = req.headers.get('user-agent');
   if (input.action === 'create') return transaction((trx) => createCompany(trx, user, input));
   const hash = await currentSessionHash();

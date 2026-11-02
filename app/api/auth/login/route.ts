@@ -7,6 +7,11 @@ import { route, body, ApiError, asId } from '@/lib/server/http';
 import { logAudit } from '@/lib/server/audit';
 import { createChallenge, LOCKOUT_MINUTES, MAX_ATTEMPTS } from '@/lib/server/auth/mfa';
 import { afterSignIn, assertSignInAllowed, knownDevice } from '@/lib/server/auth/sign-in-rules';
+import { bucket, clear, count, overLimit } from '@/lib/server/auth/throttle';
+
+/** Failed sign-ins from one address in a window, whatever the accounts: stops one password tried across many. */
+const IP_LIMIT = 30;
+import { clientIp } from '@/lib/server/client-ip';
 
 const LoginInput = z.object({
   email: z.string().trim().toLowerCase().email('Enter a valid email address.'),
@@ -16,7 +21,7 @@ const LoginInput = z.object({
 export const POST = route(
   async ({ req }) => {
     const { email, password } = await body(req, LoginInput);
-    const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? null;
+    const ip = clientIp(req);
     const userAgent = req.headers.get('user-agent');
 
     // One person may be a user in several companies, each with the same email.
@@ -38,28 +43,37 @@ export const POST = route(
     // the account does not exist. Telling the caller whether an email is
     // registered turns the login form into a customer list.
     const reject = () => new ApiError(401, 'Email or password is incorrect.', 'invalid_credentials');
+    // Too many tries: the same answer whether the email is an account or not,
+    // so a lockout says nothing about who is registered.
+    const slowDown = () => new ApiError(429, `Too many attempts. Try again in ${LOCKOUT_MINUTES} minutes.`, 'locked');
+    const ipBucket = ip ? bucket('login-ip', ip) : null;
+    const emailBucket = bucket('login-email', email);
+    const failed = async () => {
+      if (ipBucket) await count(db, ipBucket, LOCKOUT_MINUTES);
+      await count(db, emailBucket, LOCKOUT_MINUTES);
+    };
+    if ((ipBucket && await overLimit(db, ipBucket, IP_LIMIT, LOCKOUT_MINUTES)) || await overLimit(db, emailBucket, MAX_ATTEMPTS, LOCKOUT_MINUTES)) {
+      await fakeVerify();
+      throw slowDown();
+    }
 
     if (!user) {
       await fakeVerify();
+      await failed();
       throw reject();
     }
 
     if (user.locked_until && new Date(user.locked_until) > new Date()) {
-      const mins = Math.ceil((new Date(user.locked_until).getTime() - Date.now()) / 60_000);
-      throw new ApiError(
-        429,
-        `Too many failed attempts. Try again in ${mins} minute${mins === 1 ? '' : 's'}.`,
-        'locked',
-      );
+      await fakeVerify();
+      throw slowDown();
     }
 
+    // An invited user who has not set a password yet fails like anyone else:
+    // a different answer would say the email is an account.
     if (!user.password_hash) {
       await fakeVerify();
-      throw new ApiError(
-        403,
-        'This account has not been set up yet. Ask an admin to send an invitation.',
-        'no_password',
-      );
+      await failed();
+      throw reject();
     }
 
     let ok = await verifyPassword(user.password_hash, password);
@@ -95,8 +109,10 @@ export const POST = route(
         userAgent,
       });
 
+      await failed();
       throw reject();
     }
+    await clear(db, emailBucket);
 
     if (!user.is_active) {
       throw new ApiError(403, 'This account has been disabled.', 'disabled');

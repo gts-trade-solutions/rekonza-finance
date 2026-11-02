@@ -77,6 +77,22 @@ export async function listShareLinks(ex: Executor, orgId: number, invoiceId: num
   }));
 }
 
+/** Every live link to one document (a quote, an order, a receipt …) stops working. */
+export async function revokeDocumentLinks(trx: Trx, orgId: number, kind: PrintKind, id: number) {
+  const r = await trx.updateTable('share_links').set({ revoked_at: new Date() })
+    .where('org_id', '=', orgId).where('doc_type', '=', 'document').where('doc_kind', '=', kind).where('doc_id', '=', id)
+    .where('revoked_at', 'is', null).where('expires_at', '>', new Date()).executeTakeFirst();
+  return Number(r.numUpdatedRows);
+}
+
+/** Every live link to one employee's payslip for a month stops working: one sent to the wrong person, say. */
+export async function revokePayslipLinks(trx: Trx, orgId: number, runId: number, employeeId: number) {
+  const r = await trx.updateTable('share_links').set({ revoked_at: new Date() })
+    .where('org_id', '=', orgId).where('doc_type', '=', 'payslip').where('doc_id', '=', runId).where('sub_id', '=', employeeId)
+    .where('revoked_at', 'is', null).where('expires_at', '>', new Date()).executeTakeFirst();
+  return Number(r.numUpdatedRows);
+}
+
 /** Every live link to an invoice stops working. */
 export async function revokeShareLinks(trx: Trx, orgId: number, invoiceId: number) {
   const r = await trx.updateTable('share_links').set({ revoked_at: new Date() })

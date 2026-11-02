@@ -4,7 +4,7 @@ import { openShareLink } from '@/lib/server/services/sharing';
 import { invoiceDetail } from '@/lib/server/services/invoice-detail';
 import { runDetail } from '@/lib/server/payroll/payroll';
 import { livePaymentLink } from '@/lib/server/services/payment-links';
-import { printableDocument } from '@/lib/server/services/document-print';
+import { forOutside, printableDocument } from '@/lib/server/services/document-print';
 import { isPrintKind } from '@/lib/print-doc';
 
 // A shared invoice or other document, for whoever holds the link: what is
@@ -27,7 +27,7 @@ export const GET = route(
       if (!isPrintKind(opened.docKind)) throw notFound('This link has expired or been withdrawn. Ask the sender for a new one.');
       const doc = await printableDocument(db, opened.orgId, opened.docKind, opened.docId);
       if (doc.tag === 'Cancelled') throw notFound('This document was cancelled.');
-      return { kind: 'document', doc };
+      return { kind: 'document', doc: forOutside(doc) };
     }
     const inv = await invoiceDetail(opened.orgId, opened.docId);
     if (inv.status === 'draft' || inv.status === 'void') throw notFound('This invoice is no longer available.');

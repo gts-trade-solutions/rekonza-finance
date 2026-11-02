@@ -32,6 +32,7 @@ import { BackupsPanel } from '@/components/settings/backups-panel';
 import { PoliciesPanel } from '@/components/settings/policies-panel';
 import { ControlsPanel } from '@/components/settings/controls-panel';
 import { HealthPanel } from '@/components/settings/health-panel';
+import { GoLivePanel } from '@/components/settings/golive-panel';
 import { SignInsPanel } from '@/components/settings/sign-ins-panel';
 import { TwoStepPanel } from '@/components/settings/two-step-panel';
 import { ChangePasswordCard, UsersPanel } from '@/components/settings/users-panel';
@@ -495,7 +496,8 @@ export default function SettingsPage() {
             </TabsContent>
 
             {canEdit && (
-              <TabsContent value="health" className="mt-4">
+              <TabsContent value="health" className="mt-4 space-y-4">
+                <GoLivePanel />
                 <HealthPanel />
               </TabsContent>
             )}

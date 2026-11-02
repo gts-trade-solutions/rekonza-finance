@@ -3,7 +3,7 @@ import { db } from '@/lib/server/db';
 import { route, idParam, asId, notFound, forbidden } from '@/lib/server/http';
 import { hasPermission } from '@/lib/rbac';
 import { toPaiseFromSql } from '@/lib/server/money-sql';
-import { unseal } from '@/lib/server/crypto/fields';
+import { bankNumberFor } from '@/lib/server/bank-mask';
 import { vendorFyTaxable } from '@/lib/server/services/purchases';
 
 /**
@@ -136,7 +136,7 @@ export const GET = route(
         msmeActivity: c.msme_activity,
         msmeAgreementDays: c.msme_agreement_days,
         bankAccountName: c.bank_account_name,
-        bankAccountNo: unseal(c.bank_account_no),
+        bankAccountNo: bankNumberFor(role, c.bank_account_no),
         updatedAt: new Date(c.updated_at).toISOString(),
         bankIfsc: c.bank_ifsc,
         currency: c.currency,

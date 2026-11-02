@@ -1,7 +1,7 @@
 import { db } from '@/lib/server/db';
 import { route, notFound } from '@/lib/server/http';
 import { openPortal } from '@/lib/server/services/portal';
-import { documentParty, printableDocument } from '@/lib/server/services/document-print';
+import { documentParty, forOutside, printableDocument } from '@/lib/server/services/document-print';
 import { isPrintKind, PRINT_SIDE } from '@/lib/print-doc';
 
 // One of the contact's own documents, as printed, from the portal: a
@@ -17,7 +17,7 @@ export const GET = route(
     if (!isPrintKind(kind) || PRINT_SIDE[kind] !== p.side || !Number.isInteger(id)) throw notFound('That document is not yours.');
     const owner = await documentParty(db, p.orgId, kind, id);
     if (!owner || owner.contactId !== p.contactId || ['draft', 'void', 'cancelled'].includes(owner.status)) throw notFound('That document is not yours.');
-    return printableDocument(db, p.orgId, kind, id);
+    return forOutside(await printableDocument(db, p.orgId, kind, id));
   },
   { public: true },
 );

@@ -26,6 +26,7 @@ import { StandinProvider } from './standin';
 import { hiddenAreas } from './tools';
 import type { AiProvider } from './types';
 import recordingJson from './demo-recording.json';
+import { clientIp } from '../client-ip';
 
 const recording = recordingJson as unknown as AiRecording;
 
@@ -96,7 +97,7 @@ export async function demoChat(req: Request): Promise<Response> {
   const now = Date.now();
   sweep(now);
   const provider = demoProvider();
-  const visitor = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || req.headers.get('x-real-ip') || 'local';
+  const visitor = clientIp(req) || 'local';
   const refusal = limited(visitor, now, provider.name === 'openai');
   if (refusal) return json(429, refusal, 'rate_limited');
 

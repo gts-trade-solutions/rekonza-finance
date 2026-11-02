@@ -7,7 +7,8 @@ export const GET = route(
     const database = await ping();
     return {
       ok: database.ok,
-      database,
+      // Whether it answers and how fast; never the driver's error, which can name the host and user.
+      database: { ok: database.ok, latencyMs: database.latencyMs },
       env: process.env.APP_ENV ?? 'unknown',
       time: new Date().toISOString(),
     };

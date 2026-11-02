@@ -174,13 +174,15 @@ Vercel runs the app; it does not run the database. You need:
 
 1. **A hosted MySQL 8** in Mumbai (the Companies Act wants the books and their backups in India) — Aiven, AWS RDS, DigitalOcean or Railway, or for a demo the free TiDB Cloud from Vercel's Storage tab. A single `DATABASE_URL` (`mysql://user:password@host:port/name`, as Vercel's integrations set it) is used ahead of the `DB_*` settings, with TLS. Put it in `.env.production.local` and run the migrations and the demo book against it from your machine: `node --env-file=.env.production.local scripts/migrate.mjs`, then `npx tsx --conditions=react-server --env-file=.env.production.local scripts/seed.ts`.
 2. **A Vercel Blob store** (private, Mumbai) connected to the project, for attachments. Vercel adds `BLOB_READ_WRITE_TOKEN` itself.
-3. **Environment variables** in the Vercel project: `DATABASE_URL` (a Vercel database integration adds it), or the `DB_*` set with `DB_SSL=true` (and `DB_SSL_CA` if the provider asks), `SESSION_SECRET`, `FIELD_ENCRYPTION_KEY`, `CRON_SECRET`, `NEXT_PUBLIC_SITE_URL`. See `.env.example`.
+3. **Environment variables** in the Vercel project: `DATABASE_URL` (a Vercel database integration adds it), or the `DB_*` set with `DB_SSL=true` (and `DB_SSL_CA` if the provider asks), `APP_ENV=production`, `FIELD_ENCRYPTION_KEY`, `CRON_SECRET`, `NEXT_PUBLIC_SITE_URL`, and the mail, GSP and e-invoice settings when the business has them. See `.env.example`.
+4. **The go-live check**: `npx tsx --conditions=react-server --env-file=.env.production.local scripts/golive.ts` (or Settings → System health once it is running) tests the database and its TLS, every migration, the encryption key, the cron secret, the site address, file storage and the demo door, and lists which connections are live or on a stand-in. It exits non-zero while anything required is missing.
 
 `vercel.json` runs the functions in Mumbai (`bom1`) and calls `/api/cron/sweep` once a day for the background work (scheduled entries, retries, webhooks, reports, stock alerts, reminders). On a Pro plan, make it every ten minutes: `"*/10 * * * *"`. Backups are the database host's: turn on its daily backups and point-in-time recovery; `npm run db:backup` is for a server you run yourself.
 
 ## Checks
 
 ```bash
+npm run golive         # is this server set up to keep real books (lib/server/golive.ts)
 npm run test:unit      # posting engine, money arithmetic, services
 npm run test:api       # route handlers against a live server
 npm run smoke          # every route renders with no console errors
