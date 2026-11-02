@@ -3,11 +3,9 @@
 // Customer-facing portal — a deliberately simpler surface. No accounting
 // vocabulary at all: just "what do I owe, and how do I pay it".
 //
-// This is a PREVIEW, and the page says so. A real portal hands each customer a
-// tokenised link, which needs mail transport the app does not have yet, and a
-// payment button needs a gateway it does not have either. What exists today is
-// the view itself, rendered from the real ledger, so you can pick a customer
-// and see exactly what they would see.
+// This is a PREVIEW for staff: pick a customer and see their figures. The
+// real portal is at /portal/<token> (app/portal/[token]); a customer gets their
+// own link from the People & portal tab on their page, copied or emailed.
 //
 // It used to run off the seeded demo store and was reachable without signing
 // in — which meant a stranger could read one customer's invoice history by
@@ -112,9 +110,9 @@ function PortalInner() {
     setPaying(id);
     await new Promise((r) => setTimeout(r, 1200));
     setPaying(null);
-    toast.info('No payment gateway is connected', {
+    toast.info('This is the staff preview', {
       description:
-        'This button would open a checkout and reconcile the receipt automatically. Connecting one needs a merchant account, which is set up in Settings → Integrations.',
+        'On the customer’s own portal link this button opens a Razorpay payment link, and the receipt records itself when they pay. Connect Razorpay under Settings → Integrations.',
     });
   };
 
@@ -161,7 +159,7 @@ function PortalInner() {
             />
           </div>
           <p className="text-xs text-muted-foreground">
-            A live portal would email each customer their own link. Nothing here is sent.
+            A preview for staff. To give a customer their own portal, open their page → People &amp; portal.
           </p>
         </div>
       </div>

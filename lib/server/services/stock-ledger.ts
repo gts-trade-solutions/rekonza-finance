@@ -33,6 +33,7 @@ import 'server-only';
 import { db, transaction, type Executor, type Trx } from '../db';
 import type { Paise } from '../../types';
 import { toPaiseFromSql } from '../money-sql';
+import { explodeKits } from './kits';
 import { badRequest, conflict } from '../http';
 import { postEntry, type DraftLine } from '../ledger/posting';
 import { CODE, accountIds, requireAccount } from '../ledger/chart-of-accounts';
@@ -56,7 +57,9 @@ async function trackedItems(ex: Executor, orgId: number, ids: (number | null)[])
 }
 
 /** What these goods cost, at each item's cost on the day (its catalogue price when it has none yet). */
-async function costOf(ex: Executor, orgId: number, date: string, lines: { itemId: number | null; qty: number }[]): Promise<Paise> {
+async function costOf(ex: Executor, orgId: number, date: string, given: { itemId: number | null; qty: number }[]): Promise<Paise> {
+  // A kit costs what its components cost.
+  const lines = await explodeKits(ex, orgId, given);
   const tracked = await trackedItems(ex, orgId, lines.map((l) => l.itemId));
   if (!tracked.size) return 0;
   const pos = await stockPosition(ex, orgId, date, { includeArchived: true });

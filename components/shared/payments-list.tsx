@@ -15,6 +15,7 @@ import { Badge } from '@/components/ui/badge';
 import { Card } from '@/components/ui/card';
 import { PageHeader } from '@/components/shared/page-header';
 import { DataTable, type Column } from '@/components/shared/data-table';
+import { BulkPrintButton, documentMenuColumn } from '@/components/shared/document-menu';
 import { Money } from '@/components/shared/money';
 import { EmptyState } from '@/components/shared/empty-state';
 import { AsyncPage, LoadingRows, Refreshing } from '@/components/shared/async-state';
@@ -101,6 +102,12 @@ export function PaymentsList({ kind }: { kind: 'received' | 'made' }) {
         ),
     },
     { key: 'amount', header: 'Amount', align: 'right', sortValue: (r) => r.amountPaise, cell: (r) => <Money value={r.amountPaise} className="font-medium" /> },
+    ...(!isReceipt ? [{
+      key: 'cheque', header: '', sortValue: () => 0,
+      cell: (r: PaymentListItem) => (r.mode === 'cheque' && r.status !== 'void'
+        ? <Link href={`/purchases/payments/${r.id}/cheque`} onClick={(e) => e.stopPropagation()} className="text-xs text-primary hover:underline" data-slot="print-cheque">Print cheque</Link>
+        : null),
+    }] : []),
   ];
 
   return (
@@ -175,8 +182,10 @@ export function PaymentsList({ kind }: { kind: 'received' | 'made' }) {
 
               <DataTable
                 rows={data.payments}
-                columns={columns}
+                columns={[...columns, documentMenuColumn(isReceipt ? 'payment-received' : 'payment-made', () => void state.refetch())]}
                 getRowId={(r) => r.id}
+                selectable
+                bulkActions={(selected) => <BulkPrintButton kind={isReceipt ? 'payment-received' : 'payment-made'} ids={selected.map((r) => r.id)} />}
                 initialSort={{ key: 'date', dir: 'desc' }}
                 searchPlaceholder={`Search ${isReceipt ? 'receipt' : 'payment'} or ${party.toLowerCase()}…`}
                 dateFilter={{ getDate: (r) => r.date, value: range, onChange: setRange }}

@@ -2,11 +2,12 @@
 
 // Sending an invoice to the customer: a link that opens it without signing
 // in, copied, or put in a WhatsApp message or an email ready to go from the
-// user's own phone or mail. No provider is needed for either; with one
-// connected, the same message could go by itself. Links can be withdrawn.
+// user's own phone or mail. With a mail server set up (lib/server/mail), it
+// can also be emailed straight from here, to the people at the customer
+// marked to receive documents. Links can be withdrawn.
 
 import { useState } from 'react';
-import { Copy, Loader2, Mail, MessageCircle, Send, Unlink } from 'lucide-react';
+import { Copy, CreditCard, Loader2, Mail, MessageCircle, Send, Unlink } from 'lucide-react';
 import { toast } from 'sonner';
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
@@ -14,6 +15,7 @@ import {
 import { api, invoices as invoiceApi, type InvoiceDetail } from '@/lib/api/client';
 import { formatINR } from '@/lib/money';
 import { usePermission } from '@/lib/store/hooks';
+import { useApi } from '@/lib/api/use-api';
 
 /** A WhatsApp number from what was typed: digits only, with India's 91 when it is a ten-digit mobile. */
 export const whatsappNumber = (phone: string | null | undefined) => {
@@ -25,7 +27,39 @@ export function SendInvoice({ inv, onSent }: { inv: InvoiceDetail; onSent: () =>
   const canShare = usePermission('sales', 'export');
   const canEdit = usePermission('sales', 'edit');
   const [busy, setBusy] = useState(false);
+  const mail = useApi(() => api.get<{ configured: boolean; sent: { to: string; status: string; at: string }[] }>('/api/email', { docType: 'invoice', docId: inv.id }), [inv.id]);
+  const gateway = useApi(() => api.get<{ connected: boolean }>('/api/payment-links'), []);
   if (!canShare) return null;
+
+  const payLink = async () => {
+    setBusy(true);
+    try {
+      const r = await api.post<{ url: string; amountPaise: number; reused: boolean }>('/api/payment-links', { action: 'link', invoiceId: inv.id });
+      await navigator.clipboard.writeText(r.url).catch(() => {});
+      toast.success(r.reused ? 'Payment link copied' : 'Payment link made and copied', {
+        description: `${r.url} asks for ${formatINR(r.amountPaise)}. It also shows as a Pay button on the shared invoice; the receipt records itself when it is paid.`,
+      });
+    } catch (e) {
+      toast.error('No link', { description: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setBusy(false);
+    }
+  };
+  const lastSent = mail.data?.sent.find((x) => x.status === 'sent');
+
+  const emailNow = async () => {
+    setBusy(true);
+    try {
+      const r = await api.post<{ to: string[] }>('/api/email', { kind: 'invoice', invoiceId: inv.id });
+      toast.success('Emailed', { description: `To ${r.to.join(', ')}, with a link to view and pay it.` });
+      mail.refetch();
+      onSent();
+    } catch (e) {
+      toast.error('Not sent', { description: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const link = async () => {
     const r = await api.post<{ path: string; expiresAt: string }>('/api/share', { invoiceId: inv.id });
@@ -83,12 +117,22 @@ export function SendInvoice({ inv, onSent }: { inv: InvoiceDetail; onSent: () =>
         <DropdownMenuItem onClick={() => void go('whatsapp')}>
           <MessageCircle className="mr-2 size-4" /> On WhatsApp{inv.customer.phone ? '' : ' (no number on file)'}
         </DropdownMenuItem>
+        {mail.data?.configured && (
+          <DropdownMenuItem onClick={() => void emailNow()} data-slot="email-now">
+            <Mail className="mr-2 size-4" /> Email now{lastSent ? ' (again)' : ''}
+          </DropdownMenuItem>
+        )}
         <DropdownMenuItem onClick={() => void go('email')}>
-          <Mail className="mr-2 size-4" /> By email{inv.customer.email ? '' : ' (no address on file)'}
+          <Mail className="mr-2 size-4" /> In my mail app{inv.customer.email ? '' : ' (no address on file)'}
         </DropdownMenuItem>
         <DropdownMenuItem onClick={() => void go('copy')}>
           <Copy className="mr-2 size-4" /> Copy a link
         </DropdownMenuItem>
+        {gateway.data?.connected && inv.balancePaise > 0 && (
+          <DropdownMenuItem onClick={() => void payLink()} data-slot="payment-link">
+            <CreditCard className="mr-2 size-4" /> Payment link (Razorpay)
+          </DropdownMenuItem>
+        )}
         {canEdit && (
           <>
             <DropdownMenuSeparator />

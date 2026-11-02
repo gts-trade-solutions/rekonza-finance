@@ -62,8 +62,9 @@ interface RawBalance {
 async function balances(
   ex: Executor,
   orgId: number,
-  opts: { from?: string; to: string; branchId?: number },
+  opts: { from?: string; to: string; branchId?: number; basis?: ReportBasis },
 ): Promise<AccountBalance[]> {
+  if (opts.basis === 'cash') return cashBalances(ex, orgId, opts);
   const from = opts.from ?? '1900-01-01';
   const branchFilter = opts.branchId
     ? sql`AND e.branch_id = ${opts.branchId}`
@@ -99,6 +100,106 @@ async function balances(
       balancePaise: isDebitNormal(r.type) ? debitPaise - creditPaise : creditPaise - debitPaise,
     };
   });
+}
+
+/**
+ * Accrual (the default) counts a sale when it is invoiced and a cost when it
+ * is billed; cash counts each when it is paid, as Zoho Books' "Report basis:
+ * Cash" does.
+ */
+export type ReportBasis = 'accrual' | 'cash';
+
+/**
+ * Every account's movement between two dates, on the cash basis.
+ *
+ * An invoice, bill, credit note or vendor credit counts as it is settled in
+ * money: each of its journal lines in the share of the document paid — by
+ * receipts and payments (payment_allocations), by a retainer applied to an
+ * invoice, by a credit note or vendor credit refunded — and on the day it was
+ * paid, never before the document's own date. A credit note set against an
+ * invoice is no money at all: the invoice's unpaid part and the note both stay
+ * out. Every other entry (a cash sale, an expense paid, a journal, payroll,
+ * depreciation) counts on its own date, as on the accrual basis.
+ *
+ * Each document's lines are scaled by the same share, so every document still
+ * balances; rounding to the paisa per account can leave a paisa or two, which
+ * is put to Accounts Receivable, the account the cash basis leaves almost
+ * empty anyway, so the trial balance and balance sheet still tie exactly.
+ */
+async function cashBalances(
+  ex: Executor,
+  orgId: number,
+  opts: { from?: string; to: string; branchId?: number },
+): Promise<AccountBalance[]> {
+  const from = opts.from ?? '1900-01-01';
+  const { rows } = await sql<RawBalance>`
+    WITH docs AS (
+      SELECT journal_entry_id AS entry_id, 'invoice' AS kind, id AS doc_id, invoice_date AS doc_date, total FROM invoices
+       WHERE org_id = ${orgId} AND journal_entry_id IS NOT NULL
+      UNION ALL
+      SELECT journal_entry_id, 'bill', id, bill_date, total FROM bills WHERE org_id = ${orgId} AND journal_entry_id IS NOT NULL
+      UNION ALL
+      SELECT journal_entry_id, 'credit_note', id, note_date, total FROM credit_notes WHERE org_id = ${orgId} AND journal_entry_id IS NOT NULL
+      UNION ALL
+      SELECT journal_entry_id, 'vendor_credit', id, credit_date, total FROM vendor_credits WHERE org_id = ${orgId} AND journal_entry_id IS NOT NULL
+    ),
+    settled AS (
+      SELECT pa.target_type AS kind, pa.target_id AS doc_id, p.payment_date AS paid_on, pa.amount AS amt
+        FROM payment_allocations pa JOIN payments p ON p.id = pa.payment_id AND p.status <> 'void'
+       WHERE pa.org_id = ${orgId} AND pa.target_type IN ('invoice', 'bill')
+      UNION ALL
+      -- A retainer applied to an invoice: money received earlier, settling it now.
+      SELECT 'invoice', i.id, e.entry_date, (SELECT SUM(l.debit) FROM journal_lines l WHERE l.entry_id = e.id)
+        FROM journal_entries e JOIN invoices i ON i.org_id = e.org_id AND e.memo LIKE CONCAT('% applied to invoice ', i.number)
+       WHERE e.org_id = ${orgId} AND e.source_type = 'retainer_application'
+      UNION ALL
+      SELECT CASE e.source_type WHEN 'credit_note_refund' THEN 'credit_note' ELSE 'vendor_credit' END, e.source_id, e.entry_date,
+             (SELECT SUM(l.debit) FROM journal_lines l WHERE l.entry_id = e.id)
+        FROM journal_entries e
+       WHERE e.org_id = ${orgId} AND e.source_type IN ('credit_note_refund', 'vendor_credit_refund')
+    ),
+    share AS (
+      SELECT d.entry_id,
+             LEAST(1, COALESCE(SUM(CASE WHEN GREATEST(s.paid_on, d.doc_date) <= ${opts.to} THEN s.amt END), 0) / NULLIF(d.total, 0)) AS by_end,
+             LEAST(1, COALESCE(SUM(CASE WHEN GREATEST(s.paid_on, d.doc_date) < ${from} THEN s.amt END), 0) / NULLIF(d.total, 0)) AS before_start
+        FROM docs d LEFT JOIN settled s ON s.kind = d.kind AND s.doc_id = d.doc_id
+       GROUP BY d.entry_id, d.total
+    ),
+    weighted AS (
+      SELECT jl.account_id, jl.debit, jl.credit,
+             CASE WHEN sh.entry_id IS NULL
+                  THEN CASE WHEN jl.entry_date BETWEEN ${from} AND ${opts.to} THEN 1 ELSE 0 END
+                  ELSE COALESCE(sh.by_end, 0) - COALESCE(sh.before_start, 0) END AS w
+        FROM journal_lines jl
+        LEFT JOIN share sh ON sh.entry_id = jl.entry_id
+        ${opts.branchId ? sql`JOIN journal_entries e ON e.id = jl.entry_id AND e.branch_id = ${opts.branchId}` : sql``}
+       WHERE jl.org_id = ${orgId}
+    )
+    SELECT a.id, a.code, a.name, a.type, a.subtype,
+           ROUND(COALESCE(SUM(x.debit * x.w), 0), 2)  AS dr,
+           ROUND(COALESCE(SUM(x.credit * x.w), 0), 2) AS cr
+      FROM accounts a
+      LEFT JOIN weighted x ON x.account_id = a.id AND x.w <> 0
+     WHERE a.org_id = ${orgId}
+     GROUP BY a.id, a.code, a.name, a.type, a.subtype
+     ORDER BY a.code
+  `.execute(ex);
+
+  const out = rows.map((r) => {
+    const debitPaise = toPaiseFromSql(r.dr);
+    const creditPaise = toPaiseFromSql(r.cr);
+    return {
+      accountId: String(r.id), code: r.code, name: r.name, type: r.type, subtype: r.subtype, debitPaise, creditPaise,
+      balancePaise: isDebitNormal(r.type) ? debitPaise - creditPaise : creditPaise - debitPaise,
+    };
+  });
+  const residue = out.reduce((t, r) => t + r.debitPaise - r.creditPaise, 0);
+  const ar = out.find((r) => r.code === CODE.AR);
+  if (residue && ar) {
+    if (residue > 0) ar.creditPaise += residue; else ar.debitPaise -= residue;
+    ar.balancePaise = ar.debitPaise - ar.creditPaise;
+  }
+  return out;
 }
 
 /**
@@ -144,8 +245,9 @@ export async function trialBalance(
   orgId: number,
   asOf: string,
   branchId?: number,
+  basis: ReportBasis = 'accrual',
 ): Promise<TrialBalance> {
-  const all = await balances(ex, orgId, { to: asOf, branchId });
+  const all = await balances(ex, orgId, { to: asOf, branchId, basis });
 
   const rows = all
     .filter((r) => r.debitPaise !== 0 || r.creditPaise !== 0)
@@ -177,6 +279,8 @@ export interface ProfitAndLoss {
   netProfit: Paise;
   from: string;
   to: string;
+  /** Accrual, or cash: counted when paid. */
+  basis: ReportBasis;
 }
 
 /**
@@ -193,9 +297,10 @@ export async function profitAndLoss(
   from: string,
   to: string,
   branchId?: number,
+  basis: ReportBasis = 'accrual',
 ): Promise<ProfitAndLoss> {
   const [all, opening, closing, postedOpening, postedClosing] = await Promise.all([
-    balances(ex, orgId, { from, to, branchId }),
+    balances(ex, orgId, { from, to, branchId, basis }),
     stockPosition(ex, orgId, dayBefore(from), { branchId, includeArchived: true }),
     stockPosition(ex, orgId, to, { branchId, includeArchived: true }),
     inventoryInLedger(ex, orgId, dayBefore(from), branchId),
@@ -217,8 +322,13 @@ export async function profitAndLoss(
     .reduce((t, r) => t + r.balancePaise, 0);
 
   // Only the stock the ledger does not carry already (inventoryInLedger).
-  const openingStockPaise = opening.totalValuePaise - postedOpening;
-  const closingStockPaise = closing.totalValuePaise - postedClosing;
+  // On the cash basis none: stock valued from the documents is an accrual,
+  // and adding goods not yet paid for to a profit of money paid and received
+  // would count them as profit. (A perpetual book's Inventory account still
+  // shows, in the share paid.)
+  const stockCounts = basis !== 'cash';
+  const openingStockPaise = stockCounts ? opening.totalValuePaise - postedOpening : 0;
+  const closingStockPaise = stockCounts ? closing.totalValuePaise - postedClosing : 0;
   const costOfGoodsSoldPaise = directCost + openingStockPaise - closingStockPaise;
 
   return {
@@ -233,6 +343,7 @@ export async function profitAndLoss(
     netProfit: totalIncome - totalExpense + closingStockPaise - openingStockPaise,
     from,
     to,
+    basis,
   };
 }
 
@@ -256,6 +367,8 @@ export interface BalanceSheet {
   fyStart: string;
   balanced: boolean;
   asOf: string;
+  /** Accrual, or cash: counted when paid. */
+  basis: ReportBasis;
 }
 
 /** Statement rows for figures that are computed rather than posted. */
@@ -287,13 +400,14 @@ export async function balanceSheet(
   orgId: number,
   asOf: string,
   branchId?: number,
+  basis: ReportBasis = 'accrual',
 ): Promise<BalanceSheet> {
   const fyStart = fyStartFor(asOf, await fiscalStartMonth(ex, orgId));
   const lastYearEnd = dayBefore(fyStart);
 
   const [all, beforeYear, stockNow, stockAtYearStart, postedNow, postedAtYearStart] = await Promise.all([
-    balances(ex, orgId, { to: asOf, branchId }),
-    balances(ex, orgId, { to: lastYearEnd, branchId }),
+    balances(ex, orgId, { to: asOf, branchId, basis }),
+    balances(ex, orgId, { to: lastYearEnd, branchId, basis }),
     stockPosition(ex, orgId, asOf, { branchId, includeArchived: true }),
     stockPosition(ex, orgId, lastYearEnd, { branchId, includeArchived: true }),
     inventoryInLedger(ex, orgId, asOf, branchId),
@@ -304,10 +418,12 @@ export async function balanceSheet(
     rows.filter((r) => r.type === 'income').reduce((t, r) => t + r.balancePaise, 0) -
     rows.filter((r) => r.type === 'expense').reduce((t, r) => t + r.balancePaise, 0);
 
-  const openingStock = stockNow.bookOpeningValuePaise;
+  // On the cash basis, no stock valued from the documents (see profitAndLoss).
+  const stockCounts = basis !== 'cash';
+  const openingStock = stockCounts ? stockNow.bookOpeningValuePaise : 0;
   // The part of stock the Inventory account does not already hold (inventoryInLedger).
-  const closingStockPaise = stockNow.totalValuePaise - postedNow;
-  const stockAtYearStartPaise = stockAtYearStart.totalValuePaise - postedAtYearStart;
+  const closingStockPaise = stockCounts ? stockNow.totalValuePaise - postedNow : 0;
+  const stockAtYearStartPaise = stockCounts ? stockAtYearStart.totalValuePaise - postedAtYearStart : 0;
   const priorYearsEarnings = profitIn(beforeYear) + stockAtYearStartPaise - openingStock;
   const currentPeriodEarnings =
     profitIn(all) - profitIn(beforeYear) + closingStockPaise - stockAtYearStartPaise;
@@ -340,6 +456,7 @@ export async function balanceSheet(
     fyStart,
     balanced: totalAssets === totalLiabilities + totalEquity,
     asOf,
+    basis,
   };
 }
 

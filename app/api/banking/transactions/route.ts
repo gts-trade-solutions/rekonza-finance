@@ -6,6 +6,7 @@ import { toPaiseFromSql } from '@/lib/server/money-sql';
 import {
   categoriseTransaction, matchToPayment, unmatchTransaction, applyRules, matchInvoicePayments, matchEnteredPayments,
 } from '@/lib/server/services/banking';
+import { acceptSuggestions, bulkCategorise, deleteLines, setExcluded, suggestCategories } from '@/lib/server/services/bank-bulk';
 import { logAudit, auditMeta } from '@/lib/server/audit';
 
 const ListQuery = z.object({
@@ -13,6 +14,10 @@ const ListQuery = z.object({
   status: z.enum(['unmatched', 'matched', 'excluded', 'manually_added', 'all']).optional(),
   from: z.string().optional(),
   to: z.string().optional(),
+  /** The lines of one import (Undo import, and the bulk screen's filter). */
+  importId: z.string().optional(),
+  /** Also suggest a category for each uncategorised line, learnt from past ones (bank-bulk.ts). */
+  suggest: z.enum(['1']).optional(),
   limit: z.coerce.number().int().min(1).max(500).default(200),
   offset: z.coerce.number().int().min(0).default(0),
 });
@@ -30,6 +35,7 @@ export const GET = route(
     if (q.status && q.status !== 'all') base = base.where('bank_transactions.status', '=', q.status);
     if (q.from) base = base.where('bank_transactions.txn_date', '>=', q.from);
     if (q.to) base = base.where('bank_transactions.txn_date', '<=', q.to);
+    if (q.importId) base = base.where('bank_transactions.import_batch_id', '=', Number(q.importId));
 
     const [rows, counts] = await Promise.all([
       base
@@ -104,7 +110,12 @@ export const GET = route(
       }
     }
 
+    const categories = q.suggest
+      ? await suggestCategories(db, orgId, unmatchedRows.map((r) => ({ id: r.id, narration: r.narration, inflow: toPaiseFromSql(r.deposit) > 0 })))
+      : null;
+
     return {
+      ...(categories ? { categorySuggestions: Object.fromEntries([...categories].map(([id, c]) => [String(id), c])) } : {}),
       transactions: rows.map((r) => ({
         id: asId(r.id),
         date: r.txn_date,
@@ -154,6 +165,21 @@ const ActionInput = z.discriminatedUnion('action', [
     action: z.literal('auto_match'),
     bankAccountId: z.string(),
   }),
+  // In bulk, as Zoho's banking list allows (bank-bulk.ts).
+  z.object({
+    action: z.literal('bulk_categorise'),
+    transactionIds: z.array(z.string()).min(1).max(500),
+    accountId: z.string(),
+    contactId: z.string().nullish(),
+    description: z.string().max(300).nullish(),
+  }),
+  z.object({
+    action: z.literal('accept_suggestions'),
+    picks: z.array(z.object({ transactionId: z.string(), accountId: z.string() })).min(1).max(500),
+  }),
+  z.object({ action: z.literal('exclude'), transactionIds: z.array(z.string()).min(1).max(500) }),
+  z.object({ action: z.literal('include'), transactionIds: z.array(z.string()).min(1).max(500) }),
+  z.object({ action: z.literal('delete'), transactionIds: z.array(z.string()).min(1).max(500) }),
 ]);
 
 export const POST = route(
@@ -170,6 +196,32 @@ export const POST = route(
       });
       return { matched };
     }
+
+    if (input.action === 'bulk_categorise' || input.action === 'accept_suggestions' || input.action === 'exclude' || input.action === 'include' || input.action === 'delete') {
+      const ids = input.action === 'accept_suggestions' ? input.picks.map((x) => Number(x.transactionId)) : input.transactionIds.map(Number);
+      const action = input.action;
+      const result = await transaction(async (trx) => {
+        if (input.action === 'bulk_categorise') {
+          return bulkCategorise(trx, orgId, user.userId, ids, {
+            accountId: Number(input.accountId), contactId: input.contactId ? Number(input.contactId) : null, description: input.description,
+          });
+        }
+        if (input.action === 'accept_suggestions') {
+          return { categorised: await acceptSuggestions(trx, orgId, user.userId, input.picks.map((x) => ({ id: Number(x.transactionId), accountId: Number(x.accountId) }))) };
+        }
+        if (input.action === 'delete') return deleteLines(trx, orgId, ids);
+        return { changed: await setExcluded(trx, orgId, ids, input.action === 'exclude') };
+      });
+      await logAudit({
+        orgId, actorUserId: user.userId, actorName: user.name,
+        action: action === 'delete' ? 'void' : action === 'exclude' || action === 'include' ? 'update' : 'match',
+        targetType: 'bank_txn', targetId: ids[0], targetLabel: `${ids.length} bank line(s)`,
+        detail: `Bulk ${action.replace('_', ' ')} on ${ids.length} statement line(s): ${JSON.stringify(result)}`,
+        ...auditMeta(req),
+      });
+      return result;
+    }
+
     const txnId = Number(input.transactionId);
 
     const result = await transaction(async (trx) => {

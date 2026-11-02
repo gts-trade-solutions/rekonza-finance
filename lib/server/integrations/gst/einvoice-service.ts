@@ -76,7 +76,7 @@ async function loadInvoice(
     .innerJoin('organizations as o', 'o.id', 'i.org_id')
     .select([
       'e.id as einvoice_id', 'e.status as einvoice_status', 'e.attempts',
-      'i.id as invoice_id', 'i.branch_id', 'i.number', 'i.invoice_date', 'i.status as invoice_status',
+      'i.id as invoice_id', 'i.branch_id', 'i.number', 'i.doc_kind', 'i.invoice_date', 'i.status as invoice_status',
       'i.supply_type', 'i.supply_kind', 'i.place_of_supply',
       'i.doc_discount', 'i.shipping_charge', 'i.adjustment', 'i.round_off', 'i.total',
       'i.ship_to_name', 'i.ship_to_gstin', 'i.ship_to_address', 'i.ship_to_city', 'i.ship_to_pincode', 'i.ship_to_state_code',
@@ -170,7 +170,7 @@ async function loadInvoice(
     !!head.shipping_address && head.shipping_address !== head.billing_address;
 
   const source: EinvoiceSource = {
-    docType: 'INV',
+    docType: head.doc_kind === 'debit_note' ? 'DBN' : 'INV',
     number: head.number,
     date: String(head.invoice_date).slice(0, 10),
     supplyType: head.supply_type as SupplyType,

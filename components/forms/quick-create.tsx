@@ -44,6 +44,7 @@ import { GST_RATES, isValidGstin, stateName } from '@/lib/tax/gst';
 import { TDS_SECTIONS } from '@/lib/tax/tds';
 import type { Contact, GstTreatment, Item, TaxPref } from '@/lib/types';
 import { cn } from '@/lib/utils';
+import { GstinLookupButton, gstinTreatment } from '@/components/gst/gstn-portal';
 
 const TREATMENTS = [
   { value: 'registered', label: 'Registered business (regular)' },
@@ -238,16 +239,23 @@ export function QuickContactDialog({
                 }
                 error={gstinValid === false ? 'Checksum does not match' : undefined}
               >
-                <div className="relative">
-                  <Input
-                    value={gstin}
-                    onChange={(e) => setGstinAndState(e.target.value)}
-                    placeholder="22AAAAA0000A1Z5"
-                    className={cn('pr-8 font-mono uppercase', gstinValid === false && 'border-destructive')}
-                  />
-                  {gstinValid === true && (
-                    <BadgeCheck className="absolute right-2 top-1/2 size-4 -translate-y-1/2 text-success" />
-                  )}
+                <div className="flex gap-2">
+                  <div className="relative flex-1">
+                    <Input
+                      value={gstin}
+                      onChange={(e) => setGstinAndState(e.target.value)}
+                      placeholder="22AAAAA0000A1Z5"
+                      className={cn('pr-8 font-mono uppercase', gstinValid === false && 'border-destructive')}
+                    />
+                    {gstinValid === true && (
+                      <BadgeCheck className="absolute right-2 top-1/2 size-4 -translate-y-1/2 text-success" />
+                    )}
+                  </div>
+                  <GstinLookupButton gstin={gstin} onFound={(d) => {
+                    if (!name.trim()) setName(d.tradeName || d.legalName || '');
+                    setTreatment(gstinTreatment(d) as GstTreatment);
+                    if (d.address?.stateCode) setStateCode(d.address.stateCode);
+                  }} />
                 </div>
               </Field>
             ) : (

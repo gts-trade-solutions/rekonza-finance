@@ -14,6 +14,7 @@ import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/shared/page-header';
+import { GstnReturnBar } from '@/components/gst/gstn-portal';
 import { Money } from '@/components/shared/money';
 import { AsyncPage, LoadingRows } from '@/components/shared/async-state';
 import { downloadCsv, downloadJson, ReportTable } from '@/components/shared/report-shell';
@@ -74,7 +75,7 @@ export default function IffPage() {
     downloadCsv(`IFF-${month}.csv`, [
       ['Table', 'Buyer GSTIN', 'Buyer', 'Number', 'Date', 'Place of supply', 'Taxable', 'CGST', 'SGST', 'IGST', 'Cess', 'Value'],
       ...d.b2b.map((r) => row('B2B invoice', r)),
-      ...d.cdnr.map((r) => row('Credit note', r)),
+      ...d.cdnr.map((r) => row(r.noteType === 'D' ? 'Debit note' : 'Credit note', r)),
     ]);
   };
 
@@ -112,6 +113,8 @@ export default function IffPage() {
         }
       />
 
+      <GstnReturnBar returnType="IFF" period={month} />
+
       <AsyncPage state={state} loading={<LoadingRows rows={8} />}>
         {(d) => (
           <>
@@ -131,12 +134,12 @@ export default function IffPage() {
               <Card className="p-4">
                 <p className="text-xs text-muted-foreground">Credit notes to registered buyers</p>
                 <Money value={d.totals.cdnr.taxablePaise} className="mt-1 block text-2xl font-semibold" />
-                <p className="mt-0.5 text-xs text-muted-foreground">{d.cdnr.length} note(s), taxable value</p>
+                <p className="mt-0.5 text-xs text-muted-foreground">{d.cdnr.filter((n) => n.noteType !== 'D').length} credit note(s), taxable value{d.totals.debitNotes.taxablePaise ? ` · debit notes add ₹${(d.totals.debitNotes.taxablePaise / 100).toLocaleString('en-IN')}` : ''}</p>
               </Card>
             </div>
 
             <Docs title="B2B invoices" rows={d.b2b} />
-            <Docs title="Credit notes" rows={d.cdnr} />
+            <Docs title="Credit and debit notes" rows={d.cdnr} />
 
             <Card className="flex items-start gap-3 p-4">
               <Info className="mt-0.5 size-4 shrink-0 text-muted-foreground" />

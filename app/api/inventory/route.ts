@@ -168,7 +168,7 @@ const AdjustInput = z.object({
   warehouseId: z.union([z.string(), z.number()]).nullish(),
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use a yyyy-mm-dd date.'),
   qtyDelta: z.number().refine((v) => v !== 0, 'An adjustment of zero changes nothing.'),
-  reason: z.enum(['damage', 'theft', 'stocktake', 'expiry', 'sample', 'opening', 'other']),
+  reason: z.enum(['damage', 'theft', 'stocktake', 'expiry', 'sample', 'opening', 'other', 'issued']),
   notes: z.string().trim().max(500).nullish(),
   /** A batch-tracked item: which batch, made if new (with its dates) on an opening or a found count. */
   batch: z.object({ batchNo: z.string().trim().min(1).max(40), mfgDate: z.string().nullish(), expiryDate: z.string().nullish() }).nullish(),

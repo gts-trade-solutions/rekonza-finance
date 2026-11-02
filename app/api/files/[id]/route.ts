@@ -41,6 +41,8 @@ export const DELETE = route(async ({ orgId, user, role, req, params }) => {
 
   await transaction(async (trx) => {
     const row = await removeAttachment(trx, orgId, user.userId, id);
+    // An item's picture, taken off: the item shows none.
+    if (row.type === 'item') await trx.updateTable('items').set({ image_file_id: null }).where('org_id', '=', orgId).where('image_file_id', '=', id).execute();
     await logAudit({
       trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'update',
       targetType: row.type, targetId: row.attached_to_id,

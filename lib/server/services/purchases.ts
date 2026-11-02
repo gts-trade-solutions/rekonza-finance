@@ -43,6 +43,7 @@ import { allocateOrgNumber, postEntry, reverseEntry, type DraftLine } from '../l
 import { CODE, accountIds, requireAccount } from '../ledger/chart-of-accounts';
 import { ApiError, badRequest, notFound } from '../http';
 import { atRate, foreignOf, fyLabelFor } from './sales';
+import { removeLandedCost } from './landed-cost';
 
 export interface BillLineInput {
   itemId?: number | null;
@@ -521,6 +522,11 @@ export async function voidBill(
     });
   }
 
+  // Landed cost it carried, or gave: off the goods, and out of Inventory on a perpetual book.
+  const landed = await trx.selectFrom('landed_costs').select('id').where('org_id', '=', orgId)
+    .where((eb) => eb.or([eb('goods_bill_id', '=', billId), eb('charge_bill_id', '=', billId)])).execute();
+  for (const l of landed) await removeLandedCost(trx, orgId, userId, l.id);
+
   await trx
     .updateTable('bills').set({ status: 'void', ...voidStamp(why, userId) })
     .where('id', '=', billId).execute();
@@ -540,9 +546,17 @@ export interface CreateExpenseInput {
   vendorId?: number | null;
   itcEligibility?: 'eligible' | 'ineligible' | 'capital_goods';
   isBillable?: boolean;
+  /** Who a billable expense is re-charged to; a project's customer when it is booked to a project. */
   billableCustomerId?: number | null;
+  /** The project it is a cost of (services/projects.ts). */
+  projectId?: number | null;
   reference?: string | null;
   notes?: string | null;
+  /**
+   * A journey claimed by the kilometre: the amount is the distance times the
+   * rate, and there is no GST in it, because nobody charged any.
+   */
+  mileage?: { km: number; ratePaise: Paise } | null;
 }
 
 /**
@@ -560,7 +574,23 @@ export async function createExpense(
   userId: number | null,
   input: CreateExpenseInput,
 ): Promise<{ id: number; number: string; totalPaise: Paise; journalEntryId: number; warnings?: string[] }> {
+  if (input.mileage) {
+    const { km, ratePaise } = input.mileage;
+    if (!(km > 0) || !(ratePaise > 0)) throw badRequest('Give the distance in kilometres and the rate a kilometre.');
+    input = { ...input, amountPaise: Math.round(km * ratePaise), gstRatePct: 0 };
+  }
   if (input.amountPaise <= 0) throw badRequest('An expense needs an amount above zero.');
+  // A cost of a project, and re-charged to its customer when billable.
+  let billTo = input.isBillable ? input.billableCustomerId ?? null : null;
+  if (input.projectId) {
+    const project = await trx.selectFrom('projects').select(['customer_id']).where('id', '=', input.projectId).where('org_id', '=', orgId).executeTakeFirst();
+    if (!project) throw notFound('That project does not exist.');
+    if (input.isBillable) {
+      if (billTo && billTo !== project.customer_id) throw badRequest("A project's expense is re-charged to the project's customer.");
+      billTo = project.customer_id;
+    }
+  }
+  if (input.isBillable && !billTo) throw badRequest('Say which customer the expense is re-charged to.');
 
   const bank = await trx
     .selectFrom('bank_accounts').select(['id', 'name', 'ledger_account_id', 'kind'])
@@ -618,9 +648,12 @@ export async function createExpense(
       total: toSqlFromPaise(input.amountPaise),
       itc_eligibility: itcEligibility,
       is_billable: input.isBillable ? 1 : 0,
-      billable_customer_id: input.billableCustomerId ?? null,
+      billable_customer_id: billTo,
+      project_id: input.projectId ?? null,
       reference: input.reference ?? null,
       notes: input.notes ?? null,
+      mileage_km: input.mileage ? String(input.mileage.km) : null,
+      mileage_rate: input.mileage ? toSqlFromPaise(input.mileage.ratePaise) : null,
       status: 'recorded',
       created_by_user_id: userId,
     })

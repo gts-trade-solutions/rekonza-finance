@@ -1,7 +1,7 @@
 import 'server-only';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// GSTR-2B from the portal, and IMS actions on it.
+// GSTR-2B (or GSTR-2A) from the portal, and IMS actions on it.
 //
 // The portal lets a taxpayer download GSTR-2B as JSON (Returns → GSTR-2B →
 // Download), one file per GSTIN per month. This reads that file into
@@ -58,9 +58,59 @@ function portalDate(v: unknown): string | null {
   return m ? `${m[3]}-${m[2]}-${m[1]}` : null;
 }
 
+/**
+ * GSTR-2A, the older and still-downloadable statement: the same documents,
+ * but every invoice listed with its rate-wise items rather than totals, and
+ * no availability flag — whether the supplier filed (cfs) is the nearest
+ * thing, so a filed supplier's credit is taken as available. Read into the
+ * same lines as 2B, so the reconciliation works on either.
+ */
+function parseGstr2a(root: Obj): ParsedGstr2b {
+  const gstin = str(root.gstin).toUpperCase();
+  const returnPeriod = str(root.fp);
+  const lines: Gstr2bLine[] = [];
+  const skipped: string[] = [];
+  type Sums = { taxable: number; igst: number; cgst: number; sgst: number; cess: number };
+  const sum = (itms: unknown) => arr(itms).reduce<Sums>((t, it) => {
+    const d = isObj(it.itm_det) ? it.itm_det : it;
+    return { taxable: t.taxable + num(d.txval), igst: t.igst + num(d.iamt), cgst: t.cgst + num(d.camt), sgst: t.sgst + num(d.samt), cess: t.cess + num(d.csamt) };
+  }, { taxable: 0, igst: 0, cgst: 0, sgst: 0, cess: 0 });
+  const push = (s: Obj, number: string, dt: unknown, docType: Gstr2bLine['docType'], itms: unknown, rev: unknown) => {
+    const date = portalDate(dt);
+    const vendorGstin = str(s.ctin).toUpperCase();
+    if (!number || !date || !/^[0-9A-Z]{15}$/.test(vendorGstin)) {
+      skipped.push(`${vendorGstin || 'unknown supplier'} ${number || '(no number)'}`);
+      return;
+    }
+    lines.push({
+      vendorGstin, vendorName: str(s.trdnm) || null, docType, number, date, ...sum(itms),
+      itcAvailable: str(s.cfs).toUpperCase() !== 'N',
+      reverseCharge: str(rev).toUpperCase() === 'Y',
+    });
+  };
+  for (const key of ['b2b', 'b2ba'] as const) {
+    for (const s of arr(root[key])) for (const inv of arr(s.inv)) push(s, str(inv.inum), inv.idt, 'invoice', inv.itms, inv.rchrg);
+  }
+  for (const key of ['cdn', 'cdnr', 'cdna'] as const) {
+    for (const s of arr(root[key])) {
+      for (const nt of arr(s.nt)) {
+        const kind = str(nt.ntty ?? nt.typ).toUpperCase() === 'D' ? 'debit_note' : 'credit_note';
+        push(s, str(nt.nt_num ?? nt.ntnum), nt.nt_dt ?? nt.dt, kind, nt.itms, nt.rchrg ?? nt.rev);
+      }
+    }
+  }
+  return { gstin, returnPeriod, lines, skipped };
+}
+
 export function parseGstr2b(json: unknown): ParsedGstr2b {
   if (!isObj(json)) throw badRequest('That file is not a GSTR-2B JSON download.');
   const root = isObj(json.data) ? json.data : json;
+  // A GSTR-2A download: a filing period and the supplier tables at the top level.
+  if (/^\d{6}$/.test(str(root.fp)) && !isObj(root.docdata) && (Array.isArray(root.b2b) || Array.isArray(root.cdn) || Array.isArray(root.cdnr))) {
+    const parsed = parseGstr2a(root);
+    if (!/^[0-9A-Z]{15}$/.test(parsed.gstin)) throw badRequest('That GSTR-2A file has no GSTIN.');
+    return parsed;
+  }
   const gstin = str(root.gstin).toUpperCase();
   const returnPeriod = str(root.rtnprd);
   const doc = isObj(root.docdata) ? root.docdata : null;

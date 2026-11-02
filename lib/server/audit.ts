@@ -20,7 +20,7 @@ import { db, type Executor } from './db';
 import { changeReason } from './request-context';
 
 export type AuditAction =
-  | 'create' | 'update' | 'void' | 'approve' | 'send' | 'match' | 'login' | 'export' | 'import';
+  | 'create' | 'update' | 'void' | 'approve' | 'send' | 'match' | 'login' | 'export' | 'import' | 'comment';
 
 export interface AuditInput {
   orgId: number;
@@ -84,6 +84,9 @@ async function queueWebhook(ex: Executor, input: AuditInput) {
       type: input.targetType, id: input.targetId != null ? String(input.targetId) : null,
       label: input.targetLabel ?? null, detail: input.detail ?? null, actor: input.actorName ?? null,
     });
+    // Workflow rules on the same event (services/workflows.ts), queued in the same transaction.
+    const { queueRuns } = await import('./services/workflows');
+    await queueRuns(ex, input.orgId, event, input.targetType, Number(input.targetId) || 0);
   } catch (err) {
     console.error('[webhooks] not queued', input.action, input.targetType, err);
   }

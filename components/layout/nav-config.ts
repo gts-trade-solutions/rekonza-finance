@@ -4,7 +4,7 @@ import {
   ReceiptIndianRupee, Repeat, ScrollText, Settings, ShieldCheck, ShoppingCart,
   Truck, Users, Wallet, FileCheck2, HandCoins, ClipboardList, CalendarClock,
   FileMinus, Building, AlertTriangle, Split, Lock, ChartColumnBig, MonitorDown, PackageCheck, Scale, CalendarDays, LifeBuoy,
-  ScanBarcode, BellRing, AlertOctagon, FolderOpen, Radar,
+  ScanBarcode, BellRing, AlertOctagon, FolderOpen, Radar, FilePlus2, Timer, FolderKanban, Ship, PhoneCall, ListChecks, LayoutTemplate, Shuffle, Globe,
 } from 'lucide-react';
 
 export interface NavItem {
@@ -46,12 +46,15 @@ export const NAV_GROUPS: NavGroup[] = [
       { label: 'Sales Orders', href: '/sales/sales-orders', icon: ClipboardList, module: 'sales' },
       { label: 'Delivery Challans', href: '/sales/challans', icon: Truck, module: 'sales' },
       { label: 'Invoices', href: '/sales/invoices', icon: Receipt, module: 'sales' },
+      { label: 'Sales Receipts', href: '/sales/sales-receipts', icon: ReceiptIndianRupee, module: 'sales' },
       { label: 'Retainer Invoices', href: '/sales/retainers', icon: HandCoins, module: 'sales' },
       { label: 'Payments Received', href: '/sales/payments', icon: Wallet, module: 'sales' },
       { label: 'Credit Notes', href: '/sales/credit-notes', icon: FileMinus, module: 'sales' },
+      { label: 'Debit Notes', href: '/sales/debit-notes', icon: FilePlus2, module: 'sales' },
       { label: 'Recurring Invoices', href: '/sales/recurring', icon: Repeat, module: 'sales' },
       { label: 'Interest on Overdue', href: '/sales/overdue-interest', icon: AlertTriangle, module: 'sales' },
       { label: 'Payment Reminders', href: '/sales/reminders', icon: BellRing, module: 'sales' },
+      { label: 'Collections', href: '/sales/collections', icon: PhoneCall, module: 'sales' },
     ],
   },
   {
@@ -64,10 +67,23 @@ export const NAV_GROUPS: NavGroup[] = [
       { label: 'Purchase Orders', href: '/purchases/purchase-orders', icon: ClipboardList, module: 'purchases' },
       { label: 'Goods Receipts', href: '/purchases/goods-receipts', icon: PackageCheck, module: 'purchases' },
       { label: 'Bills', href: '/purchases/bills', icon: FileText, module: 'purchases' },
+      { label: 'Recurring Bills & Expenses', href: '/purchases/recurring', icon: Repeat, module: 'purchases' },
+      { label: 'Bills of Entry (imports)', href: '/purchases/bills-of-entry', icon: Ship, module: 'purchases', feature: 'gst' },
       { label: 'Payments Made', href: '/purchases/payments', icon: Banknote, module: 'purchases' },
       { label: 'Payment Batches', href: '/purchases/payment-batches', icon: Landmark, module: 'purchases' },
       { label: 'Vendor Credits', href: '/purchases/vendor-credits', icon: FileMinus, module: 'purchases' },
       { label: 'MSME Payments', href: '/purchases/msme-tracker', icon: AlertTriangle, module: 'purchases', badge: 'msmeRisk' },
+    ],
+  },
+  {
+    // Time Tracking, as in Zoho: work done for customers, the hours logged to
+    // it, and billing them (services/projects.ts).
+    label: 'Time Tracking',
+    icon: Timer,
+    module: 'projects',
+    items: [
+      { label: 'Projects', href: '/projects', icon: FolderKanban, module: 'projects' },
+      { label: 'Timesheet', href: '/projects/timesheet', icon: Timer, module: 'projects' },
     ],
   },
   {
@@ -89,10 +105,13 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { label: 'Manual Journals', href: '/accountant/journals', icon: BookOpen, module: 'accountant' },
       { label: 'Recurring Journals', href: '/accountant/recurring-journals', icon: Repeat, module: 'accountant' },
+      { label: 'Journal Templates', href: '/accountant/journal-templates', icon: LayoutTemplate, module: 'accountant' },
+      { label: 'Bulk Update', href: '/accountant/bulk-update', icon: Shuffle, module: 'accountant' },
       { label: 'Chart of Accounts', href: '/accountant/chart-of-accounts', icon: ScrollText, module: 'accountant' },
       { label: 'Opening Balances', href: '/accountant/opening-balances', icon: FileCheck2, module: 'accountant' },
       { label: 'Fixed Assets', href: '/accountant/fixed-assets', icon: Building, module: 'accountant', feature: 'fixedAssets' },
       { label: 'Budgets', href: '/accountant/budgets', icon: BarChart3, module: 'accountant' },
+      { label: 'Balance Confirmations', href: '/accountant/balance-confirmations', icon: Scale, module: 'accountant' },
       { label: 'Approvals', href: '/approvals', icon: ShieldCheck, module: 'accountant', feature: 'approvals' },
       { label: 'Documents', href: '/documents', icon: FolderOpen, module: 'accountant' },
       { label: 'Risk & Anomalies', href: '/analytics/risk', icon: Radar, module: 'analytics', feature: 'analytics' },
@@ -163,9 +182,12 @@ export const TOP_LEVEL: NavItem[] = [
 
 export const BOTTOM_LEVEL: NavItem[] = [
   { label: 'Reports', href: '/reports', icon: BarChart3, module: 'reports' },
+  { label: 'Software Checklist', href: '/checklist', icon: ListChecks, module: 'reports' },
   { label: 'Tally', href: '/tally', icon: MonitorDown, module: 'tally', feature: 'tally' },
   { label: 'Analytics', href: '/analytics', icon: ChartColumnBig, module: 'analytics', feature: 'analytics' },
   { label: 'AI Assistant', href: '/ai', icon: Bot, module: 'ai' },
   { label: 'Settings', href: '/settings', icon: Settings, module: 'settings' },
+  // Everyone may open the web tabs, as everyone may open Help.
+  { label: 'Web Tabs', href: '/web-tabs', icon: Globe, module: 'help' },
   { label: 'Help', href: '/help', icon: LifeBuoy, module: 'help' },
 ];

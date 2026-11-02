@@ -24,7 +24,7 @@ type Enforcement = 'off' | 'warn' | 'block';
 interface Control { key: string; area: string; status: Status; evidence: string; gap: string | null; href: string }
 interface Controls {
   changeReasons: boolean; segregation: Enforcement; autoIrn: boolean; creditHoldDays: number; creditHold: Enforcement;
-  billsDueDays: number; concentrationPct: number; escalateAfterDays: number; autoDepreciation: boolean;
+  billsDueDays: number; concentrationPct: number; escalateAfterDays: number; autoDepreciation: boolean; timesheetApproval?: boolean;
 }
 interface Response {
   controls: Control[];
@@ -195,6 +195,9 @@ export function ControlsPanel({ canEdit }: { canEdit: boolean }) {
                 </Row>
                 <Row title="Depreciation at month end" hint="Post each month's depreciation by itself when the month ends.">
                   <Switch checked={c.autoDepreciation} disabled={!canEdit || busy} onCheckedChange={(v) => setControl('autoDepreciation', v)} />
+                </Row>
+                <Row title="Timesheet approval" hint="Time logged waits for someone other than the person who logged it to approve it, before it can be billed.">
+                  <Switch checked={!!c.timesheetApproval} disabled={!canEdit || busy} onCheckedChange={(v) => setControl('timesheetApproval', v)} />
                 </Row>
                 <Row title="Passwords" hint="Minimum length, days before a password must be changed (0 never), and how many old ones may not be reused.">
                   <div className="flex items-end gap-2">

@@ -185,7 +185,7 @@ test('a payslip shared by link: the posted month only, that employee only', asyn
     await postRun(trx, orgId, null, runId);
     await assert.rejects(createPayslipLink(trx, orgId, null, { runId, employeeId: e + 999 }), /not on that payroll/);
     const link = await createPayslipLink(trx, orgId, null, { runId, employeeId: e });
-    assert.deepEqual(await openShareLink(trx, link.path.replace('/share/', '')), { orgId, docType: 'payslip', docId: runId, subId: e });
+    assert.deepEqual(await openShareLink(trx, link.path.replace('/share/', '')), { orgId, docType: 'payslip', docKind: null, docId: runId, subId: e });
   });
 });
 

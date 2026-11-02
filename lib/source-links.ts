@@ -37,6 +37,7 @@ const LIST: Record<string, string> = {
   // Perpetual inventory's own entries (services/stock-ledger.ts).
   stock_valuation: '/inventory/stock',
   stock_opening: '/inventory/stock',
+  bill_of_entry: '/purchases/bills-of-entry',
 };
 
 export function sourceHref(sourceType: string, sourceId: string | null): string | null {

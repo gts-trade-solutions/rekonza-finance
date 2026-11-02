@@ -11,6 +11,7 @@
 // so the GST, the numbering and the posting are identical.
 
 import { useState } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Bell, Mail, Play, Plus, Repeat, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -51,18 +52,6 @@ const TERMS = [
   { value: 'net_45', label: 'Net 45' },
 ];
 
-/**
- * Dunning schedules are configuration for a mailer that is not built yet — the
- * app sends no email. Shown as the surface it will occupy, and flagged as such
- * rather than pretending to save.
- */
-const REMINDERS = [
-  { id: 'r1', label: '3 days before due', template: 'Friendly reminder' },
-  { id: 'r2', label: 'On the due date', template: 'Payment due today' },
-  { id: 'r3', label: '7 days overdue', template: 'Overdue — first notice' },
-  { id: 'r4', label: '15 days overdue', template: 'Overdue — second notice' },
-  { id: 'r5', label: '30 days overdue', template: 'Final notice before escalation' },
-];
 
 const today = () => new Date().toISOString().slice(0, 10);
 const short = (d: string | null) => (d ? new Date(d).toLocaleDateString('en-IN') : '—');
@@ -387,27 +376,20 @@ export default function RecurringPage() {
         </TabsContent>
 
         <TabsContent value="dunning" className="mt-4 space-y-3">
-          <Card className="flex items-start gap-3 border-amber-500/30 bg-amber-500/5 p-4">
-            <Mail className="mt-0.5 size-4 shrink-0 text-amber-600 dark:text-amber-400" />
-            <p className="text-xs leading-relaxed text-muted-foreground">
-              <span className="font-medium text-foreground">Reminders do not send yet.</span> The app has no mail
-              transport wired up, so this is the shape the schedule will take rather than something that runs. The
-              ageing report is what to work from in the meantime.
-            </p>
+          {/* The reminders themselves (services/reminders.ts): the stages and channel under
+              Settings → Policies, the queue under Sales → Payment Reminders. */}
+          <Card className="flex flex-wrap items-start gap-3 p-4">
+            <Bell className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+            <div className="min-w-0 flex-1 text-sm">
+              <p className="font-medium">Payment reminders run on their own schedule</p>
+              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                Reminders go out on the days you choose — before the due date, on it, and at 15, 30, 60 and 90 days after — by
+                email, SMS or WhatsApp. Choose the days and the channel under Settings → Policies. With a mail server set up,
+                email reminders are sent by themselves; otherwise each waits in the queue to be sent with one click.
+              </p>
+            </div>
+            <Button size="sm" variant="outline" asChild className="gap-1.5"><Link href="/sales/reminders"><Mail className="size-3.5" /> Payment reminders</Link></Button>
           </Card>
-
-          {REMINDERS.map((r) => (
-            <Card key={r.id} className="flex flex-wrap items-center gap-4 p-4 opacity-70">
-              <Bell className="size-4 shrink-0 text-muted-foreground" />
-              <div className="min-w-0 flex-1">
-                <p className="text-sm font-medium">{r.label}</p>
-                <p className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
-                  <Mail className="size-3" /> Template: {r.template}
-                </p>
-              </div>
-              <Switch checked={false} disabled />
-            </Card>
-          ))}
         </TabsContent>
       </Tabs>
     </>

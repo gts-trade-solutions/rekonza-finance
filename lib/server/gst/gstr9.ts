@@ -70,6 +70,8 @@ export interface Gstr9 {
     advances: TaxHeads;       // 4F
     rcmInward: TaxHeads;      // 4G
     creditNotes: TaxHeads;    // 4I, shown negative
+    /** Debit notes carrying tax (CGST Act s.34(3)): they add to the year's supplies. */
+    debitNotes: TaxHeads;     // 4J
     total: TaxHeads;          // 4N
   };
   table5: {
@@ -85,6 +87,8 @@ export interface Gstr9 {
     inputServices: TaxHeads;  // 6B input services
     rcmUnregistered: TaxHeads; // 6C
     rcmRegistered: TaxHeads;  // 6D
+    /** IGST and cess paid at customs on goods imported (bills of entry). */
+    imports: TaxHeads;        // 6E
     total: TaxHeads;
   };
   /** Credit reversed in the year by vendor credits (debit notes we raised). */
@@ -128,6 +132,7 @@ export async function gstr9(ex: Executor, orgId: number, startYear: number, bran
     // the buyer is registered — the same split GSTR-1 made month by month.
     sql<Heads & { bucket: string }>`
       SELECT CASE
+               WHEN x.doc_kind = 'debit_note' AND (x.cgst + x.sgst + x.igst + x.cess) > 0 THEN 'debit_note'
                WHEN x.supply_type = 'export_lut' THEN 'export_lut'
                WHEN x.supply_type = 'export_with_tax' THEN 'export_tax'
                WHEN x.supply_type = 'sez' AND (x.cgst + x.sgst + x.igst) > 0 THEN 'sez_tax'
@@ -250,9 +255,10 @@ export async function gstr9(ex: Executor, orgId: number, startYear: number, bran
     advances: add(heads(advIn.rows[0]), neg(heads(advOut.rows[0]))),
     rcmInward: rcm.rows.reduce((t, r) => add(t, heads(r)), zero()),
     creditNotes: neg(taxNotes),
+    debitNotes: bucket('debit_note'),
     total: zero(),
   };
-  table4.total = [table4.b2c, table4.b2b, table4.exportsWithTax, table4.sezWithTax, table4.advances, table4.rcmInward, table4.creditNotes]
+  table4.total = [table4.b2c, table4.b2b, table4.exportsWithTax, table4.sezWithTax, table4.advances, table4.rcmInward, table4.creditNotes, table4.debitNotes]
     .reduce(add, zero());
 
   const table5 = {
@@ -272,9 +278,16 @@ export async function gstr9(ex: Executor, orgId: number, startYear: number, bran
     inputServices: add(kind('services'), heads(expenses.rows[0])),
     rcmUnregistered: heads(rcm.rows.find((r) => Number(r.registered) === 0)),
     rcmRegistered: heads(rcm.rows.find((r) => Number(r.registered) === 1)),
+    imports: heads((await sql<Heads>`
+      SELECT COALESCE(SUM(x.assessable_value), 0) AS taxable, 0 AS cgst, 0 AS sgst,
+             COALESCE(SUM(x.igst), 0) AS igst, COALESCE(SUM(x.cess), 0) AS cess
+        FROM bills_of_entry x
+       WHERE x.org_id = ${orgId} AND x.status = 'recorded' AND x.itc_eligibility <> 'ineligible'
+         AND x.boe_date BETWEEN ${from} AND ${to} ${br}
+    `.execute(ex)).rows[0]),
     total: zero(),
   };
-  table6.total = [table6.inputs, table6.capitalGoods, table6.inputServices, table6.rcmUnregistered, table6.rcmRegistered]
+  table6.total = [table6.inputs, table6.capitalGoods, table6.inputServices, table6.rcmUnregistered, table6.rcmRegistered, table6.imports]
     .reduce(add, zero());
 
   // Table 9 and the reversal in table 7 are the monthly returns added up.

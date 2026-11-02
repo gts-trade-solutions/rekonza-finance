@@ -79,6 +79,8 @@ export interface OrgPolicies {
     escalateAfterDays: number;
     /** Post each month's depreciation by itself when the month ends. */
     autoDepreciation: boolean;
+    /** Time logged waits for someone else to approve it before it can be billed (services/projects.ts). */
+    timesheetApproval: boolean;
   };
   /** Passwords: how long, how often changed, and how many old ones may not come back. */
   password: { minLength: number; expiryDays: number; history: number };
@@ -102,6 +104,7 @@ export const DEFAULT_CONTROLS: OrgPolicies['controls'] = {
   concentrationPct: 25,
   escalateAfterDays: 3,
   autoDepreciation: false,
+  timesheetApproval: false,
 };
 
 export const DEFAULT_POLICIES: OrgPolicies = {

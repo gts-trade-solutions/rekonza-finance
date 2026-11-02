@@ -31,7 +31,8 @@ function PayInner() {
   const s = useAppStore();
   const vendorList = vendors(s);
 
-  const [vendorId, setVendorId] = useState('');
+  // From a vendor's page, the vendor comes chosen.
+  const [vendorId, setVendorId] = useState(params.get('vendor') ?? '');
   const [date, setDate] = useState(today());
   const [mode, setMode] = useState<PaymentMode>('neft');
   const [bankAccountId, setBankAccountId] = useState('');

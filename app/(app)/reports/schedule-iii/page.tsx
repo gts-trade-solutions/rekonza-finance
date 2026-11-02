@@ -7,12 +7,12 @@
 // beside them and the ageing tables for trade receivables and payables that
 // the 2021 amendment added. Notes to the accounts are the signatory's part.
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Scale } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Money } from '@/components/shared/money';
-import { downloadCsv, ReportShell, ReportTable, useReportRange } from '@/components/shared/report-shell';
+import { BasisSelect, downloadCsv, ReportShell, ReportTable, useReportRange, type ReportBasis } from '@/components/shared/report-shell';
 import { AsyncPage, LoadingRows } from '@/components/shared/async-state';
 import {
   reports, type ScheduleIIIAgeing, type ScheduleIIIBalanceSheetReport, type ScheduleIIILine,
@@ -20,6 +20,7 @@ import {
 } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
 import { toRupees } from '@/lib/money';
+import { FormatSwitch } from '@/components/reports/statement-formats';
 
 const fmt = (iso: string) =>
   new Date(`${iso}T00:00:00`).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
@@ -98,9 +99,14 @@ function Ageing({ title, table }: { title: string; table: ScheduleIIIAgeing }) {
 export default function ScheduleIIIPage() {
   const [range, setRange] = useReportRange();
   const [tab, setTab] = useState('bs');
-  const bs = useApi<ScheduleIIIBalanceSheetReport>(() => reports.scheduleIIIBalanceSheet(range.to), [range.to]);
+  // Opened from the profit and loss's format switch, it starts on that statement.
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get('tab') === 'pl') setTab('pl');
+  }, []);
+  const [basis, setBasis] = useState<ReportBasis>('accrual');
+  const bs = useApi<ScheduleIIIBalanceSheetReport>(() => reports.scheduleIIIBalanceSheet(range.to, undefined, basis), [range.to, basis]);
   const pl = useApi<ScheduleIIIProfitAndLossReport>(
-    () => reports.scheduleIIIProfitAndLoss(range.from, range.to), [range.from, range.to],
+    () => reports.scheduleIIIProfitAndLoss(range.from, range.to, undefined, basis), [range.from, range.to, basis],
   );
 
   const exportCsv = () => {
@@ -135,8 +141,10 @@ export default function ScheduleIIIPage() {
       description="The balance sheet and profit and loss laid out as the Companies Act requires, with the previous period beside them."
       range={range}
       onRangeChange={setRange}
+      extraActions={<div className="w-32"><BasisSelect value={basis} onChange={setBasis} /></div>}
       onExport={exportCsv}
     >
+      <FormatSwitch value="schedule-iii" statement={tab === 'pl' ? 'pl' : 'bs'} base={tab === 'pl' ? '/reports/profit-and-loss' : '/reports/balance-sheet'} />
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList>
           <TabsTrigger value="bs">Balance sheet</TabsTrigger>

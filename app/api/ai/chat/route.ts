@@ -4,6 +4,7 @@ import { hasPermission } from '@/lib/rbac';
 import { badRequest, forbidden, toResponse, unauthorized } from '@/lib/server/http';
 import { beginQuestion, runQuestion, MAX_QUESTION_CHARS, type BegunQuestion } from '@/lib/server/ai/assistant';
 import { currentSessionKey } from '@/lib/server/ai/session-key';
+import { snapshotMode } from '@/lib/demo-snapshot';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Ask the assistant. The answer comes back as a stream of server-sent events:
@@ -32,6 +33,13 @@ const Input = z.object({
 });
 
 export async function POST(req: Request): Promise<Response> {
+  // The online demo has no database: the same assistant answers from the
+  // recorded demo book, charging and storing nothing.
+  if (snapshotMode()) {
+    const { demoChat } = await import('@/lib/server/ai/demo-chat');
+    return demoChat(req);
+  }
+
   let question: BegunQuestion;
   try {
     const user = await currentUser();
@@ -106,6 +114,7 @@ export async function POST(req: Request): Promise<Response> {
           chargedMc: done.chargedMc,
           availableMc: done.availableMc,
           notice: done.notice,
+          fromCache: done.fromCache,
         });
       } catch (err) {
         console.error('[ai] chat stream failed', err);

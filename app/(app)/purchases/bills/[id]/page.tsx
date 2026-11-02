@@ -10,7 +10,7 @@
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useState } from 'react';
-import { AlertTriangle, ArrowLeft, Ban, FileText, Loader2, MoreHorizontal, Receipt } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, Ban, Copy, FileText, Loader2, MoreHorizontal, Printer, Receipt } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -29,6 +29,10 @@ import { StatusBadge } from '@/components/shared/status-badge';
 import { ReportTable } from '@/components/shared/report-shell';
 import { AsyncPage } from '@/components/shared/async-state';
 import { Attachments } from '@/components/shared/attachments';
+import { CustomFieldsPanel } from '@/components/shared/custom-fields-panel';
+import { TagsPanel } from '@/components/shared/tags-panel';
+import { ActivityPanel } from '@/components/shared/activity-panel';
+import { LandedCostCard } from '@/components/purchases/landed-cost';
 import { ApprovalBar } from '@/components/shared/approval-bar';
 import { Field } from '@/components/shared/form-bits';
 import { usePermission } from '@/lib/store/hooks';
@@ -94,6 +98,7 @@ function MatchCard({ bill, onAccepted }: { bill: BillDetail; onAccepted: () => v
 export default function BillDetailPage() {
   const params = useParams<{ id: string }>();
   const canEdit = usePermission('purchases', 'edit');
+  const canCreate = usePermission('purchases', 'create');
 
   const state = useApi<BillDetail>(() => billApi.get(params.id), [params.id]);
   const voidIt = useApiAction(billApi.void);
@@ -123,6 +128,14 @@ export default function BillDetailPage() {
                   <Button variant="outline" size="sm" asChild>
                     <Link href="/purchases/bills"><ArrowLeft className="mr-1.5 size-3.5" /> Bills</Link>
                   </Button>
+                  <Button variant="outline" size="sm" asChild className="gap-1.5">
+                    <Link href={`/print/bill/${bill.id}`} data-slot="print-bill"><Printer className="size-3.5" /> Print</Link>
+                  </Button>
+                  {canCreate && (
+                    <Button variant="outline" size="sm" asChild className="gap-1.5">
+                      <Link href={`/purchases/bills/new?clone=${bill.id}`} data-slot="clone-bill"><Copy className="size-3.5" /> Clone</Link>
+                    </Button>
+                  )}
                   {canEdit && bill.status !== 'void' && (
                     <DropdownMenu>
                       <DropdownMenuTrigger aria-label="More actions" className="grid size-9 place-items-center rounded-[3px] border transition-colors hover:bg-accent">
@@ -185,6 +198,7 @@ export default function BillDetailPage() {
                 <TabsTrigger value="document">Document</TabsTrigger>
                 <TabsTrigger value="journal">Journal</TabsTrigger>
                 <TabsTrigger value="payments">Payments ({bill.payments.length})</TabsTrigger>
+                <TabsTrigger value="activity">Comments &amp; history</TabsTrigger>
               </TabsList>
 
               <TabsContent value="document" className="mt-4 space-y-4">
@@ -318,7 +332,14 @@ export default function BillDetailPage() {
                   </Card>
                 </div>
 
+                <LandedCostCard billId={bill.id} canEdit={canEdit && bill.status !== 'void' && bill.status !== 'draft'} />
+                <CustomFieldsPanel entity="bill" id={bill.id} canEdit={canEdit} />
+                <TagsPanel entity="bill" id={bill.id} canEdit={canEdit} />
                 <Attachments targetType="bill" targetId={bill.id} canEdit={canEdit} title="Supplier's bill and other files" />
+              </TabsContent>
+
+              <TabsContent value="activity" className="mt-4">
+                <ActivityPanel targetType="bill" targetId={bill.id} />
               </TabsContent>
 
               <TabsContent value="journal" className="mt-4 space-y-3">

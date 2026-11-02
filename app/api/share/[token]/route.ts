@@ -3,9 +3,13 @@ import { route, notFound } from '@/lib/server/http';
 import { openShareLink } from '@/lib/server/services/sharing';
 import { invoiceDetail } from '@/lib/server/services/invoice-detail';
 import { runDetail } from '@/lib/server/payroll/payroll';
+import { livePaymentLink } from '@/lib/server/services/payment-links';
+import { printableDocument } from '@/lib/server/services/document-print';
+import { isPrintKind } from '@/lib/print-doc';
 
-// A shared invoice, for whoever holds the link: what is printed on it and no
-// more. The ledger entry, the payments and the approval trail stay inside.
+// A shared invoice or other document, for whoever holds the link: what is
+// printed on it and no more. The ledger entry, the payments and the approval
+// trail stay inside.
 
 export const GET = route(
   async ({ params }) => {
@@ -18,11 +22,20 @@ export const GET = route(
       if (!line || run.status === 'draft') throw notFound('This payslip is no longer available.');
       return { kind: 'payslip', run: { ...run, lines: [{ ...line, bankAccountNo: line.bankAccountNo ? `XXXX${line.bankAccountNo.slice(-4)}` : null }] } };
     }
+    // A quote, an order, a receipt … (lib/print-doc.ts): its printed copy.
+    if (opened.docType === 'document') {
+      if (!isPrintKind(opened.docKind)) throw notFound('This link has expired or been withdrawn. Ask the sender for a new one.');
+      const doc = await printableDocument(db, opened.orgId, opened.docKind, opened.docId);
+      if (doc.tag === 'Cancelled') throw notFound('This document was cancelled.');
+      return { kind: 'document', doc };
+    }
     const inv = await invoiceDetail(opened.orgId, opened.docId);
     if (inv.status === 'draft' || inv.status === 'void') throw notFound('This invoice is no longer available.');
     const shown: Partial<typeof inv> = { ...inv };
     for (const inside of ['journalLines', 'journalEntryId', 'payments', 'approval'] as const) delete shown[inside];
-    return { kind: 'invoice', ...shown };
+    // A live payment link, while something is still owed: the page shows a Pay button.
+    const payLink = inv.balancePaise > 0 ? await livePaymentLink(db, opened.orgId, opened.docId) : null;
+    return { kind: 'invoice', ...shown, payLink };
   },
   { public: true },
 );

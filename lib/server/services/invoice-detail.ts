@@ -9,6 +9,8 @@ import { db } from '../db';
 import { asId, notFound } from '../http';
 import { toPaiseFromSql } from '../money-sql';
 import { ruleFor } from './approvals';
+import { getValues } from './custom-fields';
+import { readTemplate } from '../../print-template';
 import { registrationOn } from './statutory';
 import { environmentOf } from '../integrations/gst';
 import { irnCancelOpenUntil } from '../../tax/einvoice';
@@ -30,6 +32,7 @@ export async function invoiceDetail(orgId: number, id: number) {
       'invoices.total', 'invoices.amount_paid', 'invoices.order_number',
       'invoices.subject', 'invoices.payment_terms', 'invoices.notes', 'invoices.terms',
       'invoices.journal_entry_id', 'invoices.customer_id', 'invoices.branch_id',
+      'invoices.doc_kind', 'invoices.against_invoice_id', 'invoices.note_reason', 'invoices.paid_at_sale',
       'invoices.created_at', 'invoices.eway_bill_no',
       sql<string | null>`(SELECT JSON_OBJECT('name', vt.name, 'heading', vt.print_heading, 'terms', vt.print_terms, 'showUpi', vt.print_show_upi, 'showBank', vt.print_show_bank) FROM voucher_types vt WHERE vt.id = invoices.voucher_type_id)`.as('voucher_print'),
       'invoices.approval_status', 'invoices.rejection_reason', 'invoices.submitted_by_user_id',
@@ -52,7 +55,7 @@ export async function invoiceDetail(orgId: number, id: number) {
       // Not required by law; what makes an invoice easy to pay.
       'organizations.logo_file_id as org_logo_file_id', 'organizations.print_bank_account_id',
       'organizations.upi_id as org_upi_id', 'organizations.upi_payee_name as org_upi_payee',
-      'organizations.print_upi_qr as org_print_upi_qr', 'organizations.signatory_name as org_signatory', 'organizations.print_language as org_print_language',
+      'organizations.print_upi_qr as org_print_upi_qr', 'organizations.signatory_name as org_signatory', 'organizations.print_language as org_print_language', 'organizations.print_template as org_print_template',
     ])
     .where('invoices.id', '=', id)
     .where('invoices.org_id', '=', orgId)
@@ -128,9 +131,18 @@ export async function invoiceDetail(orgId: number, id: number) {
 
   const p = toPaiseFromSql;
   const rule = await ruleFor(db, orgId, 'invoice', p(inv.total));
+  // A debit note names the invoice it corrects, by number and date (Rule 53(1A)).
+  const against = inv.against_invoice_id
+    ? await db.selectFrom('invoices').select(['id', 'number', 'invoice_date']).where('id', '=', inv.against_invoice_id).where('org_id', '=', orgId).executeTakeFirst()
+    : null;
   return {
     id: asId(inv.id),
     number: inv.number,
+    docKind: inv.doc_kind,
+    paidAtSale: !!inv.paid_at_sale,
+    debitNote: inv.doc_kind === 'debit_note'
+      ? { reason: inv.note_reason, against: against ? { id: asId(against.id), number: against.number, date: String(against.invoice_date).slice(0, 10) } : null }
+      : null,
     approval: {
       status: inv.approval_status,
       // A draft a rule catches cannot be posted until someone approves it.
@@ -177,6 +189,7 @@ export async function invoiceDetail(orgId: number, id: number) {
       signatoryName: inv.org_signatory,
       /** The second language the book prints invoices in, if any. */
       printLanguage: inv.org_print_language,
+      template: readTemplate(inv.org_print_template),
       // Printed only when the full number is held; four digits pay no one.
       bank: bank?.account_number
         ? {
@@ -203,6 +216,10 @@ export async function invoiceDetail(orgId: number, id: number) {
     shipTo: shipDiffers ? { address: shipAddress, city: inv.ship_city, pincode: inv.ship_pincode } : null,
     ewayBill: ewbNo ? { number: ewbNo, validUntil: ewb?.valid_until ?? null } : null,
     orderNumber: inv.order_number,
+    // Custom fields ticked to print (Settings → Custom fields).
+    printFields: (await getValues(db, orgId, 'invoice', inv.id))
+      .filter((f) => f.showOnPdf && f.value)
+      .map((f) => ({ label: f.label, value: f.type === 'checkbox' ? (f.value === 'true' ? 'Yes' : 'No') : f.value! })),
     subject: inv.subject,
     paymentTerms: inv.payment_terms,
     notes: inv.notes,

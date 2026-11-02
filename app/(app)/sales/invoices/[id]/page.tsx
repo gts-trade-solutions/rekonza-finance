@@ -11,7 +11,7 @@ import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { useState } from 'react';
 import {
-  ArrowLeft, Ban, FileText, Loader2, MoreHorizontal, Printer, Receipt, Send,
+  ArrowLeft, Ban, Copy, FileText, Loader2, MoreHorizontal, Printer, Receipt, Send,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card } from '@/components/ui/card';
@@ -32,6 +32,9 @@ import { EInvoiceMark } from '@/components/shared/einvoice-mark';
 import { ReportTable } from '@/components/shared/report-shell';
 import { AsyncPage } from '@/components/shared/async-state';
 import { Attachments } from '@/components/shared/attachments';
+import { CustomFieldsPanel } from '@/components/shared/custom-fields-panel';
+import { TagsPanel } from '@/components/shared/tags-panel';
+import { ActivityPanel } from '@/components/shared/activity-panel';
 import { ApprovalBar } from '@/components/shared/approval-bar';
 import { Field } from '@/components/shared/form-bits';
 import { CancelEinvoiceDialog } from '@/components/gst/cancel-einvoice-dialog';
@@ -49,6 +52,7 @@ const d = (s: string) =>
 
 export default function InvoiceDetailPage() {
   const params = useParams<{ id: string }>();
+  const canCreate = usePermission('sales', 'create');
   const router = useRouter();
   const canEdit = usePermission('sales', 'edit');
   const canVoid = usePermission('sales', 'void');
@@ -77,7 +81,7 @@ export default function InvoiceDetailPage() {
           <>
             <PageHeader
               title={inv.number}
-              description={`${inv.customer.name} · raised ${d(inv.date)}, due ${d(inv.dueDate)}`}
+              description={`${inv.debitNote ? `Debit note${inv.debitNote.against ? ` against ${inv.debitNote.against.number}` : ''} · ` : inv.paidAtSale ? 'Sales receipt · paid at the time of sale · ' : ''}${inv.customer.name} · raised ${d(inv.date)}, due ${d(inv.dueDate)}`}
               actions={
                 <>
                   <Button variant="outline" size="sm" asChild>
@@ -89,6 +93,11 @@ export default function InvoiceDetailPage() {
                     </Link>
                   </Button>
                   {inv.status !== 'draft' && inv.status !== 'void' && <SendInvoice inv={inv} onSent={() => void state.refetch()} />}
+                  {canCreate && !inv.debitNote && (
+                    <Button variant="outline" size="sm" asChild className="gap-1.5">
+                      <Link href={`/sales/invoices/new?clone=${inv.id}`} data-slot="clone-invoice"><Copy className="size-3.5" /> Clone</Link>
+                    </Button>
+                  )}
                   {canEdit && inv.status !== 'void' && (
                     <DropdownMenu>
                       <DropdownMenuTrigger aria-label="More actions" className="grid size-9 place-items-center rounded-[3px] border transition-colors hover:bg-accent">
@@ -180,6 +189,7 @@ export default function InvoiceDetailPage() {
                 <TabsTrigger value="document">Document</TabsTrigger>
                 <TabsTrigger value="journal">Journal</TabsTrigger>
                 <TabsTrigger value="payments">Payments ({inv.payments.length})</TabsTrigger>
+                <TabsTrigger value="activity">Comments &amp; history</TabsTrigger>
               </TabsList>
 
               {/* ── The invoice itself ─────────────────────────────────── */}
@@ -297,7 +307,13 @@ export default function InvoiceDetailPage() {
                   </Card>
                 </div>
 
+                <CustomFieldsPanel entity="invoice" id={inv.id} canEdit={canEdit} />
+                <TagsPanel entity="invoice" id={inv.id} canEdit={canEdit} />
                 <Attachments targetType="invoice" targetId={inv.id} canEdit={canEdit} title="Signed copies, proof of delivery and other files" />
+              </TabsContent>
+
+              <TabsContent value="activity" className="mt-4">
+                <ActivityPanel targetType="invoice" targetId={inv.id} />
               </TabsContent>
 
               {/* ── The double entry behind it ─────────────────────────── */}

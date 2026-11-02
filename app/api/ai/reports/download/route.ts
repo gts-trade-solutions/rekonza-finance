@@ -5,6 +5,7 @@ import { aiSettingsFor } from '@/lib/server/ai/settings';
 import { currentSessionKey } from '@/lib/server/ai/session-key';
 import { quoteDownload, takeDownload, type DownloadScope } from '@/lib/server/ai/downloads';
 import { walletView } from '@/lib/server/billing/wallet';
+import { snapshotMode } from '@/lib/demo-snapshot';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Downloading a report under an answer.
@@ -28,7 +29,7 @@ async function scopeFor(orgId: number, userId: number): Promise<DownloadScope> {
 const MessageId = z.coerce.number().int().positive();
 const Key = z.string().trim().min(1).max(120);
 
-export const GET = route(
+const quote = route(
   async ({ user, orgId, req }) => {
     const url = new URL(req.url);
     const messageId = MessageId.safeParse(url.searchParams.get('messageId'));
@@ -45,7 +46,7 @@ const Take = z.object({
   format: z.enum(['png', 'csv']),
 });
 
-export const POST = route(
+const take = route(
   async ({ user, orgId, req }) => {
     const input = await body(req, Take);
     const scope = await scopeFor(orgId, user.userId);
@@ -58,3 +59,19 @@ export const POST = route(
   },
   { permission: { module: 'ai', action: 'view' } },
 );
+
+// On the online demo the answer is held in the server's memory, and its
+// reports download free: there is no wallet to charge.
+type Context = { params: Promise<Record<string, string>> };
+
+export async function GET(req: Request, context: Context): Promise<Response> {
+  if (!snapshotMode()) return quote(req, context);
+  const { demoReportQuote } = await import('@/lib/server/ai/demo-chat');
+  return demoReportQuote();
+}
+
+export async function POST(req: Request, context: Context): Promise<Response> {
+  if (!snapshotMode()) return take(req, context);
+  const { demoReportDownload } = await import('@/lib/server/ai/demo-chat');
+  return demoReportDownload(req);
+}

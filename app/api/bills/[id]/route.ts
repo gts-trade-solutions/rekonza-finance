@@ -48,7 +48,7 @@ export const GET = route(
           'bill_lines.hsn_sac', 'bill_lines.qty', 'bill_lines.uqc', 'bill_lines.rate',
           'bill_lines.discount_pct', 'bill_lines.gst_rate_pct', 'bill_lines.taxable',
           'bill_lines.cgst', 'bill_lines.sgst', 'bill_lines.igst', 'bill_lines.line_total',
-          'bill_lines.itc_eligibility', 'accounts.name as account_name',
+          'bill_lines.itc_eligibility', 'bill_lines.account_id', 'accounts.name as account_name',
         ])
         .where('bill_lines.bill_id', '=', id)
         .orderBy('bill_lines.line_no')
@@ -129,6 +129,7 @@ export const GET = route(
       lines: lines.map((l) => ({
         id: asId(l.id),
         itemId: l.item_id ? asId(l.item_id) : null,
+        accountId: l.account_id ? asId(l.account_id) : null,
         accountName: l.account_name,
         description: l.description,
         hsnSac: l.hsn_sac,

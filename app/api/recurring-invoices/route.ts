@@ -4,6 +4,8 @@ import { route, body, query, asId, badRequest } from '@/lib/server/http';
 import { runRecurringInvoice } from '@/lib/server/services/recurring';
 import '@/lib/server/jobs/boot';
 import { logAudit, auditMeta } from '@/lib/server/audit';
+import { mailStatus, siteUrl } from '@/lib/server/mail/mailer';
+import { emailInvoice } from '@/lib/server/mail/documents';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Recurring invoice profiles.
@@ -205,6 +207,11 @@ export const PATCH = route(
     }
 
     const created = await transaction((trx) => runRecurringInvoice(trx, orgId, user.userId, id, input.date));
+    // Set to send itself: with a mail server, it goes to the customer now it is committed.
+    let emailed: string[] | null = null;
+    if (created.autoSent && mailStatus().configured) {
+      emailed = await emailInvoice(orgId, user.userId, created.invoice.id, { baseUrl: siteUrl(req) }).then((r) => r.to).catch(() => null);
+    }
 
     await logAudit({
       orgId, actorUserId: user.userId, actorName: user.name, action: 'create',
@@ -219,6 +226,7 @@ export const PATCH = route(
       number: created.invoice.number,
       totalPaise: created.invoice.totalPaise,
       autoSent: created.autoSent,
+      emailedTo: emailed,
     };
   },
   { permission: { module: 'sales', action: 'create' } },

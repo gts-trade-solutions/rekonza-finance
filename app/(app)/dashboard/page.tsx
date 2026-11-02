@@ -21,6 +21,7 @@ import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { PageHeader } from '@/components/shared/page-header';
+import { ChecklistCard } from '@/components/layout/checklist-card';
 import { DateRangePicker } from '@/components/shared/date-range-picker';
 import { StatTile } from '@/components/shared/stat-tile';
 import { Money } from '@/components/shared/money';
@@ -28,6 +29,7 @@ import { StatusBadge } from '@/components/shared/status-badge';
 import { ShareDonut } from '@/components/charts/share-donut';
 import { RankedBars } from '@/components/charts/ranked-bars';
 import { AsyncPage, LoadingRows, Refreshing } from '@/components/shared/async-state';
+import { DashboardExtras } from '@/components/dashboard/watchlist';
 import { useCanSeeCosts } from '@/lib/store/hooks';
 import { useSession } from '@/components/layout/session-provider';
 import { today } from '@/lib/selectors';
@@ -115,6 +117,8 @@ export default function DashboardPage() {
           </>
         }
       />
+
+      <ChecklistCard />
 
       <AsyncPage state={state} loading={<LoadingRows rows={6} />}>
         {(d) => {
@@ -643,6 +647,8 @@ export default function DashboardPage() {
                   </Card>
                 </div>
               </div>
+
+              <DashboardExtras />
             </>
           );
         }}

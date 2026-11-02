@@ -1,7 +1,8 @@
 'use client';
 
 // A document opened from a link the business sent: an invoice (the
-// recipient's copy) or an employee's payslip. No sign-in; a way to print it or
+// recipient's copy), a quote, order, challan, credit note, receipt or purchase
+// order (lib/print-doc.ts), or an employee's payslip. No sign-in; a way to print it or
 // save it as a PDF.
 
 import { use } from 'react';
@@ -9,11 +10,13 @@ import { AlertCircle, Printer } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { PrintView } from '@/components/print/invoice-print';
 import { Payslip } from '@/components/payroll/payslip';
+import { DocumentPrintView } from '@/components/print/document-print';
+import type { PrintDoc } from '@/lib/print-doc';
 import { api, type InvoiceDetail } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
 import type { Run } from '@/app/(app)/payroll/runs/[id]/page';
 
-type Shared = ({ kind: 'invoice' } & InvoiceDetail) | { kind: 'payslip'; run: Run };
+type Shared = ({ kind: 'invoice' } & InvoiceDetail) | { kind: 'payslip'; run: Run } | { kind: 'document'; doc: PrintDoc };
 
 export default function SharedDocumentPage({ params }: { params: Promise<{ token: string }> }) {
   const { token } = use(params);
@@ -30,6 +33,8 @@ export default function SharedDocumentPage({ params }: { params: Promise<{ token
           </div>
         ) : !d ? (
           <p className="mt-24 text-center text-sm text-muted-foreground">Opening…</p>
+        ) : d.kind === 'document' ? (
+          <DocumentPrintView doc={d.doc} shared />
         ) : d.kind === 'payslip' ? (
           <div className="space-y-4">
             <div className="flex justify-end no-print">

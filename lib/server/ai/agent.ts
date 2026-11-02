@@ -16,16 +16,22 @@ import 'server-only';
 // Text the model writes before it decides to use a tool ("Let me check…") is
 // withdrawn from the screen when the tool call arrives, so the answer the
 // person reads is only the answer.
+//
+// The lookups the model asks for in one step run side by side, not one after
+// another, and a lookup already made while the books stood still is reused
+// rather than read again (cache.ts) — the two things that make an answer
+// quick once the model has decided what it needs.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { splitFollowups } from '../../ai/followups';
 import { MAX_REPORTS_PER_ANSWER, type AiReport } from '../../ai/reports';
 import { costMicroForMc, costMicroUsd, type ModelPrice } from './pricing';
 import { buildSystemPrompt, type PromptContext } from './prompt';
-import { runTool, toolLabel, toolSpecsFor, type ToolContext, type ToolSource } from './tools';
+import { runTool, toolLabel, toolSpecsFor, type ToolContext, type ToolRun, type ToolSource } from './tools';
+import { cacheStats, lookupCache, lookupKey } from './cache';
 import {
   NO_USAGE, ProviderError, addUsage,
-  type AiProvider, type CallUsage, type ChatMessage, type ProviderErrorKind,
+  type AiProvider, type CallUsage, type ChatMessage, type ProviderErrorKind, type ToolCall,
 } from './types';
 
 /** Model calls per question, the last of which must answer. */
@@ -54,6 +60,12 @@ export interface AgentInput {
   creditCostUsd: number;
   signal: AbortSignal;
   emit: (e: AgentEvent) => void;
+  /** Runs a lookup in place of the books: the online demo answers from its recording. */
+  runLookup?: (call: ToolCall) => Promise<ToolRun>;
+  /** The book's version (cache.ts): given, lookups made under it are reused. */
+  booksVersion?: string;
+  /** Sent to the model provider so requests from one book share its prompt cache. */
+  cacheKey?: string;
 }
 
 export interface AgentResult {
@@ -67,6 +79,8 @@ export interface AgentResult {
   costMicroUsd: number;
   modelCalls: number;
   toolCalls: number;
+  /** Of the lookups, how many were answered from the cache. */
+  lookupsFromCache: number;
   outcome: 'answered' | 'stopped' | 'error';
   errorKind?: ProviderErrorKind | 'internal';
   errorMessage?: string;
@@ -95,6 +109,21 @@ export async function runAgent(input: AgentInput): Promise<AgentResult> {
   let usage: CallUsage = NO_USAGE;
   let modelCalls = 0;
   let toolCalls = 0;
+  let lookupsFromCache = 0;
+
+  const lookup = async (call: ToolCall): Promise<{ out: ToolRun; cached: boolean }> => {
+    if (input.runLookup) return { out: await input.runLookup(call), cached: false };
+    if (!input.booksVersion) return { out: await runTool(input.tools, call), cached: false };
+    const key = lookupKey({ orgId: input.tools.orgId, role: input.tools.role, today: input.tools.today, version: input.booksVersion }, call);
+    const hit = lookupCache.get(key);
+    if (hit) {
+      cacheStats.lookups++;
+      return { out: hit, cached: true };
+    }
+    const out = await runTool(input.tools, call);
+    if (out.ok) lookupCache.set(key, out);
+    return { out, cached: false };
+  };
   let answer = '';
   let outcome: AgentResult['outcome'] = 'answered';
   let errorKind: AgentResult['errorKind'];
@@ -114,6 +143,7 @@ export async function runAgent(input: AgentInput): Promise<AgentResult> {
         tools: specs.length ? specs : undefined,
         toolChoice: specs.length ? (wrapUp ? 'none' : 'auto') : undefined,
         maxOutputTokens,
+        cacheKey: input.cacheKey,
         signal: input.signal,
         onText: (t) => {
           streamed += t;
@@ -127,10 +157,16 @@ export async function runAgent(input: AgentInput): Promise<AgentResult> {
         if (streamed) input.emit({ type: 'discard' });
         messages.push({ role: 'assistant', content: result.text || null, toolCalls: result.toolCalls });
         const run = result.toolCalls.slice(0, MAX_TOOL_CALLS_PER_STEP);
+        if (input.signal.aborted) throw new ProviderError('Stopped.', 'aborted');
+        // The step's lookups run side by side; their answers go back in the
+        // order the model asked for them.
+        for (const call of run) input.emit({ type: 'tool', name: call.name, label: toolLabel(call.name) });
+        const outs = await Promise.all(run.map((call) => lookup(call)));
         // Every call the model made must be answered — including the ones
         // not run — or the next request is rejected as malformed.
         for (const call of result.toolCalls) {
-          if (!run.includes(call)) {
+          const at = run.indexOf(call);
+          if (at < 0) {
             messages.push({
               role: 'tool',
               toolCallId: call.id,
@@ -139,10 +175,9 @@ export async function runAgent(input: AgentInput): Promise<AgentResult> {
             });
             continue;
           }
-          if (input.signal.aborted) throw new ProviderError('Stopped.', 'aborted');
-          input.emit({ type: 'tool', name: call.name, label: toolLabel(call.name) });
-          const out = await runTool(input.tools, call);
+          const { out, cached } = outs[at];
           toolCalls++;
+          if (cached) lookupsFromCache++;
           for (const s of out.sources) sources.set(`${s.href}|${s.label}`, s);
           // The same lookup asked twice is one report.
           const report = out.report;
@@ -193,6 +228,7 @@ export async function runAgent(input: AgentInput): Promise<AgentResult> {
     costMicroUsd: costMicroUsd(usage, input.price),
     modelCalls,
     toolCalls,
+    lookupsFromCache,
     outcome,
     errorKind,
     errorMessage,

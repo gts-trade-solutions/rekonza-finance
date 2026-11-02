@@ -3,6 +3,7 @@ import { db } from '@/lib/server/db';
 import { route, body, idParam } from '@/lib/server/http';
 import { deleteConversation, getConversation, renameConversation } from '@/lib/server/ai/assistant';
 import { currentSessionKey } from '@/lib/server/ai/session-key';
+import { snapshotMode } from '@/lib/demo-snapshot';
 
 // One conversation: read it, rename it, or delete it. Only ever the caller's
 // own — a conversation id belonging to anyone else is simply not found.
@@ -12,13 +13,22 @@ async function scope(orgId: number) {
   return { isDemo: !!org?.is_demo, sessionKey: await currentSessionKey() };
 }
 
-export const GET = route(
+const read = route(
   async ({ user, orgId, params }) => {
     const s = await scope(orgId);
     return getConversation(orgId, user.userId, s.isDemo, s.sessionKey, idParam(params));
   },
   { permission: { module: 'ai', action: 'view' } },
 );
+
+export async function GET(req: Request, context: { params: Promise<Record<string, string>> }): Promise<Response> {
+  // On the online demo a conversation lives in the server's memory only.
+  if (snapshotMode()) {
+    const { demoConversation } = await import('@/lib/server/ai/demo-chat');
+    return demoConversation((await context.params).id ?? '');
+  }
+  return read(req, context);
+}
 
 const Rename = z.object({ title: z.string().trim().min(1, 'Give it a name.').max(150) });
 

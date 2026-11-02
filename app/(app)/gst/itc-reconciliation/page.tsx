@@ -22,6 +22,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { PageHeader } from '@/components/shared/page-header';
+import { FetchGstr2bButton } from '@/components/gst/gstn-portal';
 import { Money } from '@/components/shared/money';
 import { StatTile } from '@/components/shared/stat-tile';
 import { AsyncPage } from '@/components/shared/async-state';
@@ -175,13 +176,13 @@ export default function ItcReconciliationPage() {
     try {
       json = JSON.parse(await file.text());
     } catch {
-      toast.error('That file is not JSON. Download GSTR-2B as JSON from the portal.');
+      toast.error('That file is not JSON. Download GSTR-2B (or GSTR-2A) as JSON from the portal.');
       return;
     }
     const r = await importer.run(json);
     if (fileRef.current) fileRef.current.value = '';
     if (!r) { toast.error(importer.error ?? 'The file could not be imported.'); return; }
-    toast.success(`GSTR-2B for ${r.gstin}, ${r.returnPeriod.slice(0, 2)}/${r.returnPeriod.slice(2)} imported`, {
+    toast.success(`GSTR-2A/2B for ${r.gstin}, ${r.returnPeriod.slice(0, 2)}/${r.returnPeriod.slice(2)} imported`, {
       description: `${r.inserted} new, ${r.updated} updated${r.skipped.length ? `, ${r.skipped.length} could not be read` : ''}.`,
     });
     const imported = `${r.returnPeriod.slice(2)}-${r.returnPeriod.slice(0, 2)}`;
@@ -220,8 +221,9 @@ export default function ItcReconciliationPage() {
                   className="hidden"
                   onChange={(e) => void onFile(e.target.files?.[0])}
                 />
+                <FetchGstr2bButton period={period} onDone={() => state.refetch()} />
                 <Button size="sm" className="gap-1.5" disabled={importer.busy} onClick={() => fileRef.current?.click()}>
-                  <Upload className="size-3.5" /> {importer.busy ? 'Importing…' : 'Import GSTR-2B'}
+                  <Upload className="size-3.5" /> {importer.busy ? 'Importing…' : 'Import GSTR-2B / 2A JSON'}
                 </Button>
               </>
             )}

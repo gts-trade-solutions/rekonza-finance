@@ -18,15 +18,18 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { PageHeader } from '@/components/shared/page-header';
-import { downloadCsv } from '@/components/shared/report-shell';
+import { downloadCsv, downloadJson } from '@/components/shared/report-shell';
 import { api, imports, type ImportOutcome, type ImportResponse } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
 import { columnFor, IMPORT_KINDS, MAX_IMPORT_ROWS, TEMPLATES, templateCsv, templateSheets, type ImportKind } from '@/lib/imports/templates';
 import { downloadWorkbook } from '@/lib/xlsx';
+import { jsonGrid, templateJson } from '@/lib/imports/json';
 
 const PART_LABEL: Record<string, string> = {
   contacts: 'Customers and vendors', items: 'Items', accounts: 'Accounts', 'opening-ledger': 'Ledger openings',
   'opening-bills': 'Unpaid bills', journals: 'Journal vouchers', invoices: 'Invoices', bills: 'Bills',
+  estimates: 'Quotes', 'sales-orders': 'Sales orders', 'credit-notes': 'Credit notes', 'purchase-orders': 'Purchase orders',
+  expenses: 'Expenses', 'payments-received': 'Payments received', 'payments-made': 'Payments made',
 };
 
 /** A cell as text the server reads: dates as yyyy-mm-dd. */
@@ -38,7 +41,7 @@ export default function ImportPage() {
     <>
       <PageHeader
         title="Import"
-        description="Bring masters, opening balances and vouchers in from a spreadsheet, or a whole company from Tally."
+        description="Bring masters, opening balances and vouchers in from a spreadsheet or JSON file, or a whole company from Tally."
         actions={
           <Button variant="outline" size="sm" asChild>
             <Link href="/settings"><ArrowLeft className="mr-1.5 size-3.5" /> Settings</Link>
@@ -47,7 +50,7 @@ export default function ImportPage() {
       />
       <Tabs defaultValue="sheet">
         <TabsList>
-          <TabsTrigger value="sheet">From a spreadsheet</TabsTrigger>
+          <TabsTrigger value="sheet">From a spreadsheet or JSON</TabsTrigger>
           <TabsTrigger value="tally">From Tally</TabsTrigger>
         </TabsList>
         <TabsContent value="sheet" className="mt-4"><SheetImport /></TabsContent>
@@ -133,6 +136,9 @@ function SheetImport() {
         const { default: readXlsxFile } = await import('read-excel-file/browser');
         const sheets = (await readXlsxFile(file)) as unknown as { sheet: string; data: unknown[][] }[];
         grid = sheets.find((s) => s.data.some((r) => r.some((c) => c !== null && c !== '')))?.data ?? [];
+      } else if (/\.json$/i.test(file.name)) {
+        // The same grid a spreadsheet gives (lib/imports/json.ts).
+        grid = jsonGrid(await file.text(), kind);
       } else {
         const text = (await file.text()).replace(/^﻿/, '');
         grid = Papa.parse<string[]>(text, { skipEmptyLines: 'greedy' }).data;
@@ -195,6 +201,9 @@ function SheetImport() {
               }}>
                 CSV
               </Button>
+              <Button size="sm" variant="ghost" onClick={() => downloadJson(`rekonza-${kind}-template.json`, templateJson(kind))}>
+                JSON
+              </Button>
             </div>
           </div>
           <div className="flex flex-wrap gap-1.5">
@@ -203,9 +212,9 @@ function SheetImport() {
             ))}
           </div>
           <div className="flex flex-wrap items-center gap-3">
-            <input ref={input} type="file" accept=".csv,.xlsx" className="hidden" onChange={(e) => void load(e.target.files?.[0])} />
+            <input ref={input} type="file" accept=".csv,.xlsx,.json,application/json" className="hidden" onChange={(e) => void load(e.target.files?.[0])} />
             <Button size="sm" className="gap-1.5" onClick={() => input.current?.click()}>
-              <Upload className="size-3.5" /> Choose a CSV or Excel file
+              <Upload className="size-3.5" /> Choose a CSV, Excel or JSON file
             </Button>
             {fileName && <span className="text-xs text-muted-foreground"><FileSpreadsheet className="mr-1 inline size-3.5" />{fileName}: {rows.length} row(s)</span>}
             {['contacts', 'items', 'accounts'].includes(kind) && (

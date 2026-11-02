@@ -40,13 +40,38 @@ const TYPE_INFO: Record<AccountType, { label: string; plain: string; tone: strin
 
 const ORDER: AccountType[] = ['asset', 'liability', 'equity', 'income', 'expense'];
 
+/**
+ * Accounts as a tree: each group (an account others sit under, like Tally's
+ * groups) followed by its members, indented, with the group's total covering
+ * everything beneath it.
+ */
+function tree(list: AccountRow[]) {
+  const ids = new Set(list.map((a) => a.id));
+  const kids = new Map<string, AccountRow[]>();
+  for (const a of list) {
+    const parent = a.parentId && ids.has(a.parentId) ? a.parentId : '';
+    kids.set(parent, [...(kids.get(parent) ?? []), a]);
+  }
+  const total = (a: AccountRow): number => a.balancePaise + (kids.get(a.id) ?? []).reduce((t, c) => t + total(c), 0);
+  const out: { a: AccountRow; depth: number; isGroup: boolean; groupTotal: number }[] = [];
+  const walk = (parent: string, depth: number) => {
+    for (const a of [...(kids.get(parent) ?? [])].sort((x, y) => x.code.localeCompare(y.code))) {
+      const isGroup = (kids.get(a.id) ?? []).length > 0;
+      out.push({ a, depth, isGroup, groupTotal: total(a) });
+      if (depth < 6) walk(a.id, depth + 1);
+    }
+  };
+  walk('', 0);
+  return out;
+}
+
 export default function ChartOfAccountsPage() {
   const canCreate = usePermission('accountant', 'create');
   const canEdit = usePermission('accountant', 'edit');
   const state = useApi<{ accounts: AccountRow[] }>(() => accountsApi.list(), []);
 
   const [open, setOpen] = useState(false);
-  const [f, setF] = useState({ code: '', name: '', type: 'expense' as AccountType, description: '' });
+  const [f, setF] = useState({ code: '', name: '', type: 'expense' as AccountType, description: '', parentId: '' });
 
   const create = useApiAction(accountsApi.create);
   const remove = useApiAction(accountsApi.remove);
@@ -68,6 +93,7 @@ export default function ChartOfAccountsPage() {
       name: f.name.trim(),
       type: f.type,
       description: f.description.trim() || null,
+      parentId: f.parentId || null,
     });
     if (!result) {
       toast.error(create.error ?? 'The account was not created');
@@ -75,7 +101,7 @@ export default function ChartOfAccountsPage() {
     }
     toast.success(`${result.code} — ${result.name} created`);
     setOpen(false);
-    setF({ code: '', name: '', type: 'expense', description: '' });
+    setF({ code: '', name: '', type: 'expense', description: '', parentId: '' });
     state.refetch();
   };
 
@@ -130,6 +156,12 @@ export default function ChartOfAccountsPage() {
                       />
                     </Field>
                   </div>
+                  <Field label="Under (group)" hint="Optional: the account it is grouped under, as Sundry Debtors holds each customer in Tally. Reports total a group with everything beneath it.">
+                    <select value={f.parentId} onChange={(e) => setF({ ...f, parentId: e.target.value })} className="h-9 w-full rounded-md border bg-background px-2 text-sm" data-slot="account-parent">
+                      <option value="">None: a top-level account</option>
+                      {(byType.get(f.type) ?? []).map((a) => <option key={a.id} value={a.id}>{a.code} · {a.name}</option>)}
+                    </select>
+                  </Field>
                   <Field label="Description" hint="What belongs in this account, for whoever posts next">
                     <Input
                       value={f.description}
@@ -169,12 +201,13 @@ export default function ChartOfAccountsPage() {
                   <Card className="overflow-hidden p-0">
                     <table className="w-full text-sm">
                       <tbody>
-                        {list.map((a) => (
-                          <tr key={a.id} className="group border-b last:border-0 hover:bg-accent/40">
+                        {tree(list).map(({ a, depth, isGroup, groupTotal: gt }) => (
+                          <tr key={a.id} className={`group border-b last:border-0 hover:bg-accent/40 ${isGroup ? 'bg-muted/30' : ''}`}>
                             <td className="w-20 px-4 py-2 font-mono text-xs text-muted-foreground">{a.code}</td>
-                            <td className="px-4 py-2">
+                            <td className="px-4 py-2" style={{ paddingLeft: `${16 + depth * 20}px` }}>
                               <div className="flex items-center gap-2">
-                                <span className="font-medium">{a.name}</span>
+                                <span className={isGroup ? 'font-semibold' : 'font-medium'}>{a.name}</span>
+                                {isGroup && <Badge variant="outline" className="text-[9px]">Group</Badge>}
                                 {a.isSystem && (
                                   <Badge variant="secondary" className="gap-1 text-[9px]">
                                     <Lock className="size-2.5" /> System
@@ -188,9 +221,9 @@ export default function ChartOfAccountsPage() {
                             </td>
                             <td className="w-40 px-4 py-2 text-right">
                               <Money
-                                value={a.balancePaise}
+                                value={isGroup ? gt : a.balancePaise}
                                 showZero={false}
-                                className={a.balancePaise !== 0 ? 'font-medium' : undefined}
+                                className={isGroup ? 'font-semibold' : a.balancePaise !== 0 ? 'font-medium' : undefined}
                               />
                             </td>
                             <td className="w-10 px-2 py-2">

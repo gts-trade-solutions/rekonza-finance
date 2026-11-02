@@ -20,6 +20,7 @@ import { toPaiseFromSql } from '../money-sql';
 import { conflict } from '../http';
 import { stockPosition } from '../reports/stock';
 import { enforce, getPolicies } from './org-settings';
+import { explodeKits } from './kits';
 
 const rupees = (p: Paise) => `₹${(p / 100).toLocaleString('en-IN')}`;
 export const CASH_RECEIPT_LIMIT_PAISE = 2_00_000_00;
@@ -56,7 +57,8 @@ export async function checkStock(
   ex: Executor, orgId: number, branchId: number, date: string, lines: { itemId?: number | null; qty: number }[], warnings: string[],
 ) {
   const out = new Map<number, number>();
-  for (const l of lines) if (l.itemId && l.qty > 0) out.set(l.itemId, (out.get(l.itemId) ?? 0) + l.qty);
+  // A kit takes its components out of stock, so those are what must be there.
+  for (const l of await explodeKits(ex, orgId, lines)) if (l.itemId && l.qty > 0) out.set(l.itemId, (out.get(l.itemId) ?? 0) + l.qty);
   if (!out.size) return;
   const tracked = await ex.selectFrom('items').select(['id', 'name']).where('org_id', '=', orgId)
     .where('id', 'in', [...out.keys()]).where('track_inventory', '=', 1).where('kind', '=', 'goods').execute();

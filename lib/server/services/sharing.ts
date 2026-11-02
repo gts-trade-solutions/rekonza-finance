@@ -1,7 +1,8 @@
 import 'server-only';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Share links: one invoice, or one employee's payslip for a month, opened by
+// Share links: one invoice, one other document (a quote, a purchase order …,
+// lib/print-doc.ts), or one employee's payslip for a month, opened by
 // whoever holds the link, without signing in. Read-only and the recipient's
 // copy only; it lapses on its expiry date and can be revoked sooner. The token is random and only its hash is kept,
 // so the table alone cannot open anything.
@@ -10,6 +11,8 @@ import 'server-only';
 import { createHash, randomBytes } from 'node:crypto';
 import type { Executor, Trx } from '../db';
 import { notFound } from '../http';
+import type { PrintKind } from '../../print-doc';
+import { documentParty } from './document-print';
 
 const hash = (token: string) => createHash('sha256').update(token).digest('hex');
 
@@ -21,6 +24,21 @@ export async function createShareLink(trx: Trx, orgId: number, userId: number | 
   const expiresAt = new Date(Date.now() + Math.min(Math.max(input.days ?? 30, 1), 180) * 86_400_000);
   await trx.insertInto('share_links').values({
     org_id: orgId, token_hash: hash(token), doc_type: 'invoice', doc_id: inv.id, expires_at: expiresAt, created_by_user_id: userId,
+  }).execute();
+  return { path: `/share/${token}`, expiresAt: expiresAt.toISOString() };
+}
+
+/** A link to one document's printed copy: what an emailed quote, order or receipt opens. */
+export async function createDocumentLink(trx: Trx, orgId: number, userId: number | null, input: { kind: PrintKind; id: number; days?: number }) {
+  const doc = await documentParty(trx, orgId, input.kind, input.id);
+  if (!doc) throw notFound('That document does not exist.');
+  if (doc.status === 'draft' && input.kind !== 'estimate' && input.kind !== 'purchase-order' && input.kind !== 'retainer') {
+    throw notFound('A draft is not final yet; save it before sending it.');
+  }
+  const token = randomBytes(24).toString('base64url');
+  const expiresAt = new Date(Date.now() + Math.min(Math.max(input.days ?? 30, 1), 180) * 86_400_000);
+  await trx.insertInto('share_links').values({
+    org_id: orgId, token_hash: hash(token), doc_type: 'document', doc_kind: input.kind, doc_id: input.id, expires_at: expiresAt, created_by_user_id: userId,
   }).execute();
   return { path: `/share/${token}`, expiresAt: expiresAt.toISOString() };
 }
@@ -40,13 +58,13 @@ export async function createPayslipLink(trx: Trx, orgId: number, userId: number 
 }
 
 /** What a link opens, counting the opening; null when it is unknown, expired or revoked. */
-export async function openShareLink(ex: Executor, token: string): Promise<{ orgId: number; docType: 'invoice' | 'payslip'; docId: number; subId: number | null } | null> {
+export async function openShareLink(ex: Executor, token: string): Promise<{ orgId: number; docType: 'invoice' | 'payslip' | 'document'; docKind: string | null; docId: number; subId: number | null } | null> {
   if (!/^[A-Za-z0-9_-]{20,64}$/.test(token)) return null;
-  const link = await ex.selectFrom('share_links').select(['id', 'org_id', 'doc_type', 'doc_id', 'sub_id', 'expires_at', 'revoked_at'])
+  const link = await ex.selectFrom('share_links').select(['id', 'org_id', 'doc_type', 'doc_kind', 'doc_id', 'sub_id', 'expires_at', 'revoked_at'])
     .where('token_hash', '=', hash(token)).executeTakeFirst();
   if (!link || link.revoked_at || new Date(link.expires_at) < new Date()) return null;
   await ex.updateTable('share_links').set((eb) => ({ opens: eb('opens', '+', 1), last_opened_at: new Date() })).where('id', '=', link.id).execute();
-  return { orgId: link.org_id, docType: link.doc_type, docId: link.doc_id, subId: link.sub_id };
+  return { orgId: link.org_id, docType: link.doc_type, docKind: link.doc_kind, docId: link.doc_id, subId: link.sub_id };
 }
 
 export async function listShareLinks(ex: Executor, orgId: number, invoiceId: number) {

@@ -284,6 +284,13 @@ export class OpenAiProvider implements AiProvider {
     if (isReasoningModel(this.cfg.model) && this.cfg.reasoningEffort) {
       body.reasoning_effort = this.cfg.reasoningEffort;
     }
+    // The system prompt and tool list are the same for every question in a
+    // book, so OpenAI serves them from its prompt cache at a tenth of the
+    // price once this key routes them together. Only to OpenAI itself: a
+    // proxy or another provider may refuse a field it does not know.
+    if (req.cacheKey && this.cfg.baseUrl.startsWith('https://api.openai.com/')) {
+      body.prompt_cache_key = req.cacheKey;
+    }
     const serialised = JSON.stringify(body);
 
     const headers: Record<string, string> = {

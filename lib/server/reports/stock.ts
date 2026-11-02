@@ -134,7 +134,8 @@ export async function stockPosition(
 
   const [inward, outward, returned, adjusted, openingAdj] = await Promise.all([
     // What a purchase cost is what was posted to the cost: the taxable value,
-    // plus the tax only when that tax could not be claimed back.
+    // plus the tax only when that tax could not be claimed back, plus any
+    // landed cost (freight, duty) spread over it.
     //
     // Goods on a receipt note are in stock from the day they arrive, at the
     // note's rate, until their bill comes; from then the bill carries them.
@@ -143,9 +144,19 @@ export async function stockPosition(
       SELECT item_id, fy, SUM(qty) AS qty, SUM(cost) AS cost FROM (
         SELECT bl.item_id, ${fySql(sql.ref('b.bill_date'))} AS fy, bl.qty,
                bl.taxable + CASE WHEN bl.itc_eligibility NOT IN ('eligible', 'capital_goods') AND b.is_rcm = 0
-                                 THEN bl.cgst + bl.sgst + bl.igst + bl.cess ELSE 0 END AS cost
+                                 THEN bl.cgst + bl.sgst + bl.igst + bl.cess ELSE 0 END
+                          + COALESCE(landed.amt, 0) AS cost
           FROM bill_lines bl
           JOIN bills b ON b.id = bl.bill_id
+          -- Landed cost spread over the line (services/landed-cost.ts), from the charge bill's date.
+          LEFT JOIN (
+            SELECT lcl.bill_line_id, SUM(lcl.amount) AS amt
+              FROM landed_cost_lines lcl
+              JOIN landed_costs lc ON lc.id = lcl.landed_cost_id
+              JOIN bills cb ON cb.id = lc.charge_bill_id
+             WHERE lc.org_id = ${orgId} AND lc.allocated_on <= ${asOf} AND cb.status NOT IN ('draft','void')
+             GROUP BY lcl.bill_line_id
+          ) landed ON landed.bill_line_id = bl.id
          WHERE b.org_id = ${orgId} AND b.status NOT IN ('draft','void')
            AND bl.item_id IS NOT NULL AND b.bill_date <= ${asOf} ${docBranch('b.branch_id')}
         UNION ALL
@@ -179,6 +190,14 @@ export async function stockPosition(
          WHERE i.org_id = ${orgId} AND i.status NOT IN ('draft','void')
            AND il.item_id IS NOT NULL AND i.invoice_date <= ${asOf} ${docBranch('i.branch_id')}
         UNION ALL
+        -- A kit sold takes its components out of stock (services/kits.ts).
+        SELECT ic.component_item_id, ${fySql(sql.ref('i.invoice_date'))} AS fy, il.qty * ic.qty
+          FROM invoice_lines il
+          JOIN invoices i ON i.id = il.invoice_id
+          JOIN item_components ic ON ic.kit_item_id = il.item_id
+         WHERE i.org_id = ${orgId} AND i.status NOT IN ('draft','void')
+           AND i.invoice_date <= ${asOf} ${docBranch('i.branch_id')}
+        UNION ALL
         -- Components used up in making something.
         SELECT pl.item_id, ${fySql(sql.ref('p.produced_on'))} AS fy, pl.qty
           FROM production_lines pl JOIN productions p ON p.id = pl.production_id
@@ -196,12 +215,22 @@ export async function stockPosition(
        GROUP BY item_id, fy
     `.execute(ex),
     sql<Movement>`
-      SELECT cl.item_id, ${fySql(sql.ref('c.note_date'))} AS fy, SUM(cl.qty) AS qty
-        FROM credit_note_lines cl
-        JOIN credit_notes c ON c.id = cl.credit_note_id
-       WHERE c.org_id = ${orgId} AND c.status <> 'void'
-         AND cl.item_id IS NOT NULL AND c.note_date <= ${asOf} ${docBranch('c.branch_id')}
-       GROUP BY cl.item_id, fy
+      SELECT item_id, fy, SUM(qty) AS qty FROM (
+        SELECT cl.item_id, ${fySql(sql.ref('c.note_date'))} AS fy, cl.qty
+          FROM credit_note_lines cl
+          JOIN credit_notes c ON c.id = cl.credit_note_id
+         WHERE c.org_id = ${orgId} AND c.status <> 'void'
+           AND cl.item_id IS NOT NULL AND c.note_date <= ${asOf} ${docBranch('c.branch_id')}
+        UNION ALL
+        -- A kit returned puts its components back.
+        SELECT ic.component_item_id, ${fySql(sql.ref('c.note_date'))} AS fy, cl.qty * ic.qty
+          FROM credit_note_lines cl
+          JOIN credit_notes c ON c.id = cl.credit_note_id
+          JOIN item_components ic ON ic.kit_item_id = cl.item_id
+         WHERE c.org_id = ${orgId} AND c.status <> 'void'
+           AND c.note_date <= ${asOf} ${docBranch('c.branch_id')}
+      ) back
+       GROUP BY item_id, fy
     `.execute(ex),
     sql<Movement>`
       SELECT a.item_id, ${fySql(sql.ref('a.adjust_date'))} AS fy, SUM(a.qty_delta) AS qty
@@ -340,8 +369,18 @@ export async function stockPosition(
       SELECT item_id, qty, cost FROM (
         SELECT bl.item_id, b.bill_date AS d, bl.id AS seq, bl.qty,
                bl.taxable + CASE WHEN bl.itc_eligibility NOT IN ('eligible', 'capital_goods') AND b.is_rcm = 0
-                                 THEN bl.cgst + bl.sgst + bl.igst + bl.cess ELSE 0 END AS cost
+                                 THEN bl.cgst + bl.sgst + bl.igst + bl.cess ELSE 0 END
+                          + COALESCE(landed.amt, 0) AS cost
           FROM bill_lines bl JOIN bills b ON b.id = bl.bill_id
+          -- Landed cost spread over the line (services/landed-cost.ts), from the charge bill's date.
+          LEFT JOIN (
+            SELECT lcl.bill_line_id, SUM(lcl.amount) AS amt
+              FROM landed_cost_lines lcl
+              JOIN landed_costs lc ON lc.id = lcl.landed_cost_id
+              JOIN bills cb ON cb.id = lc.charge_bill_id
+             WHERE lc.org_id = ${orgId} AND lc.allocated_on <= ${asOf} AND cb.status NOT IN ('draft','void')
+             GROUP BY lcl.bill_line_id
+          ) landed ON landed.bill_line_id = bl.id
          WHERE b.org_id = ${orgId} AND b.status NOT IN ('draft','void')
            AND bl.item_id IS NOT NULL AND bl.qty > 0 AND b.bill_date <= ${asOf} ${docBranch('b.branch_id')}
         UNION ALL

@@ -3,6 +3,7 @@ import { db, transaction } from '@/lib/server/db';
 import { route, body, asId, badRequest } from '@/lib/server/http';
 import { logAudit, auditMeta } from '@/lib/server/audit';
 import { isValidVpa } from '@/lib/billing/upi';
+import { readTemplate } from '@/lib/print-template';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // What goes on an invoice beyond what Rule 46 requires: the logo, the bank
@@ -19,7 +20,7 @@ export const GET = route(
       db.selectFrom('organizations')
         .select([
           'name', 'logo_file_id', 'print_bank_account_id', 'upi_id', 'upi_payee_name', 'print_upi_qr',
-          'default_invoice_terms', 'default_invoice_notes', 'signatory_name', 'print_language',
+          'default_invoice_terms', 'default_invoice_notes', 'signatory_name', 'print_language', 'print_template',
         ])
         .where('id', '=', orgId)
         .executeTakeFirstOrThrow(),
@@ -42,6 +43,7 @@ export const GET = route(
       defaultNotes: org.default_invoice_notes,
       signatoryName: org.signatory_name,
       printLanguage: org.print_language,
+      template: readTemplate(org.print_template),
       orgId: asId(orgId),
       orgName: org.name,
       bankAccounts: accounts.map((a) => ({
@@ -78,6 +80,13 @@ const PrintInput = z.object({
   defaultNotes: text(2000),
   signatoryName: text(150),
   printLanguage: z.enum(['hi', 'mr', 'gu', 'ta', 'te', 'kn', 'ml', 'bn']).nullish(),
+  template: z.object({
+    layout: z.enum(['classic', 'modern', 'compact']),
+    accent: z.string().regex(/^#[0-9a-fA-F]{6}$/, 'Pick a colour.'),
+    showLogo: z.boolean(),
+    showSignature: z.boolean(),
+    footer: z.string().trim().max(300).nullish(),
+  }).nullish(),
 });
 
 export const PUT = route(
@@ -117,6 +126,7 @@ export const PUT = route(
         default_invoice_notes: input.defaultNotes ?? null,
         signatory_name: input.signatoryName ?? null,
         print_language: input.printLanguage ?? null,
+        ...(input.template ? { print_template: JSON.stringify(input.template) } : {}),
       }).where('id', '=', orgId).execute();
 
       await logAudit({

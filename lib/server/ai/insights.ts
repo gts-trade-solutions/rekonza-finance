@@ -241,6 +241,10 @@ const seesCosts = (role: RoleName) => role === 'admin' || role === 'accountant' 
 /** Questions worth asking first, chosen by what the role can see. */
 export function suggestedPrompts(role: RoleName): SuggestedPrompt[] {
   const out: SuggestedPrompt[] = [];
+  // The question asked most: what is still to come in and to go out.
+  if (hasPermission(role, 'sales', 'view') || hasPermission(role, 'purchases', 'view')) {
+    out.push({ kind: 'receivable', title: 'Pending payments', prompt: 'What all are the pending payments, to receive and to pay?' });
+  }
   if (seesCosts(role)) {
     out.push(
       { kind: 'balance', title: 'Closing balance', prompt: 'What is the closing balance of each of our bank accounts today?' },

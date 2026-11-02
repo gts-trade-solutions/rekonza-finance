@@ -1,8 +1,8 @@
 'use client';
 
-import { useRouter } from 'next/navigation';
-import { useEffect, useMemo, useState } from 'react';
-import { FileText, Loader2, Save, ScanText, ShieldAlert } from 'lucide-react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { Suspense, useEffect, useMemo, useState } from 'react';
+import { FileText, Loader2, Paperclip, Save, ScanText, ShieldAlert } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -24,7 +24,7 @@ import {
   branchOptionsForUser, dueDateFor, termsForDays, termsOptions, userBranches,
   vendorOptions,
 } from '@/lib/options';
-import { api, ApiError, taxRates } from '@/lib/api/client';
+import { api, ApiError, bills as billApi, files, taxRates } from '@/lib/api/client';
 import { PendingAttachments, uploadPending } from '@/components/shared/attachments';
 import { useApi } from '@/lib/api/use-api';
 import { computeLineTax, stateName, sumTax, totalTaxPaise } from '@/lib/tax/gst';
@@ -35,7 +35,16 @@ import { CostCentrePicker } from '@/components/forms/cost-centre-picker';
 import { GodownPicker } from '@/components/forms/godown-picker';
 
 export default function NewBillPage() {
+  return <Suspense><NewBillForm /></Suspense>;
+}
+
+function NewBillForm() {
   const router = useRouter();
+  // ?clone=<id>: start from an earlier bill — same vendor and lines, today's date, the vendor's new bill number to type.
+  const params = useSearchParams();
+  const cloneId = params.get('clone');
+  // ?fromFile=<id>: made from a file in Documents, which moves onto the bill once it is saved.
+  const fromFile = params.get('fromFile');
   const s = useAppStore();
 
   const [branchId, setBranchId] = useState(s.activeBranchId || s.branches[0]?.id || '');
@@ -57,6 +66,25 @@ export default function NewBillPage() {
   const [saving, setSaving] = useState(false);
   const [costCentreId, setCostCentreId] = useState('');
   const [warehouseId, setWarehouseId] = useState('');
+  useEffect(() => {
+    if (!cloneId) return;
+    let live = true;
+    billApi.get(cloneId).then((b) => {
+      if (!live) return;
+      setVendorId(b.vendor.id);
+      setIsRcm(!!b.isRcm);
+      if (b.notes) setNotes(b.notes);
+      const copied = b.lines.map((l, i) => ({
+        ...newEditorLine(`c${i}`),
+        itemId: l.itemId ?? null, description: l.description ?? '', hsnSac: l.hsnSac ?? '', qty: l.qty, uqc: l.uqc ?? '',
+        ratePaise: l.ratePaise, discountPct: l.discountPct, gstRatePct: l.gstRatePct,
+      }));
+      setLines(copied);
+      setItc(Object.fromEntries(b.lines.map((l, i) => [`c${i}`, l.itcEligibility as 'eligible' | 'ineligible' | 'capital_goods'])));
+      toast.info(`Copied from ${b.internalNo ?? 'the bill'}`, { description: "Dated today. Type the vendor's own number for this bill." });
+    }).catch(() => toast.error('The bill to copy could not be loaded.'));
+    return () => { live = false; };
+  }, [cloneId]);
   // Read from a PDF or photo: what to check, and a supplier not yet in the books.
   const [reading, setReading] = useState(false);
   const [readNotes, setReadNotes] = useState<string[]>([]);
@@ -241,6 +269,10 @@ export default function NewBillPage() {
 
     if (!created) return;
     await uploadPending('bill', created.id, pendingFiles);
+    if (fromFile) {
+      await api.patch('/api/documents/files', { action: 'attach', fileIds: [fromFile], targetType: 'bill', targetId: created.id })
+        .catch(() => toast.error('The file from Documents was not attached', { description: 'Attach it from the saved bill.' }));
+    }
 
     toast.success(`Bill ${created.internalNo} recorded`, {
       description: 'Posted to the ledger — open the Journal tab to see the entry.',
@@ -459,6 +491,13 @@ export default function NewBillPage() {
               placeholder="Internal notes — not shown to the vendor"
             />
           </div>
+          {fromFile && (
+            <p className="flex items-center gap-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-xs">
+              <Paperclip className="size-3.5 text-primary" />
+              <a href={files.url(fromFile)} target="_blank" rel="noreferrer" className="font-medium hover:underline">The file from Documents</a>
+              <span className="text-muted-foreground">is attached to this bill when it is saved.</span>
+            </p>
+          )}
           <PendingAttachments value={pendingFiles} onChange={setPendingFiles} label="Attach File(s) to Bill" />
         </div>
 

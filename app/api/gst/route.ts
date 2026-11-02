@@ -7,6 +7,7 @@ import { gstr1, gstr3b, iff } from '@/lib/server/gst/returns';
 import { gstr9 } from '@/lib/server/gst/gstr9';
 import { gstr9c } from '@/lib/server/gst/gstr9c';
 import { gstr1PortalFile } from '@/lib/server/gst/gstr1-json';
+import { gstr3bForm, gstr3bPortalJson } from '@/lib/server/gst/gstr3b-form';
 import { einvoiceQueue, itcReconciliation, tdsSummary } from '@/lib/server/gst/compliance';
 import { cancelEinvoice, previewEinvoice, registerInvoice } from '@/lib/server/integrations/gst/einvoice-service';
 import { CANCEL_REASONS } from '@/lib/server/integrations/gst';
@@ -41,12 +42,18 @@ const DATE = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 
 const Q = z.object({
   view: z.enum([
-    'gstr1', 'gstr1-file', 'gstr3b', 'iff', 'gstr9', 'gstr9c', 'einvoices', 'eway-bills', 'itc', 'tds',
+    'gstr1', 'gstr1-file', 'gstr3b', 'gstr3b-form', 'gstr3b-docs', 'gstr3b-file', 'iff', 'gstr9', 'gstr9c', 'einvoices', 'eway-bills', 'itc', 'tds',
     'einvoice-preview', 'eway-check',
   ]),
   /** gstr1-file: the whole return, or only the B2B part that IFF takes. */
   scope: z.enum(['gstr1', 'iff']).optional(),
   period: MONTH.optional(),
+  /** GSTR-3B: a month, or a quarter (yyyy-Qn, the financial year it starts in) for a quarterly filer. */
+  ret: z.string().regex(/^\d{4}-(\d{2}|Q[1-4])$/, 'Give the return period as yyyy-mm or yyyy-Qn.').optional(),
+  /** gstr3b-docs: the table row, and for 3.2 who the supply was to and where. */
+  row: z.string().max(10).optional(),
+  recipient: z.enum(['unregistered', 'composition', 'uin']).optional(),
+  pos: z.string().regex(/^\d{2}$/).optional(),
   /** GSTR-9: the year the financial year starts in, e.g. 2026 for 2026-27. */
   fy: z.coerce.number().int().min(2017).max(2100).optional(),
   from: DATE.optional(),
@@ -59,6 +66,10 @@ const Q = z.object({
 });
 
 const thisMonth = () => new Date().toISOString().slice(0, 7);
+const localToday = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
 
 /**
  * ₹50,000 — the floor below which no state requires a bill, so nothing under
@@ -101,6 +112,30 @@ export const GET = route(
 
       case 'gstr3b':
         return { view: q.view, ...(await gstr3b(db, orgId, period, branchId)) };
+
+      // The form as the portal lays it out, table by table (gstr3b-form.ts).
+      case 'gstr3b-form': {
+        const { documents, ...form } = await gstr3bForm(db, orgId, q.ret ?? period, { branchId, today: localToday() });
+        void documents; // the summary only; the drill-down asks for them
+        return { view: q.view, ...form };
+      }
+
+      // The documents behind one figure on the form.
+      case 'gstr3b-docs': {
+        if (!q.row) throw badRequest('Which row? Pass row, as in 3.1a or 4A5.');
+        const { documents } = await gstr3bForm(db, orgId, q.ret ?? period, { branchId, today: localToday() });
+        const rows = q.row === '3.2'
+          ? documents.filter((d) => d.row === '3.1a' && d.recipient && (!q.recipient || d.recipient === q.recipient) && (!q.pos || d.pos === q.pos))
+          : documents.filter((d) => d.row === q.row);
+        return { view: q.view, row: q.row, documents: rows };
+      }
+
+      // Exactly the GSTN's GSTR-3B schema, with nothing of ours mixed in.
+      case 'gstr3b-file': {
+        const { documents, ...form } = await gstr3bForm(db, orgId, q.ret ?? period, { branchId, today: localToday() });
+        void documents; // the summary only; the drill-down asks for them
+        return gstr3bPortalJson(form);
+      }
 
       case 'einvoices': {
         const [{ rows, counts }, portal] = await Promise.all([

@@ -8,6 +8,7 @@
 // you can reclaim, so nothing they bill carries input credit.
 
 import { useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { Building2, Plus, ShieldAlert } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -23,9 +24,9 @@ import { Money } from '@/components/shared/money';
 import { EmptyState } from '@/components/shared/empty-state';
 import { AsyncPage } from '@/components/shared/async-state';
 import { Field } from '@/components/shared/form-bits';
+import { GstinLookupButton, gstinTreatment } from '@/components/gst/gstn-portal';
 import { Combobox } from '@/components/ui/combobox';
 import { contacts, type ContactRow } from '@/lib/api/client';
-import { ContactEditDialog } from '@/components/forms/contact-edit-dialog';
 import { useApi, useApiAction } from '@/lib/api/use-api';
 import { usePermission } from '@/lib/store/hooks';
 import { useAppStore } from '@/lib/store';
@@ -116,8 +117,7 @@ export default function VendorsPage() {
   const state = useApi<{ contacts: ContactRow[] }>(() => contacts.list({ kind: 'vendor' }), []);
   const [open, setOpen] = useState(false);
   const [f, setF] = useState(BLANK);
-  const [editing, setEditing] = useState<ContactRow | null>(null);
-  const canEdit = usePermission('purchases', 'edit');
+  const router = useRouter();
 
   // The organisation's own registration, used as the default state for a new
   // vendor. Selected as a primitive: an object out of a Zustand selector builds
@@ -182,12 +182,21 @@ export default function VendorsPage() {
                     />
                   </Field>
                   <Field label="GSTIN" error={create.fieldErrors.gstin}>
-                    <Input
-                      value={f.gstin}
-                      onChange={(e) => setF({ ...f, gstin: e.target.value.toUpperCase() })}
-                      className="font-mono"
-                      maxLength={15}
-                    />
+                    <div className="flex gap-2">
+                      <Input
+                        value={f.gstin}
+                        onChange={(e) => setF({ ...f, gstin: e.target.value.toUpperCase() })}
+                        className="font-mono"
+                        maxLength={15}
+                      />
+                      <GstinLookupButton gstin={f.gstin} onFound={(d) => setF({
+                        ...f,
+                        name: f.name.trim() ? f.name : d.tradeName || d.legalName || '',
+                        pan: f.gstin.slice(2, 12),
+                        stateCode: d.address?.stateCode ?? f.stateCode,
+                        treatment: gstinTreatment(d),
+                      })} />
+                    </div>
                   </Field>
                   <Field label="PAN" hint="Without PAN, TDS is deducted at 20%" error={create.fieldErrors.pan}>
                     <Input
@@ -299,12 +308,11 @@ export default function VendorsPage() {
               columns={columns}
               getRowId={(r) => r.id}
               searchPlaceholder="Search vendor, GSTIN or PAN…"
-              onRowClick={canEdit ? (r) => setEditing(r) : undefined}
+              onRowClick={(r) => router.push(`/purchases/vendors/${r.id}`)}
             />
           )
         }
       </AsyncPage>
-      <ContactEditDialog contact={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); void state.refetch(); }} />
     </>
   );
 }

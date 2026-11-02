@@ -1,15 +1,17 @@
 'use client';
 
-// Foreign currency: the rates the book uses, and its open balances in other
+// Foreign currency: the rates the book uses — typed, or fetched each day by
+// the exchange rate feed as Zoho Books does — and its open balances in other
 // currencies restated at a period end's closing rate (AS 11), with the
 // restatement reversed the next day.
 
 import { useState } from 'react';
-import { Loader2, Plus } from 'lucide-react';
+import { Loader2, Plus, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { Switch } from '@/components/ui/switch';
 import { PageHeader } from '@/components/shared/page-header';
 import { Money } from '@/components/shared/money';
 import { AsyncPage, LoadingRows } from '@/components/shared/async-state';
@@ -23,6 +25,7 @@ import { today } from '@/lib/selectors';
 interface Data {
   asOf: string;
   rates: { id: string; currency: string; date: string; rate: number; source: string | null }[];
+  feed: { enabled: boolean; lastRunOn: string | null; lastDate: string | null; lastError: string | null; lastSaved: number; currencies: string[] };
   exposure: {
     kind: 'invoice' | 'bill'; id: string; number: string; party: string; currency: string; foreignOpenPaise: number;
     bookedRate: number; carriedPaise: number; closingRate: number | null; restatedPaise: number | null; differencePaise: number | null;
@@ -39,11 +42,11 @@ export default function ForeignCurrencyPage() {
   const [rate, setRate] = useState({ currency: 'USD', date: today(), rate: '' });
   const [busy, setBusy] = useState<string | null>(null);
 
-  const post = async (key: string, payload: Record<string, unknown>, done: string) => {
+  const post = async (key: string, payload: Record<string, unknown>, done: string | ((r: never) => string)) => {
     setBusy(key);
     try {
-      await api.post('/api/fx', payload);
-      toast.success(done);
+      const r = await api.post<never>('/api/fx', payload);
+      toast.success(typeof done === 'string' ? done : done(r));
       await state.refetch();
     } catch (e) {
       toast.error('Not saved', { description: e instanceof Error ? e.message : String(e) });
@@ -63,6 +66,27 @@ export default function ForeignCurrencyPage() {
             <div className="space-y-4">
               <Card className="space-y-3 p-5">
                 <h3 className="text-sm font-semibold">Rates</h3>
+                <div className="flex flex-wrap items-center gap-3 rounded-md border px-3 py-2.5 text-sm" data-slot="fx-feed">
+                  <Switch id="fx-feed" checked={d.feed.enabled} disabled={!canEdit || !!busy} aria-label="Exchange rate feed"
+                    onCheckedChange={(on) => void post('feed', { action: 'feed', enabled: on }, on ? 'Rates will be fetched every day' : 'Exchange rate feed switched off')} />
+                  <label htmlFor="fx-feed" className="min-w-0 flex-1">
+                    <span className="font-medium">Exchange rate feed</span>
+                    <span className="block text-xs text-muted-foreground">
+                      {d.feed.currencies.length
+                        ? `Fetches each day's European Central Bank reference rate for ${d.feed.currencies.join(', ')}. A rate you type for a day is kept.`
+                        : 'Fetches each day\'s reference rate for the currencies you deal in, once a customer, vendor or document uses one.'}
+                      {d.feed.lastRunOn && !d.feed.lastError && d.feed.lastDate ? ` Last fetched on ${d.feed.lastRunOn} (rates of ${d.feed.lastDate}).` : ''}
+                    </span>
+                    {d.feed.lastError && <span className="block text-xs text-destructive" data-slot="fx-feed-error">Last fetch failed: {d.feed.lastError}</span>}
+                  </label>
+                  {canEdit && d.feed.currencies.length > 0 && (
+                    <Button size="sm" variant="outline" className="gap-1.5" disabled={!!busy} data-slot="fx-fetch"
+                      onClick={() => void post('fetch', { action: 'fetch' }, (r: { saved: { currency: string; rate: number }[]; kept: string[]; date: string | null }) =>
+                        r.saved.length ? `${r.saved.map((s) => `${s.currency} ₹${s.rate}`).join(', ')} (rates of ${r.date})` : r.kept.length ? 'Your own rates for the day were kept' : 'No new rates')}>
+                      {busy === 'fetch' ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />} Fetch now
+                    </Button>
+                  )}
+                </div>
                 {canEdit && (
                   <div className="grid gap-2 sm:grid-cols-[100px_170px_160px_auto] sm:items-end">
                     <Field label="Currency"><Input value={rate.currency} onChange={(e) => setRate({ ...rate, currency: e.target.value.toUpperCase().slice(0, 3) })} className="font-mono" /></Field>
@@ -78,7 +102,7 @@ export default function ForeignCurrencyPage() {
                   <ul className="divide-y rounded-md border text-sm">
                     {d.rates.slice(0, 12).map((r) => (
                       <li key={r.id} className="flex gap-4 px-3 py-1.5">
-                        <span className="w-12 font-mono">{r.currency}</span><span className="w-28 text-muted-foreground">{r.date}</span><span className="tabular-nums">₹{r.rate.toFixed(4)}</span>
+                        <span className="w-12 font-mono">{r.currency}</span><span className="w-28 text-muted-foreground">{r.date}</span><span className="tabular-nums">₹{r.rate.toFixed(4)}</span>{r.source && <span className="ml-auto text-xs text-muted-foreground">{r.source.replace(/^Feed: /, '')}</span>}
                       </li>
                     ))}
                   </ul>

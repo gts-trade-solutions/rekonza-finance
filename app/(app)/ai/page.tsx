@@ -16,6 +16,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { PageHeader } from '@/components/shared/page-header';
+import { PerformanceButton } from '@/components/ai/performance';
 import { AsyncPage } from '@/components/shared/async-state';
 import { CreditMeter, EnablePanel, NotEnabledPanel, UnconfiguredPanel } from '@/components/ai/panels';
 import { Workspace } from '@/components/ai/workspace';
@@ -34,7 +35,9 @@ export default function AiPage() {
       <PageHeader
         title="AI Assistant"
         description="Ask about your books in plain words. Every figure comes from the same reports the app shows, and links back to them."
-        actions={state.data && state.data.enabled && state.data.mode !== 'unconfigured' ? <CreditMeter status={state.data} /> : undefined}
+        actions={state.data && state.data.enabled && state.data.mode !== 'unconfigured' ? (
+          <div className="flex items-center gap-2"><PerformanceButton /><CreditMeter status={state.data} /></div>
+        ) : undefined}
       />
 
       <AsyncPage state={state}>

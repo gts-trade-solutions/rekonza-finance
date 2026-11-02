@@ -648,3 +648,491 @@ export function cashFlowReport(p: {
     source: { label: 'Cash flow statement', href: '/reports/cash-flow' },
   };
 }
+
+// ── Stock ────────────────────────────────────────────────────────────────────
+
+export function stockReport(p: {
+  asOf: string;
+  /** Null when this role does not see costs: quantities only. */
+  totalValue: number | null;
+  inStock: number;
+  negative: number;
+  items: { name: string; qty: number; uqc: string; value: number | null }[];
+  short: { name: string; qty: number; minLevel: number; uqc: string }[];
+}): ReportDraft {
+  const valued = p.totalValue !== null;
+  const top = valued ? [...p.items].sort((a, b) => (b.value ?? 0) - (a.value ?? 0)) : [...p.items].sort((a, b) => b.qty - a.qty);
+  return {
+    title: 'Stock on hand',
+    subtitle: asAt(p.asOf),
+    kpis: [
+      ...(valued ? [kpi({ label: 'Stock value', value: p.totalValue, unit: 'inr', note: 'At weighted average cost' })] : []),
+      kpi({ label: 'Items in stock', value: p.inStock, unit: 'count' }),
+      kpi({ label: 'Below minimum', value: p.short.length, unit: 'count', tone: p.short.length ? 'warn' : 'good' }),
+      kpi({ label: 'Negative stock', value: p.negative, unit: 'count', tone: p.negative ? 'bad' : 'good', note: p.negative ? 'More went out than came in' : undefined }),
+    ],
+    chart: valued
+      ? hbar('inr', 'Item', 'Value', topWithOther(p.items.filter((i) => (i.value ?? 0) > 0), 7, (i) => i.value ?? 0, (i) => i.name))
+      : null,
+    table: table(
+      valued
+        ? [{ label: 'Item' }, { label: 'Quantity' }, { label: 'Value', unit: 'inr' }]
+        : [{ label: 'Item' }, { label: 'Quantity' }],
+      top.map((i) => (valued ? [i.name, `${i.qty} ${i.uqc}`, i.value] : [i.name, `${i.qty} ${i.uqc}`])),
+      12,
+    ),
+    insights: [
+      ...(p.short.length
+        ? [`${p.short.length} item${p.short.length === 1 ? ' is' : 's are'} below the minimum level: ${p.short.slice(0, 3).map((s) => `${s.name} (${s.qty} of ${s.minLevel} ${s.uqc})`).join(', ')}${p.short.length > 3 ? ' and more' : ''}.`]
+        : []),
+      ...(p.negative ? [`${p.negative} item${p.negative === 1 ? ' shows' : 's show'} negative stock: a sale or issue was entered before the purchase that supplied it.`] : []),
+    ],
+    source: { label: 'Stock summary', href: '/inventory/stock' },
+  };
+}
+
+export function stockItemReport(p: {
+  asOf: string;
+  item: { name: string; sku: string | null; uqc: string; qty: number; unitCost: number | null; value: number | null; minLevel: number | null };
+  from: string;
+  inward: number;
+  outward: number;
+  moves: { date: string; kind: string; number: string; qtyIn: number; qtyOut: number; balance: number }[];
+}): ReportDraft {
+  const low = p.item.minLevel !== null && p.item.qty < p.item.minLevel;
+  return {
+    title: p.item.name,
+    subtitle: `${asAt(p.asOf)}${p.item.sku ? ` · ${p.item.sku}` : ''}`,
+    kpis: [
+      kpi({ label: 'On hand', value: p.item.qty, unit: 'count', note: p.item.uqc, tone: p.item.qty < 0 ? 'bad' : low ? 'warn' : undefined }),
+      ...(p.item.value !== null ? [kpi({ label: 'Value', value: p.item.value, unit: 'inr' })] : []),
+      ...(p.item.unitCost !== null ? [kpi({ label: 'Average cost', value: p.item.unitCost, unit: 'inr', note: `per ${p.item.uqc}` })] : []),
+      ...(p.item.minLevel !== null ? [kpi({ label: 'Minimum level', value: p.item.minLevel, unit: 'count', tone: low ? 'warn' : 'good' })] : []),
+    ],
+    chart: null,
+    table: table(
+      [{ label: 'Date' }, { label: 'What' }, { label: 'Document' }, { label: 'In', unit: 'count' }, { label: 'Out', unit: 'count' }, { label: 'Balance', unit: 'count' }],
+      [...p.moves].reverse().map((m) => [formatDay(m.date), m.kind, m.number, m.qtyIn || null, m.qtyOut || null, m.balance]),
+      12,
+    ),
+    insights: [
+      `Since ${formatDay(p.from)}, ${p.inward} ${p.item.uqc} came in and ${p.outward} went out.`,
+      ...(low ? [`It is below its minimum level of ${p.item.minLevel} ${p.item.uqc}.`] : []),
+    ],
+    source: { label: 'Stock ledger', href: '/reports/stock-ledger' },
+  };
+}
+
+export function stockAgeingReport(p: {
+  asOf: string;
+  bands: string[];
+  totals: number[];
+  rows: { name: string; value: number; oldestDays: number | null }[];
+}): ReportDraft {
+  const total = sum(p.totals);
+  const old = sum(p.totals.slice(-2));
+  const oldFrom = p.bands[p.bands.length - 2] ?? '';
+  return {
+    title: 'Stock ageing',
+    subtitle: `${asAt(p.asOf)} · oldest stock assumed sold first`,
+    kpis: [
+      kpi({ label: 'Stock value', value: total, unit: 'inr' }),
+      kpi({ label: `In the ${oldFrom} band or older`, value: old, unit: 'inr', tone: old > total * 0.25 ? 'warn' : 'good' }),
+      kpi({ label: 'Share that is old', value: shareOf(old, total), unit: 'pct' }),
+    ],
+    chart: { kind: 'bar', unit: 'inr', categoryLabel: 'Age', categories: p.bands, series: [{ name: 'Value', values: p.totals }], ordinal: true },
+    table: table(
+      [{ label: 'Item' }, { label: 'Value', unit: 'inr' }, { label: 'Oldest (days)', unit: 'count' }],
+      [...p.rows].sort((a, b) => (b.oldestDays ?? 0) - (a.oldestDays ?? 0)).map((r) => [r.name, r.value, r.oldestDays]),
+      12,
+    ),
+    insights: old ? [`${money(old)} of stock sits in the ${oldFrom} band or older; slow stock ties up cash.`] : [],
+    source: { label: 'Stock ageing', href: '/reports/stock-ageing' },
+  };
+}
+
+// ── A party's statement ──────────────────────────────────────────────────────
+
+export function statementReport(p: {
+  side: 'customer' | 'vendor';
+  party: string;
+  href: string;
+  from: string;
+  to: string;
+  opening: number;
+  charges: number;
+  payments: number;
+  closing: number;
+  lines: { date: string; kind: string; number: string; charge: number; payment: number; balance: number }[];
+}): ReportDraft {
+  const cust = p.side === 'customer';
+  return {
+    title: `Statement · ${p.party}`,
+    subtitle: between(p.from, p.to),
+    kpis: [
+      kpi({ label: 'Opening balance', value: p.opening, unit: 'inr' }),
+      kpi({ label: cust ? 'Invoiced' : 'Billed', value: p.charges, unit: 'inr' }),
+      kpi({ label: cust ? 'Received' : 'Paid', value: p.payments, unit: 'inr' }),
+      kpi({ label: cust ? 'They owe' : 'We owe', value: p.closing, unit: 'inr', tone: p.closing > 0 ? 'warn' : 'good' }),
+    ],
+    chart: null,
+    table: table(
+      [{ label: 'Date' }, { label: 'What' }, { label: 'Number' }, { label: cust ? 'Charged' : 'Billed', unit: 'inr' }, { label: cust ? 'Received' : 'Paid', unit: 'inr' }, { label: 'Balance', unit: 'inr' }],
+      [...p.lines].reverse().map((l) => [formatDay(l.date), l.kind, l.number, l.charge || null, l.payment || null, l.balance]),
+      15,
+    ),
+    insights: [],
+    source: { label: cust ? 'Customer statement' : 'Supplier statement', href: p.href },
+  };
+}
+
+// ── Payments ─────────────────────────────────────────────────────────────────
+
+export function paymentsReport(p: {
+  direction: 'received' | 'made';
+  from: string;
+  to: string;
+  total: number;
+  count: number;
+  byMode: { mode: string; amount: number }[];
+  rows: { number: string; date: string; party: string; mode: string; amount: number }[];
+}): ReportDraft {
+  const recv = p.direction === 'received';
+  return {
+    title: recv ? 'Payments received' : 'Payments made',
+    subtitle: between(p.from, p.to),
+    kpis: [
+      kpi({ label: recv ? 'Received' : 'Paid out', value: p.total, unit: 'inr' }),
+      kpi({ label: 'Payments', value: p.count, unit: 'count' }),
+      kpi({ label: 'Average', value: p.count ? Math.round(p.total / p.count) : null, unit: 'inr' }),
+    ],
+    chart: p.byMode.length > 1
+      ? { kind: 'donut', unit: 'inr', categoryLabel: 'Mode', categories: p.byMode.map((m) => m.mode), series: [{ name: 'Amount', values: p.byMode.map((m) => m.amount) }] }
+      : null,
+    table: table(
+      [{ label: 'Number' }, { label: 'Date' }, { label: recv ? 'From' : 'To' }, { label: 'Mode' }, { label: 'Amount', unit: 'inr' }],
+      p.rows.map((r) => [r.number, formatDay(r.date), r.party, r.mode, r.amount]),
+      12,
+    ),
+    insights: [],
+    source: recv ? { label: 'Payments received', href: '/reports/payments-received' } : { label: 'Payments made', href: '/reports/payments-made' },
+  };
+}
+
+// ── TDS ──────────────────────────────────────────────────────────────────────
+
+export function tdsReport(p: {
+  label: string;
+  returnDue: string;
+  deducted: number;
+  deposited: number;
+  bySection: { section: string; tax: number }[];
+  months: { month: string; deducted: number; deposited: number; due: string; status: string }[];
+  issues: string[];
+}): ReportDraft {
+  const short = p.deducted - p.deposited;
+  return {
+    title: 'TDS deducted and deposited',
+    subtitle: `${p.label} · return due ${formatDay(p.returnDue)}`,
+    kpis: [
+      kpi({ label: 'Deducted', value: p.deducted, unit: 'inr' }),
+      kpi({ label: 'Deposited', value: p.deposited, unit: 'inr' }),
+      kpi({ label: 'Still to deposit', value: Math.max(0, short), unit: 'inr', tone: short > 0 ? 'warn' : 'good' }),
+    ],
+    chart: hbar('inr', 'Section', 'Tax deducted', p.bySection.map((s) => ({ name: s.section, value: s.tax }))),
+    table: table(
+      [{ label: 'Month' }, { label: 'Deducted', unit: 'inr' }, { label: 'Deposited', unit: 'inr' }, { label: 'Due by' }, { label: 'Status' }],
+      p.months.map((m) => [monthLabel(m.month), m.deducted, m.deposited, formatDay(m.due), m.status]),
+      6,
+    ),
+    insights: p.issues.slice(0, 3),
+    source: { label: 'TDS and TCS', href: '/gst/tds-tcs' },
+  };
+}
+
+// ── What is due to the government ────────────────────────────────────────────
+
+export function complianceReport(p: {
+  from: string;
+  to: string;
+  rows: { title: string; period: string; due: string; status: string; daysLeft: number }[];
+}): ReportDraft {
+  const count = (s: string) => p.rows.filter((r) => r.status === s).length;
+  const overdue = count('overdue');
+  return {
+    title: 'Compliance calendar',
+    subtitle: between(p.from, p.to),
+    kpis: [
+      kpi({ label: 'Overdue', value: overdue, unit: 'count', tone: overdue ? 'bad' : 'good' }),
+      kpi({ label: 'Due within a week', value: count('due_soon'), unit: 'count', tone: count('due_soon') ? 'warn' : undefined }),
+      kpi({ label: 'Done', value: count('done'), unit: 'count' }),
+    ],
+    chart: null,
+    table: table(
+      [{ label: 'Return or payment' }, { label: 'For' }, { label: 'Due' }, { label: 'Status' }],
+      p.rows.map((r) => [
+        r.title,
+        r.period,
+        formatDay(r.due),
+        r.status === 'due_soon' ? `Due in ${r.daysLeft} days` : r.status === 'overdue' ? `Overdue by ${-r.daysLeft} days` : r.status === 'done' ? 'Done' : 'Upcoming',
+      ]),
+      15,
+    ),
+    insights: overdue ? [`${overdue} filing${overdue === 1 ? ' is' : 's are'} past the due date; late fees and interest run until filed.`] : [],
+    source: { label: 'Compliance calendar', href: '/gst/compliance-calendar' },
+  };
+}
+
+// ── Bank reconciliation ──────────────────────────────────────────────────────
+
+export function reconciliationReport(p: {
+  accounts: { name: string; unmatched: number; deposits: number; withdrawals: number; oldest: string | null; lastLine: string | null }[];
+}): ReportDraft {
+  const lines = sum(p.accounts.map((a) => a.unmatched));
+  return {
+    title: 'Bank reconciliation',
+    subtitle: 'Statement lines not yet matched to the books',
+    kpis: [
+      kpi({ label: 'Unmatched lines', value: lines, unit: 'count', tone: lines ? 'warn' : 'good' }),
+      kpi({ label: 'Money in, unmatched', value: sum(p.accounts.map((a) => a.deposits)), unit: 'inr' }),
+      kpi({ label: 'Money out, unmatched', value: sum(p.accounts.map((a) => a.withdrawals)), unit: 'inr' }),
+    ],
+    chart: null,
+    table: table(
+      [{ label: 'Account' }, { label: 'Unmatched', unit: 'count' }, { label: 'In', unit: 'inr' }, { label: 'Out', unit: 'inr' }, { label: 'Oldest' }, { label: 'Statement to' }],
+      p.accounts.map((a) => [a.name, a.unmatched, a.deposits, a.withdrawals, a.oldest ? formatDay(a.oldest) : null, a.lastLine ? formatDay(a.lastLine) : null]),
+      10,
+    ),
+    insights: [],
+    source: { label: 'Reconcile', href: '/banking/reconcile' },
+  };
+}
+
+// ── Projects ─────────────────────────────────────────────────────────────────
+
+export function projectsReport(p: {
+  showCosts: boolean;
+  rows: { name: string; customer: string; status: string; hours: number; unbilledHours: number; billed: number; cost: number | null; profit: number | null }[];
+}): ReportDraft {
+  const billed = sum(p.rows.map((r) => r.billed));
+  const profit = p.showCosts ? sum(p.rows.map((r) => r.profit ?? 0)) : null;
+  const unbilled = sum(p.rows.map((r) => r.unbilledHours));
+  return {
+    title: 'Projects',
+    subtitle: `${p.rows.length} project${p.rows.length === 1 ? '' : 's'}`,
+    kpis: [
+      kpi({ label: 'Billed', value: billed, unit: 'inr', note: 'Before tax' }),
+      kpi({ label: 'Hours logged', value: sum(p.rows.map((r) => r.hours)), unit: 'count' }),
+      kpi({ label: 'Hours not yet billed', value: unbilled, unit: 'count', tone: unbilled ? 'warn' : 'good' }),
+      ...(profit !== null ? [kpi({ label: 'Profit', value: profit, unit: 'inr', tone: profit >= 0 ? 'good' : 'bad' })] : []),
+    ],
+    chart: hbar('inr', 'Project', 'Billed', p.rows.filter((r) => r.billed > 0).slice(0, 8).map((r) => ({ name: r.name, value: r.billed }))),
+    table: table(
+      p.showCosts
+        ? [{ label: 'Project' }, { label: 'Customer' }, { label: 'Status' }, { label: 'Hours', unit: 'count' }, { label: 'Unbilled hours', unit: 'count' }, { label: 'Billed', unit: 'inr' }, { label: 'Cost', unit: 'inr' }, { label: 'Profit', unit: 'inr' }]
+        : [{ label: 'Project' }, { label: 'Customer' }, { label: 'Status' }, { label: 'Hours', unit: 'count' }, { label: 'Unbilled hours', unit: 'count' }, { label: 'Billed', unit: 'inr' }],
+      p.rows.map((r) => (p.showCosts
+        ? [r.name, r.customer, r.status, r.hours, r.unbilledHours, r.billed, r.cost, r.profit]
+        : [r.name, r.customer, r.status, r.hours, r.unbilledHours, r.billed])),
+      12,
+    ),
+    insights: unbilled ? [`${unbilled} logged hour${unbilled === 1 ? ' has' : 's have'} not been invoiced yet.`] : [],
+    source: { label: 'Projects', href: '/projects' },
+  };
+}
+
+// ── Payroll ──────────────────────────────────────────────────────────────────
+
+export function payrollReport(p: {
+  runs: { month: string; status: string; employees: number; gross: number; net: number }[];
+  latest: { month: string; gross: number; net: number; withheld: number; employees: number } | null;
+}): ReportDraft {
+  const ordered = [...p.runs].sort((a, b) => a.month.localeCompare(b.month)).slice(-12);
+  return {
+    title: 'Payroll',
+    subtitle: p.latest ? `Latest run: ${monthLabel(p.latest.month)}` : 'No payroll runs yet',
+    kpis: p.latest
+      ? [
+          kpi({ label: 'Gross pay', value: p.latest.gross, unit: 'inr' }),
+          kpi({ label: 'Net pay', value: p.latest.net, unit: 'inr' }),
+          kpi({ label: 'Employees', value: p.latest.employees, unit: 'count' }),
+          kpi({ label: 'PF, ESI, PT and TDS', value: p.latest.withheld, unit: 'inr', note: 'Withheld from pay, to deposit' }),
+        ]
+      : [],
+    chart: ordered.length > 1
+      ? { kind: 'line', unit: 'inr', categoryLabel: 'Month', categories: ordered.map((r) => monthLabel(r.month)), series: [{ name: 'Gross', values: ordered.map((r) => r.gross) }, { name: 'Net', values: ordered.map((r) => r.net) }] }
+      : null,
+    table: table(
+      [{ label: 'Month' }, { label: 'Status' }, { label: 'Employees', unit: 'count' }, { label: 'Gross', unit: 'inr' }, { label: 'Net', unit: 'inr' }],
+      p.runs.map((r) => [monthLabel(r.month), r.status, r.employees, r.gross, r.net]),
+      12,
+    ),
+    insights: [],
+    source: { label: 'Payroll runs', href: '/payroll/runs' },
+  };
+}
+
+// ── Fixed assets ─────────────────────────────────────────────────────────────
+
+export function fixedAssetsReport(p: {
+  asOf: string;
+  cost: number;
+  accumulated: number;
+  net: number;
+  inUse: number;
+  cwip: number;
+  byClass: { name: string; count: number; cost: number; net: number }[];
+  flags: string[];
+}): ReportDraft {
+  return {
+    title: 'Fixed assets',
+    subtitle: asAt(p.asOf),
+    kpis: [
+      kpi({ label: 'Cost', value: p.cost, unit: 'inr' }),
+      kpi({ label: 'Depreciation to date', value: p.accumulated, unit: 'inr' }),
+      kpi({ label: 'Book value', value: p.net, unit: 'inr' }),
+      kpi({ label: 'In use', value: p.inUse, unit: 'count', note: p.cwip ? `${p.cwip} not yet put to use` : undefined }),
+    ],
+    chart: hbar('inr', 'Class', 'Book value', p.byClass.filter((c) => c.net > 0).map((c) => ({ name: c.name, value: c.net }))),
+    table: table(
+      [{ label: 'Class' }, { label: 'Assets', unit: 'count' }, { label: 'Cost', unit: 'inr' }, { label: 'Book value', unit: 'inr' }],
+      p.byClass.map((c) => [c.name, c.count, c.cost, c.net]),
+      12,
+    ),
+    insights: p.flags.slice(0, 3),
+    source: { label: 'Fixed asset register', href: '/accountant/fixed-assets' },
+  };
+}
+
+// ── Budgets ──────────────────────────────────────────────────────────────────
+
+export function budgetReport(p: {
+  fy: string;
+  asOf: string;
+  elapsedPct: number;
+  budget: number;
+  actual: number;
+  rows: { name: string; type: string; budget: number; actual: number; pct: number }[];
+}): ReportDraft {
+  // Spending ahead of the year's pace is the warning; so is income behind it.
+  const off = p.rows.filter((r) => (r.type === 'income' ? r.pct < p.elapsedPct - 10 : r.pct > p.elapsedPct + 10));
+  const top = p.rows.slice(0, 8);
+  return {
+    title: `Budget vs actual · FY ${p.fy}`,
+    subtitle: `To ${formatDay(p.asOf)} · ${Math.round(p.elapsedPct)}% of the year gone`,
+    kpis: [
+      kpi({ label: 'Budget for the year', value: p.budget, unit: 'inr' }),
+      kpi({ label: 'Actual so far', value: p.actual, unit: 'inr' }),
+      kpi({ label: 'Used', value: shareOf(p.actual, p.budget), unit: 'pct' }),
+      kpi({ label: 'Off pace', value: off.length, unit: 'count', tone: off.length ? 'warn' : 'good' }),
+    ],
+    chart: top.length > 1
+      ? { kind: 'hbar', unit: 'inr', categoryLabel: 'Account', categories: top.map((r) => r.name), series: [{ name: 'Budget', values: top.map((r) => r.budget) }, { name: 'Actual', values: top.map((r) => r.actual) }] }
+      : null,
+    table: table(
+      [{ label: 'Account' }, { label: 'Budget', unit: 'inr' }, { label: 'Actual', unit: 'inr' }, { label: 'Used', unit: 'pct' }],
+      p.rows.map((r) => [r.name, r.budget, r.actual, r.pct]),
+      15,
+    ),
+    insights: off.slice(0, 3).map((r) => `${r.name} is at ${Math.round(r.pct)}% of its budget with ${Math.round(p.elapsedPct)}% of the year gone.`),
+    source: { label: 'Budgets', href: '/accountant/budgets' },
+  };
+}
+
+// ── Open quotes and orders ───────────────────────────────────────────────────
+
+export function ordersReport(p: {
+  asOf: string;
+  groups: { label: string; count: number; value: number; overdue: number; href: string }[];
+  rows: { kind: string; number: string; party: string; date: string; value: number; overdue: boolean }[];
+}): ReportDraft {
+  return {
+    title: 'Open quotes and orders',
+    subtitle: asAt(p.asOf),
+    kpis: p.groups.map((g) =>
+      kpi({ label: g.label, value: g.value, unit: 'inr', note: `${g.count} open${g.overdue ? `, ${g.overdue} late` : ''}`, tone: g.overdue ? 'warn' : undefined }),
+    ),
+    chart: null,
+    table: table(
+      [{ label: 'Kind' }, { label: 'Number' }, { label: 'Party' }, { label: 'Date' }, { label: 'Open value', unit: 'inr' }, { label: 'Late' }],
+      p.rows.map((r) => [r.kind, r.number, r.party, formatDay(r.date), r.value, r.overdue ? 'Yes' : '']),
+      15,
+    ),
+    insights: [],
+    source: p.groups.length === 1 ? { label: p.groups[0].label, href: p.groups[0].href } : { label: 'Pending sales orders', href: '/reports/pending-sales-orders' },
+  };
+}
+
+// ── Collections ──────────────────────────────────────────────────────────────
+
+export function collectionsReport(p: {
+  today: string;
+  overdue: number;
+  dueToday: number;
+  promisedThisWeek: number;
+  broken: number;
+  rows: { name: string; overdue: number; oldestDays: number; promise: string | null; next: string | null }[];
+}): ReportDraft {
+  return {
+    title: 'Collections',
+    subtitle: asAt(p.today),
+    kpis: [
+      kpi({ label: 'Overdue', value: p.overdue, unit: 'inr', tone: p.overdue ? 'warn' : 'good' }),
+      kpi({ label: 'To chase today', value: p.dueToday, unit: 'count' }),
+      kpi({ label: 'Promised this week', value: p.promisedThisWeek, unit: 'inr' }),
+      kpi({ label: 'Broken promises', value: p.broken, unit: 'count', tone: p.broken ? 'bad' : 'good' }),
+    ],
+    chart: hbar('inr', 'Customer', 'Overdue', p.rows.slice(0, 8).map((r) => ({ name: r.name, value: r.overdue }))),
+    table: table(
+      [{ label: 'Customer' }, { label: 'Overdue', unit: 'inr' }, { label: 'Oldest (days)', unit: 'count' }, { label: 'Promise' }, { label: 'Next follow-up' }],
+      p.rows.map((r) => [r.name, r.overdue, r.oldestDays, r.promise, r.next ? formatDay(r.next) : null]),
+      12,
+    ),
+    insights: p.broken ? [`${p.broken} customer${p.broken === 1 ? '' : 's'} missed the date they promised to pay.`] : [],
+    source: { label: 'Collections', href: '/sales/collections' },
+  };
+}
+
+// ── Pending payments, both ways ──────────────────────────────────────────────
+
+export function pendingPaymentsReport(p: {
+  today: string;
+  receive: { total: number; overdue: number; next7: number; count: number } | null;
+  pay: { total: number; overdue: number; next7: number; count: number } | null;
+  rows: { side: 'To receive' | 'To pay'; number: string; party: string; due: string; daysOverdue: number; balance: number }[];
+}): ReportDraft {
+  const r = p.receive;
+  const y = p.pay;
+  const later = (s: NonNullable<typeof r>) => Math.max(0, s.total - s.overdue - s.next7);
+  return {
+    title: 'Pending payments',
+    subtitle: asAt(p.today),
+    kpis: [
+      ...(r ? [kpi({ label: 'To receive', value: r.total, unit: 'inr', note: `${r.count} invoice${r.count === 1 ? '' : 's'}` })] : []),
+      ...(y ? [kpi({ label: 'To pay', value: y.total, unit: 'inr', note: `${y.count} bill${y.count === 1 ? '' : 's'}` })] : []),
+      ...(r ? [kpi({ label: 'Overdue from customers', value: r.overdue, unit: 'inr', tone: r.overdue ? 'warn' : 'good' })] : []),
+      ...(y ? [kpi({ label: 'Overdue to suppliers', value: y.overdue, unit: 'inr', tone: y.overdue ? 'bad' : 'good' })] : []),
+    ],
+    chart: {
+      kind: 'bar',
+      unit: 'inr',
+      categoryLabel: 'When it falls due',
+      categories: ['Overdue', 'Next 7 days', 'Later'],
+      series: [
+        ...(r ? [{ name: 'To receive', values: [r.overdue, r.next7, later(r)] }] : []),
+        ...(y ? [{ name: 'To pay', values: [y.overdue, y.next7, later(y)] }] : []),
+      ],
+    },
+    table: table(
+      [{ label: 'Type' }, { label: 'Document' }, { label: 'Party' }, { label: 'Due' }, { label: 'Days overdue', unit: 'count' }, { label: 'Pending', unit: 'inr' }],
+      p.rows.map((x) => [x.side, x.number, x.party, formatDay(x.due), x.daysOverdue > 0 ? x.daysOverdue : null, x.balance]),
+      15,
+    ),
+    insights: [
+      ...(r && y ? [`${money(r.total - y.total >= 0 ? r.total - y.total : y.total - r.total)} more ${r.total >= y.total ? 'to come in than to go out' : 'to go out than to come in'}.`] : []),
+      ...(r?.overdue ? [`${money(r.overdue)} is overdue from customers.`] : []),
+      ...(y?.overdue ? [`${money(y.overdue)} is overdue to suppliers.`] : []),
+    ],
+    source: r ? { label: 'Receivables ageing', href: '/reports/ar-ageing' } : { label: 'Payables ageing', href: '/reports/ap-ageing' },
+  };
+}

@@ -149,6 +149,7 @@ export function useAiChat(availableMc: number, callbacks: ChatCallbacks = {}) {
                     reports: e.reports ?? [],
                     status: e.status,
                     chargedMc: e.chargedMc,
+                    fromCache: !!e.fromCache,
                     createdAt: new Date().toISOString(),
                   },
                 ]);

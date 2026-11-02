@@ -39,11 +39,25 @@ import type { AiReport } from '../../ai/reports';
 import { detectFlags } from './insights';
 import { HIDDEN_AREA_WORDS } from './prompt';
 import {
-  accountBalanceReport, ageingReport, balanceSheetReport, cashFlowReport, cashPositionReport, documentsReport,
-  expensesReport, gstReport, profitAndLossReport, ratiosReport, reportKey, safely, salesReport, trialBalanceReport,
+  accountBalanceReport, ageingReport, balanceSheetReport, budgetReport, cashFlowReport, cashPositionReport, collectionsReport,
+  complianceReport, documentsReport, expensesReport, fixedAssetsReport, gstReport, ordersReport, paymentsReport, payrollReport, pendingPaymentsReport,
+  profitAndLossReport, projectsReport, ratiosReport, reconciliationReport, reportKey, safely, salesReport, statementReport,
+  stockAgeingReport, stockItemReport, stockReport, tdsReport, trialBalanceReport,
   type ReportDraft,
 } from './reports';
-import { fyStartOf, previousMonth } from './time';
+import { formatDay, fyStartOf, previousMonth } from './time';
+import { stockPosition } from '../reports/stock';
+import { AGE_BUCKETS, stockAgeing, stockLedger } from '../reports/stock-movement';
+import { partyStatement, type StatementSide } from '../reports/party-statement';
+import { pendingPurchaseOrders, pendingSalesOrders } from '../reports/orders';
+import { budgetVsActual } from '../reports/budgets';
+import { stockAlerts } from '../services/stock-alerts';
+import { collectionsWorkbench } from '../services/collections';
+import { projectFigures } from '../services/projects';
+import { assetRegister } from '../services/fixed-assets';
+import { listRuns as listPayrollRuns } from '../payroll/payroll';
+import { complianceCalendar } from '../tax/compliance-calendar';
+import { quarterRange, quarterReturn, type Quarter } from '../tax/tds-returns';
 import type { ToolCall, ToolSpec } from './types';
 
 export interface ToolContext {
@@ -75,7 +89,7 @@ export interface ToolRun {
 /** Sales and staff roles do not see purchase costs, margins or the ledger. */
 export const seesCosts = (role: RoleName): boolean => role === 'admin' || role === 'accountant' || role === 'viewer';
 
-type Gate = 'costs' | 'sales' | 'purchases' | 'cash' | 'gst' | 'any';
+type Gate = 'costs' | 'sales' | 'purchases' | 'parties' | 'cash' | 'gst' | 'inventory' | 'projects' | 'payroll' | 'any';
 
 function allows(gate: Gate, role: RoleName): boolean {
   switch (gate) {
@@ -89,6 +103,15 @@ function allows(gate: Gate, role: RoleName): boolean {
       return hasPermission(role, 'banking', 'view') || (seesCosts(role) && hasPermission(role, 'reports', 'view'));
     case 'gst':
       return hasPermission(role, 'gst', 'view');
+    // Customers or suppliers: the tool itself keeps to the side the role can see.
+    case 'parties':
+      return hasPermission(role, 'sales', 'view') || hasPermission(role, 'purchases', 'view');
+    case 'inventory':
+      return hasPermission(role, 'inventory', 'view');
+    case 'projects':
+      return hasPermission(role, 'projects', 'view');
+    case 'payroll':
+      return hasPermission(role, 'payroll', 'view');
     default:
       return true;
   }
@@ -161,7 +184,7 @@ function period(ctx: ToolContext, from?: string, to?: string): { from: string; t
 
 // ── Finding an account by the words someone used ────────────────────────────
 
-interface AccountRow {
+export interface AccountRow {
   id: number;
   code: string;
   name: string;
@@ -181,7 +204,17 @@ async function resolveAccount(ex: Executor, orgId: number, query: string): Promi
     ex.selectFrom('accounts').select(['id', 'code', 'name', 'type']).where('org_id', '=', orgId).where('is_active', '=', 1).execute(),
     ex.selectFrom('bank_accounts').select(['name', 'bank_name', 'ledger_account_id']).where('org_id', '=', orgId).execute(),
   ]);
+  return pickAccount(accounts as AccountRow[], banks, query);
+}
 
+export interface BankName {
+  name: string;
+  bank_name: string | null;
+  ledger_account_id: number;
+}
+
+/** The scoring behind resolveAccount, on lists already read — the online demo reads them from its recording. */
+export function pickAccount(accounts: AccountRow[], banks: BankName[], query: string): { match: AccountRow | null; candidates: AccountRow[] } {
   // A bank account's own name ("HDFC Bank – Current") says which account it
   // is. The bank it is held at ("HDFC Bank") does not — a current account and
   // a credit card can share one — so that match counts for less.
@@ -220,6 +253,65 @@ async function resolveAccount(ex: Executor, orgId: number, query: string): Promi
   const clear = !!best && best.score >= 60 && (!scored[1] || scored[1].score < best.score);
   return { match: clear ? best.a : null, candidates: scored.slice(0, 6).map((x) => x.a) };
 }
+
+// ── Finding a customer or supplier by name ───────────────────────────────────
+
+/** The sides of the business this role can see: customers, suppliers, or both. */
+function sidesFor(role: RoleName): StatementSide[] {
+  const out: StatementSide[] = [];
+  if (hasPermission(role, 'sales', 'view')) out.push('customer');
+  if (hasPermission(role, 'purchases', 'view')) out.push('vendor');
+  return out;
+}
+
+interface ContactRow {
+  id: number;
+  name: string;
+  kind: 'customer' | 'vendor' | 'both';
+}
+
+/**
+ * The contact a name means, among those on the sides this role can see. An
+ * exact name wins; one partial match is taken; more than one is offered back
+ * as candidates, never guessed between.
+ */
+async function findContact(ex: Executor, orgId: number, query: string, sides: StatementSide[]): Promise<{ match: ContactRow | null; candidates: ContactRow[] }> {
+  if (!sides.length) return { match: null, candidates: [] };
+  const kinds: ('customer' | 'vendor' | 'both')[] = ['both', ...sides];
+  const rows = await ex
+    .selectFrom('contacts')
+    .select(['id', 'display_name', 'legal_name', 'kind'])
+    .where('org_id', '=', orgId)
+    .where('kind', 'in', kinds)
+    .where((eb) => eb.or([eb('display_name', 'like', `%${query}%`), eb('legal_name', 'like', `%${query}%`)]))
+    .orderBy('is_archived')
+    .orderBy('display_name')
+    .limit(10)
+    .execute();
+  const list = rows.map((r) => ({ id: r.id, name: r.display_name, kind: r.kind, legal: r.legal_name }));
+  const q = norm(query);
+  const exact = list.filter((r) => norm(r.name) === q || (r.legal && norm(r.legal) === q));
+  const pick = exact.length === 1 ? exact[0] : list.length === 1 ? list[0] : null;
+  const strip = ({ id, name, kind }: (typeof list)[number]): ContactRow => ({ id, name, kind });
+  return { match: pick ? strip(pick) : null, candidates: list.slice(0, 6).map(strip) };
+}
+
+const notFoundContact = (query: string, candidates: ContactRow[]) => ({
+  found: false,
+  query,
+  candidates: candidates.map((c) => ({ name: c.name, is: c.kind === 'both' ? 'customer and supplier' : c.kind === 'vendor' ? 'supplier' : 'customer' })),
+  hint: candidates.length ? 'More than one contact matches. Call again with the full name, or ask which one.' : 'No customer or supplier matches that name.',
+});
+
+/** For a name with no balance: is that a settled account, or nobody by that name? */
+async function nobodyOrSettled(ctx: ToolContext, name: string, side: StatementSide): Promise<string> {
+  const found = await findContact(ctx.ex, ctx.orgId, name, [side]);
+  const who = found.match?.name ?? found.candidates[0]?.name;
+  if (who) return `${who} has no balance outstanding: nothing is owed either way.`;
+  return `No ${side === 'customer' ? 'customer' : 'supplier'} matches "${name}".`;
+}
+
+const shiftDays = (iso: string, days: number): string => new Date(Date.parse(`${iso}T00:00:00Z`) + days * 86_400_000).toISOString().slice(0, 10);
 
 // ── The tools ────────────────────────────────────────────────────────────────
 
@@ -601,7 +693,9 @@ const TOOLS: AnyTool[] = [
             by_days_overdue: buckets(r.buckets),
           })),
           open_invoices: openInvoices,
-          note: a.customer && asOf !== ctx.today ? 'Open invoices are listed as they stand today.' : undefined,
+          note: a.customer && !rows.length
+            ? await nobodyOrSettled(ctx, a.customer, 'customer')
+            : a.customer && asOf !== ctx.today ? 'Open invoices are listed as they stand today.' : undefined,
         },
         sources: [
           { label: 'Receivables ageing', href: '/reports/ar-ageing' },
@@ -702,6 +796,7 @@ const TOOLS: AnyTool[] = [
             };
           }),
           open_bills: openBills,
+          note: a.vendor && !rows.length ? await nobodyOrSettled(ctx, a.vendor, 'vendor') : undefined,
         },
         sources: [
           { label: 'Payables ageing', href: '/reports/ap-ageing' },
@@ -1177,6 +1272,932 @@ const TOOLS: AnyTool[] = [
       };
     },
   }),
+
+  // ── Beyond the ledger: stock, parties, projects, payroll, compliance ────────
+
+  define({
+    name: 'get_stock',
+    label: 'Counting the stock',
+    description:
+      'Stock on hand: the quantity of each item and, for roles that see costs, its value at weighted average cost; items below their minimum level; negative stock. For one named item, its quantity, average cost, minimum level and this year\'s movements. With view "ageing", how long the stock has been on hand.',
+    parameters: params({
+      item: P.text('Part of an item name, or its SKU, to see that item in detail.'),
+      view: P.oneOf(['summary', 'ageing'], 'summary (the default) or ageing.'),
+      as_of: P.day('The date, YYYY-MM-DD. Defaults to today.'),
+    }),
+    schema: z.object({ item: z.string().trim().min(1).max(100).optional(), view: z.enum(['summary', 'ageing']).optional(), as_of: Day.optional() }),
+    gate: 'inventory',
+    run: async (ctx, a) => {
+      const asOf = a.as_of ?? ctx.today;
+      const costs = seesCosts(ctx.role);
+
+      if (a.view === 'ageing' && !a.item) {
+        if (!costs) return { data: { error: 'Stock ageing is valued at cost, which this role does not see.' } };
+        const ag = await stockAgeing(ctx.ex, ctx.orgId, asOf);
+        const total = ag.totalsPaise.reduce((t, v) => t + v, 0);
+        return {
+          data: {
+            as_of: asOf,
+            method: 'FIFO: the oldest stock is assumed to have gone first',
+            stock_value: amt(total),
+            by_age: Object.fromEntries(AGE_BUCKETS.map((b, i) => [b, amt(ag.totalsPaise[i] ?? 0)])),
+            oldest_items: [...ag.rows]
+              .sort((x, y) => (y.oldestDays ?? 0) - (x.oldestDays ?? 0))
+              .slice(0, 10)
+              .map((r) => ({ item: r.name, quantity: `${r.qty} ${r.uqc}`, value: amt(r.valuePaise), oldest_days: r.oldestDays })),
+          },
+          sources: [{ label: 'Stock ageing', href: '/reports/stock-ageing' }],
+          report: safely(() =>
+            stockAgeingReport({
+              asOf,
+              bands: [...AGE_BUCKETS],
+              totals: ag.totalsPaise,
+              rows: ag.rows.map((r) => ({ name: r.name, value: r.valuePaise, oldestDays: r.oldestDays })),
+            }),
+          ),
+        };
+      }
+
+      const pos = await stockPosition(ctx.ex, ctx.orgId, asOf);
+      const lines = pos.lines.filter((l) => !l.isArchived);
+
+      if (a.item) {
+        const q = a.item.toLowerCase();
+        const exact = lines.find((l) => l.name.toLowerCase() === q || (l.sku ?? '').toLowerCase() === q);
+        const hits = exact ? [exact] : lines.filter((l) => l.name.toLowerCase().includes(q) || (l.sku ?? '').toLowerCase().includes(q));
+        if (hits.length !== 1) {
+          return {
+            data: {
+              found: false,
+              query: a.item,
+              candidates: hits.slice(0, 8).map((l) => ({ name: l.name, sku: l.sku })),
+              hint: hits.length ? 'More than one item matches. Call again with the full name or SKU, or ask which one.' : 'No stocked item matches. Ask for the stock summary to see every item.',
+            },
+          };
+        }
+        const line = hits[0];
+        const from = fyStartOf(asOf);
+        const [led, item] = await Promise.all([
+          stockLedger(ctx.ex, ctx.orgId, Number(line.itemId), from, asOf),
+          ctx.ex.selectFrom('items').select(['min_level', 'reorder_level']).where('id', '=', Number(line.itemId)).executeTakeFirst(),
+        ]);
+        const minRaw = item?.min_level ?? item?.reorder_level ?? null;
+        const minLevel = minRaw === null ? null : Number(minRaw);
+        const moves = (led?.lines ?? []).map((m) => ({ date: day(m.date), kind: m.kind, number: m.number, qtyIn: m.qtyIn, qtyOut: m.qtyOut, balance: m.balanceQty }));
+        return {
+          data: {
+            found: true,
+            as_of: asOf,
+            item: line.name,
+            sku: line.sku ?? undefined,
+            on_hand: `${line.qty} ${line.uqc}`,
+            average_cost: costs ? amt(line.unitCostPaise) : undefined,
+            value: costs ? amt(line.valuePaise) : undefined,
+            minimum_level: minLevel ?? undefined,
+            below_minimum: minLevel !== null ? line.qty < minLevel : undefined,
+            this_year: { from, came_in: led?.inQty ?? 0, went_out: led?.outQty ?? 0 },
+            latest_movements: moves.slice(-8).reverse().map((m) => ({ date: m.date, what: m.kind, document: m.number, in: m.qtyIn || undefined, out: m.qtyOut || undefined, balance: m.balance })),
+          },
+          sources: [{ label: `Stock ledger · ${line.name}`, href: '/reports/stock-ledger' }],
+          report: safely(() =>
+            stockItemReport({
+              asOf,
+              item: {
+                name: line.name, sku: line.sku, uqc: line.uqc, qty: line.qty,
+                unitCost: costs ? line.unitCostPaise : null, value: costs ? line.valuePaise : null, minLevel,
+              },
+              from,
+              inward: led?.inQty ?? 0,
+              outward: led?.outQty ?? 0,
+              moves,
+            }),
+          ),
+        };
+      }
+
+      const alerts = await stockAlerts(ctx.ex, ctx.orgId, asOf);
+      const inStock = lines.filter((l) => l.qty > 0);
+      const negative = lines.filter((l) => l.qty < 0);
+      const ranked = costs ? [...inStock].sort((x, y) => y.valuePaise - x.valuePaise) : [...inStock].sort((x, y) => y.qty - x.qty);
+      return {
+        data: {
+          as_of: asOf,
+          stock_value: costs ? amt(pos.totalValuePaise) : undefined,
+          valued_at: costs ? 'weighted average cost' : undefined,
+          items_in_stock: inStock.length,
+          items_out_of_stock: lines.filter((l) => l.qty === 0).length,
+          below_minimum_level: alerts.short.map((s) => ({ item: s.name, on_hand: `${s.qty} ${s.uqc}`, minimum: s.minLevel })),
+          negative_stock: negative.slice(0, 10).map((l) => ({ item: l.name, on_hand: `${l.qty} ${l.uqc}` })),
+          batches_expired: alerts.expired.length || undefined,
+          batches_expiring_within_30_days: alerts.expiring.length || undefined,
+          [costs ? 'largest_by_value' : 'largest_by_quantity']: ranked.slice(0, 10).map((l) => ({
+            item: l.name,
+            on_hand: `${l.qty} ${l.uqc}`,
+            value: costs ? amt(l.valuePaise) : undefined,
+          })),
+        },
+        sources: [{ label: 'Stock summary', href: '/inventory/stock' }],
+        report: safely(() =>
+          stockReport({
+            asOf,
+            totalValue: costs ? pos.totalValuePaise : null,
+            inStock: inStock.length,
+            negative: negative.length,
+            items: inStock.map((l) => ({ name: l.name, qty: l.qty, uqc: l.uqc, value: costs ? l.valuePaise : null })),
+            short: alerts.short,
+          }),
+        ),
+      };
+    },
+  }),
+
+  define({
+    name: 'get_party_statement',
+    label: 'Preparing the statement',
+    description:
+      "A customer's or supplier's statement of account for a period: the opening balance, every invoice, bill, payment, credit note and journal in date order with the running balance, and the closing balance. Use for \"statement for X\", \"how did X's balance come about\", \"what have we invoiced and received from X this year\".",
+    parameters: params(
+      {
+        party: P.text('Part of the customer or supplier name.'),
+        side: P.oneOf(['customer', 'vendor'], 'Customer or supplier. Needed only for a contact that is both.'),
+        from: P.day('Start date, YYYY-MM-DD. Defaults to the start of the financial year.'),
+        to: P.day('End date, YYYY-MM-DD. Defaults to today.'),
+      },
+      ['party'],
+    ),
+    schema: z.object({ party: z.string().trim().min(1).max(100), side: z.enum(['customer', 'vendor']).optional(), from: Day.optional(), to: Day.optional() }),
+    gate: 'parties',
+    run: async (ctx, a) => {
+      const sides = sidesFor(ctx.role);
+      const found = await findContact(ctx.ex, ctx.orgId, a.party, sides);
+      if (!found.match) return { data: notFoundContact(a.party, found.candidates) };
+      const c = found.match;
+      const side: StatementSide = a.side ?? (c.kind === 'vendor' ? 'vendor' : c.kind === 'customer' ? 'customer' : sides[0]);
+      if (!sides.includes(side)) return { data: { error: `This role cannot see ${side === 'customer' ? 'customers' : 'suppliers'}.` } };
+      const w = period(ctx, a.from, a.to);
+      const st = await partyStatement(ctx.ex, ctx.orgId, c.id, side, w.from, w.to);
+      const href = side === 'customer' ? `/sales/customers/${c.id}` : `/purchases/vendors/${c.id}`;
+      const cust = side === 'customer';
+      return {
+        data: {
+          party: c.name,
+          side: cust ? 'customer' : 'supplier',
+          period: { from: st.from, to: st.to },
+          opening_balance: amt(st.openingPaise),
+          [cust ? 'invoiced_and_charged' : 'billed']: amt(st.chargesPaise),
+          [cust ? 'received_and_credited' : 'paid_and_credited']: amt(st.paymentsPaise),
+          closing_balance: amt(st.closingPaise),
+          meaning: st.closingPaise === 0 ? 'Settled: nothing is owed either way.'
+            : cust ? (st.closingPaise > 0 ? `${c.name} owes the business this amount.` : `The business holds this much of ${c.name}'s money in advance or credit.`)
+            : (st.closingPaise > 0 ? `The business owes ${c.name} this amount.` : `${c.name} holds this much of the business's money in advance or credit.`),
+          entries_in_period: st.lines.length,
+          latest_entries: st.lines.slice(-12).reverse().map((l) => ({
+            date: day(l.date),
+            what: l.kind,
+            number: l.number,
+            charge: l.chargePaise ? amt(l.chargePaise) : undefined,
+            payment: l.paymentPaise ? amt(l.paymentPaise) : undefined,
+            balance: amt(l.balancePaise),
+          })),
+        },
+        sources: [{ label: `Statement · ${c.name}`, href }],
+        report: safely(() =>
+          statementReport({
+            side, party: c.name, href, from: st.from, to: st.to,
+            opening: st.openingPaise, charges: st.chargesPaise, payments: st.paymentsPaise, closing: st.closingPaise,
+            lines: st.lines.map((l) => ({ date: day(l.date), kind: l.kind, number: l.number, charge: l.chargePaise, payment: l.paymentPaise, balance: l.balancePaise })),
+          }),
+        ),
+      };
+    },
+  }),
+
+  define({
+    name: 'search_payments',
+    label: 'Looking through payments',
+    description:
+      'Payments already received from customers or made to suppliers in a period, optionally for one party or one mode (UPI, NEFT, cheque, cash…), with the total, the split by mode and the latest payments. Not for what is still pending or owed — get_pending_payments answers that.',
+    parameters: params({
+      direction: P.oneOf(['received', 'made'], 'received (from customers) or made (to suppliers). Defaults to received.'),
+      party: P.text('Part of the customer or supplier name.'),
+      mode: P.oneOf(['cash', 'cheque', 'neft', 'rtgs', 'imps', 'upi', 'card', 'netbanking', 'other'], 'Only payments made this way.'),
+      from: P.day('Payment date from, YYYY-MM-DD. Defaults to the start of the financial year.'),
+      to: P.day('Payment date to, YYYY-MM-DD. Defaults to today.'),
+      limit: P.limit(),
+    }),
+    schema: z.object({
+      direction: z.enum(['received', 'made']).optional(),
+      party: z.string().trim().min(1).max(100).optional(),
+      mode: z.enum(['cash', 'cheque', 'neft', 'rtgs', 'imps', 'upi', 'card', 'netbanking', 'other']).optional(),
+      from: Day.optional(),
+      to: Day.optional(),
+      limit: Limit.optional(),
+    }),
+    gate: 'parties',
+    run: async (ctx, a) => {
+      const sides = sidesFor(ctx.role);
+      const direction = a.direction ?? (sides.includes('customer') ? 'received' : 'made');
+      if (!sides.includes(direction === 'received' ? 'customer' : 'vendor')) {
+        return { data: { error: `This role cannot see payments ${direction === 'received' ? 'from customers' : 'to suppliers'}.` } };
+      }
+      const w = period(ctx, a.from, a.to);
+      let q = ctx.ex
+        .selectFrom('payments')
+        .innerJoin('contacts', 'contacts.id', 'payments.contact_id')
+        .where('payments.org_id', '=', ctx.orgId)
+        .where('payments.kind', '=', direction)
+        .where('payments.status', '<>', 'void')
+        .where('payments.payment_date', '>=', w.from)
+        .where('payments.payment_date', '<=', w.to);
+      if (a.party) q = q.where((eb) => eb.or([eb('contacts.display_name', 'like', `%${a.party}%`), eb('contacts.legal_name', 'like', `%${a.party}%`)]));
+      if (a.mode) q = q.where('payments.mode', '=', a.mode);
+      const [rows, modes] = await Promise.all([
+        q.select(['payments.number', 'payments.payment_date', 'payments.amount', 'payments.mode', 'payments.tds_amount', 'payments.reference', 'contacts.display_name'])
+          .orderBy('payments.payment_date', 'desc').orderBy('payments.id', 'desc').limit(a.limit ?? 10).execute(),
+        q.select(['payments.mode', sql<string>`SUM(payments.amount)`.as('total'), sql<number>`COUNT(*)`.as('n')]).groupBy('payments.mode').execute(),
+      ]);
+      const byMode = modes.map((m) => ({ mode: m.mode.toUpperCase(), amount: toPaiseFromSql(m.total), count: Number(m.n) })).sort((x, y) => y.amount - x.amount);
+      const total = byMode.reduce((t, m) => t + m.amount, 0);
+      const count = byMode.reduce((t, m) => t + m.count, 0);
+      return {
+        data: {
+          direction,
+          period: w,
+          party_filter: a.party,
+          payments: count,
+          total: amt(total),
+          by_mode: Object.fromEntries(byMode.map((m) => [m.mode, amt(m.amount)])),
+          latest: rows.map((r) => ({
+            number: r.number,
+            date: day(r.payment_date),
+            [direction === 'received' ? 'from' : 'to']: r.display_name,
+            amount: amt(toPaiseFromSql(r.amount)),
+            mode: r.mode,
+            tds: toPaiseFromSql(r.tds_amount) ? amt(toPaiseFromSql(r.tds_amount)) : undefined,
+            reference: r.reference ?? undefined,
+          })),
+        },
+        sources: [direction === 'received' ? { label: 'Payments received', href: '/reports/payments-received' } : { label: 'Payments made', href: '/reports/payments-made' }],
+        report: safely(() =>
+          paymentsReport({
+            direction, from: w.from, to: w.to, total, count,
+            byMode: byMode.map((m) => ({ mode: m.mode, amount: m.amount })),
+            rows: rows.map((r) => ({ number: r.number, date: day(r.payment_date), party: r.display_name, mode: r.mode.toUpperCase(), amount: toPaiseFromSql(r.amount) })),
+          }),
+        ),
+      };
+    },
+  }),
+
+  define({
+    name: 'get_tds_summary',
+    label: 'Adding up TDS',
+    description:
+      'TDS the business deducted from suppliers in a quarter, by section (194C, 194J, 194Q…), what has been deposited each month against the 7th-of-next-month due date, problems that would stop the TDS return being filed, the return due date, and the TDS customers deducted from payments to the business.',
+    parameters: params({
+      fy: { type: 'integer', description: 'The year the financial year starts in: 2026 for FY 2026-27. Defaults to the current one.' },
+      quarter: { type: 'integer', minimum: 1, maximum: 4, description: 'Q1 Apr–Jun, Q2 Jul–Sep, Q3 Oct–Dec, Q4 Jan–Mar. Defaults to the current quarter.' },
+    }),
+    schema: z.object({ fy: z.number().int().min(2017).max(2100).optional(), quarter: z.number().int().min(1).max(4).optional() }),
+    gate: 'gst',
+    run: async (ctx, a) => {
+      const m = Number(ctx.today.slice(5, 7));
+      const nowFy = Number(ctx.today.slice(0, 4)) - (m < 4 ? 1 : 0);
+      const nowQ = (m >= 4 ? Math.floor((m - 4) / 3) + 1 : 4) as Quarter;
+      const fy = a.fy ?? nowFy;
+      const q = (a.quarter ?? (a.fy === undefined || a.fy === nowFy ? nowQ : 4)) as Quarter;
+      const [ret, fromCustomers] = await Promise.all([
+        quarterReturn(ctx.ex, ctx.orgId, fy, q),
+        sql<{ v: string | null }>`
+          SELECT SUM(tds_amount) AS v FROM payments
+           WHERE org_id = ${ctx.orgId} AND kind = 'received' AND status <> 'void'
+             AND payment_date BETWEEN ${quarterRange(fy, q).from} AND ${quarterRange(fy, q).to}
+        `.execute(ctx.ex),
+      ]);
+      const rows = ret.forms.filter((f) => f.kind !== 'tcs').flatMap((f) => f.rows);
+      const sections = new Map<string, { section: string; label: string; amount: number; tax: number; count: number }>();
+      for (const r of rows) {
+        const s = sections.get(r.section) ?? { section: r.section, label: r.sectionLabel, amount: 0, tax: 0, count: 0 };
+        s.amount += r.amountPaise;
+        s.tax += r.taxPaise;
+        s.count += 1;
+        sections.set(r.section, s);
+      }
+      const deducted = rows.reduce((t, r) => t + r.taxPaise, 0);
+      const deposited = ret.deposits.tds.reduce((t, d) => t + d.depositedPaise, 0);
+      const label = `Q${q} of FY ${fy}-${String((fy + 1) % 100).padStart(2, '0')} (${ret.from} to ${ret.to})`;
+      // "How much TDS is still to deposit?" early in a quarter is mostly about
+      // the months before it: a July deduction not deposited by 7 August is
+      // still owed — with interest — in October.
+      const earlier: { month: string; shortPaise: number; due: string }[] = [];
+      if (a.quarter === undefined && fy === nowFy) {
+        for (let pq = 1; pq < q; pq++) {
+          const back = await quarterReturn(ctx.ex, ctx.orgId, fy, pq as Quarter);
+          for (const d of back.deposits.tds) {
+            if (d.status === 'unpaid' || d.status === 'short') earlier.push({ month: d.month, shortPaise: d.deductedPaise - d.depositedPaise, due: d.dueDate });
+          }
+        }
+      }
+      return {
+        data: {
+          quarter: label,
+          tds_deducted: amt(deducted),
+          tds_deposited: amt(deposited),
+          still_to_deposit: amt(Math.max(0, deducted - deposited)),
+          by_section: [...sections.values()].map((s) => ({ section: s.section, what: s.label, paid_or_credited: amt(s.amount), tds: amt(s.tax), deductions: s.count })),
+          by_month: ret.deposits.tds.map((d) => ({
+            month: d.month, deducted: amt(d.deductedPaise), deposited: amt(d.depositedPaise), due_by: d.dueDate, status: d.status,
+            days_late: d.daysLate || undefined,
+          })),
+          return_due_date: ret.returnDueDate,
+          earlier_months_not_deposited: earlier.length
+            ? earlier.map((e) => ({ month: e.month, short: amt(e.shortPaise), due_by: e.due }))
+            : undefined,
+          earlier_not_deposited_total: earlier.length ? amt(earlier.reduce((t, e) => t + e.shortPaise, 0)) : undefined,
+          problems_before_filing: ret.issues.map((i) => i.message),
+          tds_deducted_by_customers: amt(toPaiseFromSql(fromCustomers.rows[0]?.v ?? '0')),
+          note: 'Interest under section 201(1A) runs at 1.5% a month on TDS deposited late.',
+        },
+        sources: [{ label: 'TDS and TCS', href: '/gst/tds-tcs' }],
+        report: safely(() =>
+          tdsReport({
+            label, returnDue: ret.returnDueDate, deducted, deposited,
+            bySection: [...sections.values()].map((s) => ({ section: s.section, tax: s.tax })),
+            months: ret.deposits.tds.map((d) => ({ month: d.month, deducted: d.deductedPaise, deposited: d.depositedPaise, due: d.dueDate, status: d.status })),
+            issues: ret.issues.map((i) => i.message),
+          }),
+        ),
+      };
+    },
+  }),
+
+  define({
+    name: 'get_compliance_calendar',
+    label: 'Checking the compliance calendar',
+    description:
+      'Returns and tax payments due from this business — GSTR-1, GSTR-3B, TDS deposits and returns, advance tax, PF and ESI, ROC filings, MSME-1 — with each due date and whether it is done, overdue, due within a week or upcoming. Use for "what is due this month", "have we filed GSTR-3B", "what is overdue".',
+    parameters: params({
+      from: P.day('From, YYYY-MM-DD. Defaults to 30 days ago.'),
+      to: P.day('To, YYYY-MM-DD. Defaults to 45 days ahead.'),
+    }),
+    schema: z.object({ from: Day.optional(), to: Day.optional() }),
+    gate: 'gst',
+    run: async (ctx, a) => {
+      const from = a.from ?? shiftDays(ctx.today, -30);
+      const to = a.to ?? shiftDays(ctx.today, 45);
+      const cal = await complianceCalendar(ctx.ex, ctx.orgId, from, to, ctx.today);
+      const order = { overdue: 0, due_soon: 1, upcoming: 2, done: 3 } as const;
+      const rows = [...cal.rows].sort((x, y) => order[x.status] - order[y.status] || x.dueDate.localeCompare(y.dueDate));
+      return {
+        data: {
+          today: ctx.today,
+          window: { from, to },
+          overdue: rows.filter((r) => r.status === 'overdue').length,
+          due_within_a_week: rows.filter((r) => r.status === 'due_soon').length,
+          items: rows.slice(0, 25).map((r) => ({
+            what: r.title,
+            for: r.periodLabel,
+            due: r.dueDate,
+            status: r.status === 'due_soon' ? 'due soon' : r.status,
+            days_left: r.status === 'done' ? undefined : r.daysLeft,
+            done_on: r.done?.on ?? undefined,
+            optional: r.optional || undefined,
+          })),
+        },
+        sources: [{ label: 'Compliance calendar', href: '/gst/compliance-calendar' }],
+        report: safely(() =>
+          complianceReport({
+            from, to,
+            rows: rows.map((r) => ({ title: r.title, period: r.periodLabel, due: r.dueDate, status: r.status, daysLeft: r.daysLeft })),
+          }),
+        ),
+      };
+    },
+  }),
+
+  define({
+    name: 'get_bank_reconciliation',
+    label: 'Checking the bank reconciliation',
+    description:
+      'For each bank, card and wallet account: imported statement lines not yet matched to the books, how much money in and out they carry, the oldest unmatched line, and how far the statement has been imported.',
+    parameters: params({}),
+    schema: z.object({}),
+    gate: 'cash',
+    run: async (ctx) => {
+      const { rows } = await sql<{ name: string; kind: string; unmatched: number; dep: string | null; wd: string | null; oldest: string | null; last_line: string | null }>`
+        SELECT ba.name, ba.kind,
+               SUM(bt.status = 'unmatched') AS unmatched,
+               SUM(IF(bt.status = 'unmatched', bt.deposit, 0)) AS dep,
+               SUM(IF(bt.status = 'unmatched', bt.withdrawal, 0)) AS wd,
+               MIN(IF(bt.status = 'unmatched', bt.txn_date, NULL)) AS oldest,
+               MAX(bt.txn_date) AS last_line
+          FROM bank_accounts ba
+          LEFT JOIN bank_transactions bt ON bt.bank_account_id = ba.id
+         WHERE ba.org_id = ${ctx.orgId} AND ba.is_active = 1 AND ba.kind IN ('bank', 'card', 'wallet')
+         GROUP BY ba.id, ba.name, ba.kind
+         ORDER BY unmatched DESC, ba.name
+      `.execute(ctx.ex);
+      const accounts = rows.map((r) => ({
+        name: r.name,
+        unmatched: Number(r.unmatched ?? 0),
+        deposits: toPaiseFromSql(r.dep ?? '0'),
+        withdrawals: toPaiseFromSql(r.wd ?? '0'),
+        oldest: r.oldest ? day(r.oldest) : null,
+        lastLine: r.last_line ? day(r.last_line) : null,
+      }));
+      return {
+        data: {
+          unmatched_lines: accounts.reduce((t, x) => t + x.unmatched, 0),
+          accounts: accounts.map((x) => ({
+            account: x.name,
+            unmatched_lines: x.unmatched,
+            money_in_unmatched: amt(x.deposits),
+            money_out_unmatched: amt(x.withdrawals),
+            oldest_unmatched: x.oldest ?? undefined,
+            statement_imported_to: x.lastLine ?? 'no statement imported yet',
+          })),
+        },
+        sources: [{ label: 'Reconcile', href: '/banking/reconcile' }],
+        report: safely(() => reconciliationReport({ accounts })),
+      };
+    },
+  }),
+
+  define({
+    name: 'get_projects',
+    label: 'Reading the projects',
+    description:
+      'Projects with the hours logged, hours not yet billed, what has been invoiced and — for roles that see costs — the cost of time and expenses and the profit. For one named project, its budget against what has been used.',
+    parameters: params({
+      project: P.text('Part of a project name or code.'),
+      status: P.oneOf(['active', 'completed', 'all'], 'Which projects. Defaults to active.'),
+    }),
+    schema: z.object({ project: z.string().trim().min(1).max(100).optional(), status: z.enum(['active', 'completed', 'all']).optional() }),
+    gate: 'projects',
+    run: async (ctx, a) => {
+      const costs = seesCosts(ctx.role);
+      let q = ctx.ex
+        .selectFrom('projects')
+        .innerJoin('contacts', 'contacts.id', 'projects.customer_id')
+        .select(['projects.id', 'projects.name', 'projects.code', 'projects.status', 'projects.billing_method', 'projects.budget_hours', 'projects.budget_amount', 'contacts.display_name'])
+        .where('projects.org_id', '=', ctx.orgId);
+      if (a.project) q = q.where((eb) => eb.or([eb('projects.name', 'like', `%${a.project}%`), eb('projects.code', '=', a.project!)]));
+      else if (a.status !== 'all') q = q.where('projects.status', '=', a.status ?? 'active');
+      const projects = await q.orderBy('projects.name').limit(30).execute();
+      if (!projects.length) {
+        return { data: { found: false, query: a.project, hint: a.project ? 'No project matches that name.' : 'There are no projects with that status.' } };
+      }
+      const figs = await projectFigures(ctx.ex, ctx.orgId, projects.map((p) => p.id));
+      const hours = (min: number) => Math.round((min / 60) * 10) / 10;
+      const rows = projects.map((p) => {
+        const f = figs.get(p.id);
+        return {
+          name: p.name,
+          customer: p.display_name,
+          status: p.status,
+          hours: hours(f?.loggedMinutes ?? 0),
+          unbilledHours: hours(f?.unbilledMinutes ?? 0),
+          billed: f?.billedPaise ?? 0,
+          cost: costs ? (f?.timeCostPaise ?? 0) + (f?.expenseCostPaise ?? 0) : null,
+          profit: costs ? (f?.profitPaise ?? 0) : null,
+          budgetHours: p.budget_hours === null ? null : Number(p.budget_hours),
+          budgetAmount: p.budget_amount === null ? null : toPaiseFromSql(p.budget_amount),
+          billing: p.billing_method,
+        };
+      });
+      return {
+        data: {
+          projects: rows.map((r) => ({
+            project: r.name,
+            customer: r.customer,
+            status: r.status,
+            billing: r.billing.replace('_', ' '),
+            hours_logged: r.hours,
+            hours_not_billed: r.unbilledHours,
+            invoiced_before_tax: amt(r.billed),
+            cost_of_time_and_expenses: r.cost === null ? undefined : amt(r.cost),
+            profit: r.profit === null ? undefined : amt(r.profit),
+            budget_hours: r.budgetHours ?? undefined,
+            budget: r.budgetAmount === null ? undefined : amt(r.budgetAmount),
+          })),
+        },
+        sources: [{ label: 'Projects', href: '/projects' }],
+        report: safely(() => projectsReport({ showCosts: costs, rows })),
+      };
+    },
+  }),
+
+  define({
+    name: 'get_payroll_summary',
+    label: 'Reading the payroll',
+    description:
+      'Payroll runs by month — employees paid, gross and net pay, status — and for the latest run the PF, ESI, professional tax and TDS withheld from salaries and the employer contributions on top.',
+    parameters: params({ months: { type: 'integer', minimum: 1, maximum: 24, description: 'How many recent months. Defaults to 12.' } }),
+    schema: z.object({ months: z.number().int().min(1).max(24).optional() }),
+    gate: 'payroll',
+    run: async (ctx, a) => {
+      const runs = (await listPayrollRuns(ctx.ex, ctx.orgId)).slice(0, a.months ?? 12);
+      const latest = runs.find((r) => r.status !== 'draft') ?? runs[0];
+      let totals: Record<string, number> | null = null;
+      if (latest) {
+        const { rows } = await sql<Record<string, string | null>>`
+          SELECT SUM(gross) AS gross, SUM(net_pay) AS net, SUM(pf_employee) AS pf_employee,
+                 SUM(pf_employer_epf + pf_employer_eps + pf_admin + pf_edli) AS pf_employer,
+                 SUM(esi_employee) AS esi_employee, SUM(esi_employer) AS esi_employer,
+                 SUM(pt) AS pt, SUM(tds) AS tds, SUM(lwf_employee) AS lwf_employee, SUM(lwf_employer) AS lwf_employer
+            FROM payroll_lines WHERE run_id = ${Number(latest.id)}
+        `.execute(ctx.ex);
+        totals = Object.fromEntries(Object.entries(rows[0] ?? {}).map(([k, v]) => [k, toPaiseFromSql(v ?? '0')]));
+      }
+      const withheld = totals ? totals.pf_employee + totals.esi_employee + totals.pt + totals.tds + totals.lwf_employee : 0;
+      const employer = totals ? totals.pf_employer + totals.esi_employer + totals.lwf_employer : 0;
+      return {
+        data: runs.length
+          ? {
+              runs: runs.map((r) => ({ month: r.month, status: r.status, employees: r.employees, gross: amt(r.grossPaise), net: amt(r.netPaise), paid_on: r.paidOn ?? undefined })),
+              latest_run: latest && totals
+                ? {
+                    month: latest.month,
+                    status: latest.status,
+                    employees: latest.employees,
+                    gross: amt(totals.gross),
+                    net_pay: amt(totals.net),
+                    withheld_from_pay: { pf: amt(totals.pf_employee), esi: amt(totals.esi_employee), professional_tax: amt(totals.pt), tds: amt(totals.tds), lwf: amt(totals.lwf_employee), total: amt(withheld) },
+                    employer_contributions: { pf: amt(totals.pf_employer), esi: amt(totals.esi_employer), lwf: amt(totals.lwf_employer), total: amt(employer) },
+                    cost_to_company: amt(totals.gross + employer),
+                  }
+                : undefined,
+              due_dates: 'PF and ESI by the 15th of the next month; TDS on salary by the 7th.',
+            }
+          : { runs: [], note: 'No payroll has been run in this book yet.' },
+        sources: [{ label: 'Payroll runs', href: '/payroll/runs' }],
+        report: safely(() =>
+          payrollReport({
+            runs: runs.map((r) => ({ month: r.month, status: r.status, employees: r.employees, gross: r.grossPaise, net: r.netPaise })),
+            latest: latest && totals ? { month: latest.month, gross: totals.gross, net: totals.net, withheld, employees: latest.employees } : null,
+          }),
+        ),
+      };
+    },
+  }),
+
+  define({
+    name: 'get_fixed_assets',
+    label: 'Reading the asset register',
+    description:
+      'The fixed asset register: cost, depreciation to date and book value by asset class, how many assets are in use or not yet put to use, and assets needing attention (insurance or AMC lapsing, not physically verified in a year).',
+    parameters: params({ as_of: P.day('The date, YYYY-MM-DD. Defaults to today.') }),
+    schema: z.object({ as_of: Day.optional() }),
+    gate: 'costs',
+    run: async (ctx, a) => {
+      const asOf = a.as_of ?? ctx.today;
+      const reg = (await assetRegister(ctx.ex, ctx.orgId, asOf)).filter((r) => r.status !== 'disposed');
+      const classes = new Map<string, { name: string; count: number; cost: number; accumulated: number; net: number }>();
+      for (const r of reg) {
+        const c = classes.get(r.className) ?? { name: r.className, count: 0, cost: 0, accumulated: 0, net: 0 };
+        c.count += 1;
+        c.cost += r.costPaise;
+        c.accumulated += r.accumulatedPaise;
+        c.net += r.netPaise;
+        classes.set(r.className, c);
+      }
+      const byClass = [...classes.values()].sort((x, y) => y.net - x.net);
+      const tot = (k: 'cost' | 'accumulated' | 'net') => byClass.reduce((t, c) => t + c[k], 0);
+      const flags = reg.flatMap((r) => r.flags.map((f) => `${r.name} (${r.tagNo}): ${f}`));
+      return {
+        data: reg.length
+          ? {
+              as_of: asOf,
+              assets: reg.length,
+              in_use: reg.filter((r) => r.status === 'in_use').length,
+              not_yet_put_to_use: reg.filter((r) => r.status === 'cwip').length,
+              cost: amt(tot('cost')),
+              depreciation_to_date: amt(tot('accumulated')),
+              book_value: amt(tot('net')),
+              by_class: byClass.map((c) => ({ class: c.name, assets: c.count, cost: amt(c.cost), depreciation: amt(c.accumulated), book_value: amt(c.net) })),
+              needs_attention: flags.slice(0, 10),
+            }
+          : { as_of: asOf, assets: 0, note: 'No fixed assets are recorded in the register.' },
+        sources: [{ label: 'Fixed asset register', href: '/accountant/fixed-assets' }],
+        report: reg.length
+          ? safely(() =>
+              fixedAssetsReport({
+                asOf, cost: tot('cost'), accumulated: tot('accumulated'), net: tot('net'),
+                inUse: reg.filter((r) => r.status === 'in_use').length, cwip: reg.filter((r) => r.status === 'cwip').length,
+                byClass, flags,
+              }),
+            )
+          : null,
+      };
+    },
+  }),
+
+  define({
+    name: 'get_budget_vs_actual',
+    label: 'Comparing against the budget',
+    description:
+      "The year's budget for each account set against the actual from the journal, how much of each budget is used, and which accounts are ahead of or behind the year's pace.",
+    parameters: params({
+      fy: { type: 'string', pattern: '^\\d{4}-\\d{2}$', description: 'The financial year, like 2026-27. Defaults to the current one.' },
+      as_of: P.day('Actuals up to this date, YYYY-MM-DD. Defaults to today.'),
+    }),
+    schema: z.object({ fy: z.string().regex(/^\d{4}-\d{2}$/).optional(), as_of: Day.optional() }),
+    gate: 'costs',
+    run: async (ctx, a) => {
+      const b = await budgetVsActual(ctx.ex, ctx.orgId, { fy: a.fy, asOf: a.as_of, today: ctx.today });
+      if (!b.rows.length) {
+        return { data: { fy: b.fy, budgets: 0, note: `No budget has been set for FY ${b.fy}. Budgets are set under Accountant → Budgets.` } };
+      }
+      return {
+        data: {
+          fy: b.fy,
+          actuals_to: b.asOf,
+          share_of_year_gone: pct(b.elapsedPct),
+          total_budget: amt(b.totals.budgetPaise),
+          total_actual: amt(b.totals.actualPaise),
+          accounts: b.rows.map((r) => ({
+            account: r.name,
+            type: r.type,
+            budget: amt(r.budgetPaise),
+            actual: amt(r.actualPaise),
+            used: pct(r.pct),
+            remaining: amt(r.variancePaise),
+            pace: r.type === 'income'
+              ? (r.pct < b.elapsedPct - 10 ? 'behind' : 'on track')
+              : (r.pct > b.elapsedPct + 10 ? 'ahead of budget' : 'on track'),
+          })),
+        },
+        sources: [{ label: 'Budgets', href: '/accountant/budgets' }],
+        report: safely(() =>
+          budgetReport({
+            fy: b.fy, asOf: b.asOf, elapsedPct: b.elapsedPct, budget: b.totals.budgetPaise, actual: b.totals.actualPaise,
+            rows: b.rows.map((r) => ({ name: r.name, type: r.type, budget: r.budgetPaise, actual: r.actualPaise, pct: r.pct })),
+          }),
+        ),
+      };
+    },
+  }),
+
+  define({
+    name: 'get_open_orders',
+    label: 'Looking at open orders',
+    description:
+      'Quotes sent and still open, sales orders not yet delivered or invoiced, and purchase orders not yet received or billed — with the open value, and which are late against their expected date.',
+    parameters: params({ kind: P.oneOf(['quotes', 'sales_orders', 'purchase_orders', 'all'], 'Which documents. Defaults to all this role can see.') }),
+    schema: z.object({ kind: z.enum(['quotes', 'sales_orders', 'purchase_orders', 'all']).optional() }),
+    gate: 'parties',
+    run: async (ctx, a) => {
+      const sides = sidesFor(ctx.role);
+      const kind = a.kind ?? 'all';
+      const want = (k: 'quotes' | 'sales_orders' | 'purchase_orders') =>
+        (kind === 'all' || kind === k) && sides.includes(k === 'purchase_orders' ? 'vendor' : 'customer');
+      if (!want('quotes') && !want('sales_orders') && !want('purchase_orders')) {
+        return { data: { error: 'This role cannot see those documents.' } };
+      }
+      const [quotes, so, po] = await Promise.all([
+        want('quotes')
+          ? ctx.ex.selectFrom('estimates').innerJoin('contacts', 'contacts.id', 'estimates.customer_id')
+              .select(['estimates.number', 'estimates.estimate_date', 'estimates.expiry_date', 'estimates.total', 'contacts.display_name'])
+              .where('estimates.org_id', '=', ctx.orgId).where('estimates.status', '=', 'sent')
+              .orderBy('estimates.estimate_date', 'desc').limit(50).execute()
+          : null,
+        want('sales_orders') ? pendingSalesOrders(ctx.ex, ctx.orgId, ctx.today) : null,
+        want('purchase_orders') ? pendingPurchaseOrders(ctx.ex, ctx.orgId, ctx.today) : null,
+      ]);
+      const openQuotes = quotes?.filter((x) => day(x.expiry_date) >= ctx.today) ?? [];
+      const lapsed = quotes ? quotes.length - openQuotes.length : 0;
+      const groups: { label: string; count: number; value: number; overdue: number; href: string }[] = [];
+      const rows: { kind: string; number: string; party: string; date: string; value: number; overdue: boolean }[] = [];
+      const data: Record<string, unknown> = { as_of: ctx.today };
+      if (quotes) {
+        const value = openQuotes.reduce((t, x) => t + toPaiseFromSql(x.total), 0);
+        groups.push({ label: 'Open quotes', count: openQuotes.length, value, overdue: 0, href: '/sales/estimates' });
+        rows.push(...openQuotes.map((x) => ({ kind: 'Quote', number: x.number, party: x.display_name, date: day(x.estimate_date), value: toPaiseFromSql(x.total), overdue: false })));
+        data.quotes = {
+          open: openQuotes.length,
+          value: amt(value),
+          sent_but_past_validity: lapsed || undefined,
+          list: openQuotes.slice(0, 10).map((x) => ({ number: x.number, customer: x.display_name, date: day(x.estimate_date), valid_until: day(x.expiry_date), value: amt(toPaiseFromSql(x.total)) })),
+        };
+      }
+      for (const [key, label, res, href] of [
+        ['sales_orders', 'Pending sales orders', so, '/reports/pending-sales-orders'],
+        ['purchase_orders', 'Pending purchase orders', po, '/reports/pending-purchase-orders'],
+      ] as const) {
+        if (!res) continue;
+        groups.push({ label, count: res.orders.length, value: res.totalPendingPaise, overdue: res.overdue, href });
+        rows.push(...res.orders.map((o) => ({ kind: key === 'sales_orders' ? 'Sales order' : 'Purchase order', number: o.number, party: o.partyName, date: o.date, value: o.pendingPaise, overdue: o.overdue })));
+        data[key] = {
+          open: res.orders.length,
+          open_value: amt(res.totalPendingPaise),
+          late: res.overdue,
+          list: res.orders.slice(0, 10).map((o) => ({ number: o.number, party: o.partyName, date: o.date, expected: o.expectedDate ?? undefined, open_value: amt(o.pendingPaise), late: o.overdue || undefined })),
+        };
+      }
+      return {
+        data,
+        sources: groups.map((g) => ({ label: g.label, href: g.href })),
+        report: safely(() => ordersReport({ asOf: ctx.today, groups, rows })),
+      };
+    },
+  }),
+
+  define({
+    name: 'get_collections',
+    label: 'Checking collections',
+    description:
+      'The collections list: customers with overdue invoices, how long the oldest has been overdue, the last follow-up, payment promises (and which were broken), and who is due a chase today.',
+    parameters: params({ customer: P.text('Part of a customer name, to see only them.') }),
+    schema: z.object({ customer: z.string().trim().min(1).max(100).optional() }),
+    gate: 'sales',
+    run: async (ctx, a) => {
+      const all = await collectionsWorkbench(ctx.ex, ctx.orgId, ctx.today);
+      const rows = (a.customer ? all.filter((r) => r.name.toLowerCase().includes(a.customer!.toLowerCase())) : all)
+        .filter((r) => r.overduePaise > 0)
+        .sort((x, y) => y.overduePaise - x.overduePaise);
+      const week = shiftDays(ctx.today, 7);
+      const promisedThisWeek = rows.filter((r) => r.promise && !r.promise.broken && r.promise.date >= ctx.today && r.promise.date <= week)
+        .reduce((t, r) => t + (r.promise?.amountPaise ?? 0), 0);
+      const broken = rows.filter((r) => r.promise?.broken).length;
+      const overdue = rows.reduce((t, r) => t + r.overduePaise, 0);
+      const dueToday = rows.filter((r) => r.dueToday).length;
+      return {
+        data: {
+          today: ctx.today,
+          customers_overdue: rows.length,
+          overdue: amt(overdue),
+          due_a_chase_today: dueToday,
+          promised_this_week: amt(promisedThisWeek),
+          broken_promises: broken,
+          customers: rows.slice(0, 12).map((r) => ({
+            customer: r.name,
+            overdue: amt(r.overduePaise),
+            overdue_invoices: r.overdueInvoices,
+            oldest_days_overdue: r.oldestDays,
+            last_follow_up: r.lastFollowUp ? `${r.lastFollowUp.at.slice(0, 10)} (${r.lastFollowUp.kind}): ${r.lastFollowUp.note}`.slice(0, 160) : 'none yet',
+            promise: r.promise ? `${amt(r.promise.amountPaise)} by ${r.promise.date}${r.promise.broken ? ' (broken)' : ''}` : undefined,
+            next_follow_up: r.nextFollowup ?? undefined,
+            phone: r.phone ?? undefined,
+          })),
+        },
+        sources: [{ label: 'Collections', href: '/sales/collections' }],
+        report: safely(() =>
+          collectionsReport({
+            today: ctx.today, overdue, dueToday, promisedThisWeek, broken,
+            rows: rows.map((r) => ({
+              name: r.name, overdue: r.overduePaise, oldestDays: r.oldestDays,
+              promise: r.promise ? `${formatDay(r.promise.date)}${r.promise.broken ? ' (broken)' : ''}` : null,
+              next: r.nextFollowup,
+            })),
+          }),
+        ),
+      };
+    },
+  }),
+
+  define({
+    name: 'get_pending_payments',
+    label: 'Listing pending payments',
+    description:
+      'Every payment still pending, both ways: unpaid invoices customers have yet to pay (to receive) and unpaid bills the business has yet to pay its suppliers (to pay), each with its due date and days overdue, and the totals overdue, due in the next 7 days and later. Use this for "pending payments", "outstanding payments", "dues", "what is to be received or paid", "who has not paid" — anything still owed, as opposed to payments already made or received. Filter by side, by a party, or by when it falls due.',
+    parameters: params({
+      side: P.oneOf(['both', 'receive', 'pay'], 'receive (customers to pay us), pay (us to pay suppliers) or both. Defaults to both, within what this person can see.'),
+      party: P.text('Part of a customer or supplier name.'),
+      due: P.oneOf(['all', 'overdue', 'next_7_days', 'this_month'], 'Only what is overdue, falls due in the next 7 days, or by the end of this month. Defaults to all.'),
+      limit: P.limit(),
+    }),
+    schema: z.object({
+      side: z.enum(['both', 'receive', 'pay']).optional(),
+      party: z.string().trim().min(1).max(100).optional(),
+      due: z.enum(['all', 'overdue', 'next_7_days', 'this_month']).optional(),
+      limit: Limit.optional(),
+    }),
+    gate: 'parties',
+    run: async (ctx, a) => {
+      const sides = sidesFor(ctx.role);
+      const wantReceive = (a.side ?? 'both') !== 'pay' && sides.includes('customer');
+      const wantPay = (a.side ?? 'both') !== 'receive' && sides.includes('vendor');
+      const week = shiftDays(ctx.today, 7);
+      const monthEnd = `${ctx.today.slice(0, 8)}${String(new Date(Number(ctx.today.slice(0, 4)), Number(ctx.today.slice(5, 7)), 0).getDate()).padStart(2, '0')}`;
+      const like = a.party ? `%${a.party}%` : null;
+      type Doc = { number: string; party: string; due: string; balance: number; msme?: boolean };
+
+      // Invoices and bills with something left to pay, and the openings
+      // carried in from before the books began, oldest due date first.
+      const read = async (kind: 'receivable' | 'payable'): Promise<Doc[]> => {
+        const docs = kind === 'receivable'
+          ? await sql<{ number: string; party: string; due: string; balance: string; msme: number }>`
+              SELECT i.number, c.display_name AS party, i.due_date AS due, (i.total - i.amount_paid) AS balance, 0 AS msme
+                FROM invoices i JOIN contacts c ON c.id = i.customer_id
+               WHERE i.org_id = ${ctx.orgId} AND i.status NOT IN ('draft', 'void') AND i.total > i.amount_paid
+                 ${like ? sql`AND c.display_name LIKE ${like}` : sql``}`.execute(ctx.ex)
+          : await sql<{ number: string; party: string; due: string; balance: string; msme: number }>`
+              SELECT CONCAT(b.vendor_invoice_no, ' (', b.internal_no, ')') AS number, c.display_name AS party, b.due_date AS due,
+                     (b.total - b.amount_paid) AS balance, c.is_msme AS msme
+                FROM bills b JOIN contacts c ON c.id = b.vendor_id
+               WHERE b.org_id = ${ctx.orgId} AND b.status NOT IN ('draft', 'void') AND b.total > b.amount_paid
+                 ${like ? sql`AND c.display_name LIKE ${like}` : sql``}`.execute(ctx.ex);
+        const openings = await sql<{ number: string; party: string; due: string; balance: string; msme: number }>`
+          SELECT CONCAT(o.ref_no, ' (opening)') AS number, c.display_name AS party, o.due_date AS due, (o.amount - o.amount_paid) AS balance, c.is_msme AS msme
+            FROM opening_documents o JOIN contacts c ON c.id = o.contact_id
+           WHERE o.org_id = ${ctx.orgId} AND o.kind = ${kind} AND o.status NOT IN ('paid', 'void') AND o.amount > o.amount_paid
+             ${like ? sql`AND c.display_name LIKE ${like}` : sql``}`.execute(ctx.ex);
+        return [...docs.rows, ...openings.rows]
+          .map((r) => ({ number: r.number, party: r.party, due: day(r.due), balance: toPaiseFromSql(r.balance), msme: kind === 'payable' && Number(r.msme) === 1 }))
+          .filter((d) => d.balance > 0)
+          .sort((x, y) => (x.due < y.due ? -1 : x.due > y.due ? 1 : y.balance - x.balance));
+      };
+      const inWindow = (d: Doc) => a.due === 'overdue' ? d.due < ctx.today
+        : a.due === 'next_7_days' ? d.due >= ctx.today && d.due <= week
+          : a.due === 'this_month' ? d.due <= monthEnd
+            : true;
+      const side = (docs: Doc[], kind: 'receive' | 'pay') => {
+        const all = docs.filter(inWindow);
+        // Asked what falls due this week: what is already overdue matters as much.
+        const lateOutside = a.due === 'next_7_days' ? docs.filter((d) => d.due < ctx.today) : [];
+        const overdue = all.filter((d) => d.due < ctx.today);
+        const next7 = all.filter((d) => d.due >= ctx.today && d.due <= week);
+        const total = all.reduce((t, d) => t + d.balance, 0);
+        return {
+          docs: all,
+          summary: {
+            total, overdue: overdue.reduce((t, d) => t + d.balance, 0), next7: next7.reduce((t, d) => t + d.balance, 0), count: all.length,
+            oldestDays: overdue.length ? daysBetween(overdue[0].due, ctx.today) : 0,
+          },
+          data: {
+            total: amt(total),
+            documents: all.length,
+            overdue: amt(overdue.reduce((t, d) => t + d.balance, 0)),
+            overdue_documents: overdue.length,
+            due_next_7_days: amt(next7.reduce((t, d) => t + d.balance, 0)),
+            oldest_days_overdue: overdue.length ? daysBetween(overdue[0].due, ctx.today) : 0,
+            ...(kind === 'pay' ? { msme_bills: all.filter((d) => d.msme).length } : {}),
+            ...(lateOutside.length ? { already_overdue: amt(lateOutside.reduce((t, d) => t + d.balance, 0)), already_overdue_documents: lateOutside.length } : {}),
+            [kind === 'receive' ? 'invoices' : 'bills']: all.slice(0, a.limit ?? 12).map((d) => ({
+              [kind === 'receive' ? 'invoice' : 'bill']: d.number,
+              [kind === 'receive' ? 'customer' : 'supplier']: d.party,
+              due: d.due,
+              pending: amt(d.balance),
+              ...(d.due < ctx.today ? { days_overdue: daysBetween(d.due, ctx.today) } : { due_in_days: daysBetween(ctx.today, d.due) }),
+              ...(d.msme ? { msme: true } : {}),
+            })),
+          },
+        };
+      };
+
+      const [rec, pay] = await Promise.all([wantReceive ? read('receivable') : null, wantPay ? read('payable') : null]);
+      const r = rec ? side(rec, 'receive') : null;
+      const p = pay ? side(pay, 'pay') : null;
+
+      // What the ledger holds that no document explains — an opening balance
+      // entered by journal, an advance not yet set against an invoice — so the
+      // list ties to the ageing report rather than quietly differing from it.
+      const ledgerSide = async (kind: 'receivable' | 'payable', docs: Doc[]) => {
+        if (a.due && a.due !== 'all') return null;
+        const ag = await ageing(ctx.ex, ctx.orgId, kind, ctx.today);
+        const byParty = new Map<string, number>();
+        for (const d of docs) byParty.set(d.party, (byParty.get(d.party) ?? 0) + d.balance);
+        const rowsOf = ag.rows.filter((x) => !a.party || x.name.toLowerCase().includes(a.party.toLowerCase()));
+        const diffs = rowsOf.map((x) => ({ party: x.name, diff: x.totalPaise - (byParty.get(x.name) ?? 0) })).filter((x) => Math.abs(x.diff) >= 100);
+        if (!diffs.length) return null;
+        const who = kind === 'receivable' ? 'customer' : 'supplier';
+        return {
+          not_on_any_document: diffs.filter((x) => x.diff > 0).map((x) => ({ [who]: x.party, amount: amt(x.diff) })),
+          paid_in_advance: diffs.filter((x) => x.diff < 0).map((x) => ({ [who]: x.party, amount: amt(-x.diff) })),
+          total_as_in_the_ageing_report: amt(rowsOf.reduce((t, x) => t + x.totalPaise, 0)),
+        };
+      };
+      const [recLedger, payLedger] = await Promise.all([rec ? ledgerSide('receivable', rec) : null, pay ? ledgerSide('payable', pay) : null]);
+      if (r && recLedger) Object.assign(r.data, { ledger: recLedger });
+      if (p && payLedger) Object.assign(p.data, { ledger: payLedger });
+      const notes: string[] = [];
+      if (!wantReceive && (a.side ?? 'both') !== 'pay') notes.push('This person’s role does not include customers, so money to receive is not shown.');
+      if (!wantPay && (a.side ?? 'both') !== 'receive') notes.push('This person’s role does not include suppliers, so money to pay is not shown.');
+      if (a.party && !(r?.docs.length) && !(p?.docs.length)) notes.push(`Nothing is pending for a party matching "${a.party}".`);
+      notes.push('Totals are of unpaid invoices and bills; "ledger" lists any balance the ledger holds that is not on one, so they tie to the ageing reports.');
+
+      const rows = [
+        ...(r?.docs ?? []).map((d) => ({ side: 'To receive' as const, number: d.number, party: d.party, due: d.due, daysOverdue: Math.max(0, daysBetween(d.due, ctx.today)), balance: d.balance })),
+        ...(p?.docs ?? []).map((d) => ({ side: 'To pay' as const, number: d.number, party: d.party, due: d.due, daysOverdue: Math.max(0, daysBetween(d.due, ctx.today)), balance: d.balance })),
+      ].sort((x, y) => (x.due < y.due ? -1 : x.due > y.due ? 1 : 0));
+
+      return {
+        data: {
+          as_of: ctx.today,
+          filter: { side: a.side ?? 'both', party: a.party, due: a.due ?? 'all' },
+          to_receive_from_customers: r?.data,
+          to_pay_to_suppliers: p?.data,
+          net_position: r && p ? amt(r.summary.total - p.summary.total) : undefined,
+          note: notes.join(' '),
+        },
+        sources: [
+          ...(r ? [{ label: 'Receivables ageing', href: '/reports/ar-ageing' }] : []),
+          ...(p ? [{ label: 'Payables ageing', href: '/reports/ap-ageing' }] : []),
+        ],
+        report: safely(() => pendingPaymentsReport({ today: ctx.today, receive: r?.summary ?? null, pay: p?.summary ?? null, rows })),
+      };
+    },
+  }),
 ];
 
 const BY_NAME = new Map(TOOLS.map((t) => [t.name, t]));
@@ -1202,6 +2223,9 @@ export function hiddenAreas(role: RoleName): string[] {
   if (!allows('purchases', role)) out.push(HIDDEN_AREA_WORDS.purchases);
   if (!allows('cash', role)) out.push(HIDDEN_AREA_WORDS.banking);
   if (!allows('gst', role)) out.push(HIDDEN_AREA_WORDS.gst);
+  if (!allows('inventory', role)) out.push(HIDDEN_AREA_WORDS.inventory);
+  if (!allows('projects', role)) out.push(HIDDEN_AREA_WORDS.projects);
+  if (!allows('payroll', role)) out.push(HIDDEN_AREA_WORDS.payroll);
   return out;
 }
 

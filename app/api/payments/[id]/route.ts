@@ -17,7 +17,8 @@ export const GET = route(async ({ orgId, role, params }) => {
       'payments.tds_amount', 'payments.unapplied_amount', 'payments.status', 'payments.contact_id',
       'payments.advance_gst', 'payments.advance_rate_pct', 'payments.advance_amount',
       'payments.advance_cgst', 'payments.advance_sgst', 'payments.advance_igst',
-      'contacts.display_name as contact_name',
+      'contacts.display_name as contact_name', 'contacts.legal_name as contact_legal_name',
+      'payments.mode', 'payments.reference', 'payments.bank_account_id',
     ])
     .where('payments.id', '=', id).where('payments.org_id', '=', orgId)
     .executeTakeFirst();
@@ -48,6 +49,11 @@ export const GET = route(async ({ orgId, role, params }) => {
     status: p.status,
     contactId: asId(p.contact_id),
     contactName: p.contact_name,
+    /** The name a cheque is written to. */
+    payeeName: p.contact_legal_name || p.contact_name,
+    mode: p.mode,
+    reference: p.reference,
+    bankName: p.bank_account_id ? (await db.selectFrom('bank_accounts').select('name').where('id', '=', p.bank_account_id).executeTakeFirst())?.name ?? null : null,
     amountPaise: toPaiseFromSql(p.amount),
     tdsPaise: toPaiseFromSql(p.tds_amount),
     unappliedPaise: toPaiseFromSql(p.unapplied_amount),

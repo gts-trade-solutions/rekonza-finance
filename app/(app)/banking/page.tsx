@@ -16,7 +16,7 @@ import Link from 'next/link';
 import { useMemo, useState } from 'react';
 import {
   ArrowLeftRight, ArrowRight, Banknote, CreditCard, FileClock, FileSpreadsheet,
-  Landmark, Plus, ScrollText, Wallet,
+  Landmark, ListChecks, Plus, ScrollText, Wallet,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card } from '@/components/ui/card';
@@ -71,9 +71,10 @@ const TILES: { kinds: string[]; label: string; icon: typeof Landmark; hint: stri
 ];
 
 const SHORTCUTS = [
-  { href: '/banking/imports', icon: FileSpreadsheet, label: 'Import statement', hint: 'Upload a CSV from your bank' },
+  { href: '/banking/imports', icon: FileSpreadsheet, label: 'Import statements', hint: 'Upload one or many: CSV, Excel, OFX, QIF, CAMT, MT940, JSON' },
+  { href: '/banking/statement-lines', icon: ListChecks, label: 'Statement lines', hint: 'Categorise, exclude or delete many lines at once, with suggestions' },
   { href: '/banking/rules', icon: ScrollText, label: 'Bank rules', hint: 'Auto-categorise repeating lines' },
-  { href: '/banking/transfers', icon: ArrowLeftRight, label: 'Transfers', hint: 'Move money between own accounts' },
+  { href: '/banking/transfers', icon: ArrowLeftRight, label: 'Transfers (contra)', hint: 'Move money between own accounts: cash deposited, withdrawn, bank to bank' },
   { href: '/banking/cheques', icon: FileClock, label: 'Cheques & PDC', hint: 'In hand and post-dated' },
 ];
 

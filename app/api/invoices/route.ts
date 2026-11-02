@@ -3,7 +3,9 @@ import { sql } from 'kysely';
 import { db, transaction } from '@/lib/server/db';
 import { route, body, query, asId } from '@/lib/server/http';
 import { toPaiseFromSql } from '@/lib/server/money-sql';
-import { createInvoice } from '@/lib/server/services/sales';
+import { createInvoice, type CreateInvoiceInput } from '@/lib/server/services/sales';
+import { createSalesReceipt } from '@/lib/server/services/sales-receipts';
+import { chargeExpenses } from '@/lib/server/services/projects';
 import { queueIrns } from '@/lib/server/gst/auto-irn';
 import { hasPermission } from '@/lib/rbac';
 import { logAudit, auditMeta } from '@/lib/server/audit';
@@ -15,6 +17,8 @@ const ListQuery = z.object({
   /** Issued and not yet fully settled — what a payment screen can be applied to. */
   open: z.coerce.boolean().optional(),
   customerId: z.string().optional(),
+  /** Debit notes only, or the sales paid for at the counter (sales receipts). */
+  kind: z.enum(['invoice', 'debit_note', 'receipt']).optional(),
   search: z.string().optional(),
   limit: z.coerce.number().int().min(1).max(500).default(200),
   offset: z.coerce.number().int().min(0).default(0),
@@ -48,6 +52,8 @@ export const GET = route(
         .where((eb) => eb(eb.ref('invoices.total'), '>', eb.ref('invoices.amount_paid')));
     }
     if (q.customerId) base = base.where('invoices.customer_id', '=', Number(q.customerId));
+    if (q.kind === 'receipt') base = base.where('invoices.paid_at_sale', '=', 1);
+    else if (q.kind) base = base.where('invoices.doc_kind', '=', q.kind);
     if (q.search) {
       const term = `%${q.search}%`;
       base = base.where((eb) =>
@@ -66,6 +72,8 @@ export const GET = route(
     if (q.from) countBase = countBase.where('invoices.invoice_date', '>=', q.from);
     if (q.to) countBase = countBase.where('invoices.invoice_date', '<=', q.to);
     if (q.customerId) countBase = countBase.where('invoices.customer_id', '=', Number(q.customerId));
+    if (q.kind === 'receipt') countBase = countBase.where('invoices.paid_at_sale', '=', 1);
+    else if (q.kind) countBase = countBase.where('invoices.doc_kind', '=', q.kind);
     if (q.open) {
       countBase = countBase
         .where('invoices.status', 'not in', ['draft', 'void'])
@@ -85,7 +93,7 @@ export const GET = route(
           'invoices.status', 'invoices.supply_type', 'invoices.supply_kind',
           'invoices.subtotal', 'invoices.total', 'invoices.amount_paid',
           'invoices.customer_id', 'invoices.branch_id',
-          'invoices.currency', 'invoices.fc_total', 'invoices.fc_amount_paid',
+          'invoices.currency', 'invoices.fc_total', 'invoices.fc_amount_paid', 'invoices.doc_kind', 'invoices.paid_at_sale',
           'contacts.display_name as customer_name',
         ])
         .orderBy('invoices.invoice_date', 'desc')
@@ -136,6 +144,8 @@ export const GET = route(
         date: r.invoice_date,
         dueDate: r.due_date,
         status: r.status,
+        docKind: r.doc_kind,
+        paidAtSale: !!r.paid_at_sale,
         supplyType: r.supply_type,
         supplyKind: r.supply_kind,
         customerId: asId(r.customer_id),
@@ -225,6 +235,18 @@ const CreateInput = z.object({
   warehouseId: z.union([z.string(), z.number()]).nullish(),
   exchangeRate: z.number().positive().optional(),
   overrideLimits: z.boolean().optional(),
+  /** A debit note (CGST Act s.34(3)), the invoice it corrects, and why. */
+  docKind: z.enum(['invoice', 'debit_note']).optional(),
+  againstInvoiceId: z.union([z.string(), z.number()]).nullish(),
+  noteReason: z.string().trim().max(255).nullish(),
+  /** Billable expenses this invoice re-charges (their lines are on it); marked so they are not offered again. */
+  billExpenseIds: z.array(z.union([z.string(), z.number()])).max(200).optional(),
+  /** Paid at the counter: the receipt is recorded with the sale (a sales receipt). */
+  paidAtSale: z.object({
+    mode: z.enum(['cash', 'cheque', 'neft', 'rtgs', 'imps', 'upi', 'card', 'netbanking', 'other']),
+    bankAccountId: z.union([z.string(), z.number()]),
+    reference: z.string().trim().max(100).nullish(),
+  }).nullish(),
   exportDetails: z.object({
     shippingBillNo: z.string().trim().max(20).nullish(),
     shippingBillDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullish(),
@@ -241,8 +263,8 @@ export const POST = route(
     // The whole thing in one transaction: number allocation, the invoice, its
     // lines, the e-invoice register row and the journal entry either all happen
     // or none do.
-    const created = await transaction(async (trx) =>
-      createInvoice(trx, orgId, user.userId, {
+    const created = await transaction(async (trx) => {
+      const doc: CreateInvoiceInput = {
         branchId: Number(input.branchId),
         customerId: Number(input.customerId),
         date: input.date,
@@ -284,8 +306,20 @@ export const POST = route(
           batchId: l.batchId ? Number(l.batchId) : null,
           serials: l.serials,
         })),
-      }),
-    );
+        docKind: input.docKind,
+        againstInvoiceId: input.againstInvoiceId ? Number(input.againstInvoiceId) : null,
+        noteReason: input.noteReason ?? null,
+      };
+      const made = !input.paidAtSale
+        ? await createInvoice(trx, orgId, user.userId, doc)
+        : await createSalesReceipt(trx, orgId, user.userId, doc, {
+            mode: input.paidAtSale.mode,
+            bankAccountId: Number(input.paidAtSale.bankAccountId),
+            reference: input.paidAtSale.reference ?? null,
+          });
+      if (input.billExpenseIds?.length) await chargeExpenses(trx, orgId, made.id, doc.customerId, input.billExpenseIds.map(Number));
+      return made;
+    });
 
     await logAudit({
       orgId,
@@ -295,7 +329,9 @@ export const POST = route(
       targetType: 'invoice',
       targetId: created.id,
       targetLabel: created.number,
-      detail: `Created invoice ${created.number}`,
+      detail: input.docKind === 'debit_note' ? `Created debit note ${created.number}`
+        : input.paidAtSale ? `Created invoice ${created.number}, paid at the time of sale`
+        : `Created invoice ${created.number}`,
       ...auditMeta(req),
     });
 

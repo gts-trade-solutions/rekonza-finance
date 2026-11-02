@@ -1,6 +1,7 @@
 import { sql } from 'kysely';
 import { db } from '@/lib/server/db';
-import { route, idParam, asId, notFound } from '@/lib/server/http';
+import { route, idParam, asId, notFound, forbidden } from '@/lib/server/http';
+import { hasPermission } from '@/lib/rbac';
 import { toPaiseFromSql } from '@/lib/server/money-sql';
 import { unseal } from '@/lib/server/crypto/fields';
 import { vendorFyTaxable } from '@/lib/server/services/purchases';
@@ -13,8 +14,13 @@ import { vendorFyTaxable } from '@/lib/server/services/purchases';
  * for the figures to disagree by the time they all land.
  */
 export const GET = route(
-  async ({ orgId, params, req }) => {
+  async ({ orgId, role, params, req }) => {
     const id = idParam(params);
+    // A customer's page is sales', a vendor's purchasing's. Each side only sees
+    // its own documents: a sales role is shown no bills, whoever the contact is.
+    const seeSales = hasPermission(role, 'sales', 'view');
+    const seePurchases = hasPermission(role, 'purchases', 'view');
+    if (!seeSales && !seePurchases) throw forbidden('You cannot see customers or vendors.');
     // A form that only needs a figure should not pull six hundred documents to
     // get it. `summary=1` returns the totals and nothing else.
     const summaryOnly = new URL(req.url).searchParams.get('summary') === '1';
@@ -56,15 +62,15 @@ export const GET = route(
           paymentTerms: c.payment_terms,
         },
         summary: {
-          receivablePaise: toPaiseFromSql(ar?.v ?? '0'),
-          payablePaise: toPaiseFromSql(ap?.v ?? '0'),
-          fyTaxablePaise: fyTaxable,
+          receivablePaise: seeSales ? toPaiseFromSql(ar?.v ?? '0') : 0,
+          payablePaise: seePurchases ? toPaiseFromSql(ap?.v ?? '0') : 0,
+          fyTaxablePaise: seePurchases ? fyTaxable : 0,
         },
       };
     }
 
-    const [invoices, bills, payments] = await Promise.all([
-      db
+    const [invoices, bills, allPayments] = await Promise.all([
+      !seeSales ? [] : db
         .selectFrom('invoices')
         .select([
           'id', 'number', 'invoice_date', 'due_date', 'status',
@@ -76,7 +82,7 @@ export const GET = route(
         .orderBy('id', 'desc')
         .limit(200)
         .execute(),
-      db
+      !seePurchases ? [] : db
         .selectFrom('bills')
         .select([
           'id', 'internal_no', 'vendor_invoice_no', 'bill_date', 'due_date', 'status',
@@ -103,8 +109,9 @@ export const GET = route(
         .limit(200)
         .execute(),
     ]);
+    const payments = allPayments.filter((p) => (p.kind === 'received' ? seeSales : seePurchases));
 
-    const open = (status: string) => status !== 'draft' && status !== 'void';
+    const open =(status: string) => status !== 'draft' && status !== 'void';
     const sumBalance = (rows: { status: string; total: string; amount_paid: string }[]) =>
       rows.filter((r) => open(r.status))
         .reduce((t, r) => t + toPaiseFromSql(r.total) - toPaiseFromSql(r.amount_paid), 0);
@@ -141,6 +148,8 @@ export const GET = route(
         shippingAddress: c.shipping_address,
         notes: c.notes,
         isArchived: !!c.is_archived,
+        // Merged into another contact (services/contact-merge.ts): where everything went.
+        mergedIntoId: c.merged_into_id ? asId(c.merged_into_id) : null,
       },
       invoices: invoices.map((i) => ({
         id: asId(i.id),
@@ -198,5 +207,4 @@ export const GET = route(
       },
     };
   },
-  { permission: { module: 'sales', action: 'view' } },
 );

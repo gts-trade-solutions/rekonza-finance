@@ -48,6 +48,7 @@ const Input = z.object({
     concentrationPct: z.number().min(5).max(100),
     escalateAfterDays: z.number().int().min(1).max(60),
     autoDepreciation: z.boolean(),
+    timesheetApproval: z.boolean(),
   }).partial().optional(),
   password: z.object({
     minLength: z.number().int().min(8).max(64),

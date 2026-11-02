@@ -15,6 +15,7 @@ import { toPaiseFromSql } from '../money-sql';
 import { postEntry } from '../ledger/posting';
 import { conflict, notFound } from '../http';
 import { createInvoice, markInvoiceSent } from './sales';
+import { createBill, createExpense } from './purchases';
 
 export type Frequency = 'weekly' | 'monthly' | 'quarterly' | 'yearly';
 
@@ -85,4 +86,67 @@ export async function runRecurringInvoice(trx: Trx, orgId: number, userId: numbe
     last_generated_at: runDate, next_run: advancePeriod(runDate, profile.frequency as Frequency), last_error: null,
   }).where('id', '=', id).execute();
   return { name: profile.profile_name, invoice, runDate, autoSent: !!profile.auto_send };
+}
+
+/** A recurring bill's line, as written on the profile. */
+export interface BillTemplateLine {
+  itemId: number | null; accountId: number | null; description: string | null;
+  qty: number; ratePaise: number; gstRatePct: number; hsnSac: string | null;
+}
+/** A recurring expense: what it is booked to, and what is paid each time. */
+export interface ExpenseTemplate {
+  accountId: number; amountPaise: number; gstRatePct: number;
+  itcEligibility: 'eligible' | 'ineligible' | 'capital_goods'; notes: string | null;
+}
+
+/**
+ * Raise one bill, or record one expense, from a recurring purchase profile.
+ *
+ * A bill is given a placeholder for the vendor's own number, RB<profile>/<date>,
+ * because theirs is not known until their bill arrives: whoever files it
+ * replaces the placeholder with the number on the vendor's paper.
+ */
+export async function runRecurringPurchase(trx: Trx, orgId: number, userId: number | null, id: number, date?: string) {
+  const profile = await trx.selectFrom('recurring_purchases').selectAll()
+    .where('id', '=', id).where('org_id', '=', orgId).forUpdate().executeTakeFirst();
+  if (!profile) throw notFound('That profile does not exist.');
+  if (!profile.is_active) throw conflict(`${profile.profile_name} is paused. Resume it before running it.`);
+  const runDate = date ?? ymd(profile.next_run);
+  if (profile.end_date && runDate > ymd(profile.end_date)) throw conflict(`${profile.profile_name} ended on ${ymd(profile.end_date)}.`);
+  const template = typeof profile.template === 'string' ? JSON.parse(profile.template) : profile.template;
+
+  let made: { kind: 'bill' | 'expense'; id: number; number: string; totalPaise: number };
+  if (profile.kind === 'bill') {
+    if (!profile.vendor_id) throw conflict(`${profile.profile_name} has no vendor to bill from.`);
+    const due = new Date(`${runDate}T00:00:00Z`);
+    due.setUTCDate(due.getUTCDate() + profile.due_days);
+    const lines = template as BillTemplateLine[];
+    const bill = await createBill(trx, orgId, userId, {
+      branchId: profile.branch_id, vendorId: profile.vendor_id,
+      vendorInvoiceNo: `RB${id}/${runDate.slice(2).replace(/-/g, '')}`,
+      date: runDate, dueDate: due.toISOString().slice(0, 10),
+      notes: `${profile.profile_name} — raised from a recurring profile. Replace the bill number with the vendor's own when their bill arrives.`,
+      lines: lines.map((l) => ({
+        itemId: l.itemId, accountId: l.accountId, description: l.description, hsnSac: l.hsnSac,
+        qty: l.qty, ratePaise: l.ratePaise, gstRatePct: l.gstRatePct,
+      })),
+    });
+    await trx.updateTable('bills').set({ recurring_id: id }).where('id', '=', bill.id).execute();
+    made = { kind: 'bill', id: bill.id, number: bill.internalNo, totalPaise: bill.totalPaise };
+  } else {
+    if (!profile.paid_through_bank_account_id) throw conflict(`${profile.profile_name} does not say what it is paid from.`);
+    const t = template as ExpenseTemplate;
+    const exp = await createExpense(trx, orgId, userId, {
+      branchId: profile.branch_id, date: runDate, accountId: t.accountId,
+      paidThroughBankAccountId: profile.paid_through_bank_account_id, amountPaise: t.amountPaise,
+      gstRatePct: t.gstRatePct, vendorId: profile.vendor_id, itcEligibility: t.itcEligibility,
+      notes: t.notes ?? profile.profile_name,
+    });
+    await trx.updateTable('expenses').set({ recurring_id: id }).where('id', '=', exp.id).execute();
+    made = { kind: 'expense', id: exp.id, number: exp.number, totalPaise: exp.totalPaise };
+  }
+  await trx.updateTable('recurring_purchases').set({
+    last_generated_at: runDate, next_run: advancePeriod(runDate, profile.frequency as Frequency), last_error: null,
+  }).where('id', '=', id).execute();
+  return { name: profile.profile_name, made, runDate };
 }

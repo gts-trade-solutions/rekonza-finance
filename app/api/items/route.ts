@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { sql } from 'kysely';
-import { db } from '@/lib/server/db';
+import { db, transaction } from '@/lib/server/db';
+import { saveKit } from '@/lib/server/services/kits';
 import { route, body, query, asId, badRequest, conflict } from '@/lib/server/http';
 import { toPaiseFromSql, toSqlFromPaise } from '@/lib/server/money-sql';
 import { assertFresh } from '@/lib/server/concurrency';
@@ -40,7 +41,8 @@ export const GET = route(
         'id', 'kind', 'name', 'sku', 'hsn_sac', 'uqc', 'sale_price', 'purchase_price',
         'gst_rate_pct', 'tax_pref', 'description', 'track_inventory', 'track_batches', 'reorder_level',
         'opening_stock_qty', 'opening_stock_rate', 'is_archived',
-        'mrp', 'standard_cost', 'alt_uqc', 'alt_factor', 'min_level', 'track_serials', 'updated_at', 'stock_group_id', 'valuation_method',
+        'mrp', 'standard_cost', 'alt_uqc', 'alt_factor', 'min_level', 'track_serials', 'updated_at', 'stock_group_id', 'valuation_method', 'is_kit', 'item_group_id', 'variant',
+        'image_file_id',
       ])
       .orderBy('name')
       .limit(q.limit)
@@ -48,6 +50,10 @@ export const GET = route(
       .execute();
 
     const ids = rows.map((r) => r.id);
+    // A kit's components, for the list and the item dialog (services/kits.ts).
+    const comps = ids.length
+      ? await db.selectFrom('item_components').select(['kit_item_id', 'component_item_id', 'qty']).where('org_id', '=', orgId).where('kit_item_id', 'in', ids).execute()
+      : [];
     const sold = ids.length
       ? await db
           .selectFrom('invoice_lines')
@@ -92,6 +98,11 @@ export const GET = route(
         trackSerials: !!i.track_serials,
         stockGroupId: i.stock_group_id ? asId(i.stock_group_id) : null,
         valuationMethod: i.valuation_method,
+        isKit: !!i.is_kit,
+        imageFileId: i.image_file_id ? asId(i.image_file_id) : null,
+        kitComponents: comps.filter((c) => c.kit_item_id === i.id).map((c) => ({ itemId: asId(c.component_item_id), qty: Number(c.qty) })),
+        itemGroupId: i.item_group_id ? asId(i.item_group_id) : null,
+        variant: i.variant ? (typeof i.variant === 'string' ? JSON.parse(i.variant) : i.variant) as Record<string, string> : null,
         updatedAt: new Date(i.updated_at).toISOString(),
         qtySold: Number(soldBy.get(i.id)?.qty ?? 0),
         soldValuePaise: toPaiseFromSql(soldBy.get(i.id)?.value ?? '0'),
@@ -136,6 +147,8 @@ const ItemInput = z.object({
   stockGroupId: z.coerce.number().int().positive().nullish(),
   /** Null follows the book's method. */
   valuationMethod: z.enum(['average', 'fifo']).nullish(),
+  /** Sold as a set: its components and how many of each (services/kits.ts). Empty makes it an ordinary item again. */
+  kitComponents: z.array(z.object({ itemId: z.coerce.number().int().positive(), qty: z.number().positive() })).max(50).optional(),
 });
 
 /** A stock group has to be one of the book's own. */
@@ -242,6 +255,7 @@ export const POST = route(
       .executeTakeFirstOrThrow();
 
     const id = Number(inserted.insertId);
+    if (input.kitComponents?.length) await transaction((trx) => saveKit(trx, orgId, id, input.kitComponents!));
     await logAudit({
       orgId, actorUserId: user.userId, actorName: user.name, action: 'create',
       targetType: 'item', targetId: id, targetLabel: input.name,
@@ -335,6 +349,7 @@ export const PATCH = route(
       await db.updateTable('items').set(patch).where('id', '=', id).where('org_id', '=', orgId).execute();
     }
     const changes = changesBetween(before, patch);
+    if (input.kitComponents !== undefined) await transaction((trx) => saveKit(trx, orgId, id, input.kitComponents!));
 
     await logAudit({
       orgId, actorUserId: user.userId, actorName: user.name, action: 'update',

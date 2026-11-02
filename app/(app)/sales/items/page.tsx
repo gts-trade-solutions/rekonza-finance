@@ -18,6 +18,8 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
+import { ItemGroupDialog } from '@/components/sales/item-group-dialog';
+import { ItemImageField, ItemThumb } from '@/components/sales/item-image';
 import { Combobox } from '@/components/ui/combobox';
 import {
   Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle,
@@ -47,6 +49,8 @@ const BLANK = {
   openingQty: '', openingRate: 0, trackBatches: false, trackSerials: false,
   mrp: 0, standardCost: 0, altUqc: '', altFactor: '', reorderLevel: '', minLevel: '',
   stockGroupId: '', valuationMethod: '' as '' | 'average' | 'fifo',
+  // A kit: sold as a set, taking its components out of stock (services/kits.ts).
+  isKit: false, kit: [] as { itemId: string; qty: number }[],
 };
 
 /** A blank text box is "not set"; anything else has to be a number of zero or more. */
@@ -64,6 +68,7 @@ export default function ItemsPage() {
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<ItemRow | null>(null);
   const [form, setForm] = useState(BLANK);
+  const [grouping, setGrouping] = useState(false);
 
   const state = useApi<Loaded>(
     async () => {
@@ -116,6 +121,7 @@ export default function ItemsPage() {
       mrp: r.mrpPaise ?? 0, standardCost: r.standardCostPaise ?? 0,
       altUqc: r.altUqc ?? '', altFactor: s(r.altFactor), reorderLevel: s(r.reorderLevel), minLevel: s(r.minLevel),
       stockGroupId: r.stockGroupId ?? '', valuationMethod: r.valuationMethod ?? '',
+      isKit: !!r.isKit, kit: r.kitComponents ?? [],
     });
     setOpen(true);
   };
@@ -131,6 +137,8 @@ export default function ItemsPage() {
       toast.error('Quantities are numbers of zero or more.');
       return;
     }
+    const kit = form.isKit ? form.kit.filter((k) => k.itemId && k.qty > 0) : [];
+    if (form.isKit && !kit.length) { toast.error('A kit needs its components: pick each item and how many.'); return; }
     const payload = {
       kind: form.kind,
       name: form.name.trim(),
@@ -155,6 +163,8 @@ export default function ItemsPage() {
       minLevel,
       stockGroupId: goods && form.stockGroupId ? form.stockGroupId : null,
       valuationMethod: goods && form.valuationMethod ? form.valuationMethod : null,
+      // Sent when it is a kit, or was one: an empty list makes it an ordinary item again.
+      ...(goods && (form.isKit || editing?.isKit) ? { kitComponents: kit.map((k) => ({ itemId: k.itemId, qty: k.qty })) } : {}),
     };
     const result = editing
       ? await update.run({ ...payload, id: editing.id, expectedUpdatedAt: editing.updatedAt })
@@ -173,13 +183,17 @@ export default function ItemsPage() {
       header: 'Item',
       sortValue: (r) => r.name,
       cell: (r) => (
-        <div>
+        <div className="flex items-center gap-2.5">
+          <ItemThumb fileId={r.imageFileId} name={r.name} />
+          <div>
           <p className="font-medium">{r.name}</p>
           <p className="text-xs text-muted-foreground">
             {r.sku ?? '—'}
             {r.trackSerials && ' · serial nos.'}
+            {r.isKit && ` · kit of ${r.kitComponents?.length ?? 0}`}
             {r.trackBatches && ' · batches'}
           </p>
+          </div>
         </div>
       ),
     },
@@ -250,12 +264,21 @@ export default function ItemsPage() {
             ? 'HSN/SAC codes and GST rates flow automatically onto every invoice and bill. Click an item to edit it.'
             : 'Cost prices are hidden for your role.'
         }
-        actions={canCreate && <Button size="sm" className="gap-1.5" onClick={openNew}><Plus className="size-4" /> New item</Button>}
+        actions={canCreate && (
+          <div className="flex gap-2">
+            <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setGrouping(true)}><Plus className="size-4" /> Item group</Button>
+            <Button size="sm" className="gap-1.5" onClick={openNew}><Plus className="size-4" /> New item</Button>
+          </div>
+        )}
       />
       <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) setEditing(null); }}>
         <DialogContent className="max-w-lg">
           <DialogHeader><DialogTitle>{editing ? `Edit ${editing.name}` : 'New item'}</DialogTitle></DialogHeader>
           <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="Picture" className="sm:col-span-2">
+              <ItemImageField itemId={editing?.id ?? null} fileId={editing?.imageFileId} name={form.name || 'Item'} canEdit={canEdit}
+                onChanged={(fileId) => { if (editing) setEditing({ ...editing, imageFileId: fileId }); state.refetch(); }} />
+            </Field>
             <Field label="Name" required error={action.fieldErrors.name} className="sm:col-span-2">
               <Input value={form.name} onChange={(e) => set({ name: e.target.value })} placeholder="Item name" />
             </Field>
@@ -367,6 +390,30 @@ export default function ItemsPage() {
             )}
             {action.error && <p className="text-sm text-destructive sm:col-span-2">{action.error}</p>}
           </div>
+          {form.kind === 'goods' && (
+            <div className="space-y-2 rounded-md border p-3" data-slot="kit-editor">
+              <label className="flex items-start gap-2 text-sm">
+                <input type="checkbox" className="mt-1" checked={form.isKit} onChange={(e) => set({ isKit: e.target.checked, kit: e.target.checked && !form.kit.length ? [{ itemId: '', qty: 1 }] : form.kit })} />
+                <span>Sold as a kit<span className="block text-xs text-muted-foreground">It holds no stock of its own: each sale takes the components below out of stock, and a return puts them back.</span></span>
+              </label>
+              {form.isKit && (
+                <div className="space-y-2">
+                  {form.kit.map((k, i) => (
+                    <div key={i} className="grid grid-cols-[1fr_90px_auto] gap-2">
+                      <select value={k.itemId} onChange={(e) => set({ kit: form.kit.map((x, j) => (j === i ? { ...x, itemId: e.target.value } : x)) })} className="h-9 rounded-md border bg-background px-2 text-sm" aria-label="Component">
+                        <option value="">Pick a component</option>
+                        {(state.data?.items ?? []).filter((x) => x.kind === 'goods' && x.trackInventory && !x.isKit && x.id !== editing?.id).map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+                      </select>
+                      <Input type="number" min={0} step="0.001" value={k.qty} onChange={(e) => set({ kit: form.kit.map((x, j) => (j === i ? { ...x, qty: Number(e.target.value) || 0 } : x)) })} aria-label="Quantity in the kit" />
+                      <Button size="sm" variant="ghost" onClick={() => set({ kit: form.kit.filter((_, j) => j !== i) })}>Remove</Button>
+                    </div>
+                  ))}
+                  <Button size="sm" variant="outline" onClick={() => set({ kit: [...form.kit, { itemId: '', qty: 1 }] })}>Add a component</Button>
+                </div>
+              )}
+            </div>
+          )}
+
           <DialogFooter>
             <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
             <Button onClick={save} disabled={action.busy}>
@@ -391,6 +438,7 @@ export default function ItemsPage() {
           )
         }
       </AsyncPage>
+      <ItemGroupDialog open={grouping} onOpenChange={setGrouping} onCreated={() => state.refetch()} />
     </>
   );
 }

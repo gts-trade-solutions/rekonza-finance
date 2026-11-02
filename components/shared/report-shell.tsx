@@ -46,6 +46,23 @@ export function CompareSelect({ value, onChange }: { value: CompareMode; onChang
   );
 }
 
+/** Zoho's "Report basis": accrual counts a sale when invoiced, cash when it is paid. */
+export type ReportBasis = 'accrual' | 'cash';
+
+export function BasisSelect({ value, onChange }: { value: ReportBasis; onChange: (v: ReportBasis) => void }) {
+  return (
+    <div className="space-y-1">
+      <label className="text-[11px] font-medium text-muted-foreground" htmlFor="report-basis">Report basis</label>
+      <select id="report-basis" value={value} onChange={(e) => onChange(e.target.value as ReportBasis)} data-slot="report-basis"
+        title="Accrual counts a sale when it is invoiced and a cost when it is billed; cash counts each when it is paid."
+        className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm">
+        <option value="accrual">Accrual</option>
+        <option value="cash">Cash</option>
+      </select>
+    </div>
+  );
+}
+
 /**
  * What the next export is for. Every report builds its rows and hands them to
  * downloadCsv; the Export menu sets this first, so choosing Excel gets the same
@@ -83,6 +100,7 @@ export function downloadCsv(filename: string, rows: (string | number)[][]) {
 
 /** A file to upload somewhere else, such as the GST portal. */
 export function downloadJson(filename: string, data: unknown) {
+  if (!allowOutput('export', filename)) return;
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');

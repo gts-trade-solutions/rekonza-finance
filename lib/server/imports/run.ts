@@ -20,7 +20,11 @@ import { CODE } from '../ledger/chart-of-accounts';
 import { GST_RATES, GST_STATES, isValidGstin } from '../../tax/gst';
 import { TEMPLATES, type ImportKind } from '../../imports/templates';
 import { createInvoice } from '../services/sales';
-import { createBill } from '../services/purchases';
+import { createBill, createExpense } from '../services/purchases';
+import { createCreditNote, createEstimate, createSalesOrder } from '../services/sales-documents';
+import { createPurchaseOrder } from '../services/purchase-documents';
+import { makePayment, receivePayment, type PaymentMode } from '../services/payments';
+import { toPaiseFromSql } from '../money-sql';
 import { addOpeningDocument, setAccountOpenings } from '../services/opening-balances';
 
 export type Row = Record<string, unknown>;
@@ -49,6 +53,7 @@ const fail = (m: string): never => { throw new RowError(m); };
 
 const str = (v: unknown) => (v === null || v === undefined ? '' : String(v).trim());
 const opt = (v: unknown) => str(v) || null;
+const addDays = (iso: string, n: number) => new Date(Date.parse(`${iso}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
 
 function num(v: unknown, label: string): number | null {
   const s = str(v).replace(/[₹,\s]/g, '');
@@ -108,17 +113,20 @@ function gstRate(v: unknown): number | null {
 // ── Lookups shared by the handlers ───────────────────────────────────────────
 
 async function lookups(trx: Trx, orgId: number) {
-  const [contacts, items, accounts, hsn] = await Promise.all([
+  const [contacts, items, accounts, hsn, banks] = await Promise.all([
     trx.selectFrom('contacts').select(['id', 'display_name', 'kind']).where('org_id', '=', orgId).execute(),
     trx.selectFrom('items').select(['id', 'name', 'sku']).where('org_id', '=', orgId).execute(),
     trx.selectFrom('accounts').select(['id', 'code', 'name']).where('org_id', '=', orgId).execute(),
     trx.selectFrom('hsn_codes').select(['code']).where('org_id', '=', orgId).execute(),
+    trx.selectFrom('bank_accounts').select(['id', 'name']).where('org_id', '=', orgId).where('is_active', '=', 1).execute(),
   ]);
   const key = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim();
   return {
     contacts: new Map(contacts.map((c) => [key(c.display_name), c])),
     items: new Map(items.flatMap((i) => [[key(i.name), i] as const, ...(i.sku ? [[key(i.sku), i] as const] : [])])),
     accounts: new Map(accounts.map((a) => [a.code, a])),
+    accountsByName: new Map(accounts.map((a) => [key(a.name), a])),
+    banks: new Map(banks.map((b) => [key(b.name), b])),
     hsn: new Set(hsn.map((h) => h.code)),
     key,
   };
@@ -236,7 +244,53 @@ const openingBills: Handler = async (trx, ctx, l, r) => {
   return 'created';
 };
 
-const HANDLERS: Partial<Record<ImportKind, Handler>> = { contacts, items, accounts, 'opening-bills': openingBills };
+const bankOf = (l: Lookups, name: unknown, label: string) =>
+  l.banks.get(l.key(str(name))) ?? fail(`${label} "${str(name)}" is not one of your bank or cash accounts.`);
+
+const expenses: Handler = async (trx, ctx, l, r) => {
+  const ref = str(r.account_code);
+  const acct = l.accounts.get(ref) ?? l.accountsByName.get(l.key(ref)) ?? fail(`Account ${ref} is not in your chart.`);
+  const itc = (str(r.itc).toLowerCase() || 'eligible') as 'eligible' | 'ineligible' | 'capital_goods';
+  if (!['eligible', 'ineligible', 'capital_goods'].includes(itc)) fail(`Input credit "${str(r.itc)}" should be eligible, ineligible or capital_goods.`);
+  const customerId = str(r.customer) ? party(l, r.customer, 'customer', 'Billable to customer') : null;
+  await createExpense(trx, ctx.orgId, ctx.userId, {
+    branchId: ctx.branchId, date: date(r.date, 'Date'), accountId: acct.id, paidThroughBankAccountId: bankOf(l, r.paid_through, 'Paid through').id,
+    amountPaise: paise(r.total, 'Amount paid') ?? fail('Amount paid is missing.'), gstRatePct: gstRate(r.gst_rate) ?? 0,
+    vendorId: str(r.vendor) ? party(l, r.vendor, 'vendor', 'Vendor') : null, itcEligibility: itc,
+    isBillable: !!customerId, billableCustomerId: customerId, reference: opt(r.reference), notes: opt(r.notes),
+  });
+  return 'created';
+};
+
+const MODES = ['cash', 'cheque', 'upi', 'neft', 'imps', 'card'];
+const payment = (side: 'received' | 'made'): Handler => async (trx, ctx, l, r) => {
+  const contactId = party(l, side === 'received' ? r.customer : r.vendor, side === 'received' ? 'customer' : 'vendor', side === 'received' ? 'Customer' : 'Vendor');
+  const mode = (str(r.mode).toLowerCase() || 'neft') as PaymentMode;
+  if (!MODES.includes(mode)) fail(`Mode "${str(r.mode)}" should be one of ${MODES.join(', ')}.`);
+  const amount = paise(r.amount, 'Amount') ?? fail('Amount is missing.');
+  const allocations = [];
+  const doc = str(side === 'received' ? r.invoice : r.bill);
+  if (doc) {
+    const d = side === 'received'
+      ? await trx.selectFrom('invoices').select(['id', 'total', 'amount_paid', 'status']).where('org_id', '=', ctx.orgId).where('customer_id', '=', contactId).where('number', '=', doc).executeTakeFirst()
+      : await trx.selectFrom('bills').select(['id', 'total', 'amount_paid', 'status']).where('org_id', '=', ctx.orgId).where('vendor_id', '=', contactId).where('vendor_invoice_no', '=', doc).executeTakeFirst();
+    if (!d || d.status === 'void' || d.status === 'draft') fail(`${side === 'received' ? 'Invoice' : 'Bill'} ${doc} is not an open one of theirs.`);
+    const open = toPaiseFromSql(d!.total) - toPaiseFromSql(d!.amount_paid);
+    if (open <= 0) fail(`${side === 'received' ? 'Invoice' : 'Bill'} ${doc} is paid already.`);
+    allocations.push({ targetType: side === 'received' ? 'invoice' as const : 'bill' as const, targetId: d!.id, amountPaise: Math.min(open, amount) });
+  }
+  const input = {
+    branchId: ctx.branchId, contactId, date: date(r.date, 'Date'), mode, amountPaise: amount,
+    bankAccountId: bankOf(l, r.account, side === 'received' ? 'Deposited to' : 'Paid from').id, reference: opt(r.reference),
+    tdsPaise: paise(r.tds, 'TDS') ?? 0, bankChargesPaise: paise(r.bank_charges, 'Bank charges') ?? 0, allocations, notes: opt(r.notes),
+  };
+  await (side === 'received' ? receivePayment(trx, ctx.orgId, ctx.userId, input) : makePayment(trx, ctx.orgId, ctx.userId, input));
+  return 'created';
+};
+
+const HANDLERS: Partial<Record<ImportKind, Handler>> = {
+  contacts, items, accounts, 'opening-bills': openingBills, expenses, 'payments-received': payment('received'), 'payments-made': payment('made'),
+};
 
 // ── Grouped kinds: one document from several rows ────────────────────────────
 
@@ -306,7 +360,56 @@ const bills: GroupHandler = async (trx, ctx, l, rows) => {
   });
 };
 
-const GROUPED: Partial<Record<ImportKind, GroupHandler>> = { journals, invoices, bills };
+const linesOf = async (trx: Trx, ctx: ImportContext, l: Lookups, rows: Row[]) => {
+  const lines = [];
+  for (const r of rows) lines.push(await lineOf(trx, ctx, l, r));
+  return lines;
+};
+
+const estimates: GroupHandler = async (trx, ctx, l, rows) => {
+  const when = date(rows[0].date, 'Date');
+  const until = str(rows[0].expiry_date) ? date(rows[0].expiry_date, 'Valid until') : addDays(when, 30);
+  if (until < when) fail('A quote is valid until a date after its own.');
+  await createEstimate(trx, ctx.orgId, ctx.userId, {
+    branchId: ctx.branchId, customerId: party(l, rows[0].customer, 'customer', 'Customer'),
+    number: str(rows[0].number), date: when, expiryDate: until, status: 'sent', lines: await linesOf(trx, ctx, l, rows),
+  });
+};
+
+const salesOrders: GroupHandler = async (trx, ctx, l, rows) => {
+  await createSalesOrder(trx, ctx.orgId, ctx.userId, {
+    branchId: ctx.branchId, customerId: party(l, rows[0].customer, 'customer', 'Customer'), number: str(rows[0].number),
+    date: date(rows[0].date, 'Date'), expectedShipDate: str(rows[0].expected_ship_date) ? date(rows[0].expected_ship_date, 'Expected shipment') : null,
+    lines: await linesOf(trx, ctx, l, rows),
+  });
+};
+
+const creditNotes: GroupHandler = async (trx, ctx, l, rows) => {
+  const customerId = party(l, rows[0].customer, 'customer', 'Customer');
+  let againstInvoiceId: number | null = null;
+  if (str(rows[0].against_invoice)) {
+    const inv = await trx.selectFrom('invoices').select(['id', 'customer_id']).where('org_id', '=', ctx.orgId).where('number', '=', str(rows[0].against_invoice)).executeTakeFirst();
+    if (!inv) fail(`Invoice ${str(rows[0].against_invoice)} is not in your books.`);
+    if (inv!.customer_id !== customerId) fail(`Invoice ${str(rows[0].against_invoice)} is another customer's.`);
+    againstInvoiceId = inv!.id;
+  }
+  await createCreditNote(trx, ctx.orgId, ctx.userId, {
+    branchId: ctx.branchId, customerId, number: str(rows[0].number), date: date(rows[0].date, 'Date'),
+    reason: str(rows[0].reason) || fail('Reason is missing.'), againstInvoiceId, lines: await linesOf(trx, ctx, l, rows),
+  });
+};
+
+const purchaseOrders: GroupHandler = async (trx, ctx, l, rows) => {
+  await createPurchaseOrder(trx, ctx.orgId, ctx.userId, {
+    branchId: ctx.branchId, vendorId: party(l, rows[0].vendor, 'vendor', 'Vendor'), number: str(rows[0].number),
+    date: date(rows[0].date, 'Date'), expectedDate: str(rows[0].expected_date) ? date(rows[0].expected_date, 'Expected') : null,
+    status: 'open', lines: await linesOf(trx, ctx, l, rows),
+  });
+};
+
+const GROUPED: Partial<Record<ImportKind, GroupHandler>> = {
+  journals, invoices, bills, estimates, 'sales-orders': salesOrders, 'credit-notes': creditNotes, 'purchase-orders': purchaseOrders,
+};
 
 function messageOf(err: unknown): string {
   if (err instanceof RowError) return err.message;

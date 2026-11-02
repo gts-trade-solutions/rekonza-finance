@@ -8,7 +8,9 @@
 // ids — so a page that needs the server's ids asks for them directly.
 
 import { useMemo, useState } from 'react';
-import { Plus, Receipt, Wallet } from 'lucide-react';
+import { Plus, Receipt, Tags, Wallet } from 'lucide-react';
+import { TagsPanel } from '@/components/shared/tags-panel';
+import { CustomFieldsPanel } from '@/components/shared/custom-fields-panel';
 import { toast } from 'sonner';
 import { toastWarnings } from '@/lib/api/warnings';
 import { Button } from '@/components/ui/button';
@@ -33,7 +35,7 @@ import { ALL_TIME, type RangeValue } from '@/lib/date-range';
 import { today } from '@/lib/selectors';
 import { formatINRCompact } from '@/lib/money';
 import { GST_RATES } from '@/lib/tax/gst';
-import { api, expenses as expenseApi, type ExpenseListItem } from '@/lib/api/client';
+import { api, expenses as expenseApi, projects, type ExpenseListItem } from '@/lib/api/client';
 import { useApi, useApiAction } from '@/lib/api/use-api';
 import { CostCentrePicker } from '@/components/forms/cost-centre-picker';
 
@@ -52,6 +54,12 @@ const BLANK = {
   notes: '',
   reference: '',
   billable: false,
+  billTo: '',
+  projectId: '',
+  // A journey claimed by the kilometre: distance times the rate, no GST.
+  mileage: false,
+  km: 0,
+  ratePerKm: 0,
   itcEligibility: 'eligible' as 'eligible' | 'ineligible' | 'capital_goods',
 };
 
@@ -63,6 +71,7 @@ export default function ExpensesPage() {
   const [open, setOpen] = useState(false);
   const [f, setF] = useState(BLANK);
   const [costCentreId, setCostCentreId] = useState('');
+  const [tagging, setTagging] = useState<ExpenseListItem | null>(null);
 
   const state = useApi(
     () =>
@@ -76,6 +85,8 @@ export default function ExpensesPage() {
 
   const masters = useApi<ExpenseMasters>(() => api.get<ExpenseMasters>('/api/masters'), []);
   const create = useApiAction(expenseApi.create);
+  const projectList = useApi(() => (open ? projects.list({ status: 'active' }) : Promise.resolve({ projects: [] })), [open]);
+  const projectOptions = useMemo(() => (projectList.data?.projects ?? []).map((p) => ({ value: p.id, label: p.name, sublabel: p.customerName })), [projectList.data]);
 
   const options = useMemo(() => {
     const m = masters.data;
@@ -91,7 +102,12 @@ export default function ExpensesPage() {
   }, [masters.data]);
 
   const save = async () => {
-    if (!f.accountId || f.amount <= 0 || !f.paidThroughId) {
+    const amount = f.mileage ? Math.round(f.km * f.ratePerKm) : f.amount;
+    if (f.billable && !f.billTo && !f.projectId) {
+      toast.error('Say which customer it is re-charged to, or the project it is for.');
+      return;
+    }
+    if (!f.accountId || amount <= 0 || !f.paidThroughId) {
       toast.error('Pick a category, an account it was paid from, and an amount.');
       return;
     }
@@ -103,11 +119,14 @@ export default function ExpensesPage() {
       paidThroughBankAccountId: f.paidThroughId,
       // What was entered is what was actually paid; the server extracts the GST
       // inside it rather than adding tax on top.
-      amountPaise: f.amount,
-      gstRatePct: f.gst,
+      amountPaise: f.mileage ? 0 : f.amount,
+      gstRatePct: f.mileage ? 0 : f.gst,
+      mileage: f.mileage ? { km: f.km, ratePaise: f.ratePerKm } : undefined,
       vendorId: f.vendorId || undefined,
       itcEligibility: f.itcEligibility,
       isBillable: f.billable,
+      billableCustomerId: f.billable && !f.projectId ? f.billTo || undefined : undefined,
+      projectId: f.projectId || undefined,
       reference: f.reference || undefined,
       notes: f.notes || undefined,
       costCentreId: costCentreId || undefined,
@@ -173,6 +192,7 @@ export default function ExpensesPage() {
         ),
     },
     { key: 'total', header: 'Total paid', align: 'right', sortValue: (r) => r.totalPaise, cell: (r) => <Money value={r.totalPaise} /> },
+    { key: 'tags', header: '', sortValue: () => 0, cell: (r) => <Button size="icon-sm" variant="ghost" aria-label={`Tags and details for ${r.number}`} onClick={() => setTagging(r)}><Tags className="size-3.5" /></Button> },
   ];
 
   return (
@@ -191,6 +211,10 @@ export default function ExpensesPage() {
                 <DialogContent>
                   <DialogHeader><DialogTitle>Record expense</DialogTitle></DialogHeader>
                   <div className="grid gap-4 sm:grid-cols-2">
+                    <label className="flex items-center justify-between gap-3 rounded-md border p-3 text-sm sm:col-span-2">
+                      <span>Mileage<span className="block text-xs text-muted-foreground">A journey claimed by the kilometre: the distance times the rate, with no GST.</span></span>
+                      <Switch checked={f.mileage} onCheckedChange={(v) => setF({ ...f, mileage: v })} data-slot="mileage-switch" />
+                    </label>
                     <Field label="Category" required className="sm:col-span-2">
                       <Combobox
                         options={options.expenseAccounts}
@@ -201,10 +225,21 @@ export default function ExpensesPage() {
                         showAvatar={false}
                       />
                     </Field>
+                    {f.mileage ? (
+                      <>
+                        <Field label="Distance (km)" required>
+                          <Input type="number" min={0} step="0.1" value={f.km || ''} onChange={(e) => setF({ ...f, km: Number(e.target.value) || 0 })} />
+                        </Field>
+                        <Field label="Rate a km" required hint={f.km && f.ratePerKm ? `Comes to ₹${(Math.round(f.km * f.ratePerKm) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` : undefined}>
+                          <MoneyInput valuePaise={f.ratePerKm} onChangePaise={(p) => setF({ ...f, ratePerKm: p })} />
+                        </Field>
+                      </>
+                    ) : (
                     <Field label="Amount paid" required hint="Including GST — the tax is extracted from it">
                       <MoneyInput valuePaise={f.amount} onChangePaise={(p) => setF({ ...f, amount: p })} />
                     </Field>
-                    <Field label="GST rate">
+                    )}
+                    {!f.mileage && <Field label="GST rate">
                       <Combobox
                         options={GST_RATES.map((r) => ({ value: String(r), label: `${r}%` }))}
                         value={String(f.gst)}
@@ -212,7 +247,7 @@ export default function ExpensesPage() {
                         showAvatar={false}
                         searchPlaceholder="Rate"
                       />
-                    </Field>
+                    </Field>}
                     <CostCentrePicker value={costCentreId} onChange={setCostCentreId} />
                     <Field label="Paid through" required>
                       <Combobox
@@ -260,11 +295,19 @@ export default function ExpensesPage() {
                       <div>
                         <p className="text-sm font-medium">Billable to a customer</p>
                         <p className="mt-0.5 text-xs text-muted-foreground">
-                          Re-charged on their next invoice.
+                          Offered on the customer&rsquo;s next invoice, or billed with its project.
                         </p>
                       </div>
                       <Switch checked={f.billable} onCheckedChange={(v) => setF({ ...f, billable: v })} />
                     </div>
+                    <Field label="Project" hint={f.billable ? 'Re-charged to the project’s customer when it is billed' : 'Optional: a cost of the project'}>
+                      <Combobox options={projectOptions} value={f.projectId} onChange={(v) => setF({ ...f, projectId: v })} placeholder="None" showAvatar={false} clearable />
+                    </Field>
+                    {f.billable && !f.projectId && (
+                      <Field label="Re-charge to" required>
+                        <ContactPicker kind="customer" value={f.billTo} onChange={(v) => setF({ ...f, billTo: v })} placeholder="Customer" canCreate={canCreate} />
+                      </Field>
+                    )}
                   </div>
                   {create.error && <p className="text-sm text-destructive">{create.error}</p>}
                   <DialogFooter>
@@ -318,6 +361,14 @@ export default function ExpensesPage() {
           )
         }
       </AsyncPage>
+      <Dialog open={!!tagging} onOpenChange={(o) => !o && setTagging(null)}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader><DialogTitle>{tagging?.number}: tags and details</DialogTitle></DialogHeader>
+          {tagging && <TagsPanel entity="expense" id={tagging.id} canEdit={canCreate} />}
+          {tagging && <CustomFieldsPanel entity="expense" id={tagging.id} canEdit={canCreate} />}
+          {tagging && <p className="text-xs text-muted-foreground">Reporting tags and custom fields for expenses are set up under Settings.</p>}
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

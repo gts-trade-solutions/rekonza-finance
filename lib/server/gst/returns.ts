@@ -19,6 +19,7 @@ import type { Executor } from '../db';
 import type { Paise } from '../../types';
 import { toPaiseFromSql } from '../money-sql';
 import { advancesForMonth } from './advances';
+import { creditUsedFor, setOffCredit } from './set-off';
 
 /**
  * The B2CL threshold: an inter-state sale to a consumer above this is listed
@@ -59,8 +60,10 @@ export interface Gstr1Row {
   igstPaise: Paise;
   cessPaise: Paise;
   totalPaise: Paise;
-  /** Only meaningful on a credit note. */
+  /** Only meaningful on a note. */
   reason?: string;
+  /** C for a credit note, D for a debit note (kept with the invoices, reported here). */
+  noteType?: 'C' | 'D';
   againstNumber?: string | null;
   irnStatus?: string;
 }
@@ -95,14 +98,16 @@ export async function gstr1(ex: Executor, orgId: number, month: string, branchId
     customer_name: string; gstin: string | null; place_of_supply: string;
     supply_type: string; subtotal: string; cgst: string; sgst: string;
     igst: string; cess: string; total: string; irn_status: string | null;
+    doc_kind: 'invoice' | 'debit_note'; note_reason: string | null; against_number: string | null;
   }>`
-    SELECT i.id, i.number, i.invoice_date, i.status,
+    SELECT i.id, i.number, i.invoice_date, i.status, i.doc_kind, i.note_reason, o.number AS against_number,
            c.display_name AS customer_name, c.gstin, i.place_of_supply, i.supply_type,
            i.subtotal, i.cgst, i.sgst, i.igst, i.cess, i.total,
            e.status AS irn_status
       FROM invoices i
       JOIN contacts c ON c.id = i.customer_id
       LEFT JOIN einvoices e ON e.invoice_id = i.id
+      LEFT JOIN invoices o ON o.id = i.against_invoice_id
      WHERE i.org_id = ${orgId}
        AND i.invoice_date BETWEEN ${period.from} AND ${period.to}
        ${branchId ? sql`AND i.branch_id = ${branchId}` : sql``}
@@ -138,9 +143,11 @@ export async function gstr1(ex: Executor, orgId: number, month: string, branchId
   const b2cs: Gstr1Row[] = [];
   const exports: Gstr1Row[] = [];
 
+  const debitNotes: Gstr1Row[] = [];
   for (const r of live) {
     const row = toRow(r);
-    if (['export_lut', 'export_with_tax', 'sez'].includes(r.supply_type)) exports.push(row);
+    if (r.doc_kind === 'debit_note') debitNotes.push({ ...row, noteType: 'D', reason: r.note_reason ?? undefined, againstNumber: r.against_number });
+    else if (['export_lut', 'export_with_tax', 'sez'].includes(r.supply_type)) exports.push(row);
     else if (r.gstin) b2b.push(row);
     else if (r.supply_type === 'inter' && row.totalPaise > b2clThreshold(row.date)) b2cl.push(row);
     else b2cs.push(row);
@@ -181,7 +188,10 @@ export async function gstr1(ex: Executor, orgId: number, month: string, branchId
     totalPaise: toPaiseFromSql(r.total),
     reason: r.reason,
     againstNumber: r.against_number,
+    noteType: 'C' as const,
   }));
+  // Debit notes sit in the same tables as credit notes (9B), as type D.
+  creditNotes.push(...debitNotes);
 
   // Table 12: goods and services rolled up by HSN/SAC.
   const hsnRows = await sql<{
@@ -307,8 +317,9 @@ export async function gstr1(ex: Executor, orgId: number, month: string, branchId
     hsn,
     totals,
     documentSummary: {
-      from: issued[0]?.number ?? '—',
-      to: issued[issued.length - 1]?.number ?? '—',
+      // The invoice series; debit notes run in a series of their own.
+      from: issued.find((r) => r.doc_kind !== 'debit_note')?.number ?? '—',
+      to: issued.findLast((r) => r.doc_kind !== 'debit_note')?.number ?? '—',
       total: issued.length,
       cancelled: cancelled.length,
     },
@@ -350,6 +361,8 @@ export interface Gstr3b {
     reversedRule37Paise: Paise;
     /** Table 4(D)(1): credit reversed earlier and taken again on payment. */
     reclaimedPaise: Paise;
+    /** Table 4(A)(1): IGST and cess paid at customs on bills of entry, included above. */
+    importsPaise: Paise;
   };
   /**
    * Head by head: what is owed, how much credit settles, and the cash left.
@@ -515,6 +528,15 @@ export async function gstr3b(ex: Executor, orgId: number, month: string, branchI
     heads(sql`e.source_type = 'itc_reversal_37'`),
     heads(sql`e.source_type = 'itc_reclaim_37'`),
   ]);
+  // Goods imported: IGST and cess paid at customs (services/bill-of-entry.ts).
+  const boe = await sql<{ igst: string; cess: string; blocked: string }>`
+    SELECT COALESCE(SUM(IF(itc_eligibility <> 'ineligible', igst, 0)), 0) AS igst,
+           COALESCE(SUM(IF(itc_eligibility <> 'ineligible', cess, 0)), 0) AS cess,
+           COALESCE(SUM(IF(itc_eligibility = 'ineligible', igst + cess, 0)), 0) AS blocked
+      FROM bills_of_entry
+     WHERE org_id = ${orgId} AND status = 'recorded'
+       AND boe_date BETWEEN ${period.from} AND ${period.to} ${inv}
+  `.execute(ex).then((r) => r.rows[0]);
   const total = (h: Heads) => p(h.cgst) + p(h.sgst) + p(h.igst) + p(h.cess);
   // A reclaim debits the ledgers, so its 'credit less debit' is negative.
   const out = (k: keyof Heads) => p(rule42[k]) + p(rule37[k]) + p(reclaim[k]);
@@ -523,40 +545,25 @@ export async function gstr3b(ex: Executor, orgId: number, month: string, branchI
   const itc = {
     cgstPaise: p(i.cgst) + p(x.cgst) + p(rcmCredit.cgst) - reversed.cgst - out('cgst'),
     sgstPaise: p(i.sgst) + p(x.sgst) + p(rcmCredit.sgst) - reversed.sgst - out('sgst'),
-    igstPaise: p(i.igst) + p(x.igst) + p(rcmCredit.igst) - reversed.igst - out('igst'),
-    cessPaise: p(i.cess) + p(rcmCredit.cess) - reversed.cess - out('cess'),
-    blockedPaise: p(blockedRes.rows[0].blocked),
+    igstPaise: p(i.igst) + p(x.igst) + p(rcmCredit.igst) + p(boe.igst) - reversed.igst - out('igst'),
+    cessPaise: p(i.cess) + p(rcmCredit.cess) + p(boe.cess) - reversed.cess - out('cess'),
+    blockedPaise: p(blockedRes.rows[0].blocked) + p(boe.blocked),
+    importsPaise: p(boe.igst) + p(boe.cess),
     reversedPaise: reversed.cgst + reversed.sgst + reversed.igst + reversed.cess,
     reversedRule42Paise: total(rule42),
     reversedRule37Paise: total(rule37),
     reclaimedPaise: -total(reclaim),
   };
 
-  // Only the forward-charge liability can be met with credit.
+  // Only the forward-charge liability can be met with credit (set-off.ts).
   const owed = {
     IGST: Math.max(0, outward.igstPaise),
     CGST: Math.max(0, outward.cgstPaise),
     SGST: Math.max(0, outward.sgstPaise),
     CESS: Math.max(0, outward.cessPaise),
   };
-  const used = { IGST: 0, CGST: 0, SGST: 0, CESS: 0 };
-  const apply = (credit: number, head: keyof typeof owed): number => {
-    const take = Math.min(Math.max(0, credit), owed[head] - used[head]);
-    used[head] += take;
-    return credit - take;
-  };
-
-  let igst = itc.igstPaise;
-  igst = apply(igst, 'IGST');
-  igst = apply(igst, 'CGST');
-  apply(igst, 'SGST');
-  let cgst = itc.cgstPaise;
-  cgst = apply(cgst, 'CGST');
-  apply(cgst, 'IGST');
-  let sgst = itc.sgstPaise;
-  sgst = apply(sgst, 'SGST');
-  apply(sgst, 'IGST');
-  apply(itc.cessPaise, 'CESS');
+  const so = setOffCredit(owed, { IGST: itc.igstPaise, CGST: itc.cgstPaise, SGST: itc.sgstPaise, CESS: itc.cessPaise });
+  const used = { IGST: creditUsedFor(so, 'IGST'), CGST: creditUsedFor(so, 'CGST'), SGST: creditUsedFor(so, 'SGST'), CESS: creditUsedFor(so, 'CESS') };
 
   const rcm = {
     IGST: inwardRcm.igstPaise, CGST: inwardRcm.cgstPaise, SGST: inwardRcm.sgstPaise, CESS: inwardRcm.cessPaise,
@@ -609,7 +616,8 @@ export async function iff(ex: Executor, orgId: number, month: string, branchId?:
     gstin: g.gstin,
     b2b: g.b2b,
     cdnr,
-    totals: { b2b: sum(g.b2b), cdnr: sum(cdnr) },
+    // Credit notes take value off and debit notes add it, so each is totalled apart.
+    totals: { b2b: sum(g.b2b), cdnr: sum(cdnr.filter((n) => n.noteType !== 'D')), debitNotes: sum(cdnr.filter((n) => n.noteType === 'D')) },
     issues: [
       ...g.issues.filter((i) => !/cancelled/.test(i.message)),
       ...(thirdMonth

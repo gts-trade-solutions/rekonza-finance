@@ -39,7 +39,7 @@ test('a share link opens its invoice until it lapses or is withdrawn; a draft is
     const inv = await sell('approved');
     const link = await createShareLink(trx, orgId, null, { invoiceId: inv.id });
     const token = link.path.replace('/share/', '');
-    assert.deepEqual(await openShareLink(trx, token), { orgId, docType: 'invoice', docId: inv.id, subId: null });
+    assert.deepEqual(await openShareLink(trx, token), { orgId, docType: 'invoice', docKind: null, docId: inv.id, subId: null });
     await openShareLink(trx, token);
     assert.equal((await trx.selectFrom('share_links').select('opens').where('doc_id', '=', inv.id).executeTakeFirstOrThrow()).opens, 2);
     assert.equal(await openShareLink(trx, 'x'.repeat(32)), null, 'an unknown token opens nothing');

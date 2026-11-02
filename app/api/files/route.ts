@@ -52,6 +52,11 @@ export const POST = route(async ({ orgId, user, role, req }) => {
     if (q.targetType === 'organization') {
       await trx.updateTable('organizations').set({ logo_file_id: Number(a.id) }).where('id', '=', orgId).execute();
     }
+    // An item's picture, likewise: sent as its image, and an image it must be.
+    if (q.targetType === 'item' && form.get('role') === 'image') {
+      if (!a.contentType.startsWith('image/')) throw badRequest('An item’s picture is a PNG, JPEG or WebP image.');
+      await trx.updateTable('items').set({ image_file_id: Number(a.id) }).where('id', '=', q.targetId).where('org_id', '=', orgId).execute();
+    }
     await logAudit({
       trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'update',
       targetType: q.targetType, targetId: q.targetId,

@@ -15,7 +15,7 @@ export async function turnOnDemoControls(trx: Trx, orgId: number, userId: number
   await setPolicies(trx, orgId, userId, {
     controls: {
       changeReasons: true, segregation: 'block', autoIrn: true, creditHoldDays: 90, creditHold: 'warn',
-      billsDueDays: 7, concentrationPct: 25, escalateAfterDays: 3, autoDepreciation: true,
+      billsDueDays: 7, concentrationPct: 25, escalateAfterDays: 3, autoDepreciation: true, timesheetApproval: false,
     },
     password: { minLength: 10, expiryDays: 0, history: 5 },
     reminders: { enabled: true, stages: [-3, 0, 15, 30, 60, 90], channel: 'whatsapp' },

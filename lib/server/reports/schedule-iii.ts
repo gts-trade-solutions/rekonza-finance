@@ -21,7 +21,7 @@ import type { Executor } from '../db';
 import type { Paise } from '../../types';
 import { toPaiseFromSql } from '../money-sql';
 import { CODE } from '../ledger/chart-of-accounts';
-import { balanceSheet, profitAndLoss, type AccountBalance } from './statements';
+import { balanceSheet, profitAndLoss, type AccountBalance, type ReportBasis } from './statements';
 
 export const BS_LINES = {
   share_capital: { side: 'el', group: "Shareholders' funds", label: 'Share capital' },
@@ -105,13 +105,13 @@ export function defaultLine(a: { code: string; type: AccountBalance['type']; sub
 
 const sameDayLastYear = (d: string) => `${Number(d.slice(0, 4)) - 1}${d.slice(4)}`;
 
-async function overrides(ex: Executor, orgId: number): Promise<Map<string, string>> {
+export async function overrides(ex: Executor, orgId: number): Promise<Map<string, string>> {
   const rows = await ex.selectFrom('accounts').select(['id', 'schedule_iii_line'])
     .where('org_id', '=', orgId).where('schedule_iii_line', 'is not', null).execute();
   return new Map(rows.map((r) => [String(r.id), r.schedule_iii_line as string]));
 }
 
-function lineOf(row: AccountBalance, over: Map<string, string>): string | null {
+export function lineOf(row: AccountBalance, over: Map<string, string>): string | null {
   const o = over.get(row.accountId);
   if (o && (o in BS_LINES || o in PL_LINES)) return o;
   return defaultLine(row);
@@ -232,12 +232,12 @@ export interface ScheduleIIIBalanceSheet {
 }
 
 export async function scheduleIIIBalanceSheet(
-  ex: Executor, orgId: number, asOf: string, branchId?: number,
+  ex: Executor, orgId: number, asOf: string, branchId?: number, basis: ReportBasis = 'accrual',
 ): Promise<ScheduleIIIBalanceSheet> {
   const previousAsOf = sameDayLastYear(asOf);
   const [now, before, over, receivablesAgeing, payablesAgeing] = await Promise.all([
-    balanceSheet(ex, orgId, asOf, branchId),
-    balanceSheet(ex, orgId, previousAsOf, branchId),
+    balanceSheet(ex, orgId, asOf, branchId, basis),
+    balanceSheet(ex, orgId, previousAsOf, branchId, basis),
     overrides(ex, orgId),
     scheduleAgeing(ex, orgId, 'receivable', asOf),
     scheduleAgeing(ex, orgId, 'payable', asOf),
@@ -305,12 +305,12 @@ export interface ScheduleIIIProfitAndLoss {
 }
 
 export async function scheduleIIIProfitAndLoss(
-  ex: Executor, orgId: number, from: string, to: string, branchId?: number,
+  ex: Executor, orgId: number, from: string, to: string, branchId?: number, basis: ReportBasis = 'accrual',
 ): Promise<ScheduleIIIProfitAndLoss> {
   const previous = { from: sameDayLastYear(from), to: sameDayLastYear(to) };
   const [now, before, over] = await Promise.all([
-    profitAndLoss(ex, orgId, from, to, branchId),
-    profitAndLoss(ex, orgId, previous.from, previous.to, branchId),
+    profitAndLoss(ex, orgId, from, to, branchId, basis),
+    profitAndLoss(ex, orgId, previous.from, previous.to, branchId, basis),
     overrides(ex, orgId),
   ]);
 

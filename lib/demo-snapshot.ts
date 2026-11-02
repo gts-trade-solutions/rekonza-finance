@@ -43,7 +43,7 @@ export function snapshotQuery(params: URLSearchParams): string {
 }
 
 /** A value that may differ from the recorded one and still mean the same view: a date, a period, a count. */
-const looseValue = (v: string) => /^-?\d+(\.\d+)?$/.test(v) || /^\d{4}(-\d{2}){0,2}$/.test(v);
+const looseValue = (v: string) => /^-?\d+(\.\d+)?$/.test(v) || /^\d{4}(-\d{2}){0,2}$/.test(v) || /^\d{4}-Q[1-4]$/.test(v);
 
 function pairs(query: string): Map<string, string> {
   return new Map(query ? query.split('&').map((p) => p.split('=') as [string, string]) : []);

@@ -27,7 +27,9 @@ import { hasPermission } from '../../rbac';
 import type { RoleName } from '../../types';
 import type { SessionUser } from '../auth/session';
 import { holdCredits, settleUsage, walletView } from '../billing/wallet';
-import { runAgent, type AgentEvent } from './agent';
+import { runAgent, type AgentEvent, type AgentResult } from './agent';
+import { answerCache, answerKey, booksVersion, cacheStats } from './cache';
+import { NO_USAGE } from './types';
 import { aiMode, creditCostUsd, openAiSettings, questionCapMc } from './config';
 import { OpenAiProvider } from './openai';
 import type { AiReport } from '../../ai/reports';
@@ -260,6 +262,8 @@ export interface FinishedQuestion {
   availableMc: number;
   /** For the person, when something went wrong. Never a provider's raw text. */
   notice: string | null;
+  /** Given again from a moment ago, the books unchanged since: instant, and free. */
+  fromCache: boolean;
 }
 
 /** What to tell the person when the provider failed, in words they can act on. */
@@ -286,25 +290,47 @@ export async function runQuestion(
   signal: AbortSignal,
 ): Promise<FinishedQuestion> {
   const today = istDate();
-  const result = await runAgent({
-    provider: q.provider,
-    tools: { ex: db, orgId: q.orgId, userId: q.userId, role: q.role, today, fyStart: fyStartOf(today) },
-    prompt: {
-      orgName: q.orgName,
-      userName: q.userName,
-      role: q.role,
-      today,
-      fyStart: fyStartOf(today),
-      hidden: hiddenAreas(q.role),
-    },
-    history: q.history,
-    question: q.question,
-    holdMc: q.holdMc,
-    price: q.price,
-    creditCostUsd: creditCostUsd(),
-    signal,
-    emit,
-  });
+  // The same first question, asked again while the books stand still, gets
+  // the same answer at once and costs nothing (cache.ts). A follow-up depends
+  // on what came before it, so only a conversation's first question is
+  // answered from the cache.
+  const version = await booksVersion(db, q.orgId);
+  const key = answerKey({ orgId: q.orgId, role: q.role, today, version, model: `${q.provider.name}:${q.provider.model}` }, q.question);
+  const cached = q.history.length === 0 ? answerCache.get(key) : undefined;
+  let result: AgentResult;
+  if (cached) {
+    cacheStats.answers++;
+    emit({ type: 'delta', text: cached.content });
+    result = {
+      content: cached.content, followups: cached.followups, sources: cached.sources, reports: cached.reports,
+      usage: NO_USAGE, costMicroUsd: 0, modelCalls: 0, toolCalls: 0, lookupsFromCache: 0, outcome: 'answered',
+    };
+  } else {
+    result = await runAgent({
+      provider: q.provider,
+      tools: { ex: db, orgId: q.orgId, userId: q.userId, role: q.role, today, fyStart: fyStartOf(today) },
+      prompt: {
+        orgName: q.orgName,
+        userName: q.userName,
+        role: q.role,
+        today,
+        fyStart: fyStartOf(today),
+        hidden: hiddenAreas(q.role),
+      },
+      history: q.history,
+      question: q.question,
+      holdMc: q.holdMc,
+      price: q.price,
+      creditCostUsd: creditCostUsd(),
+      signal,
+      emit,
+      booksVersion: version,
+      cacheKey: `rekonza:${q.orgId}:${q.role}`,
+    });
+    if (result.outcome === 'answered' && q.history.length === 0 && result.content.trim()) {
+      answerCache.set(key, { content: result.content, followups: result.followups, sources: result.sources, reports: result.reports });
+    }
+  }
 
   if (result.outcome === 'error' && result.errorKind !== 'rate_limit') {
     // The raw text stays in the server log, where the operator can act on it.
@@ -316,7 +342,8 @@ export async function runQuestion(
   // building it. One without — a greeting, a refusal — is charged its tokens.
   const reports = result.reports;
   const tokenChargeMc = chargeFor(result.costMicroUsd, creditCostUsd(), q.holdMc);
-  const chargeMc = reports.length ? withReportMarkup(tokenChargeMc, q.holdMc) : tokenChargeMc;
+  // An answer given again from the cache was built once already, and is free.
+  const chargeMc = cached ? 0 : reports.length ? withReportMarkup(tokenChargeMc, q.holdMc) : tokenChargeMc;
   const status = result.outcome === 'answered' ? 'complete' : result.outcome;
   const notice = result.outcome === 'error' ? noticeFor(result.errorKind, chargeMc > 0) : null;
   const content =
@@ -372,6 +399,7 @@ export async function runQuestion(
     chargedMc: finished.chargedMc,
     availableMc: wallet.availableMc,
     notice,
+    fromCache: !!cached,
   };
 }
 

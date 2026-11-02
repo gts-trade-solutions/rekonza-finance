@@ -12,6 +12,7 @@ import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { Mail, Phone, Plus } from 'lucide-react';
 import { Card } from '@/components/ui/card';
+import { MergeContactButton } from '@/components/shared/merge-contact';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -30,6 +31,12 @@ import { stateName } from '@/lib/tax/gst';
 import { usePermission } from '@/lib/store/hooks';
 import { ContactEditDialog } from '@/components/forms/contact-edit-dialog';
 import { Attachments } from '@/components/shared/attachments';
+import { PartyStatementPanel } from '@/components/shared/party-statement';
+import { CustomFieldsPanel } from '@/components/shared/custom-fields-panel';
+import { ActivityPanel } from '@/components/shared/activity-panel';
+import { ContactPersons } from '@/components/shared/contact-persons';
+import { PortalAccess } from '@/components/shared/portal-access';
+import { ContactAddresses } from '@/components/shared/contact-addresses';
 
 const TERMS: Record<string, string> = {
   due_on_receipt: 'Due on receipt',
@@ -81,6 +88,7 @@ export default function CustomerDetailPage() {
               actions={
                 <>
                   {canEdit && <Button variant="outline" size="sm" onClick={() => setEditing(true)}>Edit</Button>}
+                  {canEdit && !c.mergedIntoId && <MergeContactButton contactId={c.id} name={c.displayName} side="customer" />}
                   <Button variant="outline" size="sm" asChild>
                     <Link href={`/sales/payments/new?customer=${c.id}`}>Record payment</Link>
                   </Button>
@@ -91,6 +99,12 @@ export default function CustomerDetailPage() {
               }
             />
 
+            {c.mergedIntoId && (
+              <p className="rounded-[3px] border border-warning/40 bg-warning/10 px-3 py-2 text-sm" data-slot="merged-banner">
+                This customer was merged into another one; everything recorded under it moved there.{' '}
+                <Link href={`/sales/customers/${c.mergedIntoId}`} className="font-medium underline underline-offset-2">Open it</Link>
+              </p>
+            )}
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               <StatTile
                 label="Outstanding"
@@ -139,13 +153,28 @@ export default function CustomerDetailPage() {
                 )}
               </Card>
 
-              <div className="lg:col-span-3">
+              <div className="space-y-4 lg:col-span-3">
+                <CustomFieldsPanel entity="contact" id={c.id} canEdit={canEdit} />
                 <Tabs defaultValue="invoices">
                   <TabsList>
                     <TabsTrigger value="invoices">Invoices ({d.invoices.length})</TabsTrigger>
                     <TabsTrigger value="payments">Payments ({receipts.length})</TabsTrigger>
+                    <TabsTrigger value="statement">Statement</TabsTrigger>
+                    <TabsTrigger value="people">People &amp; portal</TabsTrigger>
+                    <TabsTrigger value="activity">Comments</TabsTrigger>
                     <TabsTrigger value="files">Files</TabsTrigger>
                   </TabsList>
+                  <TabsContent value="people" className="mt-4 space-y-4">
+                    <ContactPersons contactId={c.id} canEdit={canEdit} />
+                    <ContactAddresses contactId={c.id} canEdit={canEdit} />
+                    <PortalAccess contactId={c.id} side="customer" defaultEmail={c.email ?? null} canEdit={canEdit} />
+                  </TabsContent>
+                  <TabsContent value="activity" className="mt-4">
+                    <ActivityPanel targetType="contact" targetId={c.id} />
+                  </TabsContent>
+                  <TabsContent value="statement" className="mt-4">
+                    <PartyStatementPanel contactId={c.id} side="customer" />
+                  </TabsContent>
                   <TabsContent value="invoices" className="mt-4">
                     <DataTable
                       rows={d.invoices}

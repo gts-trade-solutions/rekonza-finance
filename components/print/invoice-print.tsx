@@ -13,7 +13,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import Link from 'next/link';
-import { createContext, useContext, useState, type ReactNode } from 'react';
+import { createContext, Fragment, useContext, useState, type ReactNode } from 'react';
 import { AlertTriangle, ArrowLeft, Printer } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import { Button } from '@/components/ui/button';
@@ -25,6 +25,13 @@ import { stateName, stateTaxLabel } from '@/lib/tax/gst';
 import { cn } from '@/lib/utils';
 import { isPrintLanguage, PRINT_LANGUAGES, translate, type PrintLanguage } from '@/lib/print-languages';
 import { printPage } from '@/lib/output-guard';
+import { DEFAULT_TEMPLATE } from '@/lib/print-template';
+
+/** "#1d4ed8" at a strength, for the tinted table header of the modern layout. */
+const tint = (hex: string, alpha: number) => {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
+};
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -98,6 +105,14 @@ function copiesFor(kind: string): Copy[] {
  * refund officer look for.
  */
 function documentTitle(inv: InvoiceDetail): { title: string; endorsement: string | null } {
+  // Rule 53(1A): a debit note says so, and names the invoice it corrects.
+  if (inv.debitNote) {
+    const a = inv.debitNote.against;
+    return {
+      title: 'Debit Note',
+      endorsement: [a ? `Against invoice ${a.number} dated ${day(a.date)}` : null, inv.debitNote.reason].filter(Boolean).join(' · ') || null,
+    };
+  }
   if (inv.seller.registration === 'unregistered') return { title: 'Invoice', endorsement: null };
   if (inv.seller.registration === 'composition') {
     return {
@@ -222,6 +237,11 @@ export function PrintView({ inv, shared = false }: { inv: InvoiceDetail; shared?
             <option value="">English only</option>
             {Object.entries(PRINT_LANGUAGES).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
           </select>
+          {shared && inv.payLink && (
+            <Button size="sm" asChild data-slot="pay-online">
+              <a href={inv.payLink.url} target="_blank" rel="noopener noreferrer">Pay {formatINR(inv.payLink.amountPaise)} online</a>
+            </Button>
+          )}
           <Button size="sm" onClick={() => printPage()} data-slot="print-invoice">
             <Printer className="size-3.5" /> Print or save as PDF
           </Button>
@@ -246,6 +266,11 @@ export function PrintView({ inv, shared = false }: { inv: InvoiceDetail; shared?
       </Lang.Provider>
     </div>
   );
+}
+
+/** One invoice's recipient copy, for printing several at once (/print/bulk). */
+export function InvoiceSheetPrint({ inv, last }: { inv: InvoiceDetail; last: boolean }) {
+  return <InvoiceSheet inv={inv} copyLabel="Original for recipient" last={last} />;
 }
 
 function PartyBlock({
@@ -302,6 +327,10 @@ function InvoiceSheet({ inv, copyLabel, last }: { inv: InvoiceDetail; copyLabel:
   const discount = inv.lines.some((l) => l.discountPct > 0);
   const taxable = inv.lines.reduce((t, l) => t + l.taxablePaise, 0);
   const tag = inv.status === 'void' ? 'Cancelled' : inv.status === 'draft' ? 'Draft' : null;
+  // The business's template (Settings → Invoice print): layout, accent, logo, signature, footer.
+  const t = inv.seller.template ?? DEFAULT_TEMPLATE;
+  const modern = t.layout === 'modern';
+  const compact = t.layout === 'compact';
 
   const totals: [string, number][] = [
     ['Taxable value', taxable],
@@ -322,18 +351,22 @@ function InvoiceSheet({ inv, copyLabel, last }: { inv: InvoiceDetail; copyLabel:
   return (
     <article
       className={cn(
-        'print-sheet mx-auto max-w-4xl rounded-[3px] border bg-white p-7 text-[12px] leading-snug text-slate-900 shadow-sm dark:bg-white',
+        'print-sheet mx-auto max-w-4xl rounded-[3px] border bg-white leading-snug text-slate-900 shadow-sm dark:bg-white',
+        compact ? 'p-5 text-[11px]' : 'p-7 text-[12px]',
+        modern && 'border-t-[6px]',
         // Paper supplies its own edge: no frame, no shadow, no inset.
         'print:max-w-none print:rounded-none print:border-0 print:p-0 print:text-[10.5px] print:shadow-none',
         !last && 'break-after-page',
       )}
       data-slot="tax-invoice"
+      data-layout={t.layout}
+      style={modern ? { borderTopColor: t.accent } : undefined}
     >
       {/* ── Title, supplier, and the IRP's stamp ───────────────────────── */}
       <header className="flex items-start justify-between gap-6 border-b border-slate-300 pb-4">
         <div className="min-w-0 space-y-2">
           <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-            <h1 className="text-lg font-bold uppercase tracking-wide"><L t={title} inline /></h1>
+            <h1 className={cn('font-bold uppercase tracking-wide', compact ? 'text-base' : 'text-lg')} style={t.layout !== 'classic' ? { color: t.accent } : undefined}><L t={title} inline /></h1>
             <span className="text-[11px] font-medium uppercase tracking-[0.06em] text-slate-600"><L t={copyLabel} inline /></span>
             {tag && (
               <span className="rounded-[2px] border border-slate-900 px-1.5 text-[10px] font-bold uppercase tracking-wide">
@@ -343,7 +376,7 @@ function InvoiceSheet({ inv, copyLabel, last }: { inv: InvoiceDetail; copyLabel:
           </div>
           {inv.voucherType?.heading && <p className="text-sm font-semibold">{inv.voucherType.heading}</p>}
           {endorsement && <p className="text-[11px] font-semibold uppercase">{endorsement}</p>}
-          {inv.seller.logoUrl && (
+          {t.showLogo && inv.seller.logoUrl && (
             // eslint-disable-next-line @next/next/no-img-element -- printed as-is; next/image adds nothing on paper
             <img
               src={inv.seller.logoUrl}
@@ -433,6 +466,12 @@ function InvoiceSheet({ inv, copyLabel, last }: { inv: InvoiceDetail; copyLabel:
               <dd>{inv.orderNumber}</dd>
             </>
           )}
+          {(inv.printFields ?? []).map((f) => (
+            <Fragment key={f.label}>
+              <dt className="text-slate-500">{f.label}</dt>
+              <dd>{f.value}</dd>
+            </Fragment>
+          ))}
           {inv.ewayBill && (
             <>
               <dt className="text-slate-500"><L t="E-way bill" /></dt>
@@ -465,7 +504,7 @@ function InvoiceSheet({ inv, copyLabel, last }: { inv: InvoiceDetail; copyLabel:
       <div className="overflow-x-auto py-3">
         <table className="w-full border-collapse">
           <thead>
-            <tr className="border-y border-slate-300 bg-slate-50 text-[10px] uppercase tracking-[0.05em] text-slate-600">
+            <tr className="border-y border-slate-300 bg-slate-50 text-[10px] uppercase tracking-[0.05em] text-slate-600" style={modern ? { backgroundColor: tint(t.accent, 0.08), color: t.accent } : undefined}>
               <th className="px-1.5 py-1.5 text-left font-semibold">#</th>
               <th className="px-1.5 py-1.5 text-left font-semibold"><L t="Description" /></th>
               <th className="px-1.5 py-1.5 text-left font-semibold">HSN/SAC</th>
@@ -545,14 +584,17 @@ function InvoiceSheet({ inv, copyLabel, last }: { inv: InvoiceDetail; copyLabel:
       </section>
 
       {/* ── Signature ──────────────────────────────────────────────────── */}
-      <footer className="mt-8 flex justify-end">
-        <div className="w-60 text-center">
-          <p>For {inv.seller.name}</p>
-          <div className="h-12" />
-          {inv.seller.signatoryName && <p className="font-medium">{inv.seller.signatoryName}</p>}
-          <p className="border-t border-slate-400 pt-1 text-slate-600"><L t="Authorised signatory" /></p>
-        </div>
-      </footer>
+      {t.showSignature && (
+        <footer className={cn('flex justify-end', compact ? 'mt-5' : 'mt-8')}>
+          <div className="w-60 text-center">
+            <p>For {inv.seller.name}</p>
+            <div className={compact ? 'h-8' : 'h-12'} />
+            {inv.seller.signatoryName && <p className="font-medium">{inv.seller.signatoryName}</p>}
+            <p className="border-t border-slate-400 pt-1 text-slate-600"><L t="Authorised signatory" /></p>
+          </div>
+        </footer>
+      )}
+      {t.footer && <p className="mt-6 border-t border-slate-200 pt-2 text-center text-[10px] text-slate-500" data-slot="invoice-footer">{t.footer}</p>}
     </article>
   );
 }

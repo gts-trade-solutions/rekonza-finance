@@ -2,11 +2,13 @@ import { z } from 'zod';
 import { db, transaction } from '@/lib/server/db';
 import { route, body, query, forbidden } from '@/lib/server/http';
 import { logAudit, auditMeta } from '@/lib/server/audit';
-import { createPayslipLink, createShareLink, listShareLinks, revokeShareLinks } from '@/lib/server/services/sharing';
+import { createDocumentLink, createPayslipLink, createShareLink, listShareLinks, revokeShareLinks } from '@/lib/server/services/sharing';
+import { PRINT_KINDS, PRINT_NOUN, PRINT_SIDE, type PrintKind } from '@/lib/print-doc';
 import { hasPermission } from '@/lib/rbac';
 
-// Links that open one invoice, or one payslip, without signing in: for sending
-// it to the customer or the employee.
+// Links that open one invoice, one other document (a quote, an order, a
+// receipt …), or one payslip, without signing in: for sending it to the
+// customer, the vendor or the employee.
 
 export const GET = route(
   async ({ orgId, req }) => {
@@ -23,7 +25,21 @@ export const POST = route(
     const input = await body(req, z.object({
       invoiceId: z.coerce.number().int().positive().optional(), days: z.number().int().min(1).max(180).optional(),
       payslip: z.object({ runId: z.coerce.number().int().positive(), employeeId: z.coerce.number().int().positive() }).optional(),
+      document: z.object({ kind: z.enum(PRINT_KINDS as [PrintKind, ...PrintKind[]]), id: z.coerce.number().int().positive() }).optional(),
     }));
+    if (input.document) {
+      const d = input.document;
+      const area = PRINT_SIDE[d.kind] === 'customer' ? 'sales' : 'purchases';
+      if (!hasPermission(role, area, 'export')) throw forbidden(`Sharing a document needs the right to export in ${area}.`);
+      return transaction(async (trx) => {
+        const link = await createDocumentLink(trx, orgId, user.userId, { kind: d.kind, id: d.id, days: input.days });
+        await logAudit({
+          trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'export', targetType: d.kind, targetId: d.id,
+          detail: `Share link to the ${PRINT_NOUN[d.kind]} made, open until ${link.expiresAt.slice(0, 10)}`, ...auditMeta(req),
+        });
+        return link;
+      });
+    }
     if (input.payslip) {
       if (!hasPermission(role, 'payroll', 'export')) throw forbidden('Sending payslips needs the right to export in payroll.');
       const slip = input.payslip;

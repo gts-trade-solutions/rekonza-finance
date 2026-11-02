@@ -26,6 +26,7 @@ import { useApi } from '@/lib/api/use-api';
 import { useAppStore } from '@/lib/store';
 import { stateOptions } from '@/lib/options';
 import { TDS_SECTIONS } from '@/lib/tax/tds';
+import { GstinLookupButton, gstinTreatment } from '@/components/gst/gstn-portal';
 
 type Editable = Omit<ContactRow, 'receivablePaise' | 'payablePaise' | 'invoiceCount' | 'billCount'>;
 
@@ -116,7 +117,19 @@ export function ContactEditDialog({ contact, onClose, onSaved }: {
             <Field label="State" error={errors.stateCode}>
               <Combobox options={stateOptions()} value={f.stateCode} onChange={(v) => set('stateCode', v)} showAvatar={false} />
             </Field>
-            <Field label="GSTIN" error={errors.gstin}><Input value={s(f.gstin)} onChange={(e) => set('gstin', e.target.value.toUpperCase())} className="font-mono" maxLength={15} /></Field>
+            <Field label="GSTIN" error={errors.gstin}>
+              <div className="flex gap-2">
+                <Input value={s(f.gstin)} onChange={(e) => set('gstin', e.target.value.toUpperCase())} className="font-mono" maxLength={15} />
+                <GstinLookupButton gstin={s(f.gstin)} onFound={(d) => setF({
+                  ...f,
+                  legalName: d.legalName ?? f.legalName,
+                  gstTreatment: gstinTreatment(d) as Editable['gstTreatment'],
+                  stateCode: d.address?.stateCode ?? f.stateCode,
+                  pan: s(f.gstin).slice(2, 12),
+                  billingAddress: d.address?.line ? [d.address.line, d.address.city, d.address.pincode].filter(Boolean).join(', ') : f.billingAddress,
+                })} />
+              </div>
+            </Field>
             <Field label="PAN" error={errors.pan}><Input value={s(f.pan)} onChange={(e) => set('pan', e.target.value.toUpperCase())} className="font-mono" maxLength={10} /></Field>
             <Field label="Email" error={errors.email}><Input value={s(f.email)} onChange={(e) => set('email', e.target.value)} /></Field>
             <Field label="Phone"><Input value={s(f.phone)} onChange={(e) => set('phone', e.target.value)} /></Field>

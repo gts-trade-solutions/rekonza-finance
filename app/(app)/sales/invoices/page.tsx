@@ -12,12 +12,14 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useMemo, useState } from 'react';
-import { Download, FileCheck2, Plus, Receipt, Send } from 'lucide-react';
+import { Download, FileCheck2, Mail, Plus, Receipt, Send } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { PageHeader } from '@/components/shared/page-header';
 import { DataTable, type Column } from '@/components/shared/data-table';
+import { BulkPrintButton } from '@/components/shared/document-menu';
+import { SavedViews } from '@/components/shared/saved-views';
 import { Money } from '@/components/shared/money';
 import { StatusBadge } from '@/components/shared/status-badge';
 import { EInvoiceMark } from '@/components/shared/einvoice-mark';
@@ -27,7 +29,7 @@ import { usePermission } from '@/lib/store/hooks';
 import { ALL_TIME, type RangeValue } from '@/lib/date-range';
 import { formatINRCompact, toRupees } from '@/lib/money';
 import { downloadCsv } from '@/components/shared/report-shell';
-import { invoices as invoiceApi, type InvoiceListItem, type InvoiceListResponse } from '@/lib/api/client';
+import { api, gst, invoices as invoiceApi, type InvoiceListItem, type InvoiceListResponse } from '@/lib/api/client';
 import { useApi, useApiAction } from '@/lib/api/use-api';
 
 const FILTERS = ['all', 'draft', 'sent', 'partially_paid', 'overdue', 'paid', 'void'] as const;
@@ -64,6 +66,7 @@ export default function InvoicesPage() {
   );
 
   const send = useApiAction(invoiceApi.send);
+  const mail = useApi(() => api.get<{ configured: boolean }>('/api/email'), []);
 
   // Tab counts come back with the data, over the same period and ignoring the
   // status filter. A second request for them could land out of order and show
@@ -136,6 +139,7 @@ export default function InvoicesPage() {
         actions={
           <>
             <Refreshing active={state.refreshing} />
+            <SavedViews list="invoices" current={{ status: filter, range }} onApply={(v) => { setFilter(String(v.status ?? 'all')); if (v.range) setRange(v.range as RangeValue); }} />
             {canCreate && (
               <Button size="sm" asChild className="gap-1.5">
                 <Link href="/sales/invoices/new"><Plus className="size-4" /> New invoice</Link>
@@ -196,6 +200,7 @@ export default function InvoicesPage() {
                 selectable={canEdit}
                 bulkActions={(selected, clear) => (
                   <>
+                    <BulkPrintButton kind="invoice" ids={selected.map((r) => r.id)} />
                     <Button
                       size="xs"
                       variant="outline"
@@ -220,20 +225,20 @@ export default function InvoicesPage() {
                     <Button
                       size="xs"
                       variant="outline"
-                      onClick={() => {
+                      onClick={async () => {
                         const pending = selected.filter(
                           (i) => i.einvoice.status === 'pending' || i.einvoice.status === 'failed',
                         );
-                        toast.info(
-                          pending.length
-                            ? `${pending.length} invoice(s) queued for the IRP`
-                            : 'Those invoices already carry an IRN',
-                          {
-                            description:
-                              'Submission needs a GSP connection, which is not wired up yet.',
-                          },
-                        );
+                        if (!pending.length) { toast.info('Those invoices already carry an IRN, or do not need one'); clear(); return; }
+                        // One at a time: the IRP takes them in order, and a refusal for one should not stop the rest.
+                        let done = 0; let live = true; const refused: string[] = [];
+                        for (const inv of pending) {
+                          try { const r = await gst.submitEinvoice(inv.id); done++; live = live && r.live; } catch (e) { refused.push(`${inv.number}: ${e instanceof Error ? e.message : String(e)}`); }
+                        }
+                        if (done) toast.success(`${done} IRN${done === 1 ? '' : 's'} registered`, { description: live ? undefined : 'Through the built-in stand-in: nothing was filed with the government portal.' });
+                        if (refused.length) toast.error(`${refused.length} refused`, { description: refused.slice(0, 3).join(' · ') });
                         clear();
+                        await state.refetch();
                       }}
                       className="gap-1"
                     >
@@ -256,6 +261,27 @@ export default function InvoicesPage() {
                     >
                       <Download className="size-3" /> Export
                     </Button>
+                    {mail.data?.configured && (
+                      <Button
+                        size="xs"
+                        variant="outline"
+                        onClick={async () => {
+                          const issued = selected.filter((i) => i.status !== 'draft' && i.status !== 'void');
+                          let sent = 0; const failed: string[] = [];
+                          for (const inv of issued) {
+                            try { await api.post('/api/email', { kind: 'invoice', invoiceId: inv.id }); sent++; } catch (e) { failed.push(`${inv.number}: ${e instanceof Error ? e.message : String(e)}`); }
+                          }
+                          if (sent) toast.success(`${sent} invoice(s) emailed`, { description: 'Each to the people at the customer marked to receive documents.' });
+                          if (failed.length) toast.error(`${failed.length} not sent`, { description: failed.slice(0, 3).join(' · ') });
+                          clear();
+                          await state.refetch();
+                        }}
+                        className="gap-1"
+                        data-slot="bulk-email"
+                      >
+                        <Mail className="size-3" /> Email
+                      </Button>
+                    )}
                   </>
                 )}
               />

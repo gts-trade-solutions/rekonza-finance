@@ -1,8 +1,9 @@
 import { z } from 'zod';
 import { sql } from 'kysely';
 import { db, transaction } from '@/lib/server/db';
-import { route, body, asId } from '@/lib/server/http';
+import { route, body, asId, badRequest } from '@/lib/server/http';
 import { importStatement } from '@/lib/server/services/banking';
+import { undoImport } from '@/lib/server/services/bank-bulk';
 import { logAudit, auditMeta } from '@/lib/server/audit';
 
 /**
@@ -104,4 +105,24 @@ export const POST = route(
     return { ...result, importId: asId(result.importId) };
   },
   { permission: { module: 'banking', action: 'create' } },
+);
+
+/**
+ * Undo an import, as Zoho's "Undo import" does: the lines it brought in that
+ * are still uncategorised are removed; any already matched stay, and the
+ * answer says how many (bank-bulk.ts).
+ */
+export const DELETE = route(
+  async ({ orgId, user, req }) => {
+    const id = Number(new URL(req.url).searchParams.get('id'));
+    if (!id) throw badRequest('Which import? Pass its id.');
+    const result = await transaction((trx) => undoImport(trx, orgId, id));
+    await logAudit({
+      orgId, actorUserId: user.userId, actorName: user.name, action: 'void', targetType: 'bank_statement', targetId: id,
+      detail: `Import undone: ${result.removed} line(s) removed${result.kept ? `, ${result.kept} already matched kept` : ''}`,
+      ...auditMeta(req),
+    });
+    return result;
+  },
+  { permission: { module: 'banking', action: 'edit' } },
 );

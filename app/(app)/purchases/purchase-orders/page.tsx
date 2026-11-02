@@ -20,6 +20,7 @@ import {
 } from '@/components/ui/dialog';
 import { PageHeader } from '@/components/shared/page-header';
 import { DataTable, type Column } from '@/components/shared/data-table';
+import { BulkPrintButton, documentMenuColumn } from '@/components/shared/document-menu';
 import { Money } from '@/components/shared/money';
 import { StatusBadge } from '@/components/shared/status-badge';
 import { EmptyState } from '@/components/shared/empty-state';
@@ -104,7 +105,20 @@ export default function PurchaseOrdersPage() {
     { key: 'vendor', header: 'Vendor', sortValue: (r) => r.vendorName, cell: (r) => r.vendorName },
     { key: 'date', header: 'Issued', sortValue: (r) => r.date, cell: (r) => short(r.date) },
     { key: 'expected', header: 'Expected', sortValue: (r) => r.expected ?? '', cell: (r) => short(r.expected) },
-    { key: 'status', header: 'Status', sortValue: (r) => r.status, cell: (r) => <StatusBadge status={r.status} /> },
+    {
+      key: 'status', header: 'Status', sortValue: (r) => r.status,
+      cell: (r) => (
+        <span className="inline-flex flex-wrap items-center gap-1">
+          <StatusBadge status={r.status} />
+          {r.vendorResponse && (
+            <span title={r.vendorResponseNote ? `Vendor's note: ${r.vendorResponseNote}` : 'Answered on the vendor portal'}
+              className={`rounded border px-1 text-[10px] ${r.vendorResponse === 'accepted' ? 'border-emerald-500/40 text-emerald-700 dark:text-emerald-300' : 'border-destructive/40 text-destructive'}`}>
+              Vendor {r.vendorResponse}{r.vendorResponseNote ? ' *' : ''}
+            </span>
+          )}
+        </span>
+      ),
+    },
     {
       key: 'billed', header: 'Billed', align: 'right',
       sortValue: (r) => r.appliedPaise,
@@ -231,8 +245,10 @@ export default function PurchaseOrdersPage() {
             ) : (
               <DataTable
                 rows={d.documents}
-                columns={columns}
+                columns={[...columns, documentMenuColumn('purchase-order', state.refetch)]}
                 getRowId={(r) => r.id}
+                selectable
+                bulkActions={(selected) => <BulkPrintButton kind="purchase-order" ids={selected.map((r) => r.id)} />}
                 initialSort={{ key: 'date', dir: 'desc' }}
                 dateFilter={{ getDate: (r) => r.date }}
                 searchPlaceholder="Search order or vendor…"

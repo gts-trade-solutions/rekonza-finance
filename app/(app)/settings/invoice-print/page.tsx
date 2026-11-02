@@ -27,6 +27,7 @@ import { files, invoicePrint, type InvoicePrintSettings } from '@/lib/api/client
 import { useApi } from '@/lib/api/use-api';
 import { usePermission } from '@/lib/store/hooks';
 import { isValidVpa, upiPayUri } from '@/lib/billing/upi';
+import { DEFAULT_TEMPLATE, type PrintTemplate } from '@/lib/print-template';
 
 const NONE = 'none';
 
@@ -43,7 +44,14 @@ interface Form {
   defaultNotes: string;
   signatoryName: string;
   printLanguage: string;
+  template: PrintTemplate;
 }
+
+const LAYOUTS: { value: PrintTemplate['layout']; label: string; note: string }[] = [
+  { value: 'classic', label: 'Classic', note: 'Black and white, as a CA expects it' },
+  { value: 'modern', label: 'Modern', note: 'An accent band and coloured headings' },
+  { value: 'compact', label: 'Compact', note: 'Smaller type, more lines to a page' },
+];
 
 function toForm(d: InvoicePrintSettings): Form {
   const acct = d.bankAccounts.find((a) => a.id === d.bankAccountId);
@@ -60,6 +68,7 @@ function toForm(d: InvoicePrintSettings): Form {
     defaultNotes: d.defaultNotes ?? '',
     signatoryName: d.signatoryName ?? '',
     printLanguage: d.printLanguage ?? '',
+    template: d.template ?? DEFAULT_TEMPLATE,
   };
 }
 
@@ -122,6 +131,7 @@ function PrintForm({ data, onSaved }: { data: InvoicePrintSettings; onSaved: () 
         defaultNotes: f.defaultNotes.trim() || null,
         signatoryName: f.signatoryName.trim() || null,
         printLanguage: f.printLanguage || null,
+        template: f.template,
       });
       toast.success('Saved. Invoices print with these from now on, reprints included.');
       onSaved();
@@ -261,6 +271,38 @@ function PrintForm({ data, onSaved }: { data: InvoicePrintSettings; onSaved: () 
                 {Object.entries(PRINT_LANGUAGES).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
               </select>
             </div>
+          </Field>
+        </Card>
+
+        <Card className="space-y-4 p-5" data-slot="invoice-template">
+          <div>
+            <h2 className="text-sm font-semibold">Template</h2>
+            <p className="text-xs text-muted-foreground">How the invoice looks. What it says is set by Rule 46 and does not change with the template.</p>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-3">
+            {LAYOUTS.map((l) => (
+              <button key={l.value} type="button" disabled={!canEdit} onClick={() => set('template', { ...f.template, layout: l.value })}
+                className={`rounded-md border p-3 text-left text-sm transition-colors ${f.template.layout === l.value ? 'border-primary bg-primary/5' : 'hover:bg-accent'}`}
+                aria-pressed={f.template.layout === l.value}>
+                <span className="block font-medium">{l.label}</span>
+                <span className="text-xs text-muted-foreground">{l.note}</span>
+              </button>
+            ))}
+          </div>
+          <div className="grid gap-4 sm:grid-cols-3">
+            <Field label="Accent colour">
+              <input type="color" value={f.template.accent} disabled={!canEdit} onChange={(e) => set('template', { ...f.template, accent: e.target.value })}
+                className="h-9 w-20 cursor-pointer rounded-md border" aria-label="Accent colour" />
+            </Field>
+            <label className="flex items-center gap-2 self-end pb-2 text-sm">
+              <input type="checkbox" checked={f.template.showLogo} disabled={!canEdit} onChange={(e) => set('template', { ...f.template, showLogo: e.target.checked })} /> Print the logo
+            </label>
+            <label className="flex items-center gap-2 self-end pb-2 text-sm">
+              <input type="checkbox" checked={f.template.showSignature} disabled={!canEdit} onChange={(e) => set('template', { ...f.template, showSignature: e.target.checked })} /> Signature block
+            </label>
+          </div>
+          <Field label="Footer line" hint="Printed at the foot of every invoice: a registered office, a CIN, a thank-you.">
+            <Input value={f.template.footer ?? ''} disabled={!canEdit} maxLength={300} onChange={(e) => set('template', { ...f.template, footer: e.target.value || null })} />
           </Field>
         </Card>
 

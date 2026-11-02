@@ -6,6 +6,7 @@ import 'server-only';
 //   post-dated journals    posted on their date (held-journals.ts)
 //   recurring journals     run on their next date, if set to run on their own
 //   recurring invoices     the same
+//   recurring bills and expenses   the same (recurring_purchases)
 //
 // Each item runs in its own transaction, as the person it stands in for would,
 // so one locked period or missing account stops that item and nothing else.
@@ -20,7 +21,7 @@ import 'server-only';
 import { db, transaction, type Trx } from '../db';
 import { logAudit } from '../audit';
 import { indiaToday, releaseHeldJournal } from './held-journals';
-import { advancePeriod, runRecurringInvoice, runRecurringJournal, type Frequency } from './recurring';
+import { advancePeriod, runRecurringInvoice, runRecurringJournal, runRecurringPurchase, type Frequency } from './recurring';
 
 const ACTOR = 'Scheduler';
 const message = (err: unknown) => (err instanceof Error ? err.message : String(err)).slice(0, 500);
@@ -36,6 +37,7 @@ export async function runScheduledPostings(opts: { now?: Date; trx?: Trx; orgId?
   const ex = opts.trx ?? db;
   const run = <T>(fn: (trx: Trx) => Promise<T>) => (opts.trx ? fn(opts.trx) : transaction(fn));
   const result: SweepResult = { posted: 0, held: 0, failed: 0, behind: 0 };
+  const toEmail: { orgId: number; invoiceId: number }[] = [];
 
   let held = ex.selectFrom('held_journals').select(['id', 'org_id', 'memo'])
     .where('status', '=', 'held').where('kind', '=', 'post_dated').where('entry_date', '<=', today);
@@ -58,7 +60,7 @@ export async function runScheduledPostings(opts: { now?: Date; trx?: Trx; orgId?
     }
   }
 
-  for (const table of ['recurring_journals', 'recurring_invoices'] as const) {
+  for (const table of ['recurring_journals', 'recurring_invoices', 'recurring_purchases'] as const) {
     let due = ex.selectFrom(table).select(['id', 'org_id', 'next_run', 'end_date', 'frequency', 'last_error'])
       .where('is_active', '=', 1).where('auto_run', '=', 1).where('next_run', '<=', today);
     if (opts.orgId) due = due.where('org_id', '=', opts.orgId);
@@ -80,8 +82,16 @@ export async function runScheduledPostings(opts: { now?: Date; trx?: Trx; orgId?
               targetType: 'recurring_journal', targetId: p.id, targetLabel: r.name,
               detail: `Posted JE #${r.entry.entryNo} for ${(r.amountPaise / 100).toFixed(2)} on ${r.runDate}`,
             });
+          } else if (table === 'recurring_purchases') {
+            const r = await runRecurringPurchase(trx, p.org_id, null, p.id);
+            await logAudit({
+              trx, orgId: p.org_id, actorUserId: null, actorName: ACTOR, action: 'create',
+              targetType: 'recurring_purchase', targetId: p.id, targetLabel: r.name,
+              detail: `${r.made.kind === 'bill' ? 'Raised bill' : 'Recorded expense'} ${r.made.number} for ${(r.made.totalPaise / 100).toFixed(2)}`,
+            });
           } else {
             const r = await runRecurringInvoice(trx, p.org_id, null, p.id);
+            if (r.autoSent) toEmail.push({ orgId: p.org_id, invoiceId: r.invoice.id });
             await logAudit({
               trx, orgId: p.org_id, actorUserId: null, actorName: ACTOR, action: 'create',
               targetType: 'recurring_invoice', targetId: p.id, targetLabel: r.name,
@@ -94,6 +104,14 @@ export async function runScheduledPostings(opts: { now?: Date; trx?: Trx; orgId?
         result.failed++;
         await ex.updateTable(table).set({ last_error: message(err) }).where('id', '=', p.id).execute();
       }
+    }
+  }
+  // Invoices set to send themselves go by email once they are committed (mail/documents.ts).
+  if (!opts.trx && toEmail.length) {
+    const { mailStatus } = await import('../mail/mailer');
+    if (mailStatus().configured) {
+      const { emailInvoice } = await import('../mail/documents');
+      for (const t of toEmail) await emailInvoice(t.orgId, null, t.invoiceId).catch((err) => console.error('[scheduler] auto-send email', t.invoiceId, message(err)));
     }
   }
   return result;

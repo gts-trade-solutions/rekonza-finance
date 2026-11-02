@@ -6,11 +6,12 @@
 // the audit trail records who did it.
 
 import { useRef, useState } from 'react';
-import { FileText, Image as ImageIcon, Loader2, Paperclip, Trash2, Upload } from 'lucide-react';
+import { FileText, FolderOpen, Image as ImageIcon, Loader2, Paperclip, Trash2, Upload } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { files, type AttachableType, type Attachment } from '@/lib/api/client';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { api, files, type AttachableType, type Attachment } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
 
 const ACCEPT = '.pdf,.png,.jpg,.jpeg,.webp,.xlsx,.docx,.csv,.txt';
@@ -91,6 +92,7 @@ export function Attachments({
 }) {
   const input = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
+  const [picking, setPicking] = useState(false);
   const state = useApi(() => files.list(targetType, targetId), [targetType, targetId]);
   const list: Attachment[] = state.data?.attachments ?? [];
 
@@ -138,9 +140,14 @@ export function Attachments({
               ref={input} type="file" accept={ACCEPT} multiple className="hidden"
               onChange={(e) => void upload(e.target.files)} data-slot="attachment-input"
             />
-            <Button size="sm" variant="outline" className="gap-1.5" disabled={busy} onClick={() => input.current?.click()}>
-              {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Upload className="size-3.5" />} Attach file
-            </Button>
+            <div className="flex gap-1.5">
+              <Button size="sm" variant="ghost" className="gap-1.5" disabled={busy} onClick={() => setPicking(true)} title="A file already uploaded to Documents">
+                <FolderOpen className="size-3.5" /> From Documents
+              </Button>
+              <Button size="sm" variant="outline" className="gap-1.5" disabled={busy} onClick={() => input.current?.click()}>
+                {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Upload className="size-3.5" />} Attach file
+              </Button>
+            </div>
           </>
         )}
       </div>
@@ -178,6 +185,57 @@ export function Attachments({
           ))}
         </ul>
       )}
+      {picking && (
+        <FromDocuments targetType={targetType} targetId={targetId} onClose={() => setPicking(false)} onDone={() => { setPicking(false); void state.refetch(); }} />
+      )}
     </Card>
+  );
+}
+
+/** Files waiting in the Documents inbox, to attach to this record (moved here, as in Zoho). */
+function FromDocuments({ targetType, targetId, onClose, onDone }: { targetType: AttachableType; targetId: string; onClose: () => void; onDone: () => void }) {
+  const inbox = useApi<{ files: { id: string; filename: string; sizeBytes: number; uploadedAt: string; uploadedBy: string | null }[] }>(
+    () => api.get('/api/documents/files', { view: 'inbox' }), [],
+  );
+  const [chosen, setChosen] = useState<Set<string>>(new Set());
+  const [busy, setBusy] = useState(false);
+  const attach = async () => {
+    setBusy(true);
+    try {
+      await api.patch('/api/documents/files', { action: 'attach', fileIds: [...chosen], targetType, targetId });
+      toast.success(`${chosen.size} file${chosen.size === 1 ? '' : 's'} attached from Documents`);
+      onDone();
+    } catch (e) {
+      toast.error('Could not attach', { description: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setBusy(false);
+    }
+  };
+  const list = inbox.data?.files ?? [];
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Attach from Documents</DialogTitle>
+          <DialogDescription>Files uploaded to the Documents inbox and not yet attached to anything.</DialogDescription>
+        </DialogHeader>
+        <div className="max-h-72 divide-y overflow-y-auto rounded-md border thin-scroll">
+          {inbox.loading && <p className="px-3 py-3 text-sm text-muted-foreground">Loading…</p>}
+          {!inbox.loading && list.length === 0 && <p className="px-3 py-3 text-sm text-muted-foreground">The inbox is empty. Upload files on the Documents page.</p>}
+          {list.map((f) => (
+            <label key={f.id} className="flex cursor-pointer items-center gap-3 px-3 py-2 hover:bg-accent">
+              <input type="checkbox" checked={chosen.has(f.id)} onChange={() => setChosen((s) => { const n = new Set(s); if (n.has(f.id)) n.delete(f.id); else n.add(f.id); return n; })} />
+              <FileText className="size-4 shrink-0 text-muted-foreground" />
+              <span className="min-w-0 flex-1 truncate text-sm">{f.filename}</span>
+              <span className="text-xs text-muted-foreground">{size(f.sizeBytes)}</span>
+            </label>
+          ))}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button onClick={() => void attach()} disabled={!chosen.size || busy}>{busy ? 'Attaching…' : `Attach ${chosen.size || ''}`}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

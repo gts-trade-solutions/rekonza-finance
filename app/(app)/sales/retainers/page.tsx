@@ -22,6 +22,7 @@ import {
 } from '@/components/ui/dialog';
 import { PageHeader } from '@/components/shared/page-header';
 import { DataTable, type Column } from '@/components/shared/data-table';
+import { BulkPrintButton, documentMenuColumn } from '@/components/shared/document-menu';
 import { Money } from '@/components/shared/money';
 import { StatusBadge } from '@/components/shared/status-badge';
 import { EmptyState } from '@/components/shared/empty-state';
@@ -223,8 +224,10 @@ export default function RetainersPage() {
           ) : (
             <DataTable
               rows={d.documents}
-              columns={columns}
+              columns={[...columns, documentMenuColumn('retainer', state.refetch)]}
               getRowId={(r) => r.id}
+              selectable
+              bulkActions={(selected) => <BulkPrintButton kind="retainer" ids={selected.map((r) => r.id)} />}
               initialSort={{ key: 'date', dir: 'desc' }}
               dateFilter={{ getDate: (r) => r.date }}
               searchPlaceholder="Search retainer or customer…"

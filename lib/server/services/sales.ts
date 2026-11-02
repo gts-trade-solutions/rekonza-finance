@@ -124,6 +124,15 @@ export interface CreateInvoiceInput {
   exchangeRate?: number;
   /** A voucher type: numbered in its own series instead of the ordinary one. */
   voucherTypeId?: number | null;
+  /**
+   * A debit note (CGST Act s.34(3)): the invoice charged too little. Posted as
+   * an invoice is, numbered in its own DN series, reported in GSTR-1 as a note.
+   */
+  docKind?: 'invoice' | 'debit_note';
+  /** The invoice a debit note corrects (Rule 53(1A) wants it named). */
+  againstInvoiceId?: number | null;
+  /** Why the debit note was raised: a price revised upward, goods short-billed. */
+  noteReason?: string | null;
 }
 
 export interface ForeignCurrency { currency: string; rate: number }
@@ -335,7 +344,24 @@ export async function createInvoice(
   // until now it was only checked when GSTR-1 was built, months too late.
   const typed = input.number?.trim();
   if (typed) assertGstDocNumber(typed);
-  const series = await seriesFor(trx, orgId, 'INV', input.voucherTypeId);
+  const debitNote = input.docKind === 'debit_note';
+  if (debitNote) {
+    if (!input.noteReason?.trim()) throw badRequest('Say why the debit note is raised: a price revised upward, goods short-billed.');
+    if (input.voucherTypeId) throw badRequest('A debit note has its own series; it does not take a voucher type.');
+    if (input.againstInvoiceId) {
+      const orig = await trx.selectFrom('invoices').select(['customer_id', 'status', 'doc_kind'])
+        .where('id', '=', input.againstInvoiceId).where('org_id', '=', orgId).executeTakeFirst();
+      if (!orig || orig.doc_kind !== 'invoice') throw notFound('The invoice the debit note corrects does not exist.');
+      if (orig.customer_id !== input.customerId) throw badRequest('A debit note goes to the customer of the invoice it corrects.');
+      if (orig.status === 'draft' || orig.status === 'void') throw badRequest('That invoice was never issued, or is void; there is nothing to correct.');
+    } else if (status !== 'draft') {
+      warnings.push('Rule 53(1A) wants the invoice a debit note corrects named on it. None was given.');
+    }
+  }
+  // Rule 46(b): a consecutive series for each kind of document.
+  const series = debitNote
+    ? { docType: 'DN', prefix: 'DN', voucherTypeId: null }
+    : await seriesFor(trx, orgId, 'INV', input.voucherTypeId);
   const number =
     typed ||
     (await allocateNumber(trx, orgId, input.branchId, series.docType, fyLabelFor(input.date), {
@@ -350,6 +376,9 @@ export async function createInvoice(
       cost_centre_id: input.costCentreId ?? null,
       warehouse_id: await checkGodown(trx, orgId, input.branchId, input.warehouseId),
       number,
+      doc_kind: debitNote ? 'debit_note' : 'invoice',
+      against_invoice_id: debitNote ? input.againstInvoiceId ?? null : null,
+      note_reason: debitNote ? input.noteReason!.trim().slice(0, 255) : null,
       customer_id: input.customerId,
       invoice_date: input.date,
       due_date: input.dueDate,
@@ -541,7 +570,7 @@ export async function postInvoice(
     orgId,
     branchId: inv.branch_id,
     date: inv.invoice_date,
-    memo: `Invoice ${inv.number}`,
+    memo: `${inv.doc_kind === 'debit_note' ? 'Debit note' : 'Invoice'} ${inv.number}`,
     sourceType: 'invoice',
     sourceId: invoiceId,
     userId,
@@ -649,6 +678,10 @@ export async function voidInvoice(
     .where('invoice_id', '=', invoiceId)
     .where('status', 'in', ['pending', 'failed'])
     .execute();
+
+  // Hours and expenses it billed are unbilled again, for the invoice that replaces it.
+  await trx.updateTable('time_entries').set({ invoice_id: null }).where('org_id', '=', orgId).where('invoice_id', '=', invoiceId).execute();
+  await trx.updateTable('expenses').set({ billed_invoice_id: null }).where('org_id', '=', orgId).where('billed_invoice_id', '=', invoiceId).execute();
 }
 
 /** Mark an approved invoice as sent. Posts it first if it was still a draft. */

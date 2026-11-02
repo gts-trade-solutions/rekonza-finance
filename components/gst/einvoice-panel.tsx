@@ -10,7 +10,7 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { FileCheck2, Loader2, SearchCheck, TriangleAlert, Zap } from 'lucide-react';
+import { Download, FileCheck2, Loader2, SearchCheck, TriangleAlert, Zap } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -19,6 +19,7 @@ import { useApiAction } from '@/lib/api/use-api';
 import { usePermission } from '@/lib/store/hooks';
 import { timeLeft } from '@/lib/tax/einvoice';
 import { cn } from '@/lib/utils';
+import { downloadJson } from '@/components/shared/report-shell';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -227,6 +228,10 @@ export function EinvoicePanel({ inv, onChanged }: { inv: InvoiceDetail; onChange
             <pre className="mt-2 max-h-72 overflow-auto rounded-[3px] border bg-muted/40 p-2 text-[11px] leading-relaxed">
               {JSON.stringify(check.payload, null, 2)}
             </pre>
+            {/* The IRP's own schema: the offline bulk tool, or a GSP, takes it as it is. */}
+            <Button size="sm" variant="outline" className="mt-2 gap-1.5" onClick={() => downloadJson(`einvoice-${inv.number.replace(/[^A-Za-z0-9-]/g, '_')}.json`, [check.payload])}>
+              <Download className="size-3.5" /> Download JSON
+            </Button>
           </details>
         </div>
       )}

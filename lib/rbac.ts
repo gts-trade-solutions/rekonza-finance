@@ -42,6 +42,9 @@ const MATRIX: Record<RoleName, Record<string, Action[]>> = {
     // Exceptions: the problems the scheduler finds. Working one is editing it;
     // handing it to someone else or waiving it is approving.
     exceptions: ['view', 'edit', 'approve'],
+    // Projects and the time logged to them; billing them raises an invoice,
+    // which still needs sales rights of its own.
+    projects: ['view', 'create', 'edit', 'approve', 'void'],
   },
   sales: {
     sales: ['view', 'create', 'edit'],
@@ -50,6 +53,7 @@ const MATRIX: Record<RoleName, Record<string, Action[]>> = {
     ai: ['view'],
     analytics: ['view', 'create', 'edit'],
     exceptions: ['view', 'edit'],
+    projects: ['view', 'create', 'edit'],
   },
   staff: {
     sales: ['view', 'create'],
@@ -57,6 +61,8 @@ const MATRIX: Record<RoleName, Record<string, Action[]>> = {
     inventory: ['view'],
     ai: ['view'],
     exceptions: ['view', 'edit'],
+    // Staff log their own time.
+    projects: ['view', 'create'],
   },
   viewer: {
     sales: ['view'],
@@ -71,6 +77,7 @@ const MATRIX: Record<RoleName, Record<string, Action[]>> = {
     analytics: ['view'],
     tally: ['view'],
     exceptions: ['view'],
+    projects: ['view'],
   },
 };
 
@@ -136,6 +143,7 @@ export const PERMISSION_MODULES: { key: string; label: string; actions: Action[]
   { key: 'analytics', label: 'Analytics', actions: ['view', 'create', 'edit', 'void', 'export'] },
   { key: 'tally', label: 'Tally', actions: ['view', 'edit'] },
   { key: 'exceptions', label: 'Exceptions (work, assign, waive)', actions: ['view', 'edit', 'approve'] },
+  { key: 'projects', label: 'Projects and timesheets', actions: ['view', 'create', 'edit', 'approve', 'void', 'print', 'export'] },
   { key: 'ai', label: 'AI assistant', actions: ['view', 'create'] },
   { key: 'settings', label: 'Settings', actions: ['view'] },
 ];

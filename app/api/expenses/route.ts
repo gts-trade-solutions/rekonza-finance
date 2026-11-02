@@ -10,6 +10,8 @@ const ListQuery = z.object({
   from: z.string().optional(),
   to: z.string().optional(),
   accountId: z.string().optional(),
+  /** A customer's billable expenses not yet re-charged on an invoice, outside any project. */
+  unbilledFor: z.string().optional(),
   limit: z.coerce.number().int().min(1).max(500).default(200),
   offset: z.coerce.number().int().min(0).default(0),
 });
@@ -28,6 +30,10 @@ export const GET = route(
     if (q.from) base = base.where('expenses.expense_date', '>=', q.from);
     if (q.to) base = base.where('expenses.expense_date', '<=', q.to);
     if (q.accountId) base = base.where('expenses.account_id', '=', Number(q.accountId));
+    if (q.unbilledFor) {
+      base = base.where('expenses.is_billable', '=', 1).where('expenses.billable_customer_id', '=', Number(q.unbilledFor))
+        .where('expenses.billed_invoice_id', 'is', null).where('expenses.project_id', 'is', null).where('expenses.status', '<>', 'void');
+    }
 
     const [rows, totals] = await Promise.all([
       base
@@ -35,7 +41,7 @@ export const GET = route(
           'expenses.id', 'expenses.number', 'expenses.expense_date', 'expenses.amount',
           'expenses.cgst', 'expenses.sgst', 'expenses.igst', 'expenses.total',
           'expenses.itc_eligibility', 'expenses.is_billable', 'expenses.reference',
-          'expenses.notes', 'expenses.status', 'expenses.account_id',
+          'expenses.notes', 'expenses.status', 'expenses.account_id', 'expenses.mileage_km', 'expenses.recurring_id', 'expenses.project_id', 'expenses.billed_invoice_id',
           'accounts.name as account_name', 'accounts.code as account_code',
           'bank_accounts.name as paid_through', 'contacts.display_name as vendor_name',
         ])
@@ -65,6 +71,10 @@ export const GET = route(
         status: r.status,
         itcEligibility: r.itc_eligibility,
         isBillable: !!r.is_billable,
+        mileageKm: r.mileage_km == null ? null : Number(r.mileage_km),
+        recurring: !!r.recurring_id,
+        projectId: r.project_id ? asId(r.project_id) : null,
+        billed: !!r.billed_invoice_id,
         amountPaise: toPaiseFromSql(r.amount),
         taxPaise: toPaiseFromSql(r.cgst) + toPaiseFromSql(r.sgst) + toPaiseFromSql(r.igst),
         totalPaise: toPaiseFromSql(r.total),
@@ -85,14 +95,18 @@ const CreateInput = z.object({
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use a yyyy-mm-dd date.'),
   accountId: z.string(),
   paidThroughBankAccountId: z.string(),
-  amountPaise: z.number().int().positive('Enter an amount above zero.'),
+  // Left out for mileage, where it is the distance times the rate.
+  amountPaise: z.number().int().nonnegative().default(0),
   gstRatePct: z.number().min(0).max(50).optional(),
   vendorId: z.string().nullish(),
   itcEligibility: z.enum(['eligible', 'ineligible', 'capital_goods']).optional(),
   isBillable: z.boolean().optional(),
   billableCustomerId: z.string().nullish(),
+  projectId: z.union([z.string(), z.number()]).nullish(),
   reference: z.string().nullish(),
   notes: z.string().nullish(),
+  /** A journey claimed by the kilometre; the amount is worked out from it. */
+  mileage: z.object({ km: z.number().positive().max(100000), ratePaise: z.number().int().positive().max(100000) }).nullish(),
 });
 
 export const POST = route(
@@ -112,8 +126,10 @@ export const POST = route(
         itcEligibility: input.itcEligibility,
         isBillable: input.isBillable,
         billableCustomerId: input.billableCustomerId ? Number(input.billableCustomerId) : null,
+        projectId: input.projectId ? Number(input.projectId) : null,
         reference: input.reference,
         notes: input.notes,
+        mileage: input.mileage ?? null,
       }),
     );
 

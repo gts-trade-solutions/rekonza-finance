@@ -16,44 +16,10 @@ import { bootstrap } from '../lib/server/seed/bootstrap';
 import { seedDemoBook } from '../lib/server/seed/demo-book';
 import { seedDemoDocuments } from '../lib/server/seed/demo-documents';
 import { turnOnDemoControls } from '../lib/server/seed/demo-controls';
+import { wipeOrganizations } from '../lib/server/seed/wipe';
 import { verifyLedgerBalances } from '../lib/server/ledger/posting';
 
 const fresh = process.argv.includes('--fresh');
-
-/**
- * Tables cleared by --fresh, in an order that respects foreign keys.
- *
- * Every one of them carries org_id, so each delete is scoped to the demo
- * organisation. `user_branches` is the exception — it hangs off users — and is
- * handled separately below.
- */
-const DATA_TABLES = [
-  'payment_allocations', 'payments', 'bank_transactions', 'bank_statement_imports',
-  'bank_transfers', 'bank_rules', 'cheques', 'bank_accounts',
-  'einvoices', 'eway_bills', 'gstr2b_entries',
-  'invoice_lines', 'credit_note_lines', 'estimate_lines', 'sales_order_lines',
-  'challan_lines', 'bill_lines', 'purchase_order_lines',
-  'credit_notes', 'invoices', 'delivery_challans', 'sales_orders', 'estimates',
-  'retainer_invoices', 'vendor_credits', 'bills', 'expenses', 'purchase_orders',
-  'recurring_invoices', 'recurring_journals', 'budgets',
-  'stock_adjustments', 'warehouses',
-  'journal_lines', 'journal_entries', 'number_series', 'sequences', 'transaction_locks',
-  'custom_field_values', 'custom_fields', 'approval_rules', 'workflow_rules',
-  // Portal connections and their call history. The sealed credentials and
-  // session tokens hang off a connection rather than carrying org_id, so they
-  // are cleared separately below — the same exception `user_branches` is.
-  'integration_calls', 'integration_connections',
-  // Reports reference their dataset, so they go first.
-  'analytics_reports', 'analytics_datasets',
-  // The assistant's conversations and credit wallet, and any billing records.
-  // Invoices before the payments they reference.
-  'ai_messages', 'ai_conversations', 'ai_credit_ledger', 'ai_usage', 'ai_credit_buckets',
-  'ai_wallets', 'ai_settings',
-  'billing_invoices', 'billing_payments', 'billing_subscriptions', 'billing_webhook_events',
-  'api_tokens', 'jobs', 'files', 'settings', 'audit_log',
-  'items', 'hsn_codes', 'contacts', 'accounts',
-  'sessions', 'users', 'branches',
-];
 
 async function main() {
   const demoOrgs = await db
@@ -73,40 +39,9 @@ async function main() {
       console.log('  No demo organisation to clear.');
     } else {
       console.log(`Clearing demo organisation(s) ${demoOrgIds.join(', ')}...`);
-      const { sql } = await import('kysely');
-      const idList = demoOrgIds.join(',');
-
-      // Relaxed only for the duration of these deletes. The order below is
-      // foreign-key safe on its own, but a few self-references — a credit note
-      // pointing at the invoice it credits — still need the checks off.
-      await sql`SET FOREIGN_KEY_CHECKS = 0`.execute(db);
-
-      await sql
-        .raw(`DELETE FROM user_branches WHERE user_id IN (SELECT id FROM users WHERE org_id IN (${idList}))`)
-        .execute(db);
-
-      // Sealed portal credentials and their session tokens. Keyed on the
-      // connection, not the organisation, so they need the subquery — and they
-      // have to go before the connections they hang off. Left behind, they are
-      // ciphertext nothing can open, pointing at a registration that no longer
-      // exists: harmless, but exactly the kind of debris that later reads as a
-      // security question nobody can answer.
-      for (const t of ['integration_credentials', 'integration_sessions']) {
-        await sql
-          .raw(
-            `DELETE FROM \`${t}\` WHERE connection_id IN ` +
-              `(SELECT id FROM integration_connections WHERE org_id IN (${idList}))`,
-          )
-          .execute(db);
-      }
-
-      for (const t of DATA_TABLES) {
-        await sql.raw(`DELETE FROM \`${t}\` WHERE org_id IN (${idList})`).execute(db);
-      }
-      await sql.raw(`DELETE FROM organizations WHERE id IN (${idList})`).execute(db);
-
-      await sql`SET FOREIGN_KEY_CHECKS = 1`.execute(db);
-      console.log(`  cleared ${DATA_TABLES.length} tables for the demo book`);
+      // Every table carrying org_id, read from the database (lib/server/seed/wipe.ts).
+      const cleared = await wipeOrganizations(db, demoOrgIds);
+      console.log(`  cleared ${cleared} tables for the demo book`);
     }
   } else if (demoOrgIds.length > 0) {
     console.log('\n  The demo organisation already exists. Use --fresh to rebuild it.\n');

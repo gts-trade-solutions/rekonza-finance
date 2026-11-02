@@ -16,6 +16,7 @@ import { Combobox } from '@/components/ui/combobox';
 import { stateOptions } from '@/lib/options';
 import { TDS_SECTIONS } from '@/lib/tax/tds';
 import { useAppStore } from '@/lib/store';
+import { GstinLookupButton, gstinTreatment } from '@/components/gst/gstn-portal';
 
 export default function NewCustomerPage() {
   const router = useRouter();
@@ -40,6 +41,7 @@ export default function NewCustomerPage() {
   useEffect(() => {
     if (!stateTouched && homeState && !stateCode) setStateCode(homeState);
   }, [homeState, stateCode, stateTouched]);
+  const [legalName, setLegalName] = useState('');
   const [line1, setLine1] = useState('');
   const [city, setCity] = useState('');
   const [pincode, setPincode] = useState('');
@@ -69,6 +71,7 @@ export default function NewCustomerPage() {
     const result = await create.run({
       kind: 'customer',
       displayName: name.trim(),
+      legalName: legalName || null,
       email: email || null,
       phone: phone || null,
       gstin: gstin ? gstin.toUpperCase() : null,
@@ -143,7 +146,8 @@ export default function NewCustomerPage() {
                 }
                 error={gstinValid === false ? 'Invalid GSTIN — checksum does not match' : undefined}
               >
-                <div className="relative">
+                <div className="flex gap-2">
+                <div className="relative flex-1">
                   <Input
                     value={gstin}
                     onChange={(e) => setGstin(e.target.value.toUpperCase())}
@@ -161,6 +165,20 @@ export default function NewCustomerPage() {
                     </span>
                   )}
                 </div>
+                <GstinLookupButton gstin={gstin} onFound={(d) => {
+                  // Zoho's prefill: the registered name and address, the state and the kind of registration.
+                  if (!name.trim()) setName(d.tradeName || d.legalName || '');
+                  if (d.legalName) setLegalName(d.legalName);
+                  setTreatment(gstinTreatment(d));
+                  if (d.address) {
+                    setStateCode(d.address.stateCode); setStateTouched(true);
+                    if (d.address.line) setLine1(d.address.line);
+                    if (d.address.city) setCity(d.address.city);
+                    if (d.address.pincode) setPincode(d.address.pincode);
+                  }
+                }} />
+                </div>
+                {legalName && <p className="mt-1 text-xs text-muted-foreground">Registered as {legalName}</p>}
               </Field>
               <Field label="State" required hint="Decides intra-state vs inter-state tax" className="sm:col-span-2">
                 <Combobox

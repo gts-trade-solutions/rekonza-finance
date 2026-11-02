@@ -317,6 +317,21 @@ export interface BackupRuns {
   started_at: Date;
 }
 
+export interface BalanceConfirmations {
+  as_of: ColumnType<string, string, string>;
+  contact_id: number;
+  created_at: Generated<Date>;
+  id: Generated<number>;
+  notes: string | null;
+  org_id: number;
+  our_balance: Decimal;
+  requested_by_user_id: number | null;
+  responded_at: Date | null;
+  side: "customer" | "vendor";
+  status: Generated<"agreed" | "disputed" | "requested">;
+  their_balance: Decimal | null;
+}
+
 export interface BankAccounts {
   account_holder: string | null;
   account_last4: string | null;
@@ -564,6 +579,8 @@ export interface Bills {
   notes: string | null;
   org_id: number;
   place_of_supply: string;
+  project_id: number | null;
+  recurring_id: number | null;
   rejection_reason: string | null;
   round_off: Generated<Decimal>;
   self_invoice_no: string | null;
@@ -587,6 +604,30 @@ export interface Bills {
   voided_at: Date | null;
   voided_by_user_id: number | null;
   warehouse_id: number | null;
+}
+
+export interface BillsOfEntry {
+  assessable_value: Generated<Decimal>;
+  bill_id: number | null;
+  boe_date: ColumnType<string, string, string>;
+  boe_no: string;
+  branch_id: number;
+  cess: Generated<Decimal>;
+  created_at: Generated<Date>;
+  created_by_user_id: number | null;
+  customs_duty: Generated<Decimal>;
+  duty_account_id: number;
+  id: Generated<number>;
+  igst: Generated<Decimal>;
+  itc_eligibility: Generated<"capital_goods" | "eligible" | "ineligible">;
+  journal_entry_id: number | null;
+  notes: string | null;
+  org_id: number;
+  paid_through_bank_account_id: number;
+  port_code: string;
+  status: Generated<"recorded" | "void">;
+  vendor_id: number | null;
+  void_reason: string | null;
 }
 
 export interface BomLines {
@@ -690,6 +731,32 @@ export interface Cheques {
   updated_at: Generated<Date>;
 }
 
+export interface CollectionFollowups {
+  author_name: string | null;
+  contact_id: number;
+  created_at: Generated<Date>;
+  id: Generated<number>;
+  invoice_id: number | null;
+  kind: Generated<"call" | "email" | "note" | "visit" | "whatsapp">;
+  next_followup: ColumnType<string | null, string | null, string | null>;
+  note: string;
+  org_id: number;
+  promised_amount: Decimal | null;
+  promised_date: ColumnType<string | null, string | null, string | null>;
+  user_id: number | null;
+}
+
+export interface Comments {
+  author_name: string;
+  body: string;
+  created_at: Generated<Date>;
+  id: Generated<number>;
+  org_id: number;
+  target_id: number;
+  target_type: string;
+  user_id: number | null;
+}
+
 export interface ComplianceFilings {
   created_at: Generated<Date>;
   created_by_user_id: number | null;
@@ -734,6 +801,39 @@ export interface Consents {
   withdrawn_at: Date | null;
 }
 
+export interface ContactAddresses {
+  address: string;
+  city: string | null;
+  contact_id: number;
+  created_at: Generated<Date>;
+  gstin: string | null;
+  id: Generated<number>;
+  is_default: Generated<number>;
+  label: string;
+  name: string | null;
+  org_id: number;
+  phone: string | null;
+  pincode: string | null;
+  state_code: string;
+  updated_at: Generated<Date>;
+}
+
+export interface ContactPersons {
+  contact_id: number;
+  created_at: Generated<Date>;
+  department: string | null;
+  designation: string | null;
+  email: string | null;
+  id: Generated<number>;
+  is_primary: Generated<number>;
+  name: string;
+  org_id: number;
+  phone: string | null;
+  receives_documents: Generated<number>;
+  salutation: string | null;
+  updated_at: Generated<Date>;
+}
+
 export interface Contacts {
   bank_account_name: string | null;
   bank_account_no: string | null;
@@ -756,6 +856,8 @@ export interface Contacts {
   is_msme: Generated<number>;
   kind: Generated<"both" | "customer" | "vendor">;
   legal_name: string | null;
+  merged_at: Date | null;
+  merged_into_id: number | null;
   msme_activity: "manufacturing" | "services" | "trading" | null;
   msme_agreement_days: number | null;
   msme_category: "medium" | "micro" | "small" | null;
@@ -853,6 +955,7 @@ export interface CustomFields {
   label: string;
   options: Json | null;
   org_id: number;
+  show_on_pdf: Generated<number>;
 }
 
 export interface CustomFieldValues {
@@ -957,6 +1060,31 @@ export interface Einvoices {
   signed_qr_payload: string | null;
   status: Generated<"cancelled" | "failed" | "not_applicable" | "pending" | "submitted">;
   updated_at: Generated<Date>;
+}
+
+export interface EmailLog {
+  cc_address: string | null;
+  created_at: Generated<Date>;
+  doc_id: number | null;
+  doc_type: string | null;
+  error: string | null;
+  id: Generated<number>;
+  message_id: string | null;
+  org_id: number;
+  sent_by_user_id: number | null;
+  status: "failed" | "sent";
+  subject: string;
+  to_address: string;
+}
+
+export interface EmailTemplates {
+  body: string;
+  id: Generated<number>;
+  kind: string;
+  org_id: number;
+  subject: string;
+  updated_at: Generated<Date>;
+  updated_by_user_id: number | null;
 }
 
 export interface EmployeeLoans {
@@ -1180,6 +1308,7 @@ export interface Expenses {
   account_id: number;
   amount: Generated<Decimal>;
   billable_customer_id: number | null;
+  billed_invoice_id: number | null;
   branch_id: number;
   cgst: Generated<Decimal>;
   cost_centre_id: number | null;
@@ -1192,11 +1321,15 @@ export interface Expenses {
   is_billable: Generated<number>;
   itc_eligibility: Generated<"capital_goods" | "eligible" | "ineligible">;
   journal_entry_id: number | null;
+  mileage_km: Decimal | null;
+  mileage_rate: Decimal | null;
   notes: string | null;
   number: string;
   org_id: number;
   paid_through_bank_account_id: number;
+  project_id: number | null;
   receipt_file_id: number | null;
+  recurring_id: number | null;
   reference: string | null;
   sgst: Generated<Decimal>;
   status: Generated<"recorded" | "void">;
@@ -1214,6 +1347,7 @@ export interface Files {
   deleted_at: Date | null;
   deleted_by_user_id: number | null;
   filename: string;
+  folder: string | null;
   id: Generated<number>;
   org_id: number;
   size_bytes: Generated<number>;
@@ -1362,6 +1496,28 @@ export interface GstRegistrationChanges {
   org_id: number;
   reason: string;
   to_type: "composition" | "regular" | "unregistered";
+}
+
+export interface GstReturnSubmissions {
+  action: "file" | "save";
+  arn: string | null;
+  branch_id: number;
+  created_at: Generated<Date>;
+  created_by_user_id: number | null;
+  error_report: Json | null;
+  filed_at: Date | null;
+  gstin: string;
+  id: Generated<number>;
+  org_id: number;
+  payload_digest: string | null;
+  portal_message: string | null;
+  provider: string;
+  reference_id: string | null;
+  ret_period: string;
+  return_type: "GSTR1" | "GSTR3B" | "IFF";
+  status: Generated<"error" | "filed" | "pending" | "processed" | "processed_with_errors">;
+  totals: Json | null;
+  updated_at: Generated<Date>;
 }
 
 export interface HeldJournals {
@@ -1517,9 +1673,25 @@ export interface InvoiceLines {
   uqc: string | null;
 }
 
+export interface InvoicePaymentLinks {
+  amount: Decimal;
+  created_at: Generated<Date>;
+  created_by_user_id: number | null;
+  id: Generated<number>;
+  invoice_id: number;
+  org_id: number;
+  paid_at: Date | null;
+  payment_id: number | null;
+  provider_link_id: string;
+  provider_payment_id: string | null;
+  short_url: string;
+  status: Generated<"cancelled" | "created" | "expired" | "paid">;
+}
+
 export interface Invoices {
   adjustment: Generated<Decimal>;
   adjustment_label: string | null;
+  against_invoice_id: number | null;
   amount_paid: Generated<Decimal>;
   approval_status: Generated<"approved" | "none" | "pending" | "rejected">;
   approved_at: Date | null;
@@ -1533,6 +1705,7 @@ export interface Invoices {
   currency: Generated<string>;
   customer_id: number;
   doc_discount: Generated<Decimal>;
+  doc_kind: Generated<"debit_note" | "invoice">;
   due_date: ColumnType<string, string, string>;
   eway_bill_no: string | null;
   exchange_rate: Generated<Decimal>;
@@ -1548,12 +1721,15 @@ export interface Invoices {
   igst: Generated<Decimal>;
   invoice_date: ColumnType<string, string, string>;
   journal_entry_id: number | null;
+  note_reason: string | null;
   notes: string | null;
   number: string;
   order_number: string | null;
   org_id: number;
+  paid_at_sale: Generated<number>;
   payment_terms: string | null;
   place_of_supply: string;
+  project_id: number | null;
   rejection_reason: string | null;
   round_off: Generated<Decimal>;
   salesperson_id: number | null;
@@ -1616,6 +1792,22 @@ export interface ItcReversals {
   unpaid_at_reversal: Decimal | null;
 }
 
+export interface ItemComponents {
+  component_item_id: number;
+  id: Generated<number>;
+  kit_item_id: number;
+  org_id: number;
+  qty: Decimal;
+}
+
+export interface ItemGroups {
+  attributes: Json;
+  created_at: Generated<Date>;
+  id: Generated<number>;
+  name: string;
+  org_id: number;
+}
+
 export interface Items {
   alt_factor: Decimal | null;
   alt_uqc: string | null;
@@ -1624,7 +1816,10 @@ export interface Items {
   gst_rate_pct: Generated<Decimal>;
   hsn_sac: string | null;
   id: Generated<number>;
+  image_file_id: number | null;
   is_archived: Generated<number>;
+  is_kit: Generated<number>;
+  item_group_id: number | null;
   kind: Generated<"goods" | "service">;
   min_level: Decimal | null;
   mrp: Decimal | null;
@@ -1647,6 +1842,7 @@ export interface Items {
   updated_at: Generated<Date>;
   uqc: Generated<string>;
   valuation_method: "average" | "fifo" | null;
+  variant: Json | null;
 }
 
 export interface ItemSerials {
@@ -1737,6 +1933,40 @@ export interface JournalLines {
   entry_id: number;
   id: Generated<number>;
   line_no: number;
+  org_id: number;
+}
+
+export interface JournalTemplates {
+  created_at: Generated<Date>;
+  created_by_user_id: number | null;
+  id: Generated<number>;
+  memo: string | null;
+  name: string;
+  org_id: number;
+  template_lines: Json;
+  updated_at: Generated<Date>;
+  with_amounts: Generated<number>;
+}
+
+export interface LandedCostLines {
+  amount: Decimal;
+  bill_line_id: number;
+  id: Generated<number>;
+  landed_cost_id: number;
+  org_id: number;
+}
+
+export interface LandedCosts {
+  allocated_on: ColumnType<string, string, string>;
+  amount: Decimal;
+  charge_bill_id: number;
+  charge_line_id: number;
+  created_at: Generated<Date>;
+  created_by_user_id: number | null;
+  goods_bill_id: number;
+  id: Generated<number>;
+  journal_entry_id: number | null;
+  method: "manual" | "quantity" | "value";
   org_id: number;
 }
 
@@ -1858,6 +2088,7 @@ export interface Organizations {
   phone: string | null;
   print_bank_account_id: number | null;
   print_language: string | null;
+  print_template: Json | null;
   print_upi_qr: Generated<number>;
   signatory_name: string | null;
   tan: string | null;
@@ -1922,6 +2153,20 @@ export interface PaymentBatchLines {
   org_id: number;
   payment_id: number | null;
   vendor_id: number;
+}
+
+export interface PaymentGateways {
+  auth_tag: Buffer;
+  ciphertext: Buffer;
+  deposit_bank_account_id: number;
+  id: Generated<number>;
+  is_active: Generated<number>;
+  iv: Buffer;
+  key_id: string;
+  key_version: number;
+  org_id: number;
+  provider: Generated<"razorpay">;
+  updated_at: Generated<Date>;
 }
 
 export interface PaymentReminders {
@@ -2044,6 +2289,57 @@ export interface PayrollRuns {
   updated_at: Generated<Date>;
 }
 
+export interface PortalAccess {
+  contact_id: number;
+  created_at: Generated<Date>;
+  created_by_user_id: number | null;
+  email: string | null;
+  expires_at: Date;
+  id: Generated<number>;
+  last_opened_at: Date | null;
+  opens: Generated<number>;
+  org_id: number;
+  revoked_at: Date | null;
+  side: "customer" | "vendor";
+  token_hash: string;
+}
+
+export interface PortalActivity {
+  action: string;
+  contact_id: number;
+  created_at: Generated<Date>;
+  detail: string | null;
+  id: Generated<number>;
+  ip: string | null;
+  org_id: number;
+  side: "customer" | "vendor";
+  target_id: number | null;
+  target_type: string | null;
+}
+
+export interface PortalLoginCodes {
+  attempts: Generated<number>;
+  code_hash: string;
+  created_at: Generated<Date>;
+  email: string;
+  expires_at: Date;
+  id: Generated<number>;
+  ip: string | null;
+  used_at: Date | null;
+}
+
+export interface PortalRequests {
+  contact_id: number;
+  created_at: Generated<Date>;
+  decided_at: Date | null;
+  decided_by_user_id: number | null;
+  id: Generated<number>;
+  kind: "bank_details";
+  org_id: number;
+  payload: Json;
+  status: Generated<"applied" | "pending" | "rejected">;
+}
+
 export interface PriceListDiscounts {
   discount_pct: Decimal;
   id: Generated<number>;
@@ -2129,6 +2425,47 @@ export interface Productions {
   warehouse_id: number | null;
 }
 
+export interface Projects {
+  billing_method: Generated<"fixed" | "project_hours" | "staff_hours" | "task_hours">;
+  budget_amount: Decimal | null;
+  budget_hours: Decimal | null;
+  code: string | null;
+  created_at: Generated<Date>;
+  created_by_user_id: number | null;
+  customer_id: number;
+  description: string | null;
+  end_date: ColumnType<string | null, string | null, string | null>;
+  fixed_amount: Generated<Decimal>;
+  gst_rate_pct: Generated<Decimal>;
+  id: Generated<number>;
+  name: string;
+  org_id: number;
+  rate: Generated<Decimal>;
+  sac_code: string | null;
+  start_date: ColumnType<string | null, string | null, string | null>;
+  status: Generated<"active" | "archived" | "completed">;
+  updated_at: Generated<Date>;
+}
+
+export interface ProjectTasks {
+  billable: Generated<number>;
+  id: Generated<number>;
+  is_active: Generated<number>;
+  name: string;
+  org_id: number;
+  project_id: number;
+  rate: Generated<Decimal>;
+}
+
+export interface ProjectUsers {
+  cost_rate: Generated<Decimal>;
+  id: Generated<number>;
+  org_id: number;
+  project_id: number;
+  rate: Generated<Decimal>;
+  user_id: number;
+}
+
 export interface PurchaseOrderLines {
   account_id: number | null;
   cess: Generated<Decimal>;
@@ -2175,6 +2512,19 @@ export interface PurchaseOrders {
   total: Generated<Decimal>;
   updated_at: Generated<Date>;
   vendor_id: number;
+  vendor_response: "accepted" | "declined" | null;
+  vendor_response_at: Date | null;
+  vendor_response_note: string | null;
+}
+
+export interface ReclassifiedLines {
+  created_at: Generated<Date>;
+  from_account_id: number;
+  id: Generated<number>;
+  journal_line_id: number;
+  org_id: number;
+  reclass_entry_id: number;
+  to_account_id: number;
 }
 
 export interface RecurringInvoices {
@@ -2218,6 +2568,29 @@ export interface RecurringJournals {
   updated_at: Generated<Date>;
 }
 
+export interface RecurringPurchases {
+  auto_run: Generated<number>;
+  branch_id: number;
+  created_at: Generated<Date>;
+  created_by_user_id: number | null;
+  due_days: Generated<number>;
+  end_date: ColumnType<string | null, string | null, string | null>;
+  frequency: Generated<"monthly" | "quarterly" | "weekly" | "yearly">;
+  id: Generated<number>;
+  is_active: Generated<number>;
+  kind: "bill" | "expense";
+  last_error: string | null;
+  last_generated_at: ColumnType<string | null, string | null, string | null>;
+  next_run: ColumnType<string, string, string>;
+  org_id: number;
+  paid_through_bank_account_id: number | null;
+  profile_name: string;
+  start_date: ColumnType<string, string, string>;
+  template: Json;
+  updated_at: Generated<Date>;
+  vendor_id: number | null;
+}
+
 export interface ReimbursementClaims {
   amount: Decimal;
   category: string;
@@ -2245,6 +2618,31 @@ export interface ReportFiles {
   report: string;
   schedule_id: number | null;
   storage_key: string;
+}
+
+export interface ReportingTagLinks {
+  entity: string;
+  entity_id: number;
+  id: Generated<number>;
+  option_id: number;
+  org_id: number;
+  tag_id: number;
+}
+
+export interface ReportingTagOptions {
+  id: Generated<number>;
+  is_active: Generated<number>;
+  org_id: number;
+  tag_id: number;
+  value: string;
+}
+
+export interface ReportingTags {
+  created_at: Generated<Date>;
+  id: Generated<number>;
+  is_active: Generated<number>;
+  name: string;
+  org_id: number;
 }
 
 export interface ReportSchedules {
@@ -2328,6 +2726,17 @@ export interface SalesOrders {
   updated_at: Generated<Date>;
 }
 
+export interface SavedViews {
+  created_at: Generated<Date>;
+  filters: Json;
+  id: Generated<number>;
+  is_shared: Generated<number>;
+  list: string;
+  name: string;
+  org_id: number;
+  user_id: number;
+}
+
 export interface SchemaMigrations {
   applied_at: Generated<Date>;
   checksum: string;
@@ -2380,7 +2789,8 @@ export interface ShareLinks {
   created_at: Generated<Date>;
   created_by_user_id: number | null;
   doc_id: number;
-  doc_type: "invoice" | "payslip";
+  doc_kind: string | null;
+  doc_type: "document" | "invoice" | "payslip";
   expires_at: Date;
   id: Generated<number>;
   last_opened_at: Date | null;
@@ -2402,7 +2812,7 @@ export interface StockAdjustments {
   notes: string | null;
   org_id: number;
   qty_delta: Decimal;
-  reason: Generated<"damage" | "expiry" | "opening" | "other" | "sample" | "stocktake" | "theft">;
+  reason: Generated<"damage" | "expiry" | "issued" | "opening" | "other" | "sample" | "stocktake" | "theft">;
   warehouse_id: number | null;
 }
 
@@ -2676,6 +3086,36 @@ export interface TdsRates {
   verified_by_user_id: number | null;
 }
 
+export interface TimeEntries {
+  approval_note: string | null;
+  approval_status: "approved" | "pending" | "rejected" | null;
+  approved_at: Date | null;
+  approved_by_user_id: number | null;
+  billable: Generated<number>;
+  created_at: Generated<Date>;
+  created_by_user_id: number | null;
+  entry_date: ColumnType<string, string, string>;
+  id: Generated<number>;
+  invoice_id: number | null;
+  minutes: number;
+  notes: string | null;
+  org_id: number;
+  project_id: number;
+  task_id: number | null;
+  user_id: number;
+}
+
+export interface TimeTimers {
+  billable: Generated<number>;
+  id: Generated<number>;
+  notes: string | null;
+  org_id: number;
+  project_id: number;
+  started_at: Generated<Date>;
+  task_id: number | null;
+  user_id: number;
+}
+
 export interface TransactionLocks {
   id: Generated<number>;
   locked_by_user_id: number | null;
@@ -2798,10 +3238,25 @@ export interface WorkflowRules {
   created_at: Generated<Date>;
   id: Generated<number>;
   is_active: Generated<number>;
+  last_run_at: Date | null;
   name: string;
   org_id: number;
+  runs: Generated<number>;
   trigger_event: string;
   updated_at: Generated<Date>;
+}
+
+export interface WorkflowRuns {
+  created_at: Generated<Date>;
+  detail: string | null;
+  event: string;
+  id: Generated<number>;
+  org_id: number;
+  ran_at: Date | null;
+  rule_id: number;
+  status: Generated<"done" | "failed" | "queued" | "skipped">;
+  target_id: number;
+  target_type: string;
 }
 
 export interface DB {
@@ -2826,6 +3281,7 @@ export interface DB {
   asset_verifications: AssetVerifications;
   audit_log: AuditLog;
   backup_runs: BackupRuns;
+  balance_confirmations: BalanceConfirmations;
   bank_accounts: BankAccounts;
   bank_rules: BankRules;
   bank_statement_imports: BankStatementImports;
@@ -2840,6 +3296,7 @@ export interface DB {
   billing_subscriptions: BillingSubscriptions;
   billing_webhook_events: BillingWebhookEvents;
   bills: Bills;
+  bills_of_entry: BillsOfEntry;
   bom_lines: BomLines;
   boms: Boms;
   branches: Branches;
@@ -2847,9 +3304,13 @@ export interface DB {
   cash_counts: CashCounts;
   challan_lines: ChallanLines;
   cheques: Cheques;
+  collection_followups: CollectionFollowups;
+  comments: Comments;
   compliance_filings: ComplianceFilings;
   composition_returns: CompositionReturns;
   consents: Consents;
+  contact_addresses: ContactAddresses;
+  contact_persons: ContactPersons;
   contacts: Contacts;
   cost_centres: CostCentres;
   credit_note_lines: CreditNoteLines;
@@ -2862,6 +3323,8 @@ export interface DB {
   depreciation_runs: DepreciationRuns;
   documents: Documents;
   einvoices: Einvoices;
+  email_log: EmailLog;
+  email_templates: EmailTemplates;
   employee_loans: EmployeeLoans;
   employee_salaries: EmployeeSalaries;
   employees: Employees;
@@ -2881,6 +3344,7 @@ export interface DB {
   goods_receipt_lines: GoodsReceiptLines;
   goods_receipts: GoodsReceipts;
   gst_registration_changes: GstRegistrationChanges;
+  gst_return_submissions: GstReturnSubmissions;
   gstr2b_entries: Gstr2bEntries;
   held_journals: HeldJournals;
   hsn_codes: HsnCodes;
@@ -2892,9 +3356,12 @@ export interface DB {
   integration_sessions: IntegrationSessions;
   invoice_interest_charges: InvoiceInterestCharges;
   invoice_lines: InvoiceLines;
+  invoice_payment_links: InvoicePaymentLinks;
   invoices: Invoices;
   it_block_openings: ItBlockOpenings;
   itc_reversals: ItcReversals;
+  item_components: ItemComponents;
+  item_groups: ItemGroups;
   item_serials: ItemSerials;
   items: Items;
   job_work_receipt_lines: JobWorkReceiptLines;
@@ -2903,6 +3370,9 @@ export interface DB {
   journal_allocations: JournalAllocations;
   journal_entries: JournalEntries;
   journal_lines: JournalLines;
+  journal_templates: JournalTemplates;
+  landed_cost_lines: LandedCostLines;
+  landed_costs: LandedCosts;
   leave_entries: LeaveEntries;
   leave_types: LeaveTypes;
   mfa_challenges: MfaChallenges;
@@ -2914,12 +3384,17 @@ export interface DB {
   payment_allocations: PaymentAllocations;
   payment_batch_lines: PaymentBatchLines;
   payment_batches: PaymentBatches;
+  payment_gateways: PaymentGateways;
   payment_reminders: PaymentReminders;
   payments: Payments;
   payroll_arrears: PayrollArrears;
   payroll_lines: PayrollLines;
   payroll_recoveries: PayrollRecoveries;
   payroll_runs: PayrollRuns;
+  portal_access: PortalAccess;
+  portal_activity: PortalActivity;
+  portal_login_codes: PortalLoginCodes;
+  portal_requests: PortalRequests;
   price_list_discounts: PriceListDiscounts;
   price_list_items: PriceListItems;
   price_lists: PriceLists;
@@ -2927,16 +3402,25 @@ export interface DB {
   privacy_requests: PrivacyRequests;
   production_lines: ProductionLines;
   productions: Productions;
+  project_tasks: ProjectTasks;
+  project_users: ProjectUsers;
+  projects: Projects;
   purchase_order_lines: PurchaseOrderLines;
   purchase_orders: PurchaseOrders;
+  reclassified_lines: ReclassifiedLines;
   recurring_invoices: RecurringInvoices;
   recurring_journals: RecurringJournals;
+  recurring_purchases: RecurringPurchases;
   reimbursement_claims: ReimbursementClaims;
   report_files: ReportFiles;
   report_schedules: ReportSchedules;
+  reporting_tag_links: ReportingTagLinks;
+  reporting_tag_options: ReportingTagOptions;
+  reporting_tags: ReportingTags;
   retainer_invoices: RetainerInvoices;
   sales_order_lines: SalesOrderLines;
   sales_orders: SalesOrders;
+  saved_views: SavedViews;
   schema_migrations: SchemaMigrations;
   sequences: Sequences;
   serial_moves: SerialMoves;
@@ -2963,6 +3447,8 @@ export interface DB {
   tds_challans: TdsChallans;
   tds_lower_certificates: TdsLowerCertificates;
   tds_rates: TdsRates;
+  time_entries: TimeEntries;
+  time_timers: TimeTimers;
   transaction_locks: TransactionLocks;
   user_branches: UserBranches;
   users: Users;
@@ -2972,4 +3458,5 @@ export interface DB {
   webhook_deliveries: WebhookDeliveries;
   webhooks: Webhooks;
   workflow_rules: WorkflowRules;
+  workflow_runs: WorkflowRuns;
 }

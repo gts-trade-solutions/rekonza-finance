@@ -17,6 +17,7 @@ import { claimDueJob, recoverStaleJobs, settleJob } from './queue';
 import { runJobHandler } from './handlers';
 import { runScheduledPostings } from '../services/scheduler';
 import { deliverDueWebhooks } from '../integrations/webhooks';
+import { runWorkflows } from '../services/workflows';
 import { runDueReports } from '../services/report-schedules';
 import { runStockAlerts } from '../services/stock-alerts';
 import { runReminders } from '../services/reminders';
@@ -24,6 +25,7 @@ import { runExceptions } from '../services/exceptions';
 import { runAutoIrn } from '../gst/auto-irn';
 import { runAutoDepreciation } from '../services/fixed-assets';
 import { runStockTrueUp } from '../services/stock-ledger';
+import { runFxFeeds } from '../services/fx-feed';
 
 const TICK_MS = Number(process.env.JOBS_TICK_MS) || 15_000;
 /** How often the scheduler looks for post-dated entries and recurring profiles due. */
@@ -64,6 +66,7 @@ export function startJobWorker(): void {
     }
     try {
       await deliverDueWebhooks();
+      await runWorkflows();
     } catch (err) {
       console.error('[webhooks] delivery failed', err);
     }
@@ -86,6 +89,8 @@ export function startJobWorker(): void {
         if (depreciation) console.info('[scheduler] depreciation runs posted:', depreciation);
         const stock = await runStockTrueUp();
         if (stock) console.info('[scheduler] stock brought into line:', stock);
+        const fx = await runFxFeeds();
+        if (fx) console.info('[scheduler] exchange rates fetched for', fx, 'book(s)');
         // Last, so it sees what the rest of the sweep did.
         const raised = await runExceptions();
         if (raised) console.info('[scheduler] exceptions raised:', raised);

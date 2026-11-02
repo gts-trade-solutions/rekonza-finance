@@ -10,12 +10,16 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useMemo, useState } from 'react';
-import { FileText, Plus } from 'lucide-react';
+import { Download, FileText, Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card } from '@/components/ui/card';
 import { PageHeader } from '@/components/shared/page-header';
 import { DataTable, type Column } from '@/components/shared/data-table';
+import { BulkPrintButton } from '@/components/shared/document-menu';
+import { SavedViews } from '@/components/shared/saved-views';
+import { downloadCsv } from '@/components/shared/report-shell';
+import { toRupees } from '@/lib/money';
 import { Money } from '@/components/shared/money';
 import { StatusBadge } from '@/components/shared/status-badge';
 import { EmptyState } from '@/components/shared/empty-state';
@@ -146,6 +150,7 @@ export default function BillsPage() {
         actions={
           <>
             <Refreshing active={state.refreshing} />
+            <SavedViews list="bills" current={{ status: filter, range }} onApply={(v) => { setFilter(String(v.status ?? 'all')); if (v.range) setRange(v.range as RangeValue); }} />
             {canCreate && (
               <Button size="sm" asChild className="gap-1.5">
                 <Link href="/purchases/bills/new"><Plus className="size-4" /> New bill</Link>
@@ -211,6 +216,21 @@ export default function BillsPage() {
                 activeTab={filter}
                 onTabChange={setFilter}
                 dateFilter={{ getDate: (r) => r.date, value: range, onChange: setRange }}
+                selectable
+                bulkActions={(selected, clear) => (
+                  <>
+                    <BulkPrintButton kind="bill" ids={selected.map((r) => r.id)} />
+                    <Button size="xs" variant="outline" className="gap-1" onClick={() => {
+                      downloadCsv('bills.csv', [
+                        ['Bill', 'Vendor bill no.', 'Vendor', 'Date', 'Due', 'Status', 'Total', 'Balance'],
+                        ...selected.map((b) => [b.internalNo, b.vendorInvoiceNo ?? '', b.vendorName, b.date, b.dueDate, b.status, toRupees(b.totalPaise), toRupees(b.balancePaise)]),
+                      ]);
+                      clear();
+                    }}>
+                      <Download className="size-3" /> Export
+                    </Button>
+                  </>
+                )}
               />
             </>
           );

@@ -18,14 +18,14 @@ function screens(dir, prefix = '') {
   const out = [];
   for (const name of readdirSync(dir)) {
     const full = path.join(dir, name);
-    if (statSync(full).isDirectory()) out.push(...screens(full, /^(.*)$/.test(name) ? prefix : `${prefix}/${name}`));
+    if (statSync(full).isDirectory()) out.push(...screens(full, /^\(.*\)$/.test(name) ? prefix : `${prefix}/${name}`));
     else if (name === 'page.tsx') out.push(prefix || '/');
   }
   return out;
 }
 const ROUTES = [
   ...screens(path.join('app', '(app)')).filter((r) => !r.includes('[')).sort(),
-  '/portal',
+  '/portal', '/portal/login',
   // The signed-out surface. Visited last, and while signed in, which is fine:
   // none of the three redirects on a session, and a console error on the
   // landing page is the one a prospective customer would see first.

@@ -20,7 +20,9 @@ import { db, transaction, type Executor, type Trx } from '../db';
 import { toPaiseFromSql } from '../money-sql';
 import { badRequest, notFound } from '../http';
 import { getPolicies } from './org-settings';
+import { sendQueuedEmailReminders } from '../mail/documents';
 import { indiaToday } from './held-journals';
+import { renderEmail } from '../mail/templates';
 
 const addDays = (iso: string, n: number) => {
   const d = new Date(`${iso}T00:00:00Z`);
@@ -31,8 +33,11 @@ const rupees = (paise: number) => `₹${(paise / 100).toLocaleString('en-IN', { 
 const dmy = (iso: string) => new Date(`${iso}T00:00:00Z`).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
 
 /** The reminder's words, with {link} for the invoice's link. */
+const dueWords = (dueDate: string, today: string) =>
+  dueDate > today ? `falls due on ${dmy(dueDate)}` : dueDate === today ? 'falls due today' : `fell due on ${dmy(dueDate)}`;
+
 export function reminderText(o: { org: string; customer: string; number: string; balancePaise: number; dueDate: string; today: string }) {
-  const when = o.dueDate > o.today ? `falls due on ${dmy(o.dueDate)}` : o.dueDate === o.today ? 'falls due today' : `fell due on ${dmy(o.dueDate)}`;
+  const when = dueWords(o.dueDate, o.today);
   return `Dear ${o.customer}, a reminder that invoice ${o.number} for ${rupees(o.balancePaise)} ${when}. You can see it and pay here: {link}\n— ${o.org}`;
 }
 
@@ -59,10 +64,13 @@ export async function queueReminders(trx: Trx, orgId: number, today: string): Pr
     const stage = rule.stages.filter((s) => addDays(due, s) <= today && addDays(due, s + 6) >= today).sort((a, b) => b - a)[0];
     if (stage === undefined || have.has(`${inv.id}:${stage}`)) continue;
     const to = rule.channel === 'email' ? inv.email : inv.phone;
+    // In the business's own wording (mail/templates.ts); {link} stays for when it is sent.
+    const words = await renderEmail(trx, orgId, 'reminder', {
+      customer: inv.display_name, number: inv.number, balance: rupees(balance), due_date: dmy(due), due_words: dueWords(due, today), link: '{link}', business: org.legal_name ?? org.name,
+    });
     await trx.insertInto('payment_reminders').values({
       org_id: orgId, invoice_id: inv.id, stage_days: stage, channel: rule.channel, to_address: to || null,
-      subject: `Invoice ${inv.number}: payment reminder`, queued_on: today,
-      message: reminderText({ org: org.legal_name ?? org.name, customer: inv.display_name, number: inv.number, balancePaise: balance, dueDate: due, today }),
+      subject: words.subject, queued_on: today, message: words.text,
     }).execute();
     queued++;
   }
@@ -78,6 +86,8 @@ export async function runReminders(day = indiaToday()): Promise<number> {
   for (const r of rows) {
     try {
       queued += await transaction((trx) => queueReminders(trx, Number(r.org_id), day));
+      // With a mail server set up, email reminders go out on their own (mail/documents.ts).
+      await sendQueuedEmailReminders(Number(r.org_id));
     } catch (err) {
       console.error('[reminders]', r.org_id, err);
     }

@@ -1,30 +1,14 @@
 import { z } from 'zod';
-import { sql } from 'kysely';
 import { db } from '@/lib/server/db';
-import { route, body, query, asId, badRequest } from '@/lib/server/http';
-import { toPaiseFromSql, toSqlFromPaise } from '@/lib/server/money-sql';
+import { route, body, query, badRequest } from '@/lib/server/http';
+import { toSqlFromPaise } from '@/lib/server/money-sql';
+import { budgetVsActual } from '@/lib/server/reports/budgets';
 import { logAudit, auditMeta } from '@/lib/server/audit';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Budget vs actual.
-//
-// The actuals come from the journal, not from a second store of numbers, and
-// they are matched to the budget by account id. That is the whole reason
-// budgets are held per account: there is no category mapping in the middle for
-// the two sides to disagree about.
+// Budget vs actual: the figures are worked out in lib/server/reports/budgets.ts,
+// which the assistant reads too.
 // ─────────────────────────────────────────────────────────────────────────────
-
-/** '2026-27' for any date in the 2026-27 financial year. India runs Apr–Mar. */
-function fyLabelFor(date: string): string {
-  const [y, m] = date.split('-').map(Number);
-  const start = m < 4 ? y - 1 : y;
-  return `${start}-${String((start + 1) % 100).padStart(2, '0')}`;
-}
-
-function fyRange(label: string): { from: string; to: string } {
-  const start = Number(label.slice(0, 4));
-  return { from: `${start}-04-01`, to: `${start + 1}-03-31` };
-}
 
 const ListQuery = z.object({
   fy: z.string().regex(/^\d{4}-\d{2}$/).optional(),
@@ -35,74 +19,7 @@ const ListQuery = z.object({
 export const GET = route(
   async ({ orgId, req }) => {
     const q = query(req, ListQuery);
-    const today = new Date().toISOString().slice(0, 10);
-    const fy = q.fy ?? fyLabelFor(today);
-    const range = fyRange(fy);
-    // Year-to-date by default: comparing a full-year budget against a full year
-    // of actuals that has not happened yet makes everything look under budget.
-    const asOf = q.asOf ?? (today < range.to ? today : range.to);
-
-    const budgets = await db
-      .selectFrom('budgets')
-      .innerJoin('accounts', 'accounts.id', 'budgets.account_id')
-      .select([
-        'budgets.id', 'budgets.account_id', 'budgets.amount', 'budgets.notes',
-        'accounts.code', 'accounts.name', 'accounts.type',
-      ])
-      .where('budgets.org_id', '=', orgId)
-      .where('budgets.fy_label', '=', fy)
-      .orderBy('accounts.code')
-      .execute();
-
-    const { rows: actuals } = await sql<{ id: number; v: string }>`
-      SELECT jl.account_id AS id, COALESCE(SUM(jl.debit - jl.credit), 0) AS v
-        FROM journal_lines jl
-       WHERE jl.org_id = ${orgId}
-         AND jl.entry_date BETWEEN ${range.from} AND ${asOf}
-       GROUP BY jl.account_id
-    `.execute(db);
-    const actualBy = new Map(actuals.map((a) => [a.id, toPaiseFromSql(a.v)]));
-
-    // How far through the year we are, so an account can be flagged as ahead of
-    // pace rather than merely under its annual total.
-    const elapsed = Math.max(
-      0,
-      Math.min(1, (new Date(asOf).getTime() - new Date(range.from).getTime())
-        / (new Date(range.to).getTime() - new Date(range.from).getTime())),
-    );
-
-    const rows = budgets.map((b) => {
-      const raw = actualBy.get(b.account_id) ?? 0;
-      // Income is credit-normal, so its actual arrives negative from a
-      // debit-minus-credit sum. Both sides are shown as positive spend/earn.
-      const actual = b.type === 'income' ? -raw : raw;
-      const budget = toPaiseFromSql(b.amount);
-      return {
-        id: asId(b.id),
-        accountId: asId(b.account_id),
-        code: b.code,
-        name: b.name,
-        type: b.type,
-        budgetPaise: budget,
-        actualPaise: actual,
-        variancePaise: budget - actual,
-        pct: budget > 0 ? (actual / budget) * 100 : 0,
-        notes: b.notes,
-      };
-    });
-
-    return {
-      fy,
-      from: range.from,
-      to: range.to,
-      asOf,
-      elapsedPct: elapsed * 100,
-      rows,
-      totals: {
-        budgetPaise: rows.reduce((t, r) => t + r.budgetPaise, 0),
-        actualPaise: rows.reduce((t, r) => t + r.actualPaise, 0),
-      },
-    };
+    return budgetVsActual(db, orgId, { fy: q.fy, asOf: q.asOf, today: new Date().toISOString().slice(0, 10) });
   },
   { permission: { module: 'accountant', action: 'view' } },
 );

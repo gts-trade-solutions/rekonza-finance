@@ -15,6 +15,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { PageHeader } from '@/components/shared/page-header';
 import { DataTable, type Column } from '@/components/shared/data-table';
+import { BulkPrintButton, documentMenuColumn } from '@/components/shared/document-menu';
 import { Money } from '@/components/shared/money';
 import { StatusBadge } from '@/components/shared/status-badge';
 import { EmptyState } from '@/components/shared/empty-state';
@@ -119,8 +120,10 @@ export default function SalesOrdersPage() {
             ) : (
               <DataTable
                 rows={d.documents}
-                columns={columns}
+                columns={[...columns, documentMenuColumn('sales-order', state.refetch)]}
                 getRowId={(r) => r.id}
+                selectable
+                bulkActions={(selected) => <BulkPrintButton kind="sales-order" ids={selected.map((r) => r.id)} />}
                 initialSort={{ key: 'date', dir: 'desc' }}
                 dateFilter={{ getDate: (r) => r.date }}
                 searchPlaceholder="Search order or customer…"

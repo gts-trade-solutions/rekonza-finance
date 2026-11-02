@@ -6,6 +6,9 @@
 // before it leaves the browser, so recording changes nothing in the books.
 //
 //   BASE=http://localhost:5001 npx tsx scripts/demo-snapshot.ts
+//
+// Record the assistant's lookups alongside it (scripts/demo-ai-snapshot.ts),
+// so the AI on the online demo quotes the figures the screens show.
 
 import { createHash } from 'node:crypto';
 import { mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -57,12 +60,36 @@ const DIALOGS = [
   { list: '/api/exceptions?view=closed', detail: '/api/exceptions/[id]' },
 ];
 
+/**
+ * Replies a screen asks for only when a button is pressed — an export, the
+ * documents behind a GSTR-3B figure — fetched once at the end so the demo can
+ * answer them too. `{lastMonth}` is the month before the recording.
+ */
+const ON_DEMAND = [
+  '/api/export?module=all',
+  ...['contacts', 'items', 'accounts', 'invoices', 'bills', 'journals', 'journal-lines', 'credit-notes', 'estimates', 'sales-orders',
+    'purchase-orders', 'expenses', 'payments-received', 'payments-made', 'vendor-credits', 'bank-transactions'].map((m) => `/api/export?module=${m}`),
+  ...['3.1a', '3.1b', '3.1c', '3.1d', '3.1e', '3.1.1i', '3.1.1ii', '4A1', '4A2', '4A3', '4A4', '4A5', '4B1', '4B2', '4D1', '4D2', '5gst', '5nongst', '3.2']
+    .map((row) => `/api/gst?view=gstr3b-docs&ret={lastMonth}&row=${encodeURIComponent(row)}`),
+  '/api/gst?view=gstr3b-file&ret={lastMonth}',
+  '/api/documents/targets',
+  '/api/documents/targets?type=bill&q=',
+];
+
 /** Lists whose records open from a row, and the screen each record opens on. */
 const ROWS = [
   { api: '/api/contacts?kind=customer&limit=500', screen: '/sales/customers/[id]' },
   { api: '/api/invoices?limit=500', screen: '/sales/invoices/[id]' },
   { api: '/api/bills?limit=500', screen: '/purchases/bills/[id]' },
+  // Printed copies, opened from a row's "⋯" menu, which leaves no link on the page to follow.
+  ...['estimate', 'sales-order', 'challan', 'credit-note', 'retainer'].map((k) => ({ api: `/api/sales-documents?kind=${k}`, screen: `/print/${k}/[id]` })),
+  ...['purchase-order', 'vendor-credit'].map((k) => ({ api: `/api/purchase-documents?kind=${k}`, screen: `/print/${k}/[id]` })),
+  { api: '/api/payments?kind=received&limit=500', screen: '/print/payment-received/[id]' },
+  { api: '/api/payments?kind=made&limit=500', screen: '/print/payment-made/[id]' },
 ];
+
+/** Printed copies of each kind recorded at most; they share one route, so they are counted by kind. */
+const PRINT_PER_KIND = 12;
 
 // ── The recording ───────────────────────────────────────────────────────────
 
@@ -121,6 +148,12 @@ async function visit(page: Page, route: string) {
       /* a tab that cannot be clicked has nothing to record */
     }
   }
+  // A statement's cash basis (Zoho's "Report basis"): the same screen once more, counted when paid.
+  const basis = page.locator('[data-slot="report-basis"]');
+  if (await basis.count().catch(() => 0)) {
+    await basis.first().selectOption('cash').catch(() => {});
+    await settle(page);
+  }
 }
 
 async function main() {
@@ -156,9 +189,11 @@ async function main() {
     if (queued.has(p)) return;
     const k = kinds.find((x) => x.re.test(p));
     if (!k) return;
-    const n = perKind.get(k.route) ?? 0;
-    if (n >= PER_KIND) return;
-    perKind.set(k.route, n + 1);
+    const printed = k.route === '/print/[kind]/[id]';
+    const key = printed ? p.split('/').slice(0, 3).join('/') : k.route;
+    const n = perKind.get(key) ?? 0;
+    if (n >= (printed ? PRINT_PER_KIND : PER_KIND)) return;
+    perKind.set(key, n + 1);
     queued.add(p);
     queue.push(p);
   };
@@ -177,7 +212,8 @@ async function main() {
 
     // Records this screen links to, and the screens beneath a record (its print view, say).
     const hrefs = await page.$$eval('a[href^="/"]', (as) => as.map((a) => a.getAttribute('href') || '')).catch(() => [] as string[]);
-    const kind = kinds.find((k) => k.re.test(route));
+    // A fixed screen (/portal/login) is not a record, even where it looks like one (/portal/[token]).
+    const kind = fixed.includes(route) ? undefined : kinds.find((k) => k.re.test(route));
     if (kind) {
       for (const sub of kinds) if (sub.route.startsWith(`${kind.route}/`)) hrefs.push(route + sub.route.slice(kind.route.length));
     }
@@ -197,6 +233,14 @@ async function main() {
     for (const id of ids.slice(0, PER_KIND)) {
       await page.evaluate((url) => fetch(url).then((r) => r.text()), detail.replace('[id]', id)).catch(() => {});
     }
+  }
+
+  const d = new Date();
+  d.setDate(1);
+  d.setMonth(d.getMonth() - 1);
+  const lastMonth = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  for (const url of ON_DEMAND) {
+    await page.evaluate((u) => fetch(u).then((r) => r.text()), url.replace('{lastMonth}', lastMonth)).catch(() => {});
   }
 
   await page.evaluate(() => fetch('/api/auth/logout', { method: 'POST' })).catch(() => {});

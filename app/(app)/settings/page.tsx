@@ -21,6 +21,12 @@ import { Field } from '@/components/shared/form-bits';
 import { AsyncPage } from '@/components/shared/async-state';
 import { BranchDialog, type EditableBranch } from '@/components/settings/branch-dialog';
 import { IntegrationsPanel } from '@/components/settings/integrations-panel';
+import { GstnConnections } from '@/components/gst/gstn-portal';
+import { CustomFieldsSettings } from '@/components/settings/custom-fields-settings';
+import { PaymentsPanel } from '@/components/settings/payments-panel';
+import { WorkflowsPanel } from '@/components/settings/workflows-panel';
+import { BiFeeds } from '@/components/settings/bi-feeds';
+import { ReportingTagsSettings } from '@/components/settings/reporting-tags-settings';
 import { NumberingPanel, type SeriesRow } from '@/components/settings/numbering-panel';
 import { BackupsPanel } from '@/components/settings/backups-panel';
 import { PoliciesPanel } from '@/components/settings/policies-panel';
@@ -84,22 +90,12 @@ const NOT_BUILT = [
   {
     name: 'Email delivery',
     desc: 'Sending invoices and payment reminders.',
-    why: 'No mail transport is wired up, so reminder schedules are configuration for something that does not run yet.',
+    why: 'Built, and switched on by the server: add SMTP_HOST, SMTP_USER, SMTP_PASSWORD and MAIL_FROM to its environment. Invoices and statements then have Email now, and email reminders go out on their own.',
   },
   {
     name: 'Payment links',
-    desc: 'A pay-now button on the invoice, and settlement reconciliation.',
-    why: 'Needs a payment gateway account and a webhook endpoint.',
-  },
-  {
-    name: 'Custom fields, workflows and approvals',
-    desc: 'Extra fields per document type, and rules that act on their own.',
-    why: 'The tables exist; nothing reads or writes them yet.',
-  },
-  {
-    name: 'Developer API',
-    desc: 'Tokens and webhooks for your website or CRM.',
-    why: 'The api_tokens table is in place but no token is issued or accepted.',
+    desc: 'A pay-now button on the invoice, with the receipt recorded when it is paid.',
+    why: 'Built: connect your own Razorpay account above (Online payments). Other gateways are not wired up yet.',
   },
 ];
 
@@ -178,6 +174,9 @@ export default function SettingsPage() {
               <TabsTrigger value="statutory">Statutory</TabsTrigger>
               <TabsTrigger value="users">Users &amp; roles</TabsTrigger>
               <TabsTrigger value="numbering">Numbering</TabsTrigger>
+              <TabsTrigger value="custom-fields">Custom fields</TabsTrigger>
+              <TabsTrigger value="workflows">Workflow rules</TabsTrigger>
+              <TabsTrigger value="tags">Reporting tags</TabsTrigger>
               <TabsTrigger value="integrations">Integrations</TabsTrigger>
               <TabsTrigger value="backups">Backups</TabsTrigger>
               <TabsTrigger value="policies">Policies</TabsTrigger>
@@ -354,15 +353,21 @@ export default function SettingsPage() {
 
               <Card className="flex flex-wrap items-center gap-4 p-5">
                 <div className="min-w-0 flex-1">
-                  <h3 className="text-sm font-semibold">Import</h3>
+                  <h3 className="text-sm font-semibold">Import and export</h3>
                   <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                    Customers, vendors, items, accounts, opening balances and vouchers from Excel or CSV, or a whole
-                    company from Tally. Every import is checked first and goes in whole or not at all.
+                    Customers, vendors, items, accounts, opening balances and vouchers in from Excel, CSV or JSON, or a
+                    whole company from Tally; and any part of the books out as CSV, Excel or JSON, or the whole book as
+                    one JSON backup. Every import is checked first and goes in whole or not at all.
                   </p>
                 </div>
-                <Button variant="outline" size="sm" asChild>
-                  <Link href="/settings/import">Import data</Link>
-                </Button>
+                <div className="flex gap-2">
+                  <Button variant="outline" size="sm" asChild>
+                    <Link href="/settings/import">Import data</Link>
+                  </Button>
+                  <Button variant="outline" size="sm" asChild>
+                    <Link href="/settings/export">Export data</Link>
+                  </Button>
+                </div>
               </Card>
 
               <Card className="flex flex-wrap items-center gap-4 p-5">
@@ -375,6 +380,19 @@ export default function SettingsPage() {
                 </div>
                 <Button variant="outline" size="sm" asChild>
                   <Link href="/settings/invoice-print">Set up</Link>
+                </Button>
+              </Card>
+
+              <Card className="flex flex-wrap items-center gap-4 p-5" data-slot="settings-email-templates">
+                <div className="min-w-0 flex-1">
+                  <h3 className="text-sm font-semibold">Email templates</h3>
+                  <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                    The wording of the invoice email, statements, payment reminders and the portal invitation, with
+                    placeholders such as the customer&apos;s name, the amount and the link, filled in as each one goes.
+                  </p>
+                </div>
+                <Button variant="outline" size="sm" asChild>
+                  <Link href="/settings/email-templates">Edit</Link>
                 </Button>
               </Card>
 
@@ -460,6 +478,18 @@ export default function SettingsPage() {
               <PoliciesPanel canEdit={canEdit} />
             </TabsContent>
 
+            <TabsContent value="custom-fields" className="mt-4">
+              <CustomFieldsSettings canEdit={canEdit} />
+            </TabsContent>
+
+            <TabsContent value="tags" className="mt-4">
+              <ReportingTagsSettings canEdit={canEdit} />
+            </TabsContent>
+
+            <TabsContent value="workflows" className="mt-4">
+              <WorkflowsPanel canEdit={canEdit} />
+            </TabsContent>
+
             <TabsContent value="controls" className="mt-4">
               <ControlsPanel canEdit={canEdit} />
             </TabsContent>
@@ -487,6 +517,7 @@ export default function SettingsPage() {
             {canEdit && (
               <TabsContent value="developer" className="mt-4">
                 <DeveloperPanel />
+                <BiFeeds />
               </TabsContent>
             )}
 
@@ -495,6 +526,8 @@ export default function SettingsPage() {
                   no longer in the "not built" list below — the credentials a
                   customer creates on the portal are stored here. */}
               <IntegrationsPanel canEdit={canEdit} />
+              <GstnConnections canEdit={canEdit} />
+              <PaymentsPanel canEdit={canEdit} />
 
               <div className="pt-4">
                 <h3 className="text-sm font-semibold">Still not connected</h3>

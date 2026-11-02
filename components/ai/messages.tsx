@@ -102,6 +102,11 @@ export function AssistantMessage({
               <FileText className="size-3" /> {s.label}
             </Link>
           ))}
+          {m.fromCache && (
+            <span data-slot="ai-cached" title="Asked a moment ago, and nothing in the books has changed since: the same answer, at once.">
+              Instant · same question a moment ago · no credits
+            </span>
+          )}
           {m.chargedMc > 0 && (
             <span data-slot="ai-charge">
               {formatCharge(m.chargedMc)} credits{m.reports.length ? ' · includes the report' : ''}

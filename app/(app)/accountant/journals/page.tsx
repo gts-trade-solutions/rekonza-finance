@@ -7,8 +7,8 @@
 // again on arrival. An entry that does not balance is not a warning to be
 // dismissed; it is an entry that cannot exist.
 
-import { useState } from 'react';
-import { BookOpen, CalendarClock, Clock, Plus, Trash2, Undo2 } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { BookOpen, CalendarClock, Clock, LayoutTemplate, Plus, Trash2, Undo2 } from 'lucide-react';
 import Link from 'next/link';
 import { toast } from 'sonner';
 import { Card } from '@/components/ui/card';
@@ -26,11 +26,12 @@ import { AsyncPage } from '@/components/shared/async-state';
 import { Field, MoneyInput } from '@/components/shared/form-bits';
 import { JournalEntryTable } from '@/components/shared/journal-table';
 import { Attachments } from '@/components/shared/attachments';
+import { TagsPanel } from '@/components/shared/tags-panel';
 import { CostCentreSelect, useCostCentres } from '@/components/forms/cost-centre-picker';
 import { ContactPicker } from '@/components/forms/quick-create';
 import {
-  accounts as accountsApi, bills as billApi, heldJournals, invoices as invoiceApi, journal,
-  type AccountRow, type HeldJournalRow, type JournalEntryRow, type JournalResponse,
+  accounts as accountsApi, api, bills as billApi, heldJournals, invoices as invoiceApi, journal,
+  type AccountRow, type HeldJournalRow, type JournalEntryRow, type JournalResponse, type JournalTemplateRow,
 } from '@/lib/api/client';
 import { useApi, useApiAction } from '@/lib/api/use-api';
 import { usePermission } from '@/lib/store/hooks';
@@ -59,7 +60,7 @@ export default function JournalsPage() {
   // Manual and opening entries only. Everything else on this ledger was posted
   // by a document, and belongs on that document's screen rather than here.
   const state = useApi<JournalResponse>(
-    () => journal.list({ sourceType: 'manual,opening,write_off,doubtful_debts', limit: 300 }),
+    () => journal.list({ sourceType: 'manual,opening,write_off,doubtful_debts,reclassification', limit: 300 }),
     [],
   );
   const chart = useApi<{ accounts: AccountRow[] }>(() => accountsApi.list(), []);
@@ -72,6 +73,41 @@ export default function JournalsPage() {
   const [reverseOn, setReverseOn] = useState('');
   const [rows, setRows] = useState<DraftRow[]>([emptyRow('r1'), emptyRow('r2')]);
   const [viewing, setViewing] = useState<JournalEntryRow | null>(null);
+  const templates = useApi(() => api.get<{ templates: JournalTemplateRow[] }>('/api/journal-templates'), []);
+  const [tplName, setTplName] = useState<string | null>(null);
+  const [tplBusy, setTplBusy] = useState(false);
+
+  const applyTemplate = (t: JournalTemplateRow) => {
+    if (t.memo) setMemo(t.memo);
+    const filled = t.lines.map((l, i) => ({ ...emptyRow(`t${i}${Date.now()}`), accountId: l.accountId, debit: l.debitPaise, credit: l.creditPaise, description: l.description ?? '', contactId: l.contactId ?? '', costCentreId: l.costCentreId ?? '' }));
+    setRows(filled.length >= 2 ? filled : [...filled, emptyRow('r2')]);
+    toast.success(`Filled from ${t.name}`, { description: t.withAmounts ? 'Check the date and amounts, then post.' : 'Enter the amounts, then post.' });
+  };
+  // /accountant/journals?template=<id>, from the templates screen: open the form already filled.
+  useEffect(() => {
+    const id = new URLSearchParams(window.location.search).get('template');
+    const t = id && templates.data?.templates.find((x) => x.id === id);
+    if (t) { setOpen(true); applyTemplate(t); window.history.replaceState(null, '', window.location.pathname); }
+  }, [templates.data]);
+  const saveTemplate = async () => {
+    const name = tplName?.trim();
+    if (!name) return;
+    const lines = rows.filter((r) => r.accountId);
+    setTplBusy(true);
+    try {
+      await api.post('/api/journal-templates', {
+        action: 'save', name, memo: memo.trim() || null, withAmounts: balanced,
+        lines: lines.map((r) => ({ accountId: r.accountId, debitPaise: r.debit, creditPaise: r.credit, description: r.description || null, contactId: r.contactId || null, costCentreId: r.costCentreId || null })),
+      });
+      toast.success(`Saved as template ${name}`, { description: balanced ? 'With its amounts.' : 'Accounts only: it did not balance, so the amounts were left out.' });
+      setTplName(null);
+      templates.refetch();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    } finally {
+      setTplBusy(false);
+    }
+  };
 
   const create = useApiAction(journal.create);
   const reverse = useApiAction(journal.reverse);
@@ -170,6 +206,7 @@ export default function JournalsPage() {
           <span>{r.memo}</span>
           {r.reversalOf && <Badge variant="outline" className="border-destructive/40 text-[9px]">Reversal</Badge>}
           {r.sourceType === 'opening' && <Badge variant="secondary" className="text-[9px]">Opening</Badge>}
+          {r.sourceType === 'reclassification' && <Badge variant="secondary" className="text-[9px]">Bulk update</Badge>}
         </div>
       ),
     },
@@ -209,6 +246,8 @@ export default function JournalsPage() {
         description="The raw primitive underneath every other screen. Nothing posts unless debits equal credits exactly."
         actions={
           canCreate && (
+            <div className="flex gap-2">
+            <Button size="sm" variant="outline" asChild className="gap-1.5"><Link href="/accountant/journal-templates"><LayoutTemplate className="size-4" /> Templates</Link></Button>
             <Dialog open={open} onOpenChange={setOpen}>
               <DialogTrigger asChild>
                 <Button size="sm" className="gap-1.5"><Plus className="size-4" /> New journal</Button>
@@ -247,6 +286,24 @@ export default function JournalsPage() {
                       </select>
                     </div>
                   </Field>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2 rounded-md border border-dashed px-3 py-2 text-sm" data-slot="journal-templates">
+                  <LayoutTemplate className="size-4 text-muted-foreground" />
+                  <select aria-label="Start from a template" value="" onChange={(e) => { const t = templates.data?.templates.find((x) => x.id === e.target.value); if (t) applyTemplate(t); }}
+                    className="h-8 min-w-48 rounded-md border border-input bg-background px-2 text-sm">
+                    <option value="">{templates.data?.templates.length ? 'Start from a template…' : 'No templates yet'}</option>
+                    {templates.data?.templates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                  </select>
+                  {tplName === null ? (
+                    <Button size="sm" variant="ghost" className="ml-auto" disabled={rows.filter((r) => r.accountId).length < 2} onClick={() => setTplName(memo.trim().slice(0, 150))}>Save as template</Button>
+                  ) : (
+                    <span className="ml-auto flex items-center gap-2">
+                      <Input aria-label="Template name" value={tplName} onChange={(e) => setTplName(e.target.value)} placeholder="Template name" className="h-8 w-56" maxLength={150} />
+                      <Button size="sm" disabled={tplBusy || !tplName.trim()} onClick={saveTemplate}>{tplBusy ? 'Saving…' : 'Save'}</Button>
+                      <Button size="sm" variant="ghost" onClick={() => setTplName(null)}>Cancel</Button>
+                    </span>
+                  )}
                 </div>
 
                 <div className="overflow-x-auto rounded-lg border thin-scroll">
@@ -362,6 +419,7 @@ export default function JournalsPage() {
                 </DialogFooter>
               </DialogContent>
             </Dialog>
+            </div>
           )
         }
       />
@@ -397,6 +455,7 @@ export default function JournalsPage() {
           <DialogHeader><DialogTitle>Journal entry detail</DialogTitle></DialogHeader>
           {viewing && <JournalEntryTable entry={viewing} />}
           {viewing && <Attachments targetType="journal" targetId={viewing.id} canEdit={canCreate} title="Supporting documents" />}
+          {viewing && <TagsPanel entity="journal_entry" id={viewing.id} canEdit={canCreate} />}
         </DialogContent>
       </Dialog>
     </>

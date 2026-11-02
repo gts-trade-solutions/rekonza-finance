@@ -40,6 +40,7 @@ const REASONS = [
   { value: 'damage', label: 'Damaged' },
   { value: 'theft', label: 'Theft or loss' },
   { value: 'expiry', label: 'Expired' },
+  { value: 'issued', label: 'Issued for use (consumed in the business)' },
   { value: 'sample', label: 'Given away as a sample' },
   { value: 'opening', label: 'Opening stock' },
   { value: 'other', label: 'Other' },

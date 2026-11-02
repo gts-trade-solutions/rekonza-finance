@@ -36,6 +36,8 @@ export const ATTACHABLE = {
   payment: { table: 'payments', module: 'banking', label: 'payment' },
   journal: { table: 'journal_entries', module: 'accountant', label: 'journal entry' },
   contact: { table: 'contacts', module: 'sales', label: 'contact' },
+  // An item's picture (migration 099) and any spec sheets kept with it.
+  item: { table: 'items', module: 'sales', label: 'item' },
   // The certificate as downloaded from TRACES, or as a customer sent it.
   tds_certificate: { table: 'tds_certificates', module: 'gst', label: 'TDS certificate' },
   organization: { table: 'organizations', module: 'settings', label: 'company' },
@@ -50,7 +52,15 @@ export const ATTACHABLE = {
   tax_declaration: { table: 'tax_declarations', module: 'payroll', label: 'investment declaration' },
   // The document library: contracts, agreements, certificates, licences.
   document: { table: 'documents', module: 'accountant', label: 'document' },
+  // The statement file a bank import was read from (Documents → Bank statements).
+  bank_import: { table: 'bank_statement_imports', module: 'banking', label: 'bank statement' },
+  // The Documents inbox: uploaded, not yet attached to anything. Held against
+  // the organisation itself until it is moved to a transaction (moveAttachment).
+  inbox: { table: 'organizations', module: 'accountant', label: 'documents inbox' },
 } as const;
+
+/** Types whose target is the organisation row itself. */
+const ORG_LEVEL = new Set<string>(['organization', 'inbox']);
 
 export type AttachableType = keyof typeof ATTACHABLE;
 export const ATTACHABLE_TYPES = Object.keys(ATTACHABLE) as [AttachableType, ...AttachableType[]];
@@ -88,15 +98,22 @@ export function sniff(bytes: Buffer, filename: string): { contentType: string; e
     // Text only: no NUL bytes in the first 8 KB.
     if (!bytes.subarray(0, 8192).includes(0)) return { contentType: ext === '.csv' ? 'text/csv' : 'text/plain', ext };
   }
+  // Bank statement files, kept as the import read them. Text, and served as
+  // plain text or JSON for download — never as markup a browser would run.
+  if (STATEMENT_EXT.has(ext) && !bytes.subarray(0, 8192).includes(0)) {
+    return { contentType: ext === '.json' ? 'application/json' : 'text/plain', ext };
+  }
   return null;
 }
 
-export const ACCEPTED_DESCRIPTION = 'PDF, PNG, JPEG, WebP, Excel (.xlsx), Word (.docx), CSV or text';
+const STATEMENT_EXT = new Set(['.tsv', '.ofx', '.qfx', '.qif', '.xml', '.sta', '.940', '.mt940', '.json']);
+
+export const ACCEPTED_DESCRIPTION = 'PDF, PNG, JPEG, WebP, Excel (.xlsx), Word (.docx), CSV, text or a bank statement file';
 
 async function assertTarget(ex: Executor, orgId: number, type: AttachableType, id: number) {
   const { table, label } = ATTACHABLE[type];
   const idCol = 'id';
-  const orgCol = type === 'organization' ? 'id' : 'org_id';
+  const orgCol = ORG_LEVEL.has(type) ? 'id' : 'org_id';
   const row = await ex
     .selectFrom(table as 'invoices')
     .select('id')
@@ -149,7 +166,7 @@ export async function listAttachments(ex: Executor, orgId: number, type: Attacha
  */
 export async function attachFile(
   trx: Trx, orgId: number, userId: number | null,
-  input: { type: AttachableType; targetId: number; filename: string; bytes: Buffer },
+  input: { type: AttachableType; targetId: number; filename: string; bytes: Buffer; folder?: string | null },
 ): Promise<AttachmentView> {
   if (input.bytes.length === 0) throw badRequest('That file is empty.');
   if (input.bytes.length > MAX_FILE_BYTES) {
@@ -174,6 +191,7 @@ export async function attachFile(
       checksum_sha256: createHash('sha256').update(input.bytes).digest('hex'),
       attached_to_type: input.type,
       attached_to_id: input.targetId,
+      folder: input.folder?.trim().slice(0, 100) || null,
       uploaded_by_user_id: userId,
     }).executeTakeFirstOrThrow()).insertId);
     const [row] = (await listAttachments(trx, orgId, input.type, input.targetId)).filter((a) => a.id === String(id));
@@ -199,6 +217,20 @@ export async function attachmentRow(ex: Executor, orgId: number, fileId: number)
 export async function readAttachment(ex: Executor, orgId: number, fileId: number) {
   const row = await attachmentRow(ex, orgId, fileId);
   return { row, bytes: await fileStore().get(row.storage_key) };
+}
+
+/**
+ * Move a file to another record: from the Documents inbox to the bill it
+ * turned out to be, say. The bytes and the row stay; only what the file
+ * belongs to changes. The caller checks the user may see the file where it
+ * is and change the record it goes to.
+ */
+export async function moveAttachment(trx: Trx, orgId: number, fileId: number, to: { type: AttachableType; targetId: number }) {
+  const row = await attachmentRow(trx, orgId, fileId);
+  await assertTarget(trx, orgId, to.type, to.targetId);
+  await trx.updateTable('files').set({ attached_to_type: to.type, attached_to_id: to.targetId })
+    .where('id', '=', fileId).where('org_id', '=', orgId).execute();
+  return row;
 }
 
 /** Take an attachment off its record. The bytes stay, as evidence. */

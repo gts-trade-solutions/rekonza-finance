@@ -11,6 +11,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { enqueue, OFFLINE_PATHS } from '../offline/outbox';
+import type { Gstr3bHeads, Gstr3bRowKey } from '../gst/gstr3b-layout';
 import { toastWarnings } from './warnings';
 
 export class ApiError extends Error {
@@ -182,6 +183,10 @@ export interface InvoiceListItem {
   date: string;
   dueDate: string;
   status: string;
+  /** A debit note is kept with the invoices (CGST Act s.34(3)). */
+  docKind?: 'invoice' | 'debit_note';
+  /** Paid at the counter: a sales receipt. */
+  paidAtSale?: boolean;
   supplyType: string;
   supplyKind: string;
   customerId: string;
@@ -208,6 +213,15 @@ export interface InvoiceJournalLine {
 
 export interface InvoiceDetail {
   id: string;
+  /** On a shared invoice: the online payment link, while something is owed. */
+  payLink?: { url: string; amountPaise: number } | null;
+  /** Custom fields ticked to print. */
+  printFields?: { label: string; value: string }[];
+  docKind?: 'invoice' | 'debit_note';
+  /** Paid at the counter, with its receipt: a sales receipt. */
+  paidAtSale?: boolean;
+  /** A debit note: why, and the invoice it corrects. */
+  debitNote?: { reason: string | null; against: { id: string; number: string; date: string } | null } | null;
   /** Priced in another currency: its own figures, and the rate it was booked at. */
   foreign?: { currency: string; rate: number; totalPaise: number; paidPaise: number } | null;
   /** When, why and by whom it was cancelled; null unless void. Older voids have no reason. */
@@ -245,6 +259,8 @@ export interface InvoiceDetail {
     logoUrl: string | null;
     signatoryName: string | null;
     printLanguage: string | null;
+    /** How the printed invoice looks (Settings → Invoice print). */
+    template?: import('@/lib/print-template').PrintTemplate;
     bank: {
       bankName: string | null; accountHolder: string; accountNumber: string;
       ifsc: string | null; branchName: string | null;
@@ -365,6 +381,7 @@ export const invoices = {
   list: (params?: {
     from?: string; to?: string; status?: string; customerId?: string;
     open?: boolean; search?: string; limit?: number; offset?: number;
+    kind?: 'invoice' | 'debit_note' | 'receipt';
   }) => api.get<InvoiceListResponse>('/api/invoices', params),
   get: (id: string) => api.get<InvoiceDetail>(`/api/invoices/${id}`),
   create: (input: unknown) =>
@@ -449,7 +466,7 @@ export interface BillDetail {
   amountPaidPaise: number;
   balancePaise: number;
   lines: {
-    id: string; accountName: string | null; description: string | null; hsnSac: string | null;
+    id: string; itemId?: string | null; accountId?: string | null; accountName: string | null; description: string | null; hsnSac: string | null;
     qty: number; uqc: string | null; ratePaise: number; discountPct: number; gstRatePct: number;
     taxablePaise: number; cgstPaise: number; sgstPaise: number; igstPaise: number;
     totalPaise: number; itcEligibility: string;
@@ -473,6 +490,13 @@ export interface ExpenseListItem {
   status: string;
   itcEligibility: string;
   isBillable: boolean;
+  /** A journey claimed by the kilometre. */
+  mileageKm?: number | null;
+  /** Raised by a recurring profile. */
+  recurring?: boolean;
+  projectId?: string | null;
+  /** A billable expense already re-charged on an invoice. */
+  billed?: boolean;
   amountPaise: number;
   taxPaise: number;
   totalPaise: number;
@@ -640,6 +664,14 @@ export interface ItemRow {
   trackSerials: boolean;
   stockGroupId: string | null;
   valuationMethod: 'average' | 'fifo' | null;
+  /** Sold as a set: its components (services/kits.ts). */
+  isKit?: boolean;
+  /** Its picture: an attachment on the item, at /api/files/<id>. */
+  imageFileId?: string | null;
+  kitComponents?: { itemId: string; qty: number }[];
+  /** A variant of an item group, and which one. */
+  itemGroupId?: string | null;
+  variant?: Record<string, string> | null;
   updatedAt: string;
   qtySold: number;
   soldValuePaise: number;
@@ -689,7 +721,7 @@ export interface ContactStatementPayment {
 }
 
 export interface ContactDetail {
-  contact: Omit<ContactRow, 'receivablePaise' | 'payablePaise' | 'invoiceCount' | 'billCount'>;
+  contact: Omit<ContactRow, 'receivablePaise' | 'payablePaise' | 'invoiceCount' | 'billCount'> & { mergedIntoId?: string | null };
   invoices: ContactStatementDoc[];
   bills: ContactStatementDoc[];
   payments: ContactStatementPayment[];
@@ -703,8 +735,30 @@ export interface ContactDetail {
   };
 }
 
+/** A statement of account (lib/server/reports/party-statement.ts). */
+export interface PartyStatement {
+  side: 'customer' | 'vendor';
+  from: string;
+  to: string;
+  party: {
+    id: string; name: string; legalName: string | null; gstin: string | null; stateCode: string | null;
+    address: string | null; email: string | null; phone: string | null;
+  };
+  org: { name: string; legalName: string | null; gstin: string | null; address: string | null; email: string | null; phone: string | null };
+  openingPaise: number;
+  chargesPaise: number;
+  paymentsPaise: number;
+  closingPaise: number;
+  lines: {
+    date: string; kind: string; number: string; detail: string | null; sourceType: string; sourceId: string | null;
+    chargePaise: number; paymentPaise: number; balancePaise: number;
+  }[];
+}
+
 export const contacts = {
   get: (id: string) => api.get<ContactDetail>(`/api/contacts/${id}`),
+  statement: (id: string, params: { side: 'customer' | 'vendor'; from: string; to: string }) =>
+    api.get<PartyStatement>(`/api/contacts/${id}/statement`, params),
   list: (params?: { kind?: 'customer' | 'vendor' | 'both' | 'all'; search?: string; archived?: boolean; limit?: number }) =>
     api.get<{ contacts: ContactRow[] }>('/api/contacts', params),
   // A possible duplicate (same PAN or name) is saved but flagged: shown as it comes back.
@@ -955,6 +1009,9 @@ export interface PurchaseDocRow {
   expected: string | null;
   reason: string | null;
   linkedId: string | null;
+  /** On an order: the vendor's answer from the portal, if they gave one. */
+  vendorResponse?: 'accepted' | 'declined' | null;
+  vendorResponseNote?: string | null;
 }
 
 export interface PurchaseDocListResponse {
@@ -1304,6 +1361,8 @@ export interface Gstr1Row {
   cessPaise: number;
   totalPaise: number;
   reason?: string;
+  /** C for a credit note, D for a debit note. */
+  noteType?: 'C' | 'D';
   againstNumber?: string | null;
   irnStatus?: string;
 }
@@ -1336,7 +1395,7 @@ export interface Gstr3bResponse {
   itc: {
     cgstPaise: number; sgstPaise: number; igstPaise: number; cessPaise: number;
     blockedPaise: number; reversedPaise: number;
-    reversedRule42Paise?: number; reversedRule37Paise?: number; reclaimedPaise?: number;
+    reversedRule42Paise?: number; reversedRule37Paise?: number; reclaimedPaise?: number; importsPaise?: number;
   };
   setOff: {
     head: 'IGST' | 'CGST' | 'SGST' | 'CESS';
@@ -1347,6 +1406,47 @@ export interface Gstr3bResponse {
     cashPaise: number;
   }[];
   totalCashPaise: number;
+}
+
+type TaxHead = 'IGST' | 'CGST' | 'SGST' | 'CESS';
+
+/** GSTR-3B table by table, as the portal lays it out (lib/server/gst/gstr3b-form.ts). */
+export interface Gstr3bFormResponse {
+  view: 'gstr3b-form';
+  period: { key: string; label: string; from: string; to: string; months: string[]; quarterly: boolean };
+  gstin: string | null;
+  legalName: string;
+  tradeName: string | null;
+  rows: Record<Gstr3bRowKey, Gstr3bHeads & { count: number }>;
+  interState: Record<'unregistered' | 'composition' | 'uin', { pos: string; taxablePaise: number; igstPaise: number }[]>;
+  itcAvailable: Gstr3bHeads;
+  itcReversed: Gstr3bHeads;
+  itcNet: Gstr3bHeads;
+  inward: { gst: { inter: number; intra: number }; nonGst: { inter: number; intra: number } };
+  interestLateFee: { interest: Gstr3bHeads; lateFee: Gstr3bHeads; daysLate: number; basis: string };
+  payment: {
+    kind: 'forward' | 'rcm'; head: TaxHead; payablePaise: number; itc: Record<TaxHead, number>;
+    cashPaise: number; interestPaise: number; lateFeePaise: number;
+  }[];
+  totals: { liabilityPaise: number; itcUsedPaise: number; cashPaise: number; interestPaise: number; lateFeePaise: number; payablePaise: number };
+  creditCarriedForward: Record<TaxHead, number>;
+  status: { filed: boolean; filedOn: string | null; arn: string | null; filedBy: string | null; dueDate: string; overdue: boolean };
+  notes: string[];
+}
+
+export interface Gstr3bDocRow extends Gstr3bHeads {
+  row: Gstr3bRowKey;
+  docType: string;
+  docId: string | null;
+  number: string;
+  date: string;
+  party: string | null;
+  gstin: string | null;
+  pos: string | null;
+  inter: boolean;
+  recipient?: 'unregistered' | 'composition' | 'uin' | null;
+  href: string | null;
+  note?: string;
 }
 
 /** A retry the app queued after the portal did not answer: when, and which try of how many. */
@@ -1536,7 +1636,7 @@ export interface IffResponse {
   gstin: string | null;
   b2b: Gstr1Row[];
   cdnr: Gstr1Row[];
-  totals: { b2b: TaxHeadsRow; cdnr: TaxHeadsRow };
+  totals: { b2b: TaxHeadsRow; cdnr: TaxHeadsRow; debitNotes: TaxHeadsRow };
   issues: { level: 'error' | 'warning'; message: string }[];
 }
 
@@ -1553,12 +1653,12 @@ export interface Gstr9Response {
   gstin: string | null;
   table4: {
     b2c: TaxHeadsRow; b2b: TaxHeadsRow; exportsWithTax: TaxHeadsRow; sezWithTax: TaxHeadsRow; advances: TaxHeadsRow;
-    rcmInward: TaxHeadsRow; creditNotes: TaxHeadsRow; total: TaxHeadsRow;
+    rcmInward: TaxHeadsRow; creditNotes: TaxHeadsRow; debitNotes: TaxHeadsRow; total: TaxHeadsRow;
   };
   table5: { exportsLut: number; sezLut: number; exemptOrNil: number; creditNotes: number; total: number };
   table6: {
     inputs: TaxHeadsRow; capitalGoods: TaxHeadsRow; inputServices: TaxHeadsRow;
-    rcmUnregistered: TaxHeadsRow; rcmRegistered: TaxHeadsRow; total: TaxHeadsRow;
+    rcmUnregistered: TaxHeadsRow; rcmRegistered: TaxHeadsRow; imports: TaxHeadsRow; total: TaxHeadsRow;
   };
   table7: { vendorCreditsPaise: number };
   table8: { asPer2b: TaxHeadsRow; asPerBooks: TaxHeadsRow; difference: TaxHeadsRow };
@@ -1593,6 +1693,14 @@ export const gst = {
     api.get<Gstr1Response>('/api/gst', { view: 'gstr1', period, branchId }),
   gstr3b: (period: string, branchId?: string) =>
     api.get<Gstr3bResponse>('/api/gst', { view: 'gstr3b', period, branchId }),
+  /** `ret` is a month (yyyy-mm) or, for a quarterly filer, a quarter (yyyy-Qn). */
+  gstr3bForm: (ret: string, branchId?: string) =>
+    api.get<Gstr3bFormResponse>('/api/gst', { view: 'gstr3b-form', ret, branchId }),
+  gstr3bDocs: (ret: string, row: string, extra: { recipient?: string; pos?: string; branchId?: string } = {}) =>
+    api.get<{ row: string; documents: Gstr3bDocRow[] }>('/api/gst', { view: 'gstr3b-docs', ret, row, ...extra }),
+  /** The return in the GSTN's own JSON schema. */
+  gstr3bFile: (ret: string, branchId?: string) =>
+    api.get<Record<string, unknown>>('/api/gst', { view: 'gstr3b-file', ret, branchId }),
   iff: (period: string, branchId?: string) => api.get<IffResponse>('/api/gst', { view: 'iff', period, branchId }),
   /** The file the portal's Prepare offline → Upload takes, built from the invoice lines. */
   gstr1File: (period: string, scope: 'gstr1' | 'iff' = 'gstr1', branchId?: string) =>
@@ -1747,6 +1855,145 @@ export const recurringInvoices = {
   /** Let the scheduler run it on its dates, or keep it to Run now. */
   auto: (id: string, autoRun: boolean) => api.patch<{ id: string }>('/api/recurring-invoices', { action: 'auto', id, autoRun }),
   remove: (id: string) => api.delete<{ id: string }>(`/api/recurring-invoices?id=${encodeURIComponent(id)}`),
+};
+
+// ── Custom fields, contact persons, comments ────────────────────────────────
+
+export type CustomFieldEntity = 'contact' | 'item' | 'invoice' | 'estimate' | 'sales_order' | 'bill' | 'purchase_order' | 'expense' | 'project';
+export interface CustomFieldDefinition {
+  id: string; entity: CustomFieldEntity; label: string; key: string; type: 'text' | 'number' | 'date' | 'select' | 'checkbox';
+  options: string[]; required: boolean; showOnPdf: boolean; order: number; isActive: boolean;
+}
+export interface CustomFieldValue {
+  fieldId: string; key: string; label: string; type: CustomFieldDefinition['type']; options: string[];
+  required: boolean; showOnPdf: boolean; value: string | null;
+}
+export const customFields = {
+  list: (entity?: CustomFieldEntity) => api.get<{ fields: CustomFieldDefinition[] }>('/api/custom-fields', entity ? { entity } : undefined),
+  save: (input: unknown) => api.post<{ id: string }>('/api/custom-fields', input),
+  values: (entity: CustomFieldEntity, id: string) => api.get<{ values: CustomFieldValue[] }>('/api/custom-fields/values', { entity, id }),
+  setValues: (entity: CustomFieldEntity, id: string, values: Record<string, string | null>) => api.put<{ ok: true }>('/api/custom-fields/values', { entity, id, values }),
+};
+
+export interface ContactPerson {
+  id: string | null; salutation: string | null; name: string; email: string | null; phone: string | null;
+  designation: string | null; department: string | null; isPrimary: boolean; receivesDocuments: boolean;
+}
+export const contactPersons = {
+  list: (contactId: string) => api.get<{ persons: ContactPerson[] }>(`/api/contacts/${contactId}/persons`),
+  save: (contactId: string, persons: ContactPerson[]) => api.put<{ ok: true }>(`/api/contacts/${contactId}/persons`, { persons }),
+};
+
+export type CommentTarget = 'invoice' | 'estimate' | 'sales_order' | 'credit_note' | 'contact' | 'bill' | 'purchase_order' | 'expense' | 'vendor_credit' | 'payment' | 'journal_entry' | 'project';
+export const comments = {
+  list: (targetType: CommentTarget, targetId: string) => api.get<{
+    comments: { id: string; author: string; body: string; at: string }[];
+    history: { id: string; action: string; actor: string | null; detail: string | null; reason: string | null; at: string }[];
+  }>('/api/comments', { targetType, targetId }),
+  add: (targetType: CommentTarget, targetId: string, text: string) => api.post<{ id: string }>('/api/comments', { targetType, targetId, body: text }),
+};
+
+// ── Projects and timesheets (services/projects.ts) ───────────────────────────
+
+export type BillingMethod = 'fixed' | 'project_hours' | 'task_hours' | 'staff_hours';
+
+export interface ProjectFigures {
+  loggedMinutes: number; billableMinutes: number; unbilledMinutes: number;
+  billedPaise: number; timeCostPaise: number; expenseCostPaise: number; profitPaise: number;
+}
+
+export interface ProjectRow extends ProjectFigures {
+  id: string; name: string; code: string | null; customerId: string; customerName: string;
+  billingMethod: BillingMethod; ratePaise: number; fixedAmountPaise: number; budgetHours: number | null;
+  status: 'active' | 'completed' | 'archived'; startDate: string | null; endDate: string | null;
+}
+
+export interface TimeEntryRow {
+  id: string; date: string; minutes: number; notes: string | null; billable: boolean;
+  userId: string; userName: string; taskName: string | null; invoiceId: string | null; invoiceNumber: string | null;
+  projectId?: string; projectName?: string; customerName?: string; taskId?: string | null;
+  /** With timesheet approval on: waiting, approved, or turned back; null when logged while it was off. */
+  approvalStatus?: 'pending' | 'approved' | 'rejected' | null; approvalNote?: string | null; approvedBy?: string | null;
+}
+
+/** A person's running timer (app/api/time-entries/timer). */
+export interface RunningTimer { id: string; projectId: string; projectName: string; taskId: string | null; taskName: string | null; notes: string | null; billable: boolean; startedAt: string }
+
+export interface ProjectDetail {
+  project: {
+    id: string; name: string; code: string | null; description: string | null; customerId: string; customerName: string;
+    billingMethod: BillingMethod; ratePaise: number; fixedAmountPaise: number; budgetHours: number | null; budgetAmountPaise: number | null;
+    sacCode: string | null; gstRatePct: number; status: 'active' | 'completed' | 'archived'; startDate: string | null; endDate: string | null;
+  };
+  tasks: { id: string; name: string; ratePaise: number; billable: boolean; isActive: boolean }[];
+  users: { userId: string; name: string; ratePaise: number; costRatePaise: number }[];
+  entries: TimeEntryRow[];
+  expenses: { id: string; number: string; date: string; notes: string | null; totalPaise: number; billable: boolean; billed: boolean; status: string }[];
+  invoices: { id: string; number: string; date: string; status: string; subtotalPaise: number; totalPaise: number }[];
+  figures: ProjectFigures;
+  unbilled: {
+    method: BillingMethod;
+    time: { label: string; minutes: number; ratePaise: number; amountPaise: number; entries: number }[];
+    expenses: { id: string; number: string; date: string; notes: string | null; amountPaise: number }[];
+    fixed: { feePaise: number; billedPaise: number; leftPaise: number } | null;
+    totalPaise: number;
+  };
+}
+
+export const projects = {
+  list: (params?: { status?: 'active' | 'completed' | 'archived' | 'all'; customerId?: string }) =>
+    api.get<{ projects: ProjectRow[] }>('/api/projects', params),
+  get: (id: string) => api.get<ProjectDetail>(`/api/projects/${id}`),
+  save: (input: unknown) => api.post<{ id: string }>('/api/projects', input),
+  bill: (id: string, input: { date: string; dueDate: string; through?: string; includeExpenses?: boolean; fixedPaise?: number; status?: 'draft' | 'approved' }) =>
+    api.post<{ invoiceId: string; number: string; totalPaise: number; hoursBilled: number; warnings?: string[] }>(`/api/projects/${id}`, { action: 'bill', ...input }),
+  setStatus: (id: string, status: 'active' | 'completed' | 'archived') => api.post<{ id: string }>(`/api/projects/${id}`, { action: 'status', status }),
+};
+
+export const timeEntries = {
+  list: (params?: { from?: string; to?: string; projectId?: string; userId?: string; mine?: boolean; approvals?: boolean }) =>
+    api.get<{ entries: TimeEntryRow[]; ownOnly: boolean; approvalOn: boolean; canApprove: boolean }>('/api/time-entries', params),
+  timer: () => api.get<{ timer: RunningTimer | null }>('/api/time-entries/timer'),
+  startTimer: (input: { projectId: string; taskId?: string | null; notes?: string | null; billable?: boolean }) =>
+    api.post<{ timer: RunningTimer }>('/api/time-entries/timer', { action: 'start', ...input }),
+  stopTimer: (notes?: string | null) => api.post<{ entryId: string | null; minutes: number }>('/api/time-entries/timer', { action: 'stop', notes }),
+  discardTimer: () => api.post<{ entryId: null; minutes: 0 }>('/api/time-entries/timer', { action: 'discard' }),
+  decide: (ids: string[], decision: 'approved' | 'rejected', note?: string | null) =>
+    api.post<{ count: number }>('/api/time-entries/approve', { ids, decision, note }),
+  log: (input: { projectId: string; taskId?: string | null; userId?: string | null; date: string; minutes: number; notes?: string | null; billable?: boolean }) =>
+    api.post<{ id: string }>('/api/time-entries', input),
+  remove: (id: string) => api.delete<{ id: string }>(`/api/time-entries?id=${encodeURIComponent(id)}`),
+};
+
+/** A recurring bill or expense profile (app/api/recurring-purchases). */
+export interface RecurringPurchaseRow {
+  id: string;
+  kind: 'bill' | 'expense';
+  name: string;
+  vendorId: string | null;
+  vendorName: string | null;
+  paidThrough: string | null;
+  frequency: string;
+  startDate: string;
+  endDate: string | null;
+  nextRun: string;
+  dueDays: number;
+  autoRun: boolean;
+  isActive: boolean;
+  lastGeneratedAt: string | null;
+  lastError: string | null;
+  totalPaise: number;
+  isDue: boolean;
+}
+
+export const recurringPurchases = {
+  list: () => api.get<{ profiles: RecurringPurchaseRow[] }>('/api/recurring-purchases'),
+  create: (input: unknown) => api.post<{ id: string; name: string }>('/api/recurring-purchases', input),
+  run: (id: string, date?: string) =>
+    api.patch<{ id: string; kind: 'bill' | 'expense'; docId: string; number: string; totalPaise: number }>('/api/recurring-purchases', { action: 'run', id, date }),
+  toggle: (id: string, isActive: boolean) => api.patch<{ id: string }>('/api/recurring-purchases', { action: 'toggle', id, isActive }),
+  auto: (id: string, autoRun: boolean) => api.patch<{ id: string }>('/api/recurring-purchases', { action: 'auto', id, autoRun }),
+  remove: (id: string) => api.delete<{ id: string }>(`/api/recurring-purchases?id=${encodeURIComponent(id)}`),
 };
 
 // ── Inventory ────────────────────────────────────────────────────────────────
@@ -1961,6 +2208,17 @@ export interface AccountTypeSummaryReport {
   }[];
 }
 
+/** Sources and applications of funds (lib/server/reports/fund-flow.ts). */
+export interface FundFlowReport {
+  from: string; to: string;
+  sources: { label: string; amountPaise: number }[];
+  applications: { label: string; amountPaise: number }[];
+  totalSourcesPaise: number; totalApplicationsPaise: number;
+  operations: { profitPaise: number; depreciationPaise: number; lossOnSalePaise: number; totalPaise: number };
+  workingCapital: { lines: { label: string; openingPaise: number; closingPaise: number; increasePaise: number; decreasePaise: number }[]; openingPaise: number; closingPaise: number; changePaise: number };
+  balanced: boolean;
+}
+
 export interface CashFlowReport extends Period {
   report: 'cash-flow';
   openingPaise: number;
@@ -2046,17 +2304,57 @@ export interface ScheduleIIIProfitAndLossReport {
   profitForThePeriod: [number, number];
 }
 
+/** A category of a grouped statement (lib/server/reports/statement-groups.ts). */
+export interface StatementGroup {
+  key: string;
+  label: string;
+  lines: { accountId: string; code: string; name: string; amountPaise: number; computed?: boolean }[];
+  groups?: StatementGroup[];
+  totalPaise: number;
+}
+
+export interface GroupedProfitAndLossReport {
+  from: string;
+  to: string;
+  operatingIncome: StatementGroup;
+  costOfGoodsSold: StatementGroup;
+  grossProfitPaise: number;
+  operatingExpense: StatementGroup;
+  operatingProfitPaise: number;
+  nonOperatingIncome: StatementGroup;
+  nonOperatingExpense: StatementGroup;
+  netProfitPaise: number;
+  openingStockPaise: number;
+  closingStockPaise: number;
+}
+
+export interface GroupedBalanceSheetReport {
+  asOf: string;
+  fyStart: string;
+  assets: StatementGroup;
+  liabilities: StatementGroup;
+  equities: StatementGroup;
+  totalLiabilitiesAndEquitiesPaise: number;
+  balanced: boolean;
+}
+
 export const reports = {
-  scheduleIIIBalanceSheet: (to: string, branchId?: string) =>
-    api.get<ScheduleIIIBalanceSheetReport>('/api/reports', { report: 'schedule-iii-balance-sheet', to, branchId }),
-  scheduleIIIProfitAndLoss: (from: string, to: string, branchId?: string) =>
-    api.get<ScheduleIIIProfitAndLossReport>('/api/reports', { report: 'schedule-iii-profit-and-loss', from, to, branchId }),
-  trialBalance: (to: string, branchId?: string) =>
-    api.get<TrialBalanceReport>('/api/reports', { report: 'trial-balance', to, branchId }),
-  profitAndLoss: (from: string, to: string, branchId?: string) =>
-    api.get<ProfitAndLossReport>('/api/reports', { report: 'profit-and-loss', from, to, branchId }),
-  balanceSheet: (to: string, branchId?: string) =>
-    api.get<BalanceSheetReport>('/api/reports', { report: 'balance-sheet', to, branchId }),
+  /** Grouped by category as Zoho Books groups them; the horizontal layout reads the same. */
+  // basis: Zoho's "Report basis" — accrual (the default) or cash, counted when paid.
+  groupedProfitAndLoss: (from: string, to: string, branchId?: string, basis?: 'accrual' | 'cash') =>
+    api.get<GroupedProfitAndLossReport>('/api/reports', { report: 'profit-and-loss-grouped', from, to, branchId, basis }),
+  groupedBalanceSheet: (to: string, branchId?: string, basis?: 'accrual' | 'cash') =>
+    api.get<GroupedBalanceSheetReport>('/api/reports', { report: 'balance-sheet-grouped', to, branchId, basis }),
+  scheduleIIIBalanceSheet: (to: string, branchId?: string, basis?: 'accrual' | 'cash') =>
+    api.get<ScheduleIIIBalanceSheetReport>('/api/reports', { report: 'schedule-iii-balance-sheet', to, branchId, basis }),
+  scheduleIIIProfitAndLoss: (from: string, to: string, branchId?: string, basis?: 'accrual' | 'cash') =>
+    api.get<ScheduleIIIProfitAndLossReport>('/api/reports', { report: 'schedule-iii-profit-and-loss', from, to, branchId, basis }),
+  trialBalance: (to: string, branchId?: string, basis?: 'accrual' | 'cash') =>
+    api.get<TrialBalanceReport>('/api/reports', { report: 'trial-balance', to, branchId, basis }),
+  profitAndLoss: (from: string, to: string, branchId?: string, basis?: 'accrual' | 'cash') =>
+    api.get<ProfitAndLossReport>('/api/reports', { report: 'profit-and-loss', from, to, branchId, basis }),
+  balanceSheet: (to: string, branchId?: string, basis?: 'accrual' | 'cash') =>
+    api.get<BalanceSheetReport>('/api/reports', { report: 'balance-sheet', to, branchId, basis }),
   generalLedger: (accountId: string, from: string, to: string) =>
     api.get<GeneralLedgerReport>('/api/reports', { report: 'general-ledger', accountId, from, to }),
   ageing: (side: 'ar' | 'ap', to: string) =>
@@ -2076,6 +2374,8 @@ export const reports = {
     api.get<AccountTypeSummaryReport>('/api/reports', { report: 'account-type-summary', from, to }),
   cashFlow: (from: string, to: string) =>
     api.get<CashFlowReport>('/api/reports', { report: 'cash-flow', from, to }),
+  fundFlow: (from: string, to: string) =>
+    api.get<FundFlowReport>('/api/reports', { report: 'fund-flow', from, to }),
   businessRatios: (from: string, to: string) =>
     api.get<BusinessRatiosReport>('/api/reports', { report: 'business-ratios', from, to }),
   movementOfEquity: (from: string, to: string) =>
@@ -2084,7 +2384,17 @@ export const reports = {
     api.get<TimeToGetPaidReport>('/api/reports', { report: 'time-to-get-paid', from, to }),
   refundHistory: (from: string, to: string) =>
     api.get<RefundHistoryReport>('/api/reports', { report: 'refund-history', from, to }),
+  portalActivities: (from: string, to: string) =>
+    api.get<PortalActivitiesReport>('/api/reports', { report: 'portal-activities', from, to }),
 };
+
+export interface PortalActivitiesReport extends Period {
+  report: 'portal-activities';
+  rows: {
+    id: string; contactId: string; contact: string; side: 'customer' | 'vendor'; action: string;
+    targetType: string | null; targetId: string | null; detail: string | null; at: string;
+  }[];
+}
 
 export interface JournalLineRow {
   lineNo: number;
@@ -2129,6 +2439,12 @@ export const journal = {
   reverse: (entryId: string, memo?: string) =>
     api.patch<{ id: string; entryNo: number }>('/api/journal', { entryId, memo }),
 };
+
+/** A journal kept to fill the journal form again (/api/journal-templates). */
+export interface JournalTemplateRow {
+  id: string; name: string; memo: string | null; withAmounts: boolean; totalPaise: number; createdBy: string | null; updatedAt: string;
+  lines: { accountId: string; accountName: string; accountCode: string; debitPaise: number; creditPaise: number; description: string | null; contactId: string | null; costCentreId: string | null }[];
+}
 
 export type HeldJournalKind = 'optional' | 'post_dated' | 'approval';
 
@@ -2203,7 +2519,7 @@ export type AttachableType =
   | 'invoice' | 'credit_note' | 'estimate' | 'sales_order' | 'challan' | 'bill' | 'expense'
   | 'vendor_credit' | 'purchase_order' | 'payment' | 'journal' | 'contact' | 'organization' | 'tds_certificate'
   | 'goods_receipt' | 'payment_batch' | 'fixed_asset' | 'employee' | 'payroll_run' | 'reimbursement_claim' | 'tax_declaration'
-  | 'document';
+  | 'document' | 'bank_import' | 'inbox';
 
 export interface Attachment {
   id: string;
@@ -2241,6 +2557,7 @@ export interface InvoicePrintSettings {
   defaultNotes: string | null;
   signatoryName: string | null;
   printLanguage: string | null;
+  template?: import('@/lib/print-template').PrintTemplate;
   orgId: string;
   orgName: string;
   bankAccounts: {
@@ -2259,6 +2576,7 @@ export interface InvoicePrintInput {
   defaultNotes: string | null;
   signatoryName: string | null;
   printLanguage?: string | null;
+  template?: import('@/lib/print-template').PrintTemplate;
 }
 
 export const invoicePrint = {

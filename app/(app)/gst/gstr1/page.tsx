@@ -16,6 +16,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { PageHeader } from '@/components/shared/page-header';
+import { GstnReturnBar } from '@/components/gst/gstn-portal';
 import { Money } from '@/components/shared/money';
 import { AsyncPage } from '@/components/shared/async-state';
 import { gst, type Gstr1Response, type Gstr1Row } from '@/lib/api/client';
@@ -129,6 +130,8 @@ export default function Gstr1Page() {
         }
       />
 
+      <GstnReturnBar returnType="GSTR1" period={month} />
+
       <AsyncPage state={state}>
         {(d) => (
           <>
@@ -180,7 +183,7 @@ export default function Gstr1Page() {
                 <TabsTrigger value="B2CL">B2CL ({d.b2cl.length})</TabsTrigger>
                 <TabsTrigger value="B2CS">B2CS ({d.b2cs.length})</TabsTrigger>
                 <TabsTrigger value="EXP">Exports ({d.exports.length})</TabsTrigger>
-                <TabsTrigger value="CDNR">Credit notes ({d.creditNotes.length})</TabsTrigger>
+                <TabsTrigger value="CDNR">Credit &amp; debit notes ({d.creditNotes.length})</TabsTrigger>
                 <TabsTrigger value="HSN">HSN ({d.hsn.length})</TabsTrigger>
               </TabsList>
 

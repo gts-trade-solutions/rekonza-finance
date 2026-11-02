@@ -65,6 +65,8 @@ export interface ChatRequest {
   /** 'none' offers the tools but has the model answer with what it already has. */
   toolChoice?: 'auto' | 'none';
   maxOutputTokens: number;
+  /** Groups requests that share a prompt prefix, so the provider can cache it. */
+  cacheKey?: string;
   signal?: AbortSignal;
   /** Each piece of answer text, as it arrives. */
   onText?: (delta: string) => void;

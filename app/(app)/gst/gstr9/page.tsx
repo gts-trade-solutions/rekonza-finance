@@ -114,6 +114,7 @@ export default function Gstr9Page() {
       heads('4F', 'Advances on which tax was paid, not yet invoiced', d.table4.advances),
       heads('4G', 'Inward supplies on reverse charge', d.table4.rcmInward),
       heads('4I', 'Credit notes issued', d.table4.creditNotes),
+      heads('4J', 'Debit notes issued', d.table4.debitNotes),
       heads('4N', 'Total', d.table4.total),
       ['5A', 'Exports without payment of tax', toRupees(d.table5.exportsLut)],
       ['5B', 'SEZ supplies without payment of tax', toRupees(d.table5.sezLut)],
@@ -125,6 +126,7 @@ export default function Gstr9Page() {
       heads('6B', 'Input services', d.table6.inputServices),
       heads('6C', 'Reverse charge, unregistered suppliers', d.table6.rcmUnregistered),
       heads('6D', 'Reverse charge, registered suppliers', d.table6.rcmRegistered),
+      heads('6E', 'Import of goods (bills of entry)', d.table6.imports),
       ['7', 'Reversed by vendor credits', toRupees(d.table7.vendorCreditsPaise)],
       heads('8A', 'Credit as per GSTR-2B', d.table8.asPer2b),
       heads('8B', 'Credit as per books (6B)', d.table8.asPerBooks),
@@ -175,6 +177,7 @@ export default function Gstr9Page() {
               { ref: '4F', label: 'Advances on which tax was paid, not yet invoiced', v: d.table4.advances },
               { ref: '4G', label: 'Inward supplies on reverse charge', v: d.table4.rcmInward },
               { ref: '4I', label: 'Credit notes issued', v: d.table4.creditNotes },
+              { ref: '4J', label: 'Debit notes issued', v: d.table4.debitNotes },
               { ref: '4N', label: 'Total', v: d.table4.total, strong: true },
             ]} />
 
@@ -209,6 +212,7 @@ export default function Gstr9Page() {
               { ref: '6B', label: 'Input services', v: d.table6.inputServices },
               { ref: '6C', label: 'Reverse charge — unregistered suppliers', v: d.table6.rcmUnregistered },
               { ref: '6D', label: 'Reverse charge — registered suppliers', v: d.table6.rcmRegistered },
+              { ref: '6E', label: 'Import of goods — bills of entry', v: d.table6.imports },
               { ref: '6O', label: 'Total', v: d.table6.total, strong: true },
             ]} />
 

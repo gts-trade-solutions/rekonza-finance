@@ -15,6 +15,8 @@ import { connectedCompanyMasters, importTally, importTallyVouchers, parseTallyMa
 const MODULE: Record<ImportKind, string> = {
   contacts: 'sales', items: 'inventory', accounts: 'accountant', 'opening-ledger': 'accountant',
   'opening-bills': 'accountant', journals: 'accountant', invoices: 'sales', bills: 'purchases',
+  estimates: 'sales', 'sales-orders': 'sales', 'credit-notes': 'sales', 'payments-received': 'sales',
+  'purchase-orders': 'purchases', expenses: 'purchases', 'payments-made': 'purchases',
 };
 
 const Input = z.discriminatedUnion('source', [

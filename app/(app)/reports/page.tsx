@@ -34,11 +34,15 @@ const CATALOGUE: { group: string; blurb: string; reports: ReportDef[] }[] = [
     group: 'Business Overview',
     blurb: 'How the business performed, and what it is worth.',
     reports: [
-      { title: 'Profit and Loss', href: '/reports/profit-and-loss', description: 'Income less expenses over a period — did we make money?' },
+      { title: 'Profit and Loss', href: '/reports/profit-and-loss', description: 'Income less expenses over a period, grouped by category — did we make money?' },
+      { title: 'Horizontal Profit and Loss', href: '/reports/profit-and-loss?format=horizontal', description: 'The trading and profit and loss account in T-form: expenses on the left, income on the right.' },
+      { title: 'Profit and Loss (Schedule III)', href: '/reports/schedule-iii?tab=pl', description: 'The statement of profit and loss in the Companies Act layout, with last year beside it.' },
       { title: 'Cash Flow Statement', href: '/reports/cash-flow', description: 'Where cash actually came from and went.' },
+      { title: 'Fund Flow Statement', href: '/reports/fund-flow', description: 'Sources and applications of funds, with the change in working capital.' },
       { title: 'Cash-flow Forecast', href: '/reports/cash-forecast', description: 'Bank and cash over the next weeks, from what is due in and out.' },
-      { title: 'Balance Sheet', href: '/reports/balance-sheet', description: 'What we own and owe on a single date.' },
-      { title: 'Schedule III statements', href: '/reports/schedule-iii', description: 'Balance sheet and profit and loss in the Companies Act layout, with last year beside them.' },
+      { title: 'Balance Sheet', href: '/reports/balance-sheet', description: 'What we own and owe on a single date, grouped by category.' },
+      { title: 'Horizontal Balance Sheet', href: '/reports/balance-sheet?format=horizontal', description: 'Liabilities and equities beside assets, in T-form.' },
+      { title: 'Balance Sheet (Schedule III)', href: '/reports/schedule-iii', description: 'The balance sheet in the Companies Act layout, with last year and the ageing tables.' },
       { title: 'Business Performance Ratios', href: '/reports/business-ratios', description: 'Margin, liquidity and collection speed, explained in plain terms.' },
       { title: 'Movement of Equity', href: '/reports/movement-of-equity', description: "How the owners' stake changed, and why." },
       { title: 'Consolidated statements', href: '/reports/consolidated', description: 'Every company you work in, side by side and summed.' },
@@ -55,6 +59,9 @@ const CATALOGUE: { group: string; blurb: string; reports: ReportDef[] }[] = [
       { title: 'Trial Balance', href: '/reports/trial-balance', description: 'Proof the books balance, account by account.' },
       { title: 'Day Book', href: '/reports/day-book', description: 'Everything that happened, day by day.' },
       { title: 'Cash & Bank Book', href: '/reports/cash-book', description: 'Receipts and payments of one account with its running balance; count the cash.' },
+      { title: 'Reconciliation Status', href: '/reports/reconciliation-status', description: 'Each bank account: statement lines matched and still to match, and the books against the statement.' },
+      { title: 'Realised Exchange Gain or Loss', href: '/reports/realised-fx', description: 'The exchange difference on foreign-currency invoices and bills settled in the period.' },
+      { title: 'Unrealised Exchange Gain or Loss', href: '/reports/unrealised-fx', description: 'What open foreign-currency documents would gain or lose at the closing rates.' },
     ],
   },
   {
@@ -64,6 +71,7 @@ const CATALOGUE: { group: string; blurb: string; reports: ReportDef[] }[] = [
       { title: 'Sales by Customer', href: '/reports/sales-by-customer', description: 'Revenue ranked by who generated it.' },
       { title: 'Sales by Item', href: '/reports/sales-by-item', description: 'What actually sells, by value and quantity.' },
       { title: 'Sales by Salesperson', href: '/reports/sales-by-salesperson', description: 'Who booked it, and how much they collected.' },
+      { title: 'Sales Summary', href: '/reports/sales-summary', description: 'Month by month: invoices, credit notes, net sales and GST charged.' },
     ],
   },
   {
@@ -78,6 +86,7 @@ const CATALOGUE: { group: string; blurb: string; reports: ReportDef[] }[] = [
       { title: 'Sales Order Details', href: '/reports/sales-order-details', description: 'Confirmed orders and what is left to invoice.' },
       { title: 'Pending Sales Orders', href: '/reports/pending-sales-orders', description: 'Line by line: what is still to deliver and to invoice.' },
       { title: 'Quote Details', href: '/reports/estimate-details', description: 'Quotes sent, and what became of them.' },
+      { title: 'Receivable Details', href: '/reports/receivable-details', description: 'Every invoice, debit note, credit note and retainer, with its balance.' },
     ],
   },
   {
@@ -96,7 +105,11 @@ const CATALOGUE: { group: string; blurb: string; reports: ReportDef[] }[] = [
     reports: [
       { title: 'Vendor Balances', href: '/reports/vendor-balances', description: 'Billed, paid and outstanding, per supplier.' },
       { title: 'AP Ageing Summary', href: '/reports/ap-ageing', description: 'Unpaid bills by age bucket.' },
+      { title: 'AP Ageing Details', href: '/reports/ap-ageing-details', description: 'Every unpaid bill, aged individually; MSME suppliers marked.' },
       { title: 'Bill Details', href: '/reports/bill-details', description: 'Every supplier bill, with TDS withheld.' },
+      { title: 'Vendor Credit Details', href: '/reports/vendor-credit-details', description: 'Credits from suppliers, and what is still to use.' },
+      { title: 'Purchase Order Details', href: '/reports/purchase-order-details', description: 'Every order raised, with what arrived, what was billed, and the vendor’s answer.' },
+      { title: 'Payable Details', href: '/reports/payable-details', description: 'Every bill and vendor credit, with its balance.' },
       { title: 'Pending Purchase Orders', href: '/reports/pending-purchase-orders', description: 'Line by line: what is still to receive and to bill.' },
       { title: 'Payments Made', href: '/reports/payments-made', description: 'Every payment out, and the account it left from.' },
     ],
@@ -106,8 +119,45 @@ const CATALOGUE: { group: string; blurb: string; reports: ReportDef[] }[] = [
     blurb: 'Where the money goes.',
     reports: [
       { title: 'Purchases by Vendor', href: '/reports/purchases-by-vendor', description: 'Spending ranked by supplier.' },
+      { title: 'Purchases by Item', href: '/reports/purchases-by-item', description: 'What was bought, how much, and the average price paid.' },
       { title: 'Expenses by Category', href: '/reports/expenses-by-category', description: 'Spend grouped by expense account.' },
       { title: 'Expense Details', href: '/reports/expense-details', description: 'Every expense line, with input credit claimed.' },
+      { title: 'Expenses by Customer', href: '/reports/expenses-by-customer', description: 'Spending incurred for each customer, billable or not.' },
+      { title: 'Expenses by Project', href: '/reports/expenses-by-project', description: 'What each project has cost in expenses.' },
+      { title: 'Billable Expense Details', href: '/reports/billable-expense-details', description: 'Expenses to charge on: billed already, or still to bill.' },
+    ],
+  },
+  {
+    group: 'Inventory',
+    blurb: 'What is in stock, what moved, and how long it has sat.',
+    reports: [
+      { title: 'Stock Summary and Valuation', href: '/inventory/stock', description: 'Opening, in, out and closing for every item, valued at weighted average or FIFO.' },
+      { title: 'Stock Ledger', href: '/reports/stock-ledger', description: 'Every receipt, issue, sale and adjustment of one item, with a running balance.' },
+      { title: 'Stock Ageing', href: '/reports/stock-ageing', description: 'How long the stock on hand has been sitting, in buckets.' },
+      { title: 'Inventory Valuation Summary', href: '/reports/inventory-valuation', description: 'Each item’s quantity, unit cost and value at a date.' },
+      { title: 'Committed Stock Details', href: '/reports/committed-stock', description: 'Promised on open sales orders against what is on hand.' },
+      { title: 'ABC Classification', href: '/reports/abc-classification', description: 'Items ranked by sales into A, B and C: where stock care pays most.' },
+      { title: 'Batches and Expiry', href: '/inventory/batches', description: 'Stock by batch, and what is expiring.' },
+      { title: 'Stock Transfers', href: '/inventory/transfers', description: 'Goods moved between godowns, in transit included.' },
+    ],
+  },
+  {
+    group: 'Projects and Timesheets',
+    blurb: 'Hours, billing and margin on the work you do for customers.',
+    reports: [
+      { title: 'Project Summary', href: '/reports/project-summary', description: 'Each project: hours, invoiced, spent and the margin.' },
+      { title: 'Timesheet Details', href: '/reports/timesheet-details', description: 'Every hour logged, by person, project and task.' },
+    ],
+  },
+  {
+    group: 'Fixed Assets, Budgets and Payroll',
+    blurb: 'Registers and comparisons kept beside the books.',
+    reports: [
+      { title: 'Fixed Asset Register', href: '/accountant/fixed-assets', description: 'Every asset, its depreciation under Schedule II, and disposals.' },
+      { title: 'Budget vs Actual', href: '/accountant/budgets', description: 'Each account against its budget, with the variance and the pace.' },
+      { title: 'Cost Centre Profit and Loss', href: '/accountant/cost-centres', description: 'Income and expense by cost centre.' },
+      { title: 'Profit by Reporting Tag', href: '/reports/profit-by-tag', description: 'Income, expense and profit under each value of a tag: region, channel, product line.' },
+      { title: 'Payroll Register', href: '/payroll/runs', description: 'Each month’s salaries, deductions and payslips.' },
     ],
   },
   {
@@ -127,6 +177,8 @@ const CATALOGUE: { group: string; blurb: string; reports: ReportDef[] }[] = [
     reports: [
       { title: 'Audit Trail', href: '/accountant/audit-trail', description: 'Every create, change and void. Never editable.' },
       { title: 'Scheduled Reports', href: '/reports/scheduled', description: 'Reports made on their own, kept here and announced under the bell.' },
+      { title: 'Portal Activities', href: '/reports/portal-activities', description: 'What customers and vendors did on their portal: opened, paid, commented, accepted, sent files.' },
+      { title: 'System Mails', href: '/reports/system-mails', description: 'Every email the books sent, to whom, and whether it went.' },
     ],
   },
 ];
@@ -134,6 +186,8 @@ const CATALOGUE: { group: string; blurb: string; reports: ReportDef[] }[] = [
 /** The permission a report needs: its report group, or the area its page lives in. */
 const needs = (href: string) =>
   href === '/reports/scheduled' ? 'reports'
+    : href.startsWith('/reports/stock-') || href.startsWith('/inventory/') ? 'inventory'
+    : href.startsWith('/payroll/') ? 'payroll'
     : href.startsWith('/reports/') ? reportModule(href.slice('/reports/'.length)) : href.startsWith('/gst/') ? 'gst' : 'accountant';
 const FAV_KEY = 'rekonza-report-favourites';
 

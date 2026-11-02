@@ -81,6 +81,8 @@ export interface AiMessage {
   status: 'complete' | 'stopped' | 'error';
   chargedMc: number;
   createdAt: string;
+  /** Given again from a moment ago, the books unchanged: instant and free. */
+  fromCache?: boolean;
 }
 
 /** What downloading one report would cost this person, before they confirm. */
@@ -147,6 +149,7 @@ export type StreamEvent =
       chargedMc: number;
       availableMc: number;
       notice: string | null;
+      fromCache?: boolean;
     }
   | { type: 'error'; message: string };
 

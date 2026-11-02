@@ -7,10 +7,11 @@
 // disagree — there is no second copy to fall out of date.
 
 import Link from 'next/link';
+import { useState } from 'react';
 import { CheckCircle2 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Money } from '@/components/shared/money';
-import { downloadCsv, ReportShell, ReportTable, useReportRange } from '@/components/shared/report-shell';
+import { BasisSelect, downloadCsv, ReportShell, ReportTable, useReportRange, type ReportBasis } from '@/components/shared/report-shell';
 import { AsyncPage, LoadingRows } from '@/components/shared/async-state';
 import { reports, type TrialBalanceReport } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
@@ -19,7 +20,8 @@ import { ledgerHref } from '@/lib/source-links';
 
 export default function TrialBalancePage() {
   const [range, setRange] = useReportRange();
-  const state = useApi<TrialBalanceReport>(() => reports.trialBalance(range.to), [range.to]);
+  const [basis, setBasis] = useState<ReportBasis>('accrual');
+  const state = useApi<TrialBalanceReport>(() => reports.trialBalance(range.to, undefined, basis), [range.to, basis]);
 
   return (
     <ReportShell
@@ -28,6 +30,7 @@ export default function TrialBalancePage() {
       range={range}
       onRangeChange={setRange}
       asOfOnly
+      extraActions={<div className="w-32"><BasisSelect value={basis} onChange={setBasis} /></div>}
       onExport={() => {
         const tb = state.data;
         if (!tb) return;

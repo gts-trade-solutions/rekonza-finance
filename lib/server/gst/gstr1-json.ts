@@ -69,7 +69,9 @@ interface DocHead {
   branchState: string;
   supplyType: string;
   totalPaise: Paise;
-  /** Credit notes only: the invoice it was raised against. */
+  /** An invoice, or a debit note kept with them (it is reported as a note). */
+  kind?: 'invoice' | 'debit_note';
+  /** Notes only: the invoice it was raised against. */
   againstTotalPaise?: Paise | null;
   againstDate?: string | null;
   againstSupplyType?: string | null;
@@ -159,13 +161,17 @@ export async function gstr1PortalFile(
     id: number; number: string; invoice_date: string; status: string; gstin: string | null;
     place_of_supply: string; supply_type: string; total: string; branch_state: string;
     sb_no: string | null; sb_date: string | null; sb_port: string | null;
+    doc_kind: 'invoice' | 'debit_note';
+    against_total: string | null; against_date: string | null; against_supply_type: string | null;
   }>`
     SELECT i.id, i.number, i.invoice_date, i.status, NULLIF(c.gstin, '') AS gstin,
            i.place_of_supply, i.supply_type, i.total, b.state_code AS branch_state,
-           i.export_shipping_bill_no AS sb_no, i.export_shipping_bill_date AS sb_date, i.export_port_code AS sb_port
+           i.export_shipping_bill_no AS sb_no, i.export_shipping_bill_date AS sb_date, i.export_port_code AS sb_port,
+           i.doc_kind, o.total AS against_total, o.invoice_date AS against_date, o.supply_type AS against_supply_type
       FROM invoices i
       JOIN contacts c ON c.id = i.customer_id
       JOIN branches b ON b.id = i.branch_id
+      LEFT JOIN invoices o ON o.id = i.against_invoice_id
      WHERE i.org_id = ${orgId} AND i.status <> 'draft'
        AND i.invoice_date BETWEEN ${period.from} AND ${period.to}
        ${branchFilter('i')}
@@ -243,14 +249,21 @@ export async function gstr1PortalFile(
   const invRates = group(invLines.rows.map(toRate));
   const cnRates = group(cnLines.rows.map(toRate));
 
-  const invoices: DocHead[] = invHeads.rows.map((r) => ({
+  const sold: DocHead[] = invHeads.rows.map((r) => ({
     id: Number(r.id), number: r.number, date: String(r.invoice_date).slice(0, 10), status: r.status,
     gstin: r.gstin, pos: r.place_of_supply, branchState: r.branch_state, supplyType: r.supply_type,
     totalPaise: toPaiseFromSql(r.total),
+    kind: r.doc_kind,
+    againstTotalPaise: r.against_total == null ? null : toPaiseFromSql(r.against_total),
+    againstDate: r.against_date == null ? null : String(r.against_date).slice(0, 10),
+    againstSupplyType: r.against_supply_type,
     shippingBill: r.sb_no || r.sb_port
       ? { no: r.sb_no, date: r.sb_date ? String(r.sb_date).slice(0, 10) : null, port: r.sb_port }
       : null,
   }));
+  // A debit note is kept with the invoices but reported with the notes, as type D.
+  const invoices = sold.filter((h) => h.kind !== 'debit_note');
+  const debitNotes = sold.filter((h) => h.kind === 'debit_note');
   const notes: DocHead[] = cnHeads.rows.map((r) => ({
     id: Number(r.id), number: r.number, date: String(r.note_date).slice(0, 10), status: r.status,
     gstin: r.gstin, pos: r.place_of_supply, branchState: r.branch_state, supplyType: r.supply_type,
@@ -325,10 +338,10 @@ export async function gstr1PortalFile(
     }
   }
 
-  for (const head of notes) {
-    if (head.status === 'void') continue;
-    const lines = cnRates.get(head.id) ?? [];
-    const base = { ntty: 'C', nt_num: head.number, nt_dt: dmy(head.date), val: r2(head.totalPaise) };
+  // Credit notes take tax off (sign -1), debit notes add it (+1); both are
+  // reported where the invoice they follow was.
+  const addNote = (head: DocHead, lines: RateRow[], ntty: 'C' | 'D', sign: 1 | -1) => {
+    const base = { ntty, nt_num: head.number, nt_dt: dmy(head.date), val: r2(head.totalPaise) };
     if (head.gstin) {
       // A note to a registered buyer goes in whole: the buyer has to reverse
       // the credit, nil-rated lines included.
@@ -336,11 +349,11 @@ export async function gstr1PortalFile(
       const list = cdnr.get(head.gstin) ?? [];
       list.push({ ...base, pos: head.pos, rchrg: 'N', inv_typ, itms: wrapped(lines, 'all') });
       cdnr.set(head.gstin, list);
-      continue;
+      return;
     }
-    for (const l of lines) if (isNilLine(head, l)) addNil(head, l, -1);
+    for (const l of lines) if (isNilLine(head, l)) addNil(head, l, sign);
     const taxed = lines.filter((l) => !isNilLine(head, l));
-    if (!taxed.length) continue;
+    if (!taxed.length) return;
 
     const original = head.againstSupplyType ?? head.supplyType;
     if (original === 'export_with_tax' || original === 'export_lut') {
@@ -351,9 +364,11 @@ export async function gstr1PortalFile(
     ) {
       cdnur.push({ typ: 'B2CL', ...base, pos: head.pos, itms: wrapped(taxed, 'igst') });
     } else {
-      for (const l of taxed) addB2cs(head, l, -1);
+      for (const l of taxed) addB2cs(head, l, sign);
     }
-  }
+  };
+  for (const head of notes) if (head.status !== 'void') addNote(head, cnRates.get(head.id) ?? [], 'C', -1);
+  for (const head of debitNotes) if (head.status !== 'void') addNote(head, invRates.get(head.id) ?? [], 'D', 1);
 
   // ── Table 12: HSN summary, net of credit notes ────────────────────────────
   const hsnRows = await sql<{
@@ -477,6 +492,7 @@ export async function gstr1PortalFile(
 
   const docDet = [
     { doc_num: 1, docs: seriesRanges(invoices) },
+    { doc_num: 4, docs: seriesRanges(debitNotes) },
     { doc_num: 5, docs: seriesRanges(notes) },
   ].filter((d) => d.docs.length);
   if (docDet.length) file.doc_issue = { doc_det: docDet };

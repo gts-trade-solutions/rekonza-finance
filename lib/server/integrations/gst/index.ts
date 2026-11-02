@@ -225,7 +225,7 @@ export async function connectionFor(
 
   if (row.gstin && row.branch_gstin && row.gstin !== row.branch_gstin) {
     throw conflict(
-      `The ${portal === 'einvoice' ? 'e-invoice' : 'e-way bill'} credentials stored for this branch were ` +
+      `The ${portal === 'einvoice' ? 'e-invoice' : portal === 'ewaybill' ? 'e-way bill' : 'GST returns'} credentials stored for this branch were ` +
         `issued for GSTIN ${row.gstin}, but the branch is now ${row.branch_gstin}. Portal credentials ` +
         'belong to one registration — re-enter them for the new GSTIN before submitting anything.',
     );

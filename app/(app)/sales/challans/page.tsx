@@ -17,6 +17,7 @@ import { Input } from '@/components/ui/input';
 import { Combobox } from '@/components/ui/combobox';
 import { PageHeader } from '@/components/shared/page-header';
 import { DataTable, type Column } from '@/components/shared/data-table';
+import { BulkPrintButton, documentMenuColumn } from '@/components/shared/document-menu';
 import { Money } from '@/components/shared/money';
 import { StatusBadge } from '@/components/shared/status-badge';
 import { EmptyState } from '@/components/shared/empty-state';
@@ -118,8 +119,10 @@ export default function ChallansPage() {
           ) : (
             <DataTable
               rows={d.documents}
-              columns={columns}
+              columns={[...columns, documentMenuColumn('challan', state.refetch)]}
               getRowId={(r) => r.id}
+              selectable
+              bulkActions={(selected) => <BulkPrintButton kind="challan" ids={selected.map((r) => r.id)} />}
               initialSort={{ key: 'date', dir: 'desc' }}
               dateFilter={{ getDate: (r) => r.date }}
               searchPlaceholder="Search challan or consignee…"
