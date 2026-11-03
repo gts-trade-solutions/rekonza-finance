@@ -24,10 +24,19 @@ export const BUSINESS_NATURES = [
   'E-commerce seller',
 ] as const;
 
-/** The kind a PAN's fourth letter or a CIN's suffix suggests, for filling the dropdown. */
+/** A customer or vendor may also be a government body; the company itself is one of the eight. */
+export const PARTY_KINDS = [...COMPANY_TYPES, 'Government or local authority'] as const;
+
+/**
+ * The kind a GST record, a PAN's fourth letter or a CIN's suffix names, as one
+ * of the dropdown's choices: "Private Limited Company" from the GST system,
+ * "Partnership firm or LLP" from the PAN, "Private limited company" from a CIN.
+ */
 export function companyTypeFrom(hint: string | null | undefined): string | null {
   const h = (hint ?? '').toLowerCase();
   if (!h) return null;
+  // The PAN's F covers both; a firm is the commoner.
+  if (h === 'partnership firm or llp') return 'Partnership firm';
   if (h.includes('one person')) return 'One person company (OPC)';
   if (h.includes('private limited') || h.includes('private company')) return 'Private limited company';
   if (h.includes('public limited') || h.includes('public company')) return 'Public limited company';
@@ -35,7 +44,8 @@ export function companyTypeFrom(hint: string | null | undefined): string | null 
   if (h.includes('partnership')) return 'Partnership firm';
   if (h.includes('proprietor')) return 'Sole proprietorship';
   if (h.includes('hindu') || h.includes('huf')) return 'Hindu undivided family (HUF)';
-  if (h.includes('trust') || h.includes('society') || h.includes('association')) return 'Trust, society or AOP';
+  if (h.includes('trust') || h.includes('society') || h.includes('association') || h.includes('aop') || h.includes('body of individuals')) return 'Trust, society or AOP';
+  if (h.includes('government') || h.includes('local authority') || h.includes('statutory') || h.includes('public sector') || h.includes('juridical')) return 'Government or local authority';
   if (h === 'company') return 'Private limited company';
   return null;
 }

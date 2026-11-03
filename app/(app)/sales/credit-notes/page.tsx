@@ -164,7 +164,7 @@ export default function CreditNotesPage() {
   return (
     <>
       <PageHeader
-        title="Credit notes"
+        title="Credit note"
         description="Reversing part of a sale. Revenue and the GST charged on it both come back out, and the customer owes that much less."
         actions={
           canCreate && (

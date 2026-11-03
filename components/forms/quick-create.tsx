@@ -46,6 +46,7 @@ import type { Contact, GstTreatment, Item, TaxPref } from '@/lib/types';
 import { cn } from '@/lib/utils';
 import { GstinLookupButton, gstinTreatment, type GstinDetails } from '@/components/gst/gstn-portal';
 import { MultiCombobox } from '@/components/ui/multi-combobox';
+import { companyTypeFrom } from '@/lib/company-profile';
 
 const TREATMENTS = [
   { value: 'registered', label: 'Registered business (regular)' },
@@ -163,7 +164,7 @@ export function QuickContactDialog({
       msmeUdyamNo: kind === 'vendor' && isMsme ? udyam.trim() || null : null,
       tdsSections: kind === 'vendor' ? tdsSections : [],
       ...(found && needsGstin && found.gstin === gstin.toUpperCase() ? {
-        legalName: found.legalName, pan: found.pan, constitution: found.constitution, gstStatus: found.status,
+        legalName: found.legalName, pan: found.pan, constitution: companyTypeFrom(found.constitution) ?? found.constitution, gstStatus: found.status,
         gstRegisteredOn: found.registeredOn ?? '',
         billingAddress: found.address?.line ? [found.address.line, found.address.city, found.address.pincode].filter(Boolean).join(', ') : null,
       } : { pan: needsGstin && gstin.length === 15 ? gstin.toUpperCase().slice(2, 12) : null }),

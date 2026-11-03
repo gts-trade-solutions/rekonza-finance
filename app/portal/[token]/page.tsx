@@ -163,7 +163,7 @@ export default function PortalPage({ params }: { params: Promise<{ token: string
                       <TabsTrigger value="invoices">Invoices ({p.invoices.length})</TabsTrigger>
                       {p.salesOrders.length > 0 && <TabsTrigger value="orders">Sales orders ({p.salesOrders.length})</TabsTrigger>}
                       {p.retainers.length > 0 && <TabsTrigger value="retainers">Service invoices ({p.retainers.length})</TabsTrigger>}
-                      {p.creditNotes.length > 0 && <TabsTrigger value="credits">Credit notes ({p.creditNotes.length})</TabsTrigger>}
+                      {p.creditNotes.length > 0 && <TabsTrigger value="credits">Credit note ({p.creditNotes.length})</TabsTrigger>}
                     </>
                   ) : (
                     <>

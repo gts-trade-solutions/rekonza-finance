@@ -28,6 +28,8 @@ import { stateOptions } from '@/lib/options';
 import { TDS_SECTIONS } from '@/lib/tax/tds';
 import { CinLookupButton, GstinLookupButton, gstinTreatment } from '@/components/gst/gstn-portal';
 import { MultiCombobox } from '@/components/ui/multi-combobox';
+import { KindOfBusinessSelect } from '@/components/shared/kind-of-business';
+import { companyTypeFrom } from '@/lib/company-profile';
 import { SupplyKindPicker } from '@/components/forms/supply-kind-picker';
 import { countryCurrency, countryOptions } from '@/lib/countries';
 
@@ -147,7 +149,7 @@ export function ContactEditDialog({ contact, onClose, onSaved }: {
                   gstTreatment: d.fromPortal ? gstinTreatment(d) as Editable['gstTreatment'] : f.gstTreatment,
                   stateCode: d.address?.stateCode ?? f.stateCode,
                   pan: d.pan,
-                  constitution: d.constitution ?? f.constitution,
+                  constitution: companyTypeFrom(d.constitution) ?? d.constitution ?? f.constitution,
                   gstStatus: d.status ?? f.gstStatus,
                   gstRegisteredOn: d.registeredOn ?? f.gstRegisteredOn,
                   billingAddress: d.address?.line ? [d.address.line, d.address.city, d.address.pincode].filter(Boolean).join(', ') : f.billingAddress,
@@ -155,14 +157,14 @@ export function ContactEditDialog({ contact, onClose, onSaved }: {
               </div>
             </Field>
             <Field label="PAN" error={errors.pan}><Input value={s(f.pan)} onChange={(e) => set('pan', e.target.value.toUpperCase())} className="font-mono" maxLength={10} /></Field>
-            <Field label="Kind of business"><Input value={s(f.constitution ?? null)} onChange={(e) => set('constitution', e.target.value)} placeholder="Company, partnership…" /></Field>
+            <Field label="Kind of business"><KindOfBusinessSelect value={f.constitution} onChange={(v) => set('constitution', v)} /></Field>
             <Field label="GST registered on" error={errors.gstRegisteredOn} hint={f.gstStatus ? `Registration is ${f.gstStatus}` : undefined}>
               <Input type="date" value={f.gstRegisteredOn ?? ''} onChange={(e) => set('gstRegisteredOn', e.target.value)} />
             </Field>
             <Field label="CIN (companies and LLPs)" error={errors.cin}>
               <div className="flex gap-2">
                 <Input value={s(f.cin ?? null)} onChange={(e) => set('cin', e.target.value.toUpperCase())} className="font-mono" maxLength={21} placeholder="U74999TN2015PTC123456" />
-                <CinLookupButton cin={s(f.cin ?? null)} onFound={(d) => setF({ ...f, incorporatedOn: d.incorporatedOn ?? f.incorporatedOn, constitution: f.constitution || d.kind })} />
+                <CinLookupButton cin={s(f.cin ?? null)} onFound={(d) => setF({ ...f, incorporatedOn: d.incorporatedOn ?? f.incorporatedOn, constitution: f.constitution || companyTypeFrom(d.kind) || d.kind })} />
               </div>
             </Field>
             <Field label="Incorporated on" error={errors.incorporatedOn}>

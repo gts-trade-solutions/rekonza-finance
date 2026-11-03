@@ -150,7 +150,7 @@ export async function checklist(ex: Executor, orgId: number): Promise<ChecklistA
         `${plural(Number(v.inv), 'sales invoice')}, ${plural(Number(v.bill), 'purchase bill')}, ${plural(Number(v.cn), 'credit note')}, ${plural(Number(v.dn), 'debit note')}`,
         'Every voucher posts a balanced double entry; a void posts the reversal and keeps both',
       ],
-      screens: [{ label: 'Receipts', href: '/sales/payments' }, { label: 'Payments', href: '/purchases/payments' }, { label: 'Contra (transfers)', href: '/banking/transfers' }, { label: 'Journals', href: '/accountant/journals' }, { label: 'Debit notes', href: '/sales/debit-notes' }, { label: 'Credit notes', href: '/sales/credit-notes' }],
+      screens: [{ label: 'Receipts', href: '/sales/payments' }, { label: 'Payments', href: '/purchases/payments' }, { label: 'Contra (transfers)', href: '/banking/transfers' }, { label: 'Journals', href: '/accountant/journals' }, { label: 'Debit note', href: '/sales/debit-notes' }, { label: 'Credit note', href: '/sales/credit-notes' }],
       outside: [],
     },
     {

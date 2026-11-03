@@ -33,7 +33,7 @@ const COPY = {
     number: 'Receipt / invoice #',
   },
   debit_note: {
-    title: 'Debit Notes',
+    title: 'Debit Note',
     description: 'Raised when an invoice charged too little — a price revised upward, goods short-billed (CGST Act s.34(3)). Reported in GSTR-1 with the notes, as type D.',
     newLabel: 'New debit note',
     newHref: '/sales/debit-notes/new',

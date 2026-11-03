@@ -21,6 +21,8 @@ import { MultiCombobox } from '@/components/ui/multi-combobox';
 import { SupplyKindPicker } from '@/components/forms/supply-kind-picker';
 import { countryCurrency, countryOptions, currencyOptions } from '@/lib/countries';
 import type { SupplyKind } from '@/lib/types';
+import { KindOfBusinessSelect } from '@/components/shared/kind-of-business';
+import { companyTypeFrom } from '@/lib/company-profile';
 
 export default function NewCustomerPage() {
   const router = useRouter();
@@ -221,7 +223,7 @@ export default function NewCustomerPage() {
                   if (!name.trim()) setName(d.tradeName || d.legalName || '');
                   if (d.legalName) setLegalName(d.legalName);
                   setPan(d.pan);
-                  if (d.constitution) setConstitution(d.constitution);
+                  if (d.constitution) setConstitution(companyTypeFrom(d.constitution) ?? d.constitution);
                   if (d.status) setGstStatus(d.status);
                   if (d.registeredOn) setGstRegisteredOn(d.registeredOn);
                   if (d.fromPortal || treatment === 'unregistered' || treatment === 'consumer') setTreatment(gstinTreatment(d));
@@ -254,7 +256,7 @@ export default function NewCustomerPage() {
                 <Input value={pan} onChange={(e) => setPan(e.target.value.toUpperCase())} maxLength={10} className="font-mono" placeholder="AAAAA0000A" />
               </Field>
               <Field label="Kind of business">
-                <Input value={constitution} onChange={(e) => setConstitution(e.target.value)} placeholder="Private limited company, partnership…" />
+                <KindOfBusinessSelect value={constitution} onChange={setConstitution} />
               </Field>
               <Field label="GST registered on" hint={gstStatus ? `Registration is ${gstStatus}` : undefined}>
                 <Input type="date" value={gstRegisteredOn} onChange={(e) => setGstRegisteredOn(e.target.value)} />
@@ -264,7 +266,7 @@ export default function NewCustomerPage() {
                   <Input value={cin} onChange={(e) => setCin(e.target.value.toUpperCase())} maxLength={21} className="font-mono" placeholder="U74999TN2015PTC123456" />
                   <CinLookupButton cin={cin} onFound={(d) => {
                     if (d.incorporatedOn) setIncorporatedOn(d.incorporatedOn);
-                    if (!constitution && d.kind) setConstitution(d.kind);
+                    if (!constitution && d.kind) setConstitution(companyTypeFrom(d.kind) ?? d.kind);
                   }} />
                 </div>
               </Field>

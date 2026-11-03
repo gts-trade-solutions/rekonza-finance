@@ -15,7 +15,7 @@ import { postManualJournal } from '../../lib/server/services/journals';
 import { bankStatementAsOn } from '../../lib/server/reports/bank-statement';
 import { printableDocument } from '../../lib/server/services/document-print';
 import { daysOverdue, paymentStatusOf } from '../../components/shared/invoice-status';
-import { companyTypeFrom, COMPANY_TYPES, BUSINESS_NATURES } from '../../lib/company-profile';
+import { companyTypeFrom, COMPANY_TYPES, BUSINESS_NATURES, PARTY_KINDS } from '../../lib/company-profile';
 import { COUNTRIES, countryCurrency, countryName } from '../../lib/countries';
 
 async function rolledBack(fn: (trx: Trx) => Promise<void>) {
@@ -178,7 +178,12 @@ test('the company profile lists, and the country list', () => {
   assert.equal(COMPANY_TYPES.length, 8);
   assert.equal(BUSINESS_NATURES.length, 8);
   assert.equal(companyTypeFrom('Private Limited Company'), 'Private limited company');
-  assert.equal(companyTypeFrom('Partnership firm or LLP'), 'Limited liability partnership (LLP)');
+  assert.equal(companyTypeFrom('Partnership firm or LLP'), 'Partnership firm', 'the PAN cannot tell a firm from an LLP; a firm is the commoner');
+  assert.equal(companyTypeFrom('Limited Liability Partnership'), 'Limited liability partnership (LLP)');
+  assert.equal(companyTypeFrom('Society/ Club/ Trust/ AOP'), 'Trust, society or AOP');
+  assert.equal(companyTypeFrom('Government Department'), 'Government or local authority');
+  assert.equal(companyTypeFrom('Company'), 'Private limited company');
+  assert.equal(PARTY_KINDS.length, 9);
   assert.equal(companyTypeFrom('Proprietorship'), 'Sole proprietorship');
   assert.equal(companyTypeFrom('One person company'), 'One person company (OPC)');
   assert.equal(companyTypeFrom(''), null);

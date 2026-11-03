@@ -26,6 +26,8 @@ import { AsyncPage } from '@/components/shared/async-state';
 import { Field } from '@/components/shared/form-bits';
 import { CinLookupButton, GstinLookupButton, gstinTreatment } from '@/components/gst/gstn-portal';
 import { MultiCombobox } from '@/components/ui/multi-combobox';
+import { KindOfBusinessSelect } from '@/components/shared/kind-of-business';
+import { companyTypeFrom } from '@/lib/company-profile';
 import { Combobox } from '@/components/ui/combobox';
 import { contacts, type ContactRow } from '@/lib/api/client';
 import { useApi, useApiAction } from '@/lib/api/use-api';
@@ -206,7 +208,7 @@ export default function VendorsPage() {
                         pan: d.pan,
                         stateCode: d.address?.stateCode ?? f.stateCode,
                         address: d.address?.line ? [d.address.line, d.address.city, d.address.pincode].filter(Boolean).join(', ') : f.address,
-                        constitution: d.constitution ?? f.constitution,
+                        constitution: companyTypeFrom(d.constitution) ?? d.constitution ?? f.constitution,
                         gstStatus: d.status ?? f.gstStatus,
                         gstRegisteredOn: d.registeredOn ?? f.gstRegisteredOn,
                         treatment: d.fromPortal ? gstinTreatment(d) : f.treatment,
@@ -247,7 +249,7 @@ export default function VendorsPage() {
                   </Field>
                   {f.legalName && <p className="-mt-2 text-xs text-muted-foreground sm:col-span-2">Registered as {f.legalName}{f.gstStatus ? ` · ${f.gstStatus}` : ''}</p>}
                   <Field label="Kind of business">
-                    <Input value={f.constitution} onChange={(e) => setF({ ...f, constitution: e.target.value })} placeholder="Company, partnership…" />
+                    <KindOfBusinessSelect value={f.constitution} onChange={(v) => setF({ ...f, constitution: v })} />
                   </Field>
                   <Field label="GST registered on">
                     <Input type="date" value={f.gstRegisteredOn} onChange={(e) => setF({ ...f, gstRegisteredOn: e.target.value })} />
@@ -258,7 +260,7 @@ export default function VendorsPage() {
                       <CinLookupButton cin={f.cin} onFound={(d) => setF({
                         ...f,
                         incorporatedOn: d.incorporatedOn ?? f.incorporatedOn,
-                        constitution: f.constitution || d.kind || '',
+                        constitution: f.constitution || companyTypeFrom(d.kind) || d.kind || '',
                       })} />
                     </div>
                   </Field>
