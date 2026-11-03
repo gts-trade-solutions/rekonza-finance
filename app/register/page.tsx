@@ -27,6 +27,7 @@ import { auth, ApiError } from '@/lib/api/client';
 import { BRAND, Logo } from '@/components/brand/logo';
 import { GST_STATES, isValidGstin } from '@/lib/tax/gst';
 import { cn } from '@/lib/utils';
+import { GstinLookupButton } from '@/components/gst/gstn-portal';
 
 const STATE_OPTIONS = Object.entries(GST_STATES)
   .filter(([code]) => code !== '96')
@@ -164,14 +165,21 @@ export default function RegisterPage() {
                     <Label htmlFor="gstin">
                       GSTIN <span className="font-normal text-muted-foreground">— optional</span>
                     </Label>
-                    <Input
-                      id="gstin"
-                      value={gstin}
-                      onChange={(e) => setGstin(e.target.value.toUpperCase().slice(0, 15))}
-                      placeholder="22AAAAA0000A1Z5"
-                      className="font-mono uppercase"
-                      disabled={busy}
-                    />
+                    <div className="flex gap-2">
+                      <Input
+                        id="gstin"
+                        value={gstin}
+                        onChange={(e) => setGstin(e.target.value.toUpperCase().slice(0, 15))}
+                        placeholder="22AAAAA0000A1Z5"
+                        className="font-mono uppercase"
+                        disabled={busy}
+                      />
+                      {/* The registered name and state, filled in as soon as the GSTIN is typed. */}
+                      <GstinLookupButton gstin={gstin} endpoint="/api/auth/gstin" onFound={(d) => {
+                        if (!businessName.trim() && (d.legalName || d.tradeName)) setBusinessName(d.legalName || d.tradeName || '');
+                        if (d.address?.stateCode) setStateCode(d.address.stateCode);
+                      }} />
+                    </div>
                     {gstinNote ? (
                       <p
                         className={cn(

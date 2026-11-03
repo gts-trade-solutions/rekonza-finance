@@ -16,7 +16,11 @@ import { Combobox } from '@/components/ui/combobox';
 import { stateOptions } from '@/lib/options';
 import { TDS_SECTIONS } from '@/lib/tax/tds';
 import { useAppStore } from '@/lib/store';
-import { GstinLookupButton, gstinTreatment } from '@/components/gst/gstn-portal';
+import { CinLookupButton, GstinLookupButton, gstinTreatment } from '@/components/gst/gstn-portal';
+import { MultiCombobox } from '@/components/ui/multi-combobox';
+import { SupplyKindPicker } from '@/components/forms/supply-kind-picker';
+import { countryCurrency, countryOptions, currencyOptions } from '@/lib/countries';
+import type { SupplyKind } from '@/lib/types';
 
 export default function NewCustomerPage() {
   const router = useRouter();
@@ -47,7 +51,21 @@ export default function NewCustomerPage() {
   const [pincode, setPincode] = useState('');
   const [terms, setTerms] = useState('net_30');
   const [creditLimit, setCreditLimit] = useState(0);
-  const [tdsSection, setTdsSection] = useState('');
+  const [tdsSections, setTdsSections] = useState<string[]>([]);
+  // The registration, filled from the GSTIN and the CIN, or typed.
+  const [pan, setPan] = useState('');
+  const [constitution, setConstitution] = useState('');
+  const [gstStatus, setGstStatus] = useState('');
+  const [gstRegisteredOn, setGstRegisteredOn] = useState('');
+  const [cin, setCin] = useState('');
+  const [incorporatedOn, setIncorporatedOn] = useState('');
+  // An international customer: outside India, no GSTIN, place of supply 96
+  // (Foreign Country), invoiced in its own currency; its sales are exports.
+  const [international, setInternational] = useState(false);
+  const [country, setCountry] = useState('');
+  const [currency, setCurrency] = useState('INR');
+  // What they buy: their estimates, orders and invoices offer only those items.
+  const [supplies, setSupplies] = useState<SupplyKind>('both');
   const create = useApiAction(contacts.create);
 
   const gstinValid = gstin.length === 15 ? isValidGstin(gstin.toUpperCase()) : null;
@@ -57,8 +75,12 @@ export default function NewCustomerPage() {
       toast.error('Customer name is required');
       return;
     }
-    if (gstin && gstinValid === false) {
+    if (!international && gstin && gstinValid === false) {
       toast.error('That GSTIN fails the checksum — please re-check it');
+      return;
+    }
+    if (international && !country) {
+      toast.error('Pick the country the customer is in');
       return;
     }
 
@@ -68,22 +90,30 @@ export default function NewCustomerPage() {
       .filter(Boolean)
       .join(', ');
 
+    const domestic = !international;
     const result = await create.run({
       kind: 'customer',
       displayName: name.trim(),
       legalName: legalName || null,
       email: email || null,
       phone: phone || null,
-      gstin: gstin ? gstin.toUpperCase() : null,
-      // A GSTIN embeds the PAN at positions 3–12, so there is no reason to ask
-      // for it twice.
-      pan: gstin.length === 15 ? gstin.slice(2, 12).toUpperCase() : null,
-      gstTreatment: treatment,
-      stateCode,
+      gstin: domestic && gstin ? gstin.toUpperCase() : null,
+      // A GSTIN embeds the PAN at positions 3–12; it is filled from it, and can be typed without one.
+      pan: domestic ? pan || (gstin.length === 15 ? gstin.slice(2, 12).toUpperCase() : null) : null,
+      constitution: constitution || null,
+      gstStatus: domestic ? gstStatus || null : null,
+      gstRegisteredOn: domestic ? gstRegisteredOn || null : null,
+      cin: domestic ? cin || null : null,
+      incorporatedOn: domestic ? incorporatedOn || null : null,
+      gstTreatment: domestic ? treatment : 'overseas',
+      stateCode: domestic ? stateCode : '96',
+      country: domestic ? null : country,
+      currency: domestic ? 'INR' : currency,
+      supplies,
       billingAddress: address || null,
       paymentTerms: terms,
       creditLimitPaise: creditLimit || 0,
-      tdsSection: tdsSection || null,
+      tdsSections: domestic ? tdsSections : [],
     });
     if (!result) return;
 
@@ -93,21 +123,22 @@ export default function NewCustomerPage() {
 
   return (
     <>
-      <PageHeader
-        title="New customer"
-        actions={
-          <>
-            <Button variant="outline" size="sm" onClick={() => router.back()}>Cancel</Button>
-            <Button size="sm" onClick={save} disabled={create.busy}>
-              {create.busy ? 'Saving…' : 'Save customer'}
-            </Button>
-          </>
-        }
-      />
+      <PageHeader title="New customer" />
       <div className="grid gap-6 lg:grid-cols-3">
         <Card className="space-y-6 p-5 lg:col-span-2">
           <FormSection title="Basic details">
             <div className="grid gap-4 sm:grid-cols-2">
+              <Field label="Customer type" className="sm:col-span-2" hint={international ? 'Outside India: no GSTIN, and every sale is an export.' : 'In India, registered for GST or not.'}>
+                <div className="inline-flex rounded-md border p-0.5" role="radiogroup" aria-label="Customer type" data-slot="customer-type">
+                  {[{ v: false, label: 'Domestic' }, { v: true, label: 'International' }].map((o) => (
+                    <button key={o.label} type="button" role="radio" aria-checked={international === o.v}
+                      onClick={() => setInternational(o.v)}
+                      className={`rounded px-4 py-1.5 text-sm font-medium transition-colors ${international === o.v ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'}`}>
+                      {o.label}
+                    </button>
+                  ))}
+                </div>
+              </Field>
               <Field label="Customer name" required className="sm:col-span-2">
                 <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Customer's business name" />
               </Field>
@@ -115,11 +146,31 @@ export default function NewCustomerPage() {
                 <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@example.com" />
               </Field>
               <Field label="Phone">
-                <Input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+91 00000 00000" />
+                <Input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder={international ? '+1 000 000 0000' : '+91 00000 00000'} />
+              </Field>
+              <Field label="They buy" className="sm:col-span-2" hint="Their estimates, orders and invoices offer only these items.">
+                <div data-slot="customer-supplies"><SupplyKindPicker value={supplies} onChange={setSupplies} /></div>
               </Field>
             </div>
           </FormSection>
 
+          {international ? (
+            <FormSection title="Country and currency" description="Sales to them are exports: zero-rated under your LUT, or with IGST that is refunded.">
+              <div className="grid gap-4 sm:grid-cols-2" data-slot="international-details">
+                <Field label="Country" required>
+                  <Combobox options={countryOptions()} value={country}
+                    onChange={(v) => { setCountry(v); setCurrency(countryCurrency(v)); }}
+                    placeholder="Select the country" searchPlaceholder="Search countries" showAvatar={false} />
+                </Field>
+                <Field label="Currency" hint="What they are invoiced in; the rupee value is kept at the day's rate">
+                  <Combobox options={currencyOptions()} value={currency} onChange={setCurrency} searchPlaceholder="Search currencies" showAvatar={false} />
+                </Field>
+                <p className="text-xs text-muted-foreground sm:col-span-2">
+                  Place of supply: 96, Foreign Country. GST treatment: overseas (export).
+                </p>
+              </div>
+            </FormSection>
+          ) : (<>
           <FormSection title="Tax details" description="These drive how GST is calculated on every invoice.">
             <div className="grid gap-4 sm:grid-cols-2">
               <Field label="GST treatment" required>
@@ -169,7 +220,11 @@ export default function NewCustomerPage() {
                   // Zoho's prefill: the registered name and address, the state and the kind of registration.
                   if (!name.trim()) setName(d.tradeName || d.legalName || '');
                   if (d.legalName) setLegalName(d.legalName);
-                  setTreatment(gstinTreatment(d));
+                  setPan(d.pan);
+                  if (d.constitution) setConstitution(d.constitution);
+                  if (d.status) setGstStatus(d.status);
+                  if (d.registeredOn) setGstRegisteredOn(d.registeredOn);
+                  if (d.fromPortal || treatment === 'unregistered' || treatment === 'consumer') setTreatment(gstinTreatment(d));
                   if (d.address) {
                     setStateCode(d.address.stateCode); setStateTouched(true);
                     if (d.address.line) setLine1(d.address.line);
@@ -193,6 +248,33 @@ export default function NewCustomerPage() {
             </div>
           </FormSection>
 
+          <FormSection title="Registration" description="Filled from the GSTIN and the CIN as you type them; check or type them yourself.">
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field label="PAN">
+                <Input value={pan} onChange={(e) => setPan(e.target.value.toUpperCase())} maxLength={10} className="font-mono" placeholder="AAAAA0000A" />
+              </Field>
+              <Field label="Kind of business">
+                <Input value={constitution} onChange={(e) => setConstitution(e.target.value)} placeholder="Private limited company, partnership…" />
+              </Field>
+              <Field label="GST registered on" hint={gstStatus ? `Registration is ${gstStatus}` : undefined}>
+                <Input type="date" value={gstRegisteredOn} onChange={(e) => setGstRegisteredOn(e.target.value)} />
+              </Field>
+              <Field label="CIN (companies and LLPs)">
+                <div className="flex gap-2">
+                  <Input value={cin} onChange={(e) => setCin(e.target.value.toUpperCase())} maxLength={21} className="font-mono" placeholder="U74999TN2015PTC123456" />
+                  <CinLookupButton cin={cin} onFound={(d) => {
+                    if (d.incorporatedOn) setIncorporatedOn(d.incorporatedOn);
+                    if (!constitution && d.kind) setConstitution(d.kind);
+                  }} />
+                </div>
+              </Field>
+              <Field label="Incorporated on">
+                <Input type="date" value={incorporatedOn} onChange={(e) => setIncorporatedOn(e.target.value)} />
+              </Field>
+            </div>
+          </FormSection>
+          </>)}
+
           <FormSection title="Billing address">
             <div className="grid gap-4 sm:grid-cols-3">
               <Field label="Address" className="sm:col-span-3">
@@ -201,8 +283,8 @@ export default function NewCustomerPage() {
               <Field label="City" className="sm:col-span-2">
                 <Input value={city} onChange={(e) => setCity(e.target.value)} placeholder="City" />
               </Field>
-              <Field label="PIN code">
-                <Input value={pincode} onChange={(e) => setPincode(e.target.value)} placeholder="000000" />
+              <Field label={international ? 'Postal / ZIP code' : 'PIN code'}>
+                <Input value={pincode} onChange={(e) => setPincode(e.target.value)} placeholder={international ? '' : '000000'} />
               </Field>
             </div>
           </FormSection>
@@ -227,27 +309,31 @@ export default function NewCustomerPage() {
             <Field label="Credit limit" hint="Warns when outstanding exceeds this">
               <MoneyInput valuePaise={creditLimit} onChangePaise={setCreditLimit} />
             </Field>
-            <Field
-              label="TDS section they deduct under"
-              hint="Large customers withhold tax and pay you net. It is tracked as TDS Receivable."
+            {!international && <Field
+              label="TDS sections they deduct under"
+              hint="Large customers withhold tax and pay you net. It is tracked as TDS Receivable. Choose every section they use."
             >
-              <Combobox
+              <MultiCombobox
                 options={TDS_SECTIONS.map((t) => ({
                   value: t.code,
                   label: `${t.code} — ${t.description}`,
                   sublabel: `${t.ratePctWithPan}% with PAN`,
                 }))}
-                value={tdsSection}
-                onChange={setTdsSection}
+                value={tdsSections}
+                onChange={setTdsSections}
                 placeholder="They do not deduct TDS"
                 searchPlaceholder="Search sections"
-                showAvatar={false}
-                clearable
               />
-            </Field>
+            </Field>}
             {create.error && <p className="text-sm text-destructive">{create.error}</p>}
           </FormSection>
         </Card>
+      </div>
+
+      {/* Save at the foot of the form, where the eye ends up, as on every document form. */}
+      <div className="footer-bar sticky bottom-0 z-20 mt-6 flex flex-wrap items-center gap-2 rounded-lg border bg-surface px-5 py-3.5" data-slot="customer-save-bar">
+        <Button onClick={save} disabled={create.busy}>{create.busy ? 'Saving…' : 'Save customer'}</Button>
+        <Button variant="outline" onClick={() => router.back()}>Cancel</Button>
       </div>
     </>
   );

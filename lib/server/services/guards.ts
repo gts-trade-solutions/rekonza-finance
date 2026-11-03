@@ -134,7 +134,7 @@ export async function checkCashPayment(
   `.execute(ex);
   const day = toPaiseFromSql(rows[0]?.v ?? '0') + amountPaise;
   const transporter = await ex.selectFrom('contacts').select('tds_section').where('id', '=', contactId).executeTakeFirst();
-  const limit = transporter?.tds_section === '194C' ? CASH_PAYMENT_LIMIT_TRANSPORT_PAISE : CASH_PAYMENT_LIMIT_PAISE;
+  const limit = (transporter?.tds_section ?? '').split(',').map((x) => x.trim()).includes('194C') ? CASH_PAYMENT_LIMIT_TRANSPORT_PAISE : CASH_PAYMENT_LIMIT_PAISE;
   if (day <= limit) return;
   enforce((await getPolicies(ex, orgId)).cashLimits,
     `${rupees(day)} paid in cash to one person on ${date}. Above ${rupees(limit)} in a day, section 40A(3) disallows the expense.`,

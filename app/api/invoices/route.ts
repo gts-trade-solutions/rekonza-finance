@@ -43,7 +43,9 @@ export const GET = route(
 
     if (q.from) base = base.where('invoices.invoice_date', '>=', q.from);
     if (q.to) base = base.where('invoices.invoice_date', '<=', q.to);
-    if (q.status && q.status !== 'all') base = base.where('invoices.status', '=', q.status as never);
+    // Unpaid is every issued invoice with nothing received: approved, sent or overdue.
+    if (q.status === 'unpaid') base = base.where('invoices.status', 'in', ['approved', 'sent', 'overdue']);
+    else if (q.status && q.status !== 'all') base = base.where('invoices.status', '=', q.status as never);
     if (q.open) {
       // A draft was never issued and a void one was cancelled, so neither can
       // be paid. Everything else with a balance is fair game.
@@ -124,6 +126,7 @@ export const GET = route(
     for (const r of statusRows) {
       statusCounts[r.status] = Number(r.n);
       statusCounts.all += Number(r.n);
+      if (r.status === 'approved' || r.status === 'sent' || r.status === 'overdue') statusCounts.unpaid = (statusCounts.unpaid ?? 0) + Number(r.n);
     }
 
     // e-invoice status, in one query rather than one per row.

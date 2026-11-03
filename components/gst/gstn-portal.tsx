@@ -6,7 +6,7 @@
 // ARN. Shown on GSTR-1, IFF and GSTR-3B; the connections themselves are also
 // listed in Settings (GstnConnections).
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { CheckCircle2, CloudUpload, KeyRound, Loader2, Plug, RefreshCw, ShieldCheck, TriangleAlert, Unplug } from 'lucide-react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
@@ -20,6 +20,7 @@ import { useApi } from '@/lib/api/use-api';
 import { usePermission } from '@/lib/store/hooks';
 import { useAppStore } from '@/lib/store';
 import { cn } from '@/lib/utils';
+import { isValidGstin } from '@/lib/tax/gst';
 
 export type ReturnType = 'GSTR1' | 'IFF' | 'GSTR3B';
 
@@ -402,7 +403,20 @@ export interface GstinDetails {
   constitution: string | null; registeredOn: string | null; cancelledOn: string | null;
   address: { line: string | null; city: string | null; district: string | null; stateCode: string; pincode: string | null } | null;
   fromPortal: boolean;
+  /** Characters 3 to 12 of every GSTIN. */
+  pan: string;
+  /** Where the details came from: the GST system (GSP), a lookup service, or only the number itself. */
+  source?: 'gst-system' | 'lookup-service' | 'number';
 }
+
+/** A company's details from its CIN (integrations/party-lookup.ts). */
+export interface CompanyDetails {
+  cin: string; listed: boolean; state: string | null; kind: string | null; incorporatedYear: number;
+  incorporatedOn: string | null; name: string | null; status: string | null; source: 'number' | 'lookup-service';
+}
+
+// Said once a page: the number alone gave the state and PAN, and fetching the rest needs a service.
+let toldNumberOnly = false;
 
 /** The GST treatment a registration's taxpayer type means. */
 export function gstinTreatment(d: GstinDetails): string {
@@ -413,29 +427,111 @@ export function gstinTreatment(d: GstinDetails): string {
   return 'registered';
 }
 
-export function GstinLookupButton({ gstin, onFound, className }: { gstin: string; onFound: (d: GstinDetails) => void; className?: string }) {
+/**
+ * Fills a customer or vendor in from its GSTIN, by itself as soon as the 15th
+ * character is typed (and again from the button): the state, PAN and kind of
+ * business at once from the number, then the registered name, address, status
+ * and registration date from the GST system or a lookup service.
+ */
+export function GstinLookupButton({ gstin, onFound, className, auto = true, endpoint = '/api/gst/portal/gstin', compact = false }: {
+  gstin: string; onFound: (d: GstinDetails) => void; className?: string;
+  /** Look up on its own when a whole GSTIN has been typed. */
+  auto?: boolean;
+  /** The public sign-up page asks a rate-limited endpoint of its own. */
+  endpoint?: string;
+  /** Just the icon, where the GSTIN box is narrow and needs the room. */
+  compact?: boolean;
+}) {
   const [busy, setBusy] = useState(false);
-  const ready = /^\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/.test(gstin.trim().toUpperCase());
-  const look = async () => {
+  const [done, setDone] = useState('');
+  const g = gstin.trim().toUpperCase();
+  const shaped = /^\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/.test(g);
+  // A typo is caught here, from the check digit, before anyone is asked.
+  const typo = shaped && !isValidGstin(g);
+  const ready = shaped && !typo;
+  const found = useRef(onFound);
+  found.current = onFound;
+  const look = async (number: string) => {
     setBusy(true);
     try {
-      const d = await api.get<GstinDetails>('/api/gst/portal/gstin', { gstin: gstin.trim().toUpperCase() });
+      const d = await api.get<GstinDetails>(endpoint, { gstin: number });
+      setDone(number);
       if (d.status && !/active/i.test(d.status)) toast.warning(`This registration is ${d.status}`, { description: d.cancelledOn ? `Cancelled on ${d.cancelledOn}.` : 'Check before invoicing it as registered.' });
       if (!d.fromPortal) {
-        toast.info('Filled what the GSTIN itself says (the state)', { description: 'Fetching the registered name and address needs a GSP connection on the server.' });
+        if (!toldNumberOnly) {
+          toldNumberOnly = true;
+          toast.info('Filled the state and PAN from the GSTIN', { description: 'The registered name, address and registration date come from the GST system: set up a GSP or a GSTIN lookup service (Settings → System health shows how).' });
+        }
       } else {
-        toast.success(`Found ${d.legalName ?? d.gstin}`, { description: [d.taxpayerType, d.status].filter(Boolean).join(' · ') });
+        toast.success(`Found ${d.legalName ?? d.gstin}`, { description: [d.taxpayerType, d.status, d.registeredOn ? `registered ${d.registeredOn}` : null].filter(Boolean).join(' · ') });
       }
-      onFound(d);
+      found.current(d);
     } catch (e) {
+      setDone(number);
       toast.error(err(e, 'Could not look the GSTIN up'));
     } finally {
       setBusy(false);
     }
   };
+  // The moment a whole GSTIN is there, once per number.
+  useEffect(() => {
+    if (typo && auto && g !== done) {
+      setDone(g);
+      toast.error('That GSTIN’s last character does not match the rest', { description: 'Check it for a typo.' });
+      return;
+    }
+    if (!auto || !ready || g === done) return;
+    const t = setTimeout(() => void look(g), 350);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [g, ready, typo, auto]);
+  const label = done === g && ready ? 'Fetch again' : 'Fetch details';
   return (
-    <Button type="button" size="sm" variant="outline" className={cn('h-9 shrink-0 gap-1.5', className)} disabled={!ready || busy} onClick={() => void look()} title="Fill the name and address from the GST system">
-      {busy ? <Loader2 className="size-3.5 animate-spin" /> : <ShieldCheck className="size-3.5" />} Fetch details
+    <Button type="button" size="sm" variant="outline" className={cn('h-9 shrink-0 gap-1.5', compact && 'w-9 px-0', className)} disabled={!ready || busy} onClick={() => void look(g)}
+      title={typo ? 'The GSTIN’s last character does not match the rest: check it for a typo' : 'Fill the name, address, PAN and registration date from the GSTIN'} data-slot="gstin-fetch"
+      aria-label={compact ? label : undefined}>
+      {busy ? <Loader2 className="size-3.5 animate-spin" /> : <ShieldCheck className="size-3.5" />} {!compact && label}
+    </Button>
+  );
+}
+
+/**
+ * The same for a company's CIN: the year of incorporation at once from the
+ * number, and the exact date and name from the MCA record when a company
+ * lookup service is set up.
+ */
+export function CinLookupButton({ cin, onFound, className }: { cin: string; onFound: (d: CompanyDetails) => void; className?: string }) {
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState('');
+  const c = cin.trim().toUpperCase();
+  const ready = /^[LU]\d{5}[A-Z]{2}\d{4}[A-Z]{3}\d{6}$/.test(c);
+  const found = useRef(onFound);
+  found.current = onFound;
+  const look = async (number: string) => {
+    setBusy(true);
+    try {
+      const d = await api.get<CompanyDetails>('/api/company-lookup', { cin: number });
+      setDone(number);
+      if (d.incorporatedOn) toast.success(`Incorporated on ${d.incorporatedOn}`, { description: [d.name, d.kind, d.status].filter(Boolean).join(' · ') });
+      else toast.info(`Incorporated in ${d.incorporatedYear}, from the CIN`, { description: 'The exact date comes from the MCA record: set up a company lookup service, or type it from the certificate of incorporation.' });
+      found.current(d);
+    } catch (e) {
+      setDone(number);
+      toast.error(err(e, 'Could not look the CIN up'));
+    } finally {
+      setBusy(false);
+    }
+  };
+  useEffect(() => {
+    if (!ready || c === done) return;
+    const t = setTimeout(() => void look(c), 350);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [c, ready]);
+  return (
+    <Button type="button" size="sm" variant="outline" className={cn('h-9 shrink-0 gap-1.5', className)} disabled={!ready || busy} onClick={() => void look(c)}
+      title="Fill the incorporation date from the CIN" data-slot="cin-fetch">
+      {busy ? <Loader2 className="size-3.5 animate-spin" /> : <ShieldCheck className="size-3.5" />} Fetch
     </Button>
   );
 }

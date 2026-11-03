@@ -335,7 +335,7 @@ function PayInner() {
                 <p className="mt-0.5 font-medium">{vendor.displayName}</p>
                 {vendor.gstin && <p className="mt-1 font-mono text-[10px] text-muted-foreground">{vendor.gstin}</p>}
                 {vendor.tdsSection && (
-                  <Badge variant="secondary" className="mt-2 text-[10px]">TDS {vendor.tdsSection} already withheld on bills</Badge>
+                  <Badge variant="secondary" className="mt-2 text-[10px]">TDS {(vendor.tdsSections?.length ? vendor.tdsSections : [vendor.tdsSection]).join(', ')} already withheld on bills</Badge>
                 )}
               </div>
             )}

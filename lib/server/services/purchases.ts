@@ -27,7 +27,7 @@ import { sql } from 'kysely';
 import type { Trx } from '../db';
 import type { Paise, SupplyType } from '../../types';
 import { computeLineTax, hsnRateOn, sumTax, totalTaxPaise } from '../../tax/gst';
-import { computeTds } from '../../tax/tds';
+import { computeTds, parseSections } from '../../tax/tds';
 import { hsnRateHistory, tdsRateOn } from '../tax/rates';
 import { certificateRate } from '../tax/tds-certificates';
 import { checkCashPayment } from './guards';
@@ -238,7 +238,7 @@ export async function createBill(
   const tax = sumTax(computed.map((c) => c.tax));
   const subtotal = tax.taxablePaise;
 
-  const sectionCode = input.tdsSectionOverride ?? vendor.tds_section ?? undefined;
+  const sectionCode = input.tdsSectionOverride ?? parseSections(vendor.tds_section)[0] ?? undefined;
   // A lower-deduction certificate covering this bill sets the rate, while its
   // amount lasts.
   const lower = await certificateRate(trx, orgId, input.vendorId, sectionCode, input.date, subtotal);

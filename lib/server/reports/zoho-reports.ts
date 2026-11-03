@@ -164,7 +164,7 @@ export async function partyRegister(ex: Executor, orgId: number, side: 'customer
           FROM credit_notes n JOIN contacts c ON c.id = n.customer_id
          WHERE n.org_id = ${orgId} AND n.status <> 'void' AND n.note_date BETWEEN ${w.from} AND ${w.to}
         UNION ALL
-        SELECT 'Retainer', r.id, r.number, r.retainer_date, NULL, c.display_name, r.customer_id, r.status, r.amount, r.amount - r.amount_paid
+        SELECT 'Service invoice', r.id, r.number, r.retainer_date, NULL, c.display_name, r.customer_id, r.status, r.amount, r.amount - r.amount_paid
           FROM retainer_invoices r JOIN contacts c ON c.id = r.customer_id
          WHERE r.org_id = ${orgId} AND r.status NOT IN ('draft', 'void') AND r.retainer_date BETWEEN ${w.from} AND ${w.to}
          ORDER BY dt DESC, number DESC`

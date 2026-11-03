@@ -12,6 +12,7 @@ import { useParams, useRouter } from 'next/navigation';
 import { Mail, Phone, Plus } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { MergeContactButton } from '@/components/shared/merge-contact';
+import { RegistrationDetails } from '@/components/shared/registration-details';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -122,6 +123,7 @@ export default function VendorDetailPage() {
                     <p className="mt-0.5 font-mono text-xs">{c.pan}</p>
                   </div>
                 )}
+                <RegistrationDetails c={c} />
                 {c.bankAccountNo && (
                   <div className="border-t pt-3 text-sm">
                     <p className="text-xs text-muted-foreground">Bank</p>
@@ -130,7 +132,7 @@ export default function VendorDetailPage() {
                 )}
                 <div className="flex flex-wrap gap-1.5 border-t pt-3">
                   {c.isMsme && <Badge variant="outline" className="border-amber-500/40 text-[11px] text-amber-700 dark:text-amber-300">MSME · pay within {c.msmeAgreementDays ?? 45} days</Badge>}
-                  {c.tdsApplicable && c.tdsSection && <Badge variant="secondary" className="text-[11px]">TDS under {c.tdsSection}</Badge>}
+                  {c.tdsApplicable && c.tdsSection && <Badge variant="secondary" className="text-[11px]" data-slot="tds-sections">TDS under {(c.tdsSections?.length ? c.tdsSections : [c.tdsSection]).join(', ')}</Badge>}
                 </div>
               </Card>
 

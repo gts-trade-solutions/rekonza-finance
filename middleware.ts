@@ -16,6 +16,9 @@ export async function middleware(req: NextRequest) {
   if (req.method === 'POST' && pathname === '/api/ai/chat') return NextResponse.next();
   if (req.method === 'GET' && /^\/api\/ai\/conversations\/demo-[\w-]+$/.test(pathname)) return NextResponse.next();
   if (pathname === '/api/ai/reports/download' && (req.method === 'GET' || req.method === 'POST')) return NextResponse.next();
+  // Typing a GSTIN or CIN fills what the number itself says (state, PAN, kind,
+  // year of incorporation): the routes answer that on the demo, without a book.
+  if (req.method === 'GET' && (pathname === '/api/gst/portal/gstin' || pathname === '/api/company-lookup')) return NextResponse.next();
 
   if (req.method === 'GET' || req.method === 'HEAD') {
     const file = pickRecording(recording.routes[pathname], snapshotQuery(searchParams));

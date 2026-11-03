@@ -44,7 +44,8 @@ import { GST_RATES, isValidGstin, stateName } from '@/lib/tax/gst';
 import { TDS_SECTIONS } from '@/lib/tax/tds';
 import type { Contact, GstTreatment, Item, TaxPref } from '@/lib/types';
 import { cn } from '@/lib/utils';
-import { GstinLookupButton, gstinTreatment } from '@/components/gst/gstn-portal';
+import { GstinLookupButton, gstinTreatment, type GstinDetails } from '@/components/gst/gstn-portal';
+import { MultiCombobox } from '@/components/ui/multi-combobox';
 
 const TREATMENTS = [
   { value: 'registered', label: 'Registered business (regular)' },
@@ -103,7 +104,9 @@ export function QuickContactDialog({
   const [terms, setTerms] = useState('net_30');
   const [isMsme, setIsMsme] = useState(false);
   const [udyam, setUdyam] = useState('');
-  const [tdsSection, setTdsSection] = useState('');
+  const [tdsSections, setTdsSections] = useState<string[]>([]);
+  // What the GSTIN lookup found: saved with the contact (legal name, PAN, address, registration).
+  const [found, setFound] = useState<GstinDetails | null>(null);
 
   const create = useApiAction(contactsApi.create);
 
@@ -120,7 +123,8 @@ export function QuickContactDialog({
     setTerms('net_30');
     setIsMsme(false);
     setUdyam('');
-    setTdsSection('');
+    setTdsSections([]);
+    setFound(null);
   }, [open, initialName, homeState]);
 
   const needsGstin = NEEDS_GSTIN.has(treatment);
@@ -157,7 +161,12 @@ export function QuickContactDialog({
       paymentTerms: terms || null,
       isMsme: kind === 'vendor' ? isMsme : false,
       msmeUdyamNo: kind === 'vendor' && isMsme ? udyam.trim() || null : null,
-      tdsSection: kind === 'vendor' ? tdsSection || null : null,
+      tdsSections: kind === 'vendor' ? tdsSections : [],
+      ...(found && needsGstin && found.gstin === gstin.toUpperCase() ? {
+        legalName: found.legalName, pan: found.pan, constitution: found.constitution, gstStatus: found.status,
+        gstRegisteredOn: found.registeredOn ?? '',
+        billingAddress: found.address?.line ? [found.address.line, found.address.city, found.address.pincode].filter(Boolean).join(', ') : null,
+      } : { pan: needsGstin && gstin.length === 15 ? gstin.toUpperCase().slice(2, 12) : null }),
     });
     if (!created) {
       toast.error(create.error ?? `Could not create that ${noun}`);
@@ -183,7 +192,8 @@ export function QuickContactDialog({
       creditLimit: null,
       isMsme: kind === 'vendor' ? isMsme : false,
       udyamNo: kind === 'vendor' && isMsme ? udyam.trim() : undefined,
-      tdsSection: kind === 'vendor' ? tdsSection || undefined : undefined,
+      tdsSection: kind === 'vendor' ? tdsSections[0] : undefined,
+      tdsSections: kind === 'vendor' ? tdsSections : [],
       openingBalance: 0,
       isArchived: false,
     };
@@ -251,9 +261,10 @@ export function QuickContactDialog({
                       <BadgeCheck className="absolute right-2 top-1/2 size-4 -translate-y-1/2 text-success" />
                     )}
                   </div>
-                  <GstinLookupButton gstin={gstin} onFound={(d) => {
+                  <GstinLookupButton compact gstin={gstin} onFound={(d) => {
+                    setFound(d);
                     if (!name.trim()) setName(d.tradeName || d.legalName || '');
-                    setTreatment(gstinTreatment(d) as GstTreatment);
+                    if (d.fromPortal) setTreatment(gstinTreatment(d) as GstTreatment);
                     if (d.address?.stateCode) setStateCode(d.address.stateCode);
                   }} />
                 </div>
@@ -341,20 +352,18 @@ export function QuickContactDialog({
                 </Field>
               )}
 
-              <Field label="TDS section" hint="Leave blank if no tax is deducted at source">
-                <Combobox
-                  options={[
-                    { value: '', label: 'No TDS' },
-                    ...TDS_SECTIONS.map((t) => ({
-                      value: t.code,
-                      label: `${t.code} — ${t.description}`,
-                      sublabel: `${t.ratePctWithPan}% with PAN`,
-                    })),
-                  ]}
-                  value={tdsSection}
-                  onChange={setTdsSection}
-                  showAvatar={false}
+              <Field label="TDS sections" hint="Every section they are paid under; leave empty if no tax is deducted at source">
+                <MultiCombobox
+                  options={TDS_SECTIONS.map((t) => ({
+                    value: t.code,
+                    label: `${t.code} — ${t.description}`,
+                    sublabel: `${t.ratePctWithPan}% with PAN`,
+                  }))}
+                  value={tdsSections}
+                  onChange={setTdsSections}
+                  placeholder="No TDS"
                   searchPlaceholder="Search sections"
+                  firstLabel="default"
                 />
               </Field>
             </>

@@ -24,7 +24,8 @@ import { Money } from '@/components/shared/money';
 import { EmptyState } from '@/components/shared/empty-state';
 import { AsyncPage } from '@/components/shared/async-state';
 import { Field } from '@/components/shared/form-bits';
-import { GstinLookupButton, gstinTreatment } from '@/components/gst/gstn-portal';
+import { CinLookupButton, GstinLookupButton, gstinTreatment } from '@/components/gst/gstn-portal';
+import { MultiCombobox } from '@/components/ui/multi-combobox';
 import { Combobox } from '@/components/ui/combobox';
 import { contacts, type ContactRow } from '@/lib/api/client';
 import { useApi, useApiAction } from '@/lib/api/use-api';
@@ -84,7 +85,7 @@ const columns: Column<ContactRow>[] = [
     sortValue: (r) => r.tdsSection ?? '',
     cell: (r) =>
       r.tdsSection ? (
-        <Badge variant="secondary" className="text-[10px]">{r.tdsSection}</Badge>
+        <Badge variant="secondary" className="text-[10px]">{(r.tdsSections?.length ? r.tdsSections : [r.tdsSection]).join(', ')}</Badge>
       ) : (
         <span className="text-xs text-muted-foreground">—</span>
       ),
@@ -108,8 +109,10 @@ const columns: Column<ContactRow>[] = [
  */
 const BLANK = {
   name: '', gstin: '', pan: '', stateCode: '', treatment: 'registered',
-  tdsSection: '', isMsme: false, udyam: '', terms: 'net_30',
+  tdsSections: [] as string[], isMsme: false, udyam: '', terms: 'net_30',
   msmeCategory: '', msmeActivity: '', agreementDays: '',
+  // The registration, filled from the GSTIN and the CIN, or typed.
+  legalName: '', address: '', constitution: '', gstStatus: '', gstRegisteredOn: '', cin: '', incorporatedOn: '',
 };
 
 export default function VendorsPage() {
@@ -134,6 +137,13 @@ export default function VendorsPage() {
       displayName: f.name.trim(),
       gstin: f.gstin || null,
       pan: f.pan || null,
+      legalName: f.legalName || null,
+      billingAddress: f.address || null,
+      constitution: f.constitution || null,
+      gstStatus: f.gstStatus || null,
+      gstRegisteredOn: f.gstRegisteredOn || null,
+      cin: f.cin || null,
+      incorporatedOn: f.incorporatedOn || null,
       gstTreatment: f.treatment,
       stateCode: f.stateCode,
       paymentTerms: f.terms,
@@ -142,7 +152,7 @@ export default function VendorsPage() {
       msmeCategory: f.isMsme && f.msmeCategory ? f.msmeCategory : null,
       msmeActivity: f.isMsme && f.msmeActivity ? f.msmeActivity : null,
       msmeAgreementDays: f.isMsme && f.agreementDays ? Number(f.agreementDays) : null,
-      tdsSection: f.tdsSection || null,
+      tdsSections: f.tdsSections,
     });
     if (!result) return;
     toast.success(`${result.displayName} added`);
@@ -171,7 +181,7 @@ export default function VendorsPage() {
               <DialogTrigger asChild>
                 <Button size="sm" className="gap-1.5"><Plus className="size-4" /> New vendor</Button>
               </DialogTrigger>
-              <DialogContent className="max-w-lg">
+              <DialogContent className="sm:max-w-2xl">
                 <DialogHeader><DialogTitle>New vendor</DialogTitle></DialogHeader>
                 <div className="grid gap-4 sm:grid-cols-2">
                   <Field label="Vendor name" required error={create.fieldErrors.displayName} className="sm:col-span-2">
@@ -192,9 +202,14 @@ export default function VendorsPage() {
                       <GstinLookupButton gstin={f.gstin} onFound={(d) => setF({
                         ...f,
                         name: f.name.trim() ? f.name : d.tradeName || d.legalName || '',
-                        pan: f.gstin.slice(2, 12),
+                        legalName: d.legalName ?? f.legalName,
+                        pan: d.pan,
                         stateCode: d.address?.stateCode ?? f.stateCode,
-                        treatment: gstinTreatment(d),
+                        address: d.address?.line ? [d.address.line, d.address.city, d.address.pincode].filter(Boolean).join(', ') : f.address,
+                        constitution: d.constitution ?? f.constitution,
+                        gstStatus: d.status ?? f.gstStatus,
+                        gstRegisteredOn: d.registeredOn ?? f.gstRegisteredOn,
+                        treatment: d.fromPortal ? gstinTreatment(d) : f.treatment,
                       })} />
                     </div>
                   </Field>
@@ -230,23 +245,42 @@ export default function VendorsPage() {
                       showAvatar={false}
                     />
                   </Field>
+                  {f.legalName && <p className="-mt-2 text-xs text-muted-foreground sm:col-span-2">Registered as {f.legalName}{f.gstStatus ? ` · ${f.gstStatus}` : ''}</p>}
+                  <Field label="Kind of business">
+                    <Input value={f.constitution} onChange={(e) => setF({ ...f, constitution: e.target.value })} placeholder="Company, partnership…" />
+                  </Field>
+                  <Field label="GST registered on">
+                    <Input type="date" value={f.gstRegisteredOn} onChange={(e) => setF({ ...f, gstRegisteredOn: e.target.value })} />
+                  </Field>
+                  <Field label="CIN (companies and LLPs)">
+                    <div className="flex gap-2">
+                      <Input value={f.cin} onChange={(e) => setF({ ...f, cin: e.target.value.toUpperCase() })} maxLength={21} className="font-mono" placeholder="U74999TN2015PTC123456" />
+                      <CinLookupButton cin={f.cin} onFound={(d) => setF({
+                        ...f,
+                        incorporatedOn: d.incorporatedOn ?? f.incorporatedOn,
+                        constitution: f.constitution || d.kind || '',
+                      })} />
+                    </div>
+                  </Field>
+                  <Field label="Incorporated on">
+                    <Input type="date" value={f.incorporatedOn} onChange={(e) => setF({ ...f, incorporatedOn: e.target.value })} />
+                  </Field>
                   <Field
-                    label="Default TDS section"
-                    hint="Applied automatically once thresholds are crossed"
+                    label="TDS sections"
+                    hint="Every section they are paid under; the first is the default a new bill takes. Applied once thresholds are crossed."
                     className="sm:col-span-2"
                   >
-                    <Combobox
+                    <MultiCombobox
                       options={TDS_SECTIONS.map((t) => ({
                         value: t.code,
                         label: `${t.code} — ${t.description}`,
                         sublabel: `${t.ratePctWithPan}% with PAN`,
                       }))}
-                      value={f.tdsSection}
-                      onChange={(v) => setF({ ...f, tdsSection: v })}
+                      value={f.tdsSections}
+                      onChange={(v) => setF({ ...f, tdsSections: v })}
                       placeholder="No TDS"
                       searchPlaceholder="Search sections"
-                      showAvatar={false}
-                      clearable
+                      firstLabel="default"
                     />
                   </Field>
                   <div className="flex items-start justify-between gap-3 rounded-md border p-3 sm:col-span-2">

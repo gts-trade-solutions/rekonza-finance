@@ -246,6 +246,27 @@ test('TDS is withheld from the vendor and becomes a liability', async () => {
   });
 });
 
+test('a vendor paid under several sections: a bill takes the first unless told otherwise', async () => {
+  await withFixture(async ({ trx, orgId, branchId, vendorId }) => {
+    await trx.updateTable('contacts').set({ tds_applicable: 1, tds_section: '194J,194C' }).where('id', '=', vendorId).execute();
+    const fees = await createBill(trx, orgId, null, {
+      branchId, vendorId, vendorInvoiceNo: 'MULTI-001', date: '2026-08-07', dueDate: '2026-09-06',
+      lines: [{ description: 'Audit fee', qty: 1, ratePaise: 60_000_00, gstRatePct: 18 }],
+    });
+    const row = await trx.selectFrom('bills').select('tds_section').where('id', '=', fees.id).executeTakeFirstOrThrow();
+    assert.equal(row.tds_section, '194J', 'the first of the vendor’s sections');
+    assert.equal((await entryByCode(trx, fees.journalEntryId!))[CODE.TDS_PAYABLE]?.cr, 6_000_00);
+
+    const job = await createBill(trx, orgId, null, {
+      branchId, vendorId, vendorInvoiceNo: 'MULTI-002', date: '2026-08-08', dueDate: '2026-09-07',
+      tdsSectionOverride: '194C',
+      lines: [{ description: 'Fabrication job work', qty: 1, ratePaise: 40_000_00, gstRatePct: 18 }],
+    });
+    const jobRow = await trx.selectFrom('bills').select('tds_section').where('id', '=', job.id).executeTakeFirstOrThrow();
+    assert.equal(jobRow.tds_section, '194C', 'the other section when the bill names it');
+  });
+});
+
 test('a bill below the section threshold deducts nothing', async () => {
   await withFixture(async ({ trx, orgId, branchId, vendorId }) => {
     // 194J starts above 50,000 for the year. Deducting on a 5,000 bill would

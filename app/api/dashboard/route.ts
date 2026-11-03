@@ -38,7 +38,7 @@ async function dashboard(orgId: number, q: z.infer<typeof Q>) {
 
     const [
       perf, perfPrev, margin, mix, bvc, series,
-      debtors, creditors, arAgeing, pl, tb, cash, msme, irn, wc, customers,
+      debtors, creditors, arAgeing, pl, tb, cash, msme, irn, wc, customers, plPeriod,
     ] = await Promise.all([
       salesPerformance(db, orgId, win),
       salesPerformance(db, orgId, prev),
@@ -56,6 +56,8 @@ async function dashboard(orgId: number, q: z.infer<typeof Q>) {
       einvoicePending(db, orgId),
       workingCapitalDays(db, orgId, q.to),
       topCustomers(db, orgId, win),
+      // The period's own profit and loss, for the net margin beside the gross.
+      profitAndLoss(db, orgId, q.from, q.to),
     ]);
 
     // Receivables and payables straight off the control accounts, so the tiles
@@ -67,7 +69,7 @@ async function dashboard(orgId: number, q: z.infer<typeof Q>) {
       .selectFrom('invoices')
       .innerJoin('contacts', 'contacts.id', 'invoices.customer_id')
       .select([
-        'invoices.id', 'invoices.number', 'invoices.invoice_date', 'invoices.status',
+        'invoices.id', 'invoices.number', 'invoices.invoice_date', 'invoices.due_date', 'invoices.status',
         'invoices.total', 'invoices.amount_paid', 'contacts.display_name as customer_name',
       ])
       .where('invoices.org_id', '=', orgId)
@@ -88,6 +90,14 @@ async function dashboard(orgId: number, q: z.infer<typeof Q>) {
       sales: perf,
       salesPrevious: perfPrev,
       margin,
+      // Net margin: what is left of every rupee of income after every expense,
+      // for the period chosen, and for the year so far.
+      netMargin: {
+        income: plPeriod.totalIncome,
+        netProfit: plPeriod.netProfit,
+        pct: plPeriod.totalIncome > 0 ? (plPeriod.netProfit / plPeriod.totalIncome) * 100 : null,
+        ytdPct: pl.totalIncome > 0 ? (pl.netProfit / pl.totalIncome) * 100 : null,
+      },
       goodsVsServices: mix,
       billedVsCollected: bvc,
       monthlySeries: series,
@@ -130,6 +140,7 @@ async function dashboard(orgId: number, q: z.infer<typeof Q>) {
         id: asId(r.id),
         number: r.number,
         date: r.invoice_date,
+        dueDate: r.due_date,
         status: r.status,
         customerName: r.customer_name,
         balancePaise: toPaiseFromSql(r.total) - toPaiseFromSql(r.amount_paid),

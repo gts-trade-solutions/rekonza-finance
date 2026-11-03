@@ -30,6 +30,21 @@ export function tdsSection(code: string): TdsSection | undefined {
 }
 
 /**
+ * A contact's TDS sections, kept as "194C,194J": a customer may deduct under,
+ * or a vendor be paid under, more than one. The first is the default a new
+ * bill takes.
+ */
+export function parseSections(stored: string | null | undefined): string[] {
+  return [...new Set((stored ?? '').split(',').map((s) => s.trim().toUpperCase()).filter(Boolean))];
+}
+
+/** The list as it is stored; none is null. */
+export function joinSections(list: readonly string[] | null | undefined): string | null {
+  const clean = parseSections((list ?? []).join(','));
+  return clean.length ? clean.join(',').slice(0, 100) : null;
+}
+
+/**
  * An individual or HUF, from the fourth letter of the PAN: P for a person, H
  * for a Hindu undivided family. Contractors are deducted at the lower rate.
  */

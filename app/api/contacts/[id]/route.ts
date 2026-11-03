@@ -4,6 +4,7 @@ import { route, idParam, asId, notFound, forbidden } from '@/lib/server/http';
 import { hasPermission } from '@/lib/rbac';
 import { toPaiseFromSql } from '@/lib/server/money-sql';
 import { bankNumberFor } from '@/lib/server/bank-mask';
+import { parseSections } from '@/lib/tax/tds';
 import { vendorFyTaxable } from '@/lib/server/services/purchases';
 
 /**
@@ -143,7 +144,15 @@ export const GET = route(
         priceListId: c.price_list_id ? String(c.price_list_id) : null,
         bankName: c.bank_name,
         tdsApplicable: !!c.tds_applicable,
-        tdsSection: c.tds_section,
+        tdsSection: parseSections(c.tds_section)[0] ?? null,
+        tdsSections: parseSections(c.tds_section),
+        constitution: c.constitution,
+        gstStatus: c.gst_status,
+        gstRegisteredOn: c.gst_registered_on ? String(c.gst_registered_on).slice(0, 10) : null,
+        cin: c.cin,
+        incorporatedOn: c.incorporated_on ? String(c.incorporated_on).slice(0, 10) : null,
+        country: c.country,
+        supplies: c.supplies,
         billingAddress: c.billing_address,
         shippingAddress: c.shipping_address,
         notes: c.notes,

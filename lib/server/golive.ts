@@ -16,6 +16,7 @@ import path from 'node:path';
 import { sql } from 'kysely';
 import { db, ping } from './db';
 import { mailStatus } from './mail/mailer';
+import { lookupServices } from './integrations/party-lookup';
 
 export type CheckStatus = 'ok' | 'warn' | 'fail' | 'manual';
 export interface GoLiveCheck { id: string; group: 'required' | 'connections' | 'data'; label: string; status: CheckStatus; detail: string; fix?: string }
@@ -146,6 +147,17 @@ export async function goLiveChecks(): Promise<GoLiveCheck[]> {
     id: 'einvoice', group: 'connections', label: 'E-invoicing (IRN)', status: nic ? 'ok' : 'warn',
     detail: nic ? 'Registered with the NIC e-invoice system.' : 'No NIC credentials: IRNs come from a stand-in and are not valid on real invoices.',
     fix: 'Register for API access on the NIC e-invoice portal (or through the GSP) and set the NIC_EINV_* settings. Needed only above the e-invoicing turnover limit.',
+  });
+  const lookups = lookupServices();
+  add({
+    id: 'gstin-lookup', group: 'connections', label: 'GSTIN details (name, address, registration date)', status: gsp || lookups.gstin ? 'ok' : 'warn',
+    detail: gsp ? 'Fetched from the GST system through the GSP.' : lookups.gstin ? 'Fetched from the GSTIN lookup service.' : 'Typing a GSTIN fills the state, PAN and kind of business only: the name, address and registration date need a source.',
+    fix: 'Set GSTIN_LOOKUP_URL (and GSTIN_LOOKUP_KEY) to a GSTIN lookup service such as ClearTax, Masters India, Vayana or Signzy; the GSP does it too.',
+  });
+  add({
+    id: 'company-lookup', group: 'connections', label: 'Company incorporation date (MCA)', status: lookups.company ? 'ok' : 'warn',
+    detail: lookups.company ? 'Fetched from the company lookup service by CIN.' : 'Typing a CIN fills the year of incorporation only; the exact date is typed from the certificate.',
+    fix: 'Set COMPANY_LOOKUP_URL (and COMPANY_LOOKUP_KEY) to a company (MCA) lookup service such as Decentro.',
   });
   add({
     id: 'ai', group: 'connections', label: 'AI assistant', status: set('OPENAI_API_KEY') ? 'ok' : 'warn',

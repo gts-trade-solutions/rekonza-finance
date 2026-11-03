@@ -26,7 +26,10 @@ import { useApi } from '@/lib/api/use-api';
 import { useAppStore } from '@/lib/store';
 import { stateOptions } from '@/lib/options';
 import { TDS_SECTIONS } from '@/lib/tax/tds';
-import { GstinLookupButton, gstinTreatment } from '@/components/gst/gstn-portal';
+import { CinLookupButton, GstinLookupButton, gstinTreatment } from '@/components/gst/gstn-portal';
+import { MultiCombobox } from '@/components/ui/multi-combobox';
+import { SupplyKindPicker } from '@/components/forms/supply-kind-picker';
+import { countryCurrency, countryOptions } from '@/lib/countries';
 
 type Editable = Omit<ContactRow, 'receivablePaise' | 'payablePaise' | 'invoiceCount' | 'billCount'>;
 
@@ -83,7 +86,12 @@ export function ContactEditDialog({ contact, onClose, onSaved }: {
         msmeCategory: isVendor && f.isMsme ? f.msmeCategory : null,
         msmeActivity: isVendor && f.isMsme ? f.msmeActivity : null,
         msmeAgreementDays: isVendor && f.isMsme ? f.msmeAgreementDays : null,
-        tdsSection: isVendor ? n(f.tdsSection) : undefined,
+        // Customers deduct under them, vendors are paid under them; every one, the first the default.
+        tdsSections: f.tdsSections ?? (f.tdsSection ? [f.tdsSection] : []),
+        constitution: n(f.constitution ?? null), gstStatus: n(f.gstStatus ?? null), gstRegisteredOn: f.gstRegisteredOn || '',
+        cin: n(f.cin ?? null) ?? '', incorporatedOn: f.incorporatedOn || '',
+        country: f.gstTreatment === 'overseas' ? f.country || null : null,
+        ...(f.kind !== 'vendor' ? { supplies: f.supplies ?? 'both' } : {}),
         billingAddress: n(f.billingAddress), shippingAddress: n(f.shippingAddress),
         bankAccountName: n(f.bankAccountName), bankAccountNo: n(f.bankAccountNo) ?? '', bankIfsc: n(f.bankIfsc) ?? '',
         bankName: n(f.bankName), notes: n(f.notes), currency: (f.currency || 'INR').toUpperCase(),
@@ -112,25 +120,54 @@ export function ContactEditDialog({ contact, onClose, onSaved }: {
             <Field label="Display name" required error={errors.displayName}><Input value={f.displayName} onChange={(e) => set('displayName', e.target.value)} /></Field>
             <Field label="Legal name"><Input value={s(f.legalName)} onChange={(e) => set('legalName', e.target.value)} /></Field>
             <Field label="GST treatment">
-              <Combobox options={TREATMENTS} value={f.gstTreatment} onChange={(v) => set('gstTreatment', v)} showAvatar={false} />
+              <Combobox options={TREATMENTS} value={f.gstTreatment}
+                onChange={(v) => setF({ ...f, gstTreatment: v as Editable['gstTreatment'], ...(v === 'overseas' ? { stateCode: '96', gstin: null } : {}) })}
+                showAvatar={false} />
             </Field>
+            {f.gstTreatment === 'overseas' && (
+              <Field label="Country" error={errors.country}>
+                <Combobox options={countryOptions()} value={f.country ?? ''} placeholder="Select the country" searchPlaceholder="Search countries" showAvatar={false}
+                  onChange={(v) => setF({ ...f, country: v, currency: !f.currency || f.currency === 'INR' ? countryCurrency(v) : f.currency })} />
+              </Field>
+            )}
+            {f.kind !== 'vendor' && (
+              <Field label="They buy" hint="Their documents offer only these items" className="sm:col-span-2">
+                <SupplyKindPicker value={f.supplies ?? 'both'} onChange={(v) => set('supplies', v)} />
+              </Field>
+            )}
             <Field label="State" error={errors.stateCode}>
               <Combobox options={stateOptions()} value={f.stateCode} onChange={(v) => set('stateCode', v)} showAvatar={false} />
             </Field>
             <Field label="GSTIN" error={errors.gstin}>
               <div className="flex gap-2">
                 <Input value={s(f.gstin)} onChange={(e) => set('gstin', e.target.value.toUpperCase())} className="font-mono" maxLength={15} />
-                <GstinLookupButton gstin={s(f.gstin)} onFound={(d) => setF({
+                <GstinLookupButton gstin={s(f.gstin)} auto={s(f.gstin) !== s(contact?.gstin ?? null)} onFound={(d) => setF({
                   ...f,
                   legalName: d.legalName ?? f.legalName,
-                  gstTreatment: gstinTreatment(d) as Editable['gstTreatment'],
+                  gstTreatment: d.fromPortal ? gstinTreatment(d) as Editable['gstTreatment'] : f.gstTreatment,
                   stateCode: d.address?.stateCode ?? f.stateCode,
-                  pan: s(f.gstin).slice(2, 12),
+                  pan: d.pan,
+                  constitution: d.constitution ?? f.constitution,
+                  gstStatus: d.status ?? f.gstStatus,
+                  gstRegisteredOn: d.registeredOn ?? f.gstRegisteredOn,
                   billingAddress: d.address?.line ? [d.address.line, d.address.city, d.address.pincode].filter(Boolean).join(', ') : f.billingAddress,
                 })} />
               </div>
             </Field>
             <Field label="PAN" error={errors.pan}><Input value={s(f.pan)} onChange={(e) => set('pan', e.target.value.toUpperCase())} className="font-mono" maxLength={10} /></Field>
+            <Field label="Kind of business"><Input value={s(f.constitution ?? null)} onChange={(e) => set('constitution', e.target.value)} placeholder="Company, partnership…" /></Field>
+            <Field label="GST registered on" error={errors.gstRegisteredOn} hint={f.gstStatus ? `Registration is ${f.gstStatus}` : undefined}>
+              <Input type="date" value={f.gstRegisteredOn ?? ''} onChange={(e) => set('gstRegisteredOn', e.target.value)} />
+            </Field>
+            <Field label="CIN (companies and LLPs)" error={errors.cin}>
+              <div className="flex gap-2">
+                <Input value={s(f.cin ?? null)} onChange={(e) => set('cin', e.target.value.toUpperCase())} className="font-mono" maxLength={21} placeholder="U74999TN2015PTC123456" />
+                <CinLookupButton cin={s(f.cin ?? null)} onFound={(d) => setF({ ...f, incorporatedOn: d.incorporatedOn ?? f.incorporatedOn, constitution: f.constitution || d.kind })} />
+              </div>
+            </Field>
+            <Field label="Incorporated on" error={errors.incorporatedOn}>
+              <Input type="date" value={f.incorporatedOn ?? ''} onChange={(e) => set('incorporatedOn', e.target.value)} />
+            </Field>
             <Field label="Email" error={errors.email}><Input value={s(f.email)} onChange={(e) => set('email', e.target.value)} /></Field>
             <Field label="Phone"><Input value={s(f.phone)} onChange={(e) => set('phone', e.target.value)} /></Field>
             <Field label="Payment terms">
@@ -157,14 +194,15 @@ export function ContactEditDialog({ contact, onClose, onSaved }: {
               <input type="checkbox" className="mt-1" checked={f.billWise !== false} onChange={(e) => set('billWise', e.target.checked)} />
               <span>Bill-wise<span className="block text-xs text-muted-foreground">Payments are matched to the invoices or bills they pay. Off, a payment settles the oldest first and the account is followed as a running balance.</span></span>
             </label>
-            {isVendor && (
-              <Field label="Default TDS section">
-                <Combobox
-                  options={TDS_SECTIONS.map((t) => ({ value: t.code, label: `${t.code} — ${t.description}` }))}
-                  value={s(f.tdsSection)} onChange={(v) => set('tdsSection', v)} showAvatar={false} clearable placeholder="No TDS"
-                />
-              </Field>
-            )}
+            <Field label={isVendor ? 'TDS sections' : 'TDS sections they deduct under'} className="sm:col-span-2"
+              hint={isVendor ? 'Every section they are paid under; the first is the default a new bill takes.' : 'Every section this customer deducts under; tracked as TDS Receivable.'}>
+              <MultiCombobox
+                options={TDS_SECTIONS.map((t) => ({ value: t.code, label: `${t.code} — ${t.description}` }))}
+                value={f.tdsSections ?? (f.tdsSection ? [f.tdsSection] : [])}
+                onChange={(v) => setF({ ...f, tdsSections: v, tdsSection: v[0] ?? null })}
+                placeholder="No TDS" searchPlaceholder="Search sections" firstLabel={isVendor ? 'default' : undefined}
+              />
+            </Field>
           </section>
 
           {isVendor && (

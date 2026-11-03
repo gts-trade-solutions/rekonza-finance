@@ -115,7 +115,11 @@ function withRoundOff(totals: { label: string; paise: number }[], total: number)
 const ORIGINAL = ['Original'];
 
 /** A document as it prints. Throws not found for one outside the organisation. */
-export async function printableDocument(ex: Executor, orgId: number, kind: PrintKind, id: number): Promise<PrintDoc> {
+export async function printableDocument(
+  ex: Executor, orgId: number, kind: PrintKind, id: number,
+  /** A sales order printed as its proforma invoice (services/order-stages.ts). */
+  opts: { proforma?: boolean } = {},
+): Promise<PrintDoc> {
   const missing = () => notFound('That document does not exist.');
   switch (kind) {
     case 'estimate': {
@@ -131,7 +135,12 @@ export async function printableDocument(ex: Executor, orgId: number, kind: Print
         kind, id: asId(d.id), number: d.number, title: 'Quotation', endorsement: null, date, status: d.status,
         tag: d.status === 'draft' ? 'Draft' : null, copies: ORIGINAL, seller, party, partyId: asId(d.customer_id), shipTo,
         placeOfSupply: d.place_of_supply, taxColumns: cols,
-        facts: [{ label: 'Quote no.', value: d.number }, { label: 'Quote date', value: day(date) }, { label: 'Valid until', value: day(d.expiry_date) }],
+        facts: [
+          { label: 'Quote no.', value: d.number }, { label: 'Quote date', value: day(date) }, { label: 'Valid until', value: day(d.expiry_date) },
+          // The same discount on every line is an offer on the whole quote: said so at the top.
+          ...(lines.length && Number(lines[0].discount_pct) > 0 && lines.every((l) => Number(l.discount_pct) === Number(lines[0].discount_pct))
+            ? [{ label: 'Special offer', value: `${Number(lines[0].discount_pct)}% off` }] : []),
+        ],
         lines: lines.map(taxedLine),
         totals: withRoundOff(taxTotals(cols, p(d.subtotal), { cgst: p(d.cgst), sgst: p(d.sgst), igst: p(d.igst), cess: p(d.cess) }), p(d.total)),
         totalLabel: 'Total', totalPaise: p(d.total), after: [], allocations: null, notes: d.notes, terms: null,
@@ -146,6 +155,25 @@ export async function printableDocument(ex: Executor, orgId: number, kind: Print
       const { seller, registration } = await sellerOf(ex, orgId, d.branch_id, date);
       const { party, shipTo } = await partyOf(ex, orgId, d.customer_id, 'Bill to');
       const cols = taxColumns(registration, d.supply_type, p(d.igst));
+      // The proforma: the order priced for the customer to pay against or approve. Not a tax invoice.
+      if (opts.proforma) {
+        if (!d.proforma_number) throw notFound('This order has no proforma invoice yet: raise one first.');
+        const piDate = iso(d.proforma_date) ?? date;
+        return {
+          kind, id: asId(d.id), number: d.proforma_number, title: 'Proforma Invoice',
+          endorsement: 'Not a tax invoice. The tax invoice follows on delivery.', date: piDate, status: d.status,
+          tag: d.status === 'cancelled' ? 'Cancelled' : null, copies: ORIGINAL, seller, party, partyId: asId(d.customer_id), shipTo,
+          placeOfSupply: d.place_of_supply, taxColumns: cols,
+          facts: [
+            { label: 'Proforma no.', value: d.proforma_number }, { label: 'Proforma date', value: day(piDate) },
+            { label: 'Against order', value: d.number },
+            ...(d.expected_ship_date ? [{ label: 'Expected delivery', value: day(d.expected_ship_date) }] : []),
+          ],
+          lines: lines.map(taxedLine),
+          totals: withRoundOff(taxTotals(cols, p(d.subtotal), { cgst: p(d.cgst), sgst: p(d.sgst), igst: p(d.igst), cess: p(d.cess) }), p(d.total)),
+          totalLabel: 'Amount payable', totalPaise: p(d.total), after: [], allocations: null, notes: null, terms: null,
+        };
+      }
       return {
         kind, id: asId(d.id), number: d.number, title: 'Sales Order', endorsement: null, date, status: d.status,
         tag: d.status === 'cancelled' ? 'Cancelled' : null, copies: ORIGINAL, seller, party, partyId: asId(d.customer_id), shipTo,
@@ -174,6 +202,18 @@ export async function printableDocument(ex: Executor, orgId: number, kind: Print
         ? { label: 'Deliver to', name: d.ship_to_name || party.name, address: d.ship_to_address, city: d.ship_to_city, pincode: d.ship_to_pincode, stateCode: d.ship_to_state_code }
         : shipTo && { ...shipTo, label: 'Deliver to' };
       const total = p(d.total);
+      // The order it was delivered against, and the invoice raised from it, printed with it.
+      const order = d.source_so_id
+        ? await ex.selectFrom('sales_orders').select('number').where('id', '=', d.source_so_id).where('org_id', '=', orgId).executeTakeFirst()
+        : undefined;
+      // Raised from it, or the one it was sent with (an order made ready for delivery).
+      const invoiced = await ex.selectFrom('invoices').select('number')
+        .where('org_id', '=', orgId)
+        .where((eb) => eb.or([
+          eb.and([eb('source_doc_type', '=', 'challan'), eb('source_doc_id', '=', d.id)]),
+          ...(d.invoice_id ? [eb('id', '=', d.invoice_id)] : []),
+        ]))
+        .where('status', 'not in', ['void', 'draft']).orderBy('id').execute();
       return {
         kind, id: asId(d.id), number: d.number, title: 'Delivery Challan',
         endorsement: d.challan_type && CHALLAN_PURPOSE[d.challan_type] ? `Purpose: ${CHALLAN_PURPOSE[d.challan_type]}` : null,
@@ -181,7 +221,11 @@ export async function printableDocument(ex: Executor, orgId: number, kind: Print
         // Rule 55(2): original for the consignee, duplicate for the transporter, triplicate for the consigner.
         copies: ['Original for consignee', 'Duplicate for transporter', 'Triplicate for consigner'],
         seller, party, partyId: asId(d.customer_id), shipTo: ship, placeOfSupply: d.place_of_supply, taxColumns: 'none',
-        facts: [{ label: 'Challan no.', value: d.number }, { label: 'Challan date', value: day(date) }],
+        facts: [
+          { label: 'Challan no.', value: d.number }, { label: 'Challan date', value: day(date) },
+          ...(order ? [{ label: 'Sales order', value: order.number }] : []),
+          ...(invoiced.length ? [{ label: invoiced.length > 1 ? 'Invoices' : 'Invoice no.', value: invoiced.map((i) => i.number).join(', ') }] : []),
+        ],
         lines: lines.map((l) => singleLineWith(l.description?.trim() || l.item_name || null, l.hsn_sac, Number(l.qty), l.uqc, p(l.rate), p(l.line_total))),
         totals: [], totalLabel: 'Value of goods', totalPaise: total, after: [], allocations: null, notes: d.notes, terms: null,
       };
@@ -224,11 +268,11 @@ export async function printableDocument(ex: Executor, orgId: number, kind: Print
       const amount = p(d.amount);
       const paid = p(d.amount_paid);
       return {
-        kind, id: asId(d.id), number: d.number, title: 'Retainer Invoice', endorsement: 'An advance, adjusted against the invoices that follow',
+        kind, id: asId(d.id), number: d.number, title: 'Service Invoice', endorsement: 'An advance, adjusted against the invoices that follow',
         date, status: d.status, tag: d.status === 'draft' ? 'Draft' : d.status === 'void' ? 'Cancelled' : null, copies: ORIGINAL,
         seller, party, partyId: asId(d.customer_id), shipTo: null, placeOfSupply: null, taxColumns: 'none',
-        facts: [{ label: 'Retainer no.', value: d.number }, { label: 'Date', value: day(date) }],
-        lines: [singleLine(d.description || 'Retainer', amount)],
+        facts: [{ label: 'Service invoice no.', value: d.number }, { label: 'Date', value: day(date) }],
+        lines: [singleLine(d.description || 'Service', amount)],
         totals: [], totalLabel: 'Total', totalPaise: amount,
         after: [{ label: 'Paid', paise: paid }, { label: 'Balance due', paise: Math.max(amount - paid, 0) }],
         allocations: null, notes: null, terms: null,

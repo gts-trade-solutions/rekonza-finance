@@ -40,7 +40,7 @@ const BY_KIND: Record<string, Record<string, string>> = {
   sales_order: { document: 'sales order', number: 'SO/26-27/0012', detail_line: 'We expect to ship it by 09 Nov 2026.' },
   challan: { document: 'delivery challan', number: 'DC/26-27/0003', detail_line: 'The goods travel with this challan.' },
   credit_note: { document: 'credit note', number: 'CN/26-27/0002', total: '₹1,180.00', detail_line: 'Against invoice INV/26-27/0042 dated 02 Nov 2026 · Damaged in transit.' },
-  retainer: { document: 'retainer invoice', number: 'RET/26-27/0001', total: '₹25,000.00', detail_line: '₹25,000.00 is due.' },
+  retainer: { document: 'service invoice', number: 'RET/26-27/0001', total: '₹25,000.00', detail_line: '₹25,000.00 is due.' },
   payment_receipt: { document: 'payment receipt', number: 'RCPT/26-27/0031', detail_line: 'It has been applied to INV/26-27/0042.' },
   purchase_order: { party: 'Steel Co', document: 'purchase order', number: 'PO/26-27/0009', detail_line: 'Please deliver by 14 Nov 2026.' },
   vendor_credit: { party: 'Steel Co', document: 'vendor credit', number: 'VC/26-27/0001', total: '₹1,000.00', detail_line: 'Against your bill SC-77 dated 08 Oct 2026.' },

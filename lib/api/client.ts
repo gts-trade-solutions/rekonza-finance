@@ -627,7 +627,19 @@ export interface ContactRow {
   /** The price list a customer is charged from. */
   priceListId?: string | null;
   tdsApplicable: boolean;
+  /** The default section; tdsSections has every one, this first. */
   tdsSection: string | null;
+  tdsSections?: string[];
+  /** From the GSTIN and the CIN, or typed: kind of business, GST status and date, company number and incorporation date. */
+  constitution?: string | null;
+  gstStatus?: string | null;
+  gstRegisteredOn?: string | null;
+  cin?: string | null;
+  incorporatedOn?: string | null;
+  /** An international party's country (ISO code). */
+  country?: string | null;
+  /** What a customer buys: goods, services or both. */
+  supplies?: 'goods' | 'service' | 'both';
   billingAddress: string | null;
   shippingAddress: string | null;
   notes: string | null;
@@ -641,6 +653,7 @@ export interface ContactRow {
 export interface ItemRow {
   id: string;
   kind: 'goods' | 'service';
+  origin?: 'local' | 'imported';
   name: string;
   sku: string | null;
   hsnSac: string | null;
@@ -948,6 +961,15 @@ export interface SalesDocRow {
   detail: string | null;
   linkedId: string | null;
   expiry: string | null;
+  /** Challans and orders: the products on it. */
+  items?: { name: string; qty: number; uqc: string | null }[];
+  /** Challans and orders: the invoices raised from it. */
+  invoices?: { id: string; number: string }[];
+  /** A challan: the order it was delivered against. */
+  salesOrder?: { id: string; number: string } | null;
+  /** An order: where it has got to before the invoice. */
+  stage?: 'order' | 'proforma' | 'in_process' | 'ready';
+  proformaNumber?: string | null;
 }
 
 export interface SalesDocListResponse {
@@ -2671,6 +2693,13 @@ export const orderFlow = {
     api.patch<{ invoiceId: string; number: string; heldForApproval: boolean }>('/api/sales-documents', { action: 'convert', kind: 'sales-order', id, ...input }),
   invoiceChallan: (id: string, input: { date: string; dueDate: string; lines?: LinePick[] }) =>
     api.patch<{ invoiceId: string; number: string; heldForApproval: boolean }>('/api/sales-documents', { action: 'convert', kind: 'challan', id, ...input }),
+  /** Order → Proforma → Work in process → Ready for delivery, which raises the invoice and its challan. */
+  stage: (id: string, stage: 'order' | 'proforma' | 'in_process' | 'ready', date: string) =>
+    api.patch<{
+      stage: string; proformaNumber?: string; proformaDate?: string;
+      invoice?: { id: string; number: string; heldForApproval: boolean } | null;
+      challan?: { id: string; number: string } | null; openChallans?: number;
+    }>('/api/sales-documents', { action: 'stage', id, stage, date }),
   deliver: (id: string, input: { date: string; challanType?: 'supply_on_approval' | 'liquid_gas' | 'other'; lines?: LinePick[] }) =>
     api.patch<{ challanId: string; number: string }>('/api/sales-documents', { action: 'deliver', id, ...input }),
   receive: (poId: string, input: { date: string; vendorChallanNo?: string | null; lines?: LinePick[] }) =>

@@ -161,6 +161,11 @@ export interface Contact {
   billWise?: boolean;
   udyamNo?: string;
   tdsSection?: string; // vendors — default TDS section, e.g. '194C'
+  tdsSections?: string[]; // every section, the default first
+  /** An international party's country (ISO code); its state is 96, Foreign Country. */
+  country?: string | null;
+  /** What a customer buys: its documents offer only those items. */
+  supplies?: 'goods' | 'service' | 'both';
   customerDeductsTds?: boolean; // customers who deduct TDS on our invoices
   openingBalance: Paise; // +ve: they owe us / we owe them per kind
   portalEnabled?: boolean;
@@ -172,6 +177,8 @@ export type TaxPref = 'taxable' | 'exempt' | 'nil' | 'non_gst';
 export interface Item {
   id: string;
   kind: 'goods' | 'service';
+  /** Made or bought in India, or imported (IGST at customs, or reverse charge for a service). */
+  origin?: 'local' | 'imported';
   name: string;
   sku: string;
   hsnSac: string;

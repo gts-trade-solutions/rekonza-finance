@@ -13,13 +13,14 @@ import { useParams, useRouter } from 'next/navigation';
 import { Mail, Phone, Plus } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { MergeContactButton } from '@/components/shared/merge-contact';
+import { RegistrationDetails } from '@/components/shared/registration-details';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { PageHeader } from '@/components/shared/page-header';
 import { DataTable, type Column } from '@/components/shared/data-table';
 import { Money } from '@/components/shared/money';
-import { StatusBadge } from '@/components/shared/status-badge';
+import { InvoiceStatus } from '@/components/shared/invoice-status';
 import { StatTile } from '@/components/shared/stat-tile';
 import { AsyncPage } from '@/components/shared/async-state';
 import {
@@ -52,7 +53,7 @@ const invCols: Column<ContactStatementDoc>[] = [
   { key: 'number', header: 'Invoice #', sortValue: (r) => r.number, cell: (r) => <span className="font-medium">{r.number}</span> },
   { key: 'date', header: 'Date', sortValue: (r) => r.date, cell: (r) => short(r.date) },
   { key: 'due', header: 'Due', sortValue: (r) => r.dueDate, cell: (r) => short(r.dueDate) },
-  { key: 'status', header: 'Status', sortValue: (r) => r.status, cell: (r) => <StatusBadge status={r.status} /> },
+  { key: 'status', header: 'Status', sortValue: (r) => r.status, cell: (r) => <InvoiceStatus status={r.status} dueDate={r.dueDate} balancePaise={r.balancePaise} /> },
   { key: 'total', header: 'Total', align: 'right', sortValue: (r) => r.totalPaise, cell: (r) => <Money value={r.totalPaise} /> },
   { key: 'balance', header: 'Balance', align: 'right', sortValue: (r) => r.balancePaise, cell: (r) => <Money value={r.balancePaise} showZero={false} /> },
 ];
@@ -146,9 +147,10 @@ export default function CustomerDetailPage() {
                     <p className="mt-0.5 font-mono text-xs">{c.pan}</p>
                   </div>
                 )}
+                <RegistrationDetails c={c} />
                 {c.tdsSection && (
-                  <Badge variant="secondary" className="w-full justify-center text-[11px]">
-                    Deducts TDS under {c.tdsSection}
+                  <Badge variant="secondary" className="w-full justify-center text-[11px]" data-slot="tds-sections">
+                    Deducts TDS under {(c.tdsSections?.length ? c.tdsSections : [c.tdsSection]).join(', ')}
                   </Badge>
                 )}
               </Card>

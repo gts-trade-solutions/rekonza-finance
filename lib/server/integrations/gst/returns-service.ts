@@ -22,7 +22,8 @@ import { encryptionAvailable } from '../crypto';
 import { connectionFor, readSession, runPortalCall, toApiError, writeSession, type PortalConnection, type PortalSession } from './index';
 import { PortalAuthFailed } from './provider';
 import { GstnReturnsProvider, gstnConfigFromEnv, retPeriod } from './gstn-returns';
-import { standinReturns, type ReturnsContext, type ReturnsProvider, type ReturnsSession, type ReturnType, type TaxpayerDetails } from './returns-provider';
+import { gstinFacts, lookupParty, type PartyDetails } from '../party-lookup';
+import { standinReturns, type ReturnsContext, type ReturnsProvider, type ReturnsSession, type ReturnType } from './returns-provider';
 import { gstr1PortalFile } from '../../gst/gstr1-json';
 import { gstr3bForm, gstr3bPortalJson } from '../../gst/gstr3b-form';
 import { importGstr2b, parseGstr2b } from '../../gst/gstr2b-import';
@@ -417,15 +418,14 @@ export async function fetchGstr2bFromPortal(orgId: number, branchId: number, mon
 }
 
 /**
- * A GSTIN's registered details (Zoho's "prefill from GSTIN"). Public data, so
- * it needs only the GSP's own credentials, not a taxpayer session; without a
- * GSP the stand-in can say only what the number itself carries.
+ * A GSTIN's registered details (Zoho's "prefill from GSTIN"). The number's own
+ * facts first (state, PAN, kind of business, and its check digit), then the GST
+ * system through the GSP, or else a GSTIN lookup service
+ * (integrations/party-lookup.ts). Public data: it needs no taxpayer session.
  */
-export async function lookupGstin(gstin: string, ipUser?: string): Promise<TaxpayerDetails> {
-  const g = gstin.trim().toUpperCase();
-  if (!/^\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/.test(g)) throw badRequest('That is not a GSTIN.');
-  const p = gspReady() ? gstnProvider() : standinReturns;
-  return wrap(`the details of ${g}`, () => p.searchTaxpayer({ ipUser }, g));
+export async function lookupGstin(gstin: string, ipUser?: string): Promise<PartyDetails> {
+  const g = gstinFacts(gstin).gstin;
+  return wrap(`the details of ${g}`, () => lookupParty(g, gspReady() ? (x) => gstnProvider().searchTaxpayer({ ipUser }, x) : null));
 }
 
 export async function trackFilings(orgId: number, branchId: number, fy: string, ipUser?: string) {

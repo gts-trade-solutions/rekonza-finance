@@ -42,7 +42,7 @@ export const GET = route(
         'gst_rate_pct', 'tax_pref', 'description', 'track_inventory', 'track_batches', 'reorder_level',
         'opening_stock_qty', 'opening_stock_rate', 'is_archived',
         'mrp', 'standard_cost', 'alt_uqc', 'alt_factor', 'min_level', 'track_serials', 'updated_at', 'stock_group_id', 'valuation_method', 'is_kit', 'item_group_id', 'variant',
-        'image_file_id',
+        'image_file_id', 'origin',
       ])
       .orderBy('name')
       .limit(q.limit)
@@ -84,6 +84,7 @@ export const GET = route(
         gstRatePct: Number(i.gst_rate_pct),
         taxPref: i.tax_pref,
         description: i.description,
+        origin: i.origin,
         trackInventory: !!i.track_inventory,
         trackBatches: !!i.track_batches,
         reorderLevel: i.reorder_level === null ? null : Number(i.reorder_level),
@@ -126,6 +127,8 @@ const ItemInput = z.object({
   gstRatePct: z.number().min(0).max(50),
   taxPref: z.enum(['taxable', 'exempt', 'nil', 'non_gst']).default('taxable'),
   description: z.string().trim().max(1000).nullish(),
+  /** Made or bought in India, or imported: IGST at customs (goods) or by reverse charge (a service). */
+  origin: z.enum(['local', 'imported']).optional(),
   trackInventory: z.boolean().optional(),
   trackBatches: z.boolean().optional(),
   reorderLevel: z.number().min(0).nullish(),
@@ -238,6 +241,7 @@ export const POST = route(
         gst_rate_pct: input.gstRatePct,
         tax_pref: input.taxPref,
         description: input.description ?? null,
+        origin: input.origin ?? 'local',
         track_inventory: input.trackInventory ? 1 : 0,
         track_batches: input.trackBatches && input.trackInventory ? 1 : 0,
         reorder_level: input.reorderLevel ?? null,
@@ -324,6 +328,7 @@ export const PATCH = route(
     set('gst_rate_pct', input.gstRatePct);
     set('tax_pref', input.taxPref);
     set('description', input.description);
+    set('origin', input.origin);
     set('track_inventory', input.trackInventory === undefined ? undefined : input.trackInventory ? 1 : 0);
     set('track_batches', input.trackBatches === undefined ? undefined : input.trackBatches ? 1 : 0);
     set('reorder_level', input.reorderLevel);

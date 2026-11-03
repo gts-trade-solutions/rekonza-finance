@@ -76,6 +76,7 @@ const SHORTCUTS = [
   { href: '/banking/rules', icon: ScrollText, label: 'Bank rules', hint: 'Auto-categorise repeating lines' },
   { href: '/banking/transfers', icon: ArrowLeftRight, label: 'Transfers (contra)', hint: 'Move money between own accounts: cash deposited, withdrawn, bank to bank' },
   { href: '/banking/cheques', icon: FileClock, label: 'Cheques & PDC', hint: 'In hand and post-dated' },
+  { href: '/reports/bank-statement', icon: ScrollText, label: 'Bank statement as on date', hint: 'Books to bank on any day: cheques not presented, deposits not credited' },
 ];
 
 const BLANK = {

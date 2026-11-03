@@ -21,7 +21,7 @@ import { DataTable, type Column } from '@/components/shared/data-table';
 import { BulkPrintButton } from '@/components/shared/document-menu';
 import { SavedViews } from '@/components/shared/saved-views';
 import { Money } from '@/components/shared/money';
-import { StatusBadge } from '@/components/shared/status-badge';
+import { InvoiceStatus } from '@/components/shared/invoice-status';
 import { EInvoiceMark } from '@/components/shared/einvoice-mark';
 import { EmptyState } from '@/components/shared/empty-state';
 import { AsyncPage, LoadingRows, Refreshing } from '@/components/shared/async-state';
@@ -32,16 +32,16 @@ import { downloadCsv } from '@/components/shared/report-shell';
 import { api, gst, invoices as invoiceApi, type InvoiceListItem, type InvoiceListResponse } from '@/lib/api/client';
 import { useApi, useApiAction } from '@/lib/api/use-api';
 
-const FILTERS = ['all', 'draft', 'sent', 'partially_paid', 'overdue', 'paid', 'void'] as const;
+// Three statuses an issued invoice can have; drafts and cancelled ones apart.
+const FILTERS = ['all', 'unpaid', 'partially_paid', 'paid', 'draft', 'void'] as const;
 
 const TAB_LABEL: Record<(typeof FILTERS)[number], string> = {
   all: 'All',
-  draft: 'Draft',
-  sent: 'Sent',
-  partially_paid: 'Partially Paid',
-  overdue: 'Overdue',
+  unpaid: 'Unpaid',
+  partially_paid: 'Partially paid',
   paid: 'Paid',
-  void: 'Void',
+  draft: 'Drafts',
+  void: 'Cancelled',
 };
 
 export default function InvoicesPage() {
@@ -77,7 +77,7 @@ export default function InvoicesPage() {
       value: f,
       label: TAB_LABEL[f],
       count: counts[f] ?? 0,
-    })).filter((t) => t.value === 'all' || t.count > 0);
+    })).filter((t) => ['all', 'unpaid', 'partially_paid', 'paid'].includes(t.value) || t.count > 0);
   }, [state.data]);
 
   const columns: Column<InvoiceListItem>[] = [
@@ -115,7 +115,7 @@ export default function InvoicesPage() {
         </span>
       ),
     },
-    { key: 'status', header: 'Status', sortValue: (r) => r.status, cell: (r) => <StatusBadge status={r.status as never} /> },
+    { key: 'status', header: 'Status', sortValue: (r) => r.status, cell: (r) => <InvoiceStatus status={r.status} dueDate={r.dueDate} balancePaise={r.balancePaise} /> },
     { key: 'total', header: 'Total', align: 'right', sortValue: (r) => r.totalPaise, cell: (r) => <Money value={r.totalPaise} /> },
     {
       key: 'balance',

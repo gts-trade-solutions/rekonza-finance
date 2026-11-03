@@ -47,7 +47,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { label: 'Delivery Challans', href: '/sales/challans', icon: Truck, module: 'sales' },
       { label: 'Invoices', href: '/sales/invoices', icon: Receipt, module: 'sales' },
       { label: 'Sales Receipts', href: '/sales/sales-receipts', icon: ReceiptIndianRupee, module: 'sales' },
-      { label: 'Retainer Invoices', href: '/sales/retainers', icon: HandCoins, module: 'sales' },
+      { label: 'Service Invoices', href: '/sales/retainers', icon: HandCoins, module: 'sales' },
       { label: 'Payments Received', href: '/sales/payments', icon: Wallet, module: 'sales' },
       { label: 'Credit Notes', href: '/sales/credit-notes', icon: FileMinus, module: 'sales' },
       { label: 'Debit Notes', href: '/sales/debit-notes', icon: FilePlus2, module: 'sales' },
@@ -177,7 +177,7 @@ export const NAV_GROUPS: NavGroup[] = [
 
 export const TOP_LEVEL: NavItem[] = [
   { label: 'Dashboard', href: '/dashboard', icon: LayoutDashboard, module: 'sales' },
-  { label: 'Exceptions', href: '/exceptions', icon: AlertOctagon, module: 'exceptions', badge: 'exceptions' },
+  { label: 'Alerts', href: '/exceptions', icon: AlertOctagon, module: 'exceptions', badge: 'exceptions' },
 ];
 
 export const BOTTOM_LEVEL: NavItem[] = [

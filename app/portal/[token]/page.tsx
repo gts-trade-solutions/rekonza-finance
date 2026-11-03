@@ -162,7 +162,7 @@ export default function PortalPage({ params }: { params: Promise<{ token: string
                       <TabsTrigger value="quotes">Quotes ({p.quotes.length})</TabsTrigger>
                       <TabsTrigger value="invoices">Invoices ({p.invoices.length})</TabsTrigger>
                       {p.salesOrders.length > 0 && <TabsTrigger value="orders">Sales orders ({p.salesOrders.length})</TabsTrigger>}
-                      {p.retainers.length > 0 && <TabsTrigger value="retainers">Retainers ({p.retainers.length})</TabsTrigger>}
+                      {p.retainers.length > 0 && <TabsTrigger value="retainers">Service invoices ({p.retainers.length})</TabsTrigger>}
                       {p.creditNotes.length > 0 && <TabsTrigger value="credits">Credit notes ({p.creditNotes.length})</TabsTrigger>}
                     </>
                   ) : (
@@ -227,7 +227,7 @@ export default function PortalPage({ params }: { params: Promise<{ token: string
                     ])} />
                   </TabsContent>
                   <TabsContent value="retainers" className="mt-4">
-                    <Table head={['Retainer', 'Date', 'For', 'Status', 'Paid', 'Amount']} rows={p.retainers.map((r) => [
+                    <Table head={['Service invoice', 'Date', 'For', 'Status', 'Paid', 'Amount']} rows={p.retainers.map((r) => [
                       <span key="n">{docLink('retainer', r.id, r.number)}</span>, d(r.date), r.description ?? '—', <Status key="s" s={r.status} />, formatINR(r.paidPaise), formatINR(r.amountPaise),
                     ])} />
                   </TabsContent>

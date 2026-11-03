@@ -37,6 +37,7 @@ import { SignInsPanel } from '@/components/settings/sign-ins-panel';
 import { TwoStepPanel } from '@/components/settings/two-step-panel';
 import { ChangePasswordCard, UsersPanel } from '@/components/settings/users-panel';
 import { PrivacyPanel } from '@/components/settings/privacy-panel';
+import { CompanyRegistration, DivisionsCard } from '@/components/settings/company-profile';
 import { DeveloperPanel } from '@/components/settings/developer-panel';
 import { StatutoryPanel } from '@/components/settings/statutory-panel';
 import { VoucherTypesPanel } from '@/components/settings/voucher-types-panel';
@@ -50,6 +51,7 @@ interface SettingsResponse {
   org: {
     id: string; name: string; legalName: string | null; pan: string | null; tan: string | null;
     lutArn: string | null; lutValidFrom: string | null; lutValidTo: string | null;
+    constitution?: string | null; businessNature?: string[]; cin?: string | null; incorporatedOn?: string | null; gstRegisteredOn?: string | null;
     email: string | null; phone: string | null; address: string | null;
     fiscalYearStartMonth: number; currency: string;
     gstRegistrationType: string; einvoiceApplicable: boolean;
@@ -111,7 +113,10 @@ export default function SettingsPage() {
   const currentUserId = useAppStore((s) => s.session?.userId);
   const state = useApi<SettingsResponse>(() => api.get('/api/settings'), []);
 
-  const [form, setForm] = useState({ name: '', legalName: '', pan: '', tan: '', email: '', phone: '', address: '', lutArn: '', lutValidFrom: '', lutValidTo: '' });
+  const [form, setForm] = useState({
+    name: '', legalName: '', pan: '', tan: '', email: '', phone: '', address: '', lutArn: '', lutValidFrom: '', lutValidTo: '',
+    constitution: '', businessNature: [] as string[], cin: '', incorporatedOn: '', gstRegisteredOn: '',
+  });
   const [editingBranch, setEditingBranch] = useState<EditableBranch | null>(null);
   // Opened on a tab when linked to one — "Settings → Integrations" from the
   // e-invoice checklist. Read once, from the address.
@@ -136,6 +141,11 @@ export default function SettingsPage() {
       email: o.email ?? '',
       phone: o.phone ?? '',
       address: o.address ?? '',
+      constitution: o.constitution ?? '',
+      businessNature: o.businessNature ?? [],
+      cin: o.cin ?? '',
+      incorporatedOn: o.incorporatedOn ?? '',
+      gstRegisteredOn: o.gstRegisteredOn ?? '',
     });
   }, [state.data]);
 
@@ -151,6 +161,11 @@ export default function SettingsPage() {
       email: form.email || null,
       phone: form.phone || null,
       address: form.address || null,
+      constitution: form.constitution || null,
+      businessNature: form.businessNature,
+      cin: form.cin || null,
+      incorporatedOn: form.incorporatedOn || null,
+      gstRegisteredOn: form.gstRegisteredOn || null,
     });
     if (!done) {
       toast.error(save.error ?? 'The changes were not saved');
@@ -276,12 +291,24 @@ export default function SettingsPage() {
                     {d.org.einvoiceApplicable ? 'Applicable' : 'Not applicable'}
                   </Badge>
                 </div>
-                {canEdit && (
-                  <Button size="sm" onClick={submit} disabled={save.busy}>
+              </Card>
+
+              <CompanyRegistration
+                value={form}
+                onChange={(v) => setForm({ ...form, ...v })}
+                canEdit={canEdit}
+                gstin={d.branches.find((b) => b.isPrimary)?.gstin ?? d.branches[0]?.gstin ?? null}
+                registrationType={d.org.gstRegistrationType}
+              />
+              {canEdit && (
+                <div className="flex justify-end">
+                  <Button size="sm" onClick={submit} disabled={save.busy} data-slot="org-save">
                     {save.busy ? 'Saving…' : 'Save changes'}
                   </Button>
-                )}
-              </Card>
+                </div>
+              )}
+
+              <DivisionsCard canEdit={canEdit} />
 
               <Card className="p-5">
                 <h3 className="mb-3 text-sm font-semibold">Branches &amp; GST registrations</h3>

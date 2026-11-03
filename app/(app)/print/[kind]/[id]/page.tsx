@@ -4,7 +4,7 @@
 // note, retainer, receipt, purchase order, vendor credit, payment advice or
 // bill (components/print/document-print.tsx), with Send and Clone beside Print.
 
-import { useParams } from 'next/navigation';
+import { useParams, useSearchParams } from 'next/navigation';
 import { AsyncPage } from '@/components/shared/async-state';
 import { DocumentPrintView } from '@/components/print/document-print';
 import { DocumentScreenActions } from '@/components/shared/document-menu';
@@ -14,7 +14,9 @@ import type { PrintDoc } from '@/lib/print-doc';
 
 export default function DocumentPrintPage() {
   const { kind, id } = useParams<{ kind: string; id: string }>();
-  const state = useApi<PrintDoc>(() => api.get<PrintDoc>(`/api/print/${kind}/${id}`), [kind, id]);
+  // A sales order as its proforma invoice.
+  const as = useSearchParams().get('as');
+  const state = useApi<PrintDoc>(() => api.get<PrintDoc>(`/api/print/${kind}/${id}`, as ? { as } : undefined), [kind, id, as]);
   return (
     <AsyncPage state={state}>
       {(doc) => (

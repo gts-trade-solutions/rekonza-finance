@@ -5,6 +5,7 @@ import { route, body, query, asId, badRequest, conflict } from '@/lib/server/htt
 import { toPaiseFromSql } from '@/lib/server/money-sql';
 import { seal } from '@/lib/server/crypto/fields';
 import { bankNumberFor, isMasked } from '@/lib/server/bank-mask';
+import { joinSections, parseSections } from '@/lib/tax/tds';
 import { assertFresh } from '@/lib/server/concurrency';
 import { logAudit, auditMeta, snapshot, changesBetween, describeChanges } from '@/lib/server/audit';
 import { isValidGstin } from '@/lib/tax/gst';
@@ -57,6 +58,7 @@ export const GET = route(
         'email', 'phone', 'payment_terms', 'credit_limit', 'owner_user_id', 'is_msme', 'msme_udyam_no',
         'msme_category', 'msme_activity', 'msme_agreement_days', 'bank_account_name', 'bank_account_no', 'bank_ifsc', 'bank_name', 'currency', 'price_list_id',
         'tds_applicable', 'tds_section', 'billing_address', 'shipping_address', 'notes', 'is_archived', 'updated_at', 'bill_wise',
+        'constitution', 'gst_status', 'gst_registered_on', 'cin', 'incorporated_on', 'country', 'supplies',
       ])
       .orderBy('display_name')
       .limit(q.limit)
@@ -128,7 +130,16 @@ export const GET = route(
         priceListId: c.price_list_id ? String(c.price_list_id) : null,
         bankName: c.bank_name,
         tdsApplicable: !!c.tds_applicable,
-        tdsSection: c.tds_section,
+        // The first is the default a bill takes; a contact may have several.
+        tdsSection: parseSections(c.tds_section)[0] ?? null,
+        tdsSections: parseSections(c.tds_section),
+        constitution: c.constitution,
+        gstStatus: c.gst_status,
+        gstRegisteredOn: c.gst_registered_on ? String(c.gst_registered_on).slice(0, 10) : null,
+        cin: c.cin,
+        incorporatedOn: c.incorporated_on ? String(c.incorporated_on).slice(0, 10) : null,
+        country: c.country,
+        supplies: c.supplies,
         billingAddress: c.billing_address,
         shippingAddress: c.shipping_address,
         notes: c.notes,
@@ -182,7 +193,21 @@ const ContactInput = z.object({
   currency: z.string().trim().toUpperCase().regex(/^[A-Z]{3}$/, 'A currency is a three-letter code, such as USD.').optional(),
   /** The price list a customer is charged from; null for the items' own prices. */
   priceListId: z.coerce.number().int().positive().nullish(),
+  /** One section, as older callers send it; tdsSections wins when both come. */
   tdsSection: z.string().trim().max(10).nullish(),
+  /** Every section they deduct, or are paid, under; the first is the default. */
+  tdsSections: z.array(z.string().trim().toUpperCase().min(2).max(10)).max(10).nullish(),
+  /** From the GSTIN and the CIN (integrations/party-lookup.ts), or typed. */
+  constitution: z.string().trim().max(60).nullish(),
+  gstStatus: z.string().trim().max(30).nullish(),
+  gstRegisteredOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Give the date as yyyy-mm-dd.').nullish().or(z.literal('').transform(() => null)),
+  cin: z.string().trim().toUpperCase().regex(/^[LU]\d{5}[A-Z]{2}\d{4}[A-Z]{3}\d{6}$|^[A-Z]{3}-\d{4}$/, 'A CIN is 21 characters, like U74999TN2015PTC123456 (an LLPIN is like AAB-1234).').nullish()
+    .or(z.literal('').transform(() => null)),
+  incorporatedOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Give the date as yyyy-mm-dd.').nullish().or(z.literal('').transform(() => null)),
+  /** An international party's country, as its two-letter ISO code (US, AE, GB …). */
+  country: z.string().trim().toUpperCase().regex(/^[A-Z]{2}$/, 'Pick the country.').nullish().or(z.literal('').transform(() => null)),
+  /** What a customer buys: the items its documents offer. */
+  supplies: z.enum(['goods', 'service', 'both']).optional(),
   billingAddress: z.string().trim().max(500).nullish(),
   shippingAddress: z.string().trim().max(500).nullish(),
   notes: z.string().trim().max(1000).nullish(),
@@ -197,6 +222,13 @@ const UpdateInput = ContactInput.partial().extend({
   /** The record's updatedAt as it was read: the edit is refused if it has changed since. */
   expectedUpdatedAt: z.string().optional(),
 });
+
+/** The sections to store: the list when it came, else the single one; undefined when neither came. */
+function sectionsOf(input: Partial<z.infer<typeof ContactInput>>): string | null | undefined {
+  if (input.tdsSections !== undefined) return joinSections(input.tdsSections ?? []);
+  if (input.tdsSection !== undefined) return joinSections(input.tdsSection ? [input.tdsSection] : []);
+  return undefined;
+}
 
 function toRow(input: z.infer<typeof ContactInput>) {
   return {
@@ -223,8 +255,15 @@ function toRow(input: z.infer<typeof ContactInput>) {
     bank_name: input.bankName ?? null,
     currency: input.currency ?? 'INR',
     price_list_id: input.priceListId ?? null,
-    tds_applicable: input.tdsSection ? 1 : 0,
-    tds_section: input.tdsSection ?? null,
+    tds_applicable: sectionsOf(input) ? 1 : 0,
+    tds_section: sectionsOf(input) ?? null,
+    constitution: input.constitution ?? null,
+    gst_status: input.gstStatus ?? null,
+    gst_registered_on: input.gstRegisteredOn ?? null,
+    cin: input.cin ?? null,
+    incorporated_on: input.incorporatedOn ?? null,
+    country: input.country ?? null,
+    supplies: input.supplies ?? 'both',
     billing_address: input.billingAddress ?? null,
     shipping_address: input.shippingAddress ?? null,
     notes: input.notes ?? null,
@@ -243,6 +282,13 @@ function checkGstin(input: Partial<z.infer<typeof ContactInput>>) {
     || input.gstTreatment === 'sez';
   if (registered && !input.gstin) {
     throw badRequest('A registered party needs a GSTIN.');
+  }
+  // An international party is outside India: no GSTIN, and not India as its country.
+  if (input.gstTreatment === 'overseas' && input.country === 'IN') {
+    throw badRequest('An overseas party is outside India: pick the country it is in.');
+  }
+  if (input.gstTreatment === 'overseas' && input.gstin) {
+    throw badRequest('An overseas party has no Indian GSTIN. Leave it empty, or choose another GST treatment.');
   }
   if (input.gstin && input.stateCode && input.gstin.slice(0, 2) !== input.stateCode) {
     throw badRequest(
@@ -379,8 +425,16 @@ export const PATCH = route(
     set('bank_name', input.bankName);
     set('currency', input.currency);
     set('price_list_id', input.priceListId);
-    set('tds_applicable', input.tdsSection === undefined ? undefined : input.tdsSection ? 1 : 0);
-    set('tds_section', input.tdsSection);
+    const sections = sectionsOf(input);
+    set('tds_applicable', sections === undefined ? undefined : sections ? 1 : 0);
+    set('tds_section', sections);
+    set('constitution', input.constitution);
+    set('gst_status', input.gstStatus);
+    set('gst_registered_on', input.gstRegisteredOn);
+    set('cin', input.cin);
+    set('incorporated_on', input.incorporatedOn);
+    set('country', input.country);
+    set('supplies', input.supplies);
     set('billing_address', input.billingAddress);
     set('shipping_address', input.shippingAddress);
     set('notes', input.notes);

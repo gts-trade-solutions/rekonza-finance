@@ -27,7 +27,7 @@ import {
 } from '@/components/ui/dialog';
 import { PageHeader } from '@/components/shared/page-header';
 import { Money } from '@/components/shared/money';
-import { StatusBadge } from '@/components/shared/status-badge';
+import { InvoiceStatus } from '@/components/shared/invoice-status';
 import { EInvoiceMark } from '@/components/shared/einvoice-mark';
 import { ReportTable } from '@/components/shared/report-shell';
 import { AsyncPage } from '@/components/shared/async-state';
@@ -157,7 +157,7 @@ export default function InvoiceDetailPage() {
             />
 
             <div className="flex flex-wrap items-center gap-3">
-              <StatusBadge status={inv.status as never} />
+              <InvoiceStatus status={inv.status} dueDate={inv.dueDate} balancePaise={inv.balancePaise} />
               <EInvoiceMark einvoice={{ status: inv.einvoice.status as never, irn: inv.einvoice.irn ?? undefined }} />
               <Badge variant="outline" className="text-[10px] uppercase">
                 {inv.supplyType === 'intra' ? `CGST + ${stateTaxLabel(inv.placeOfSupply)}` : inv.supplyType === 'inter' ? 'IGST' : inv.supplyType.replace(/_/g, ' ')}

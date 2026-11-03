@@ -74,6 +74,11 @@ export const GET = route(
         lutArn: org.lut_arn,
         lutValidFrom: org.lut_valid_from ? String(org.lut_valid_from).slice(0, 10) : null,
         lutValidTo: org.lut_valid_to ? String(org.lut_valid_to).slice(0, 10) : null,
+        constitution: org.constitution,
+        businessNature: (org.business_nature ?? '').split(',').map((x) => x.trim()).filter(Boolean),
+        cin: org.cin,
+        incorporatedOn: org.incorporated_on ? String(org.incorporated_on).slice(0, 10) : null,
+        gstRegisteredOn: org.gst_registered_on ? String(org.gst_registered_on).slice(0, 10) : null,
       },
       branches: branches.map((b) => ({
         id: asId(b.id),
@@ -132,6 +137,13 @@ const OrgInput = z.object({
     .or(z.literal('').transform(() => null)),
   lutValidFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullish().or(z.literal('').transform(() => null)),
   lutValidTo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullish().or(z.literal('').transform(() => null)),
+  /** The kind of company (lib/company-profile.ts), what it does, and its registrations. */
+  constitution: z.string().trim().max(60).nullish(),
+  businessNature: z.array(z.string().trim().min(1).max(40)).max(8).optional(),
+  cin: z.string().trim().toUpperCase().regex(/^[LU]\d{5}[A-Z]{2}\d{4}[A-Z]{3}\d{6}$|^[A-Z]{3}-\d{4}$/, 'A CIN is 21 characters, like U74999TN2015PTC123456 (an LLPIN is like AAB-1234).').nullish()
+    .or(z.literal('').transform(() => null)),
+  incorporatedOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullish().or(z.literal('').transform(() => null)),
+  gstRegisteredOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullish().or(z.literal('').transform(() => null)),
 });
 
 /**
@@ -159,7 +171,15 @@ export const PATCH = route(
       ...(input.lutArn !== undefined ? { lut_arn: input.lutArn } : {}),
       ...(input.lutValidFrom !== undefined ? { lut_valid_from: input.lutValidFrom } : {}),
       ...(input.lutValidTo !== undefined ? { lut_valid_to: input.lutValidTo } : {}),
+      // Left out, each stays as it is.
+      ...(input.constitution !== undefined ? { constitution: input.constitution } : {}),
+      ...(input.businessNature !== undefined ? { business_nature: input.businessNature.join(',').slice(0, 200) || null } : {}),
+      ...(input.cin !== undefined ? { cin: input.cin } : {}),
+      ...(input.incorporatedOn !== undefined ? { incorporated_on: input.incorporatedOn } : {}),
+      ...(input.gstRegisteredOn !== undefined ? { gst_registered_on: input.gstRegisteredOn } : {}),
     };
+    const todayIso = new Date().toISOString().slice(0, 10);
+    if (input.incorporatedOn && input.incorporatedOn > todayIso) throw badRequest('The company cannot be incorporated in the future.');
     if (input.lutValidFrom && input.lutValidTo && input.lutValidTo < input.lutValidFrom) {
       throw badRequest('The LUT cannot end before it starts.');
     }

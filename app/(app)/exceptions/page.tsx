@@ -103,7 +103,7 @@ export default function ExceptionsPage() {
   return (
     <>
       <PageHeader
-        title="Exceptions"
+        title="Alerts"
         description="What needs dealing with: each found by the scheduler, given an owner and a date, escalated when the date passes, and closed with what was done."
         actions={
           <Button variant="outline" size="sm" className="gap-1.5" onClick={scan} disabled={scanning}>

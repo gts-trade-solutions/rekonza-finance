@@ -25,7 +25,7 @@ import { ChecklistCard } from '@/components/layout/checklist-card';
 import { DateRangePicker } from '@/components/shared/date-range-picker';
 import { StatTile } from '@/components/shared/stat-tile';
 import { Money } from '@/components/shared/money';
-import { StatusBadge } from '@/components/shared/status-badge';
+import { InvoiceStatus } from '@/components/shared/invoice-status';
 import { ShareDonut } from '@/components/charts/share-donut';
 import { RankedBars } from '@/components/charts/ranked-bars';
 import { AsyncPage, LoadingRows, Refreshing } from '@/components/shared/async-state';
@@ -58,6 +58,7 @@ interface DashboardData {
   };
   salesPrevious: DashboardData['sales'];
   margin: { revenue: number; cogs: number; gross: number; marginPct: number; units: number; linesWithoutCost: number };
+  netMargin: { income: number; netProfit: number; pct: number | null; ytdPct: number | null };
   goodsVsServices: { key: string; label: string; value: number; lines: number }[];
   billedVsCollected: { month: string; billed: number; collected: number }[];
   monthlySeries: { month: string; sales: number; expenses: number }[];
@@ -72,7 +73,7 @@ interface DashboardData {
   msme: { billId: string; internalNo: string; vendorName: string; age: number; daysLeft: number; risk: string }[];
   einvoicePending: number;
   unmatchedBankLines: number;
-  recentInvoices: { id: string; number: string; date: string; status: string; customerName: string; balancePaise: number }[];
+  recentInvoices: { id: string; number: string; date: string; dueDate?: string; status: string; customerName: string; balancePaise: number }[];
 }
 
 /** Percentage change, guarding the divide-by-zero that makes dashboards lie. */
@@ -175,6 +176,7 @@ export default function DashboardPage() {
                   sub={`${d.position.openInvoices} customers owing · ${formatINRCompact(d.position.overduePaise)} overdue`}
                   icon={Receipt}
                   tone={d.position.overduePaise > 0 ? 'warning' : 'default'}
+                  color="blue"
                   href="/reports/ar-ageing"
                 />
                 <StatTile
@@ -182,6 +184,7 @@ export default function DashboardPage() {
                   value={formatINRCompact(d.position.payablePaise)}
                   sub="Bills awaiting payment"
                   icon={Banknote}
+                  color="orange"
                   href="/reports/ap-ageing"
                 />
                 <StatTile
@@ -190,14 +193,16 @@ export default function DashboardPage() {
                   sub={`Across ${d.cash.length} accounts`}
                   icon={Landmark}
                   tone="positive"
+                  color="emerald"
                   href="/banking"
                 />
                 <StatTile
                   label={d.profitAndLoss.netProfit >= 0 ? 'Profit (YTD)' : 'Loss (YTD)'}
                   value={formatINRCompact(Math.abs(d.profitAndLoss.netProfit))}
-                  sub={`Income ${formatINRCompact(d.profitAndLoss.totalIncome)} − expenses ${formatINRCompact(d.profitAndLoss.totalExpense)}`}
+                  sub={`${d.netMargin.ytdPct === null ? '' : `Net margin ${d.netMargin.ytdPct.toFixed(1)}% · `}Income ${formatINRCompact(d.profitAndLoss.totalIncome)} − expenses ${formatINRCompact(d.profitAndLoss.totalExpense)}`}
                   icon={TrendingUp}
                   tone={d.profitAndLoss.netProfit >= 0 ? 'positive' : 'danger'}
+                  color="violet"
                   href="/reports/profit-and-loss"
                 />
               </div>
@@ -210,6 +215,7 @@ export default function DashboardPage() {
                   sub={trend(d.workingCapital.receivableDays, d.workingCapital.previous.receivableDays, d.workingCapital.windowDays)}
                   icon={Clock}
                   tone={(d.workingCapital.receivableDays ?? 0) > 60 ? 'warning' : 'default'}
+                  color="sky"
                   href="/reports/ar-ageing"
                 />
                 <StatTile
@@ -220,6 +226,7 @@ export default function DashboardPage() {
                     : trend(d.workingCapital.payableDays, d.workingCapital.previous.payableDays, d.workingCapital.windowDays)}
                   icon={Banknote}
                   tone={(d.workingCapital.payableDays ?? 0) > 45 ? 'warning' : 'default'}
+                  color="amber"
                   href="/reports/ap-ageing"
                 />
                 <StatTile
@@ -229,6 +236,7 @@ export default function DashboardPage() {
                     ? 'No cost of sales posted in the last 90 days'
                     : trend(d.workingCapital.inventoryDays, d.workingCapital.previous.inventoryDays, d.workingCapital.windowDays)}
                   icon={Package}
+                  color="teal"
                 />
                 <StatTile
                   label="Cash cycle"
@@ -236,6 +244,7 @@ export default function DashboardPage() {
                   sub="Receivable + inventory − payable days"
                   icon={Repeat}
                   tone={(d.workingCapital.cashCycleDays ?? 0) > 90 ? 'warning' : 'default'}
+                  color="indigo"
                 />
               </div>
 
@@ -257,6 +266,7 @@ export default function DashboardPage() {
                   delta={pctChange(d.sales.billed, d.salesPrevious.billed)}
                   sub={`${d.sales.invoiceCount} invoices · ${d.sales.customerCount} customers`}
                   icon={Receipt}
+                  color="cyan"
                   href="/reports/invoice-details"
                 />
                 <StatTile
@@ -266,6 +276,7 @@ export default function DashboardPage() {
                   sub="Cash actually received in the period"
                   icon={Wallet}
                   tone="positive"
+                  color="lime"
                   href="/sales/payments"
                 />
                 <StatTile
@@ -276,6 +287,7 @@ export default function DashboardPage() {
                   sub="Unpaid, from invoices raised in the period"
                   icon={Clock}
                   tone={d.sales.outstanding > 0 ? 'warning' : 'default'}
+                  color="rose"
                   href="/reports/ar-ageing"
                 />
                 <StatTile
@@ -284,6 +296,7 @@ export default function DashboardPage() {
                   delta={pctChange(d.sales.avgInvoice, d.salesPrevious.avgInvoice)}
                   sub={`Across ${d.sales.invoiceCount} invoices`}
                   icon={TrendingUp}
+                  color="fuchsia"
                 />
               </div>
 
@@ -314,19 +327,19 @@ export default function DashboardPage() {
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
                       <div className="flex items-center gap-2">
-                        <h2 className="text-sm font-semibold">Gross margin</h2>
+                        <h2 className="text-sm font-semibold">Gross and net margin</h2>
                         <Badge variant="outline" className="gap-1 text-[9px]">
                           <Lock className="size-2.5" /> Owner only
                         </Badge>
                       </div>
                       <p className="mt-1 text-xs text-muted-foreground">
-                        Sales value less the catalogue purchase price of what went out the door.
+                        Gross: sales less the purchase price of what went out the door. Net: what is left of income after every expense, for the {periodLabel}.
                       </p>
                     </div>
                     <TrendingUp className="size-5 text-emerald-600 dark:text-emerald-400" />
                   </div>
 
-                  <div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                  <div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
                     <div>
                       <p className="micro-label">Gross margin</p>
                       <p className="mt-1 tabular text-2xl font-semibold text-emerald-600 dark:text-emerald-400">
@@ -334,6 +347,15 @@ export default function DashboardPage() {
                       </p>
                       <p className="mt-0.5 text-xs text-muted-foreground">
                         {d.margin.marginPct.toFixed(1)}% of sales
+                      </p>
+                    </div>
+                    <div data-slot="net-margin">
+                      <p className="micro-label">Net margin</p>
+                      <p className={`mt-1 tabular text-2xl font-semibold ${d.netMargin.netProfit >= 0 ? 'text-violet-600 dark:text-violet-400' : 'text-red-600 dark:text-red-400'}`}>
+                        {d.netMargin.netProfit < 0 ? '−' : ''}{formatINR(Math.abs(d.netMargin.netProfit))}
+                      </p>
+                      <p className="mt-0.5 text-xs text-muted-foreground">
+                        {d.netMargin.pct === null ? 'No income in the period' : `${d.netMargin.pct.toFixed(1)}% of income`}
                       </p>
                     </div>
                     <div>
@@ -378,7 +400,7 @@ export default function DashboardPage() {
                       <Tooltip formatter={rupeeFormatter} cursor={{ fill: 'var(--accent)' }} contentStyle={tooltipStyle} />
                       <Legend iconType="circle" wrapperStyle={{ fontSize: 12 }} />
                       <Bar dataKey="billed" name="Billed" fill="var(--chart-1)" radius={[3, 3, 0, 0]} />
-                      <Bar dataKey="collected" name="Collected" fill="var(--chart-2)" radius={[3, 3, 0, 0]} />
+                      <Bar dataKey="collected" name="Collected" fill="var(--chart-3)" radius={[3, 3, 0, 0]} />
                     </BarChart>
                   </ResponsiveContainer>
                 </Card>
@@ -591,7 +613,7 @@ export default function DashboardPage() {
                             {new Date(inv.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}
                           </p>
                         </div>
-                        <StatusBadge status={inv.status as never} />
+                        <InvoiceStatus status={inv.status} dueDate={inv.dueDate} balancePaise={inv.balancePaise} />
                         <Money value={inv.balancePaise} className="w-28 text-sm font-medium" />
                       </Link>
                     ))}

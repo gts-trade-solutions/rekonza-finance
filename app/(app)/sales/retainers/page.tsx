@@ -81,7 +81,7 @@ export default function RetainersPage() {
       status: 'sent',
     });
     if (!result) return;
-    toast.success(`Retainer ${result.number} raised`, {
+    toast.success(`Service invoice ${result.number} raised`, {
       description: 'Held as unearned revenue — a liability, not income, until the work is done.',
     });
     setOpen(false);
@@ -95,7 +95,7 @@ export default function RetainersPage() {
     if (!applying || !invoiceId) return;
     const done = await apply.run(applying.id, invoiceId);
     if (!done) {
-      toast.error(apply.error ?? 'Could not apply that retainer');
+      toast.error(apply.error ?? 'Could not apply that service invoice');
       return;
     }
     toast.success(`${formatINR(done.appliedPaise)} applied`, {
@@ -107,7 +107,7 @@ export default function RetainersPage() {
   };
 
   const columns: Column<SalesDocRow>[] = [
-    { key: 'number', header: 'Retainer #', sortValue: (r) => r.number, cell: (r) => <span className="font-medium">{r.number}</span> },
+    { key: 'number', header: 'Service invoice #', sortValue: (r) => r.number, cell: (r) => <span className="font-medium">{r.number}</span> },
     { key: 'customer', header: 'Customer', sortValue: (r) => r.customerName, cell: (r) => r.customerName },
     {
       key: 'desc', header: 'Description', sortValue: (r) => r.detail ?? '',
@@ -151,17 +151,17 @@ export default function RetainersPage() {
   return (
     <>
       <PageHeader
-        title="Retainer invoices"
+        title="Service invoices"
         description="Advances collected before work is done."
         actions={
           canCreate && (
             <Dialog open={open} onOpenChange={setOpen}>
               <DialogTrigger asChild>
-                <Button size="sm" className="gap-1.5"><Plus className="size-4" /> New retainer</Button>
+                <Button size="sm" className="gap-1.5"><Plus className="size-4" /> New service invoice</Button>
               </DialogTrigger>
               <DialogContent>
                 <DialogHeader>
-                  <DialogTitle>New retainer</DialogTitle>
+                  <DialogTitle>New service invoice</DialogTitle>
                   <DialogDescription>
                     Bill an advance. It is held as a liability until the work behind it is delivered.
                   </DialogDescription>
@@ -175,11 +175,11 @@ export default function RetainersPage() {
                       canCreate={canCreate}
                     />
                   </Field>
-                  <Field label="What it covers" required hint="Appears on the retainer and in the ledger memo">
+                  <Field label="What it covers" required hint="Appears on the service invoice and in the ledger memo">
                     <Input
                       value={description}
                       onChange={(e) => setDescription(e.target.value)}
-                      placeholder="What this retainer is for"
+                      placeholder="What this service invoice is for"
                     />
                   </Field>
                   <Field label="Amount" required>
@@ -190,7 +190,7 @@ export default function RetainersPage() {
                 <DialogFooter>
                   <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
                   <Button onClick={save} disabled={create.busy}>
-                    {create.busy ? 'Saving…' : 'Raise retainer'}
+                    {create.busy ? 'Saving…' : 'Raise service invoice'}
                   </Button>
                 </DialogFooter>
               </DialogContent>
@@ -218,7 +218,7 @@ export default function RetainersPage() {
           d.documents.length === 0 ? (
             <EmptyState
               icon={HandCoins}
-              title="No retainers"
+              title="No service invoices"
               description="Collect an advance and it will be held as a liability until you invoice against it."
             />
           ) : (
@@ -230,7 +230,7 @@ export default function RetainersPage() {
               bulkActions={(selected) => <BulkPrintButton kind="retainer" ids={selected.map((r) => r.id)} />}
               initialSort={{ key: 'date', dir: 'desc' }}
               dateFilter={{ getDate: (r) => r.date }}
-              searchPlaceholder="Search retainer or customer…"
+              searchPlaceholder="Search service invoice or customer…"
             />
           )
         }

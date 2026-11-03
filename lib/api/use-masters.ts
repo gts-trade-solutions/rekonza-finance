@@ -44,7 +44,8 @@ interface MastersResponse {
     id: string; kind: 'customer' | 'vendor' | 'both'; displayName: string;
     gstin: string | null; pan: string | null; gstTreatment: string; stateCode: string;
     email: string | null; phone: string | null; paymentTerms: string | null;
-    isMsme: boolean; tdsSection: string | null; billingAddress: string | null; currency?: string; billWise?: boolean;
+    isMsme: boolean; tdsSection: string | null; tdsSections?: string[]; billingAddress: string | null; currency?: string; billWise?: boolean;
+    country?: string | null; supplies?: 'goods' | 'service' | 'both';
   }[];
   items: {
     id: string; kind: 'goods' | 'service'; name: string; sku: string | null;
@@ -52,6 +53,7 @@ interface MastersResponse {
     purchasePricePaise: number; gstRatePct: number; taxPref: string;
     trackInventory?: boolean; trackBatches?: boolean; trackSerials?: boolean;
     altUqc?: string | null; altFactor?: number | null; mrpPaise?: number | null;
+    origin?: 'local' | 'imported';
   }[];
   hsnCodes: {
     id: string; code: string; kind: 'hsn' | 'sac'; description: string;
@@ -154,6 +156,9 @@ export function useMasters(): {
             isMsme: c.isMsme,
             billWise: c.billWise !== false,
             tdsSection: c.tdsSection ?? undefined,
+            tdsSections: c.tdsSections ?? (c.tdsSection ? [c.tdsSection] : []),
+            country: c.country ?? null,
+            supplies: c.supplies ?? 'both',
             openingBalance: 0,
             isArchived: false,
           })),
@@ -175,6 +180,7 @@ export function useMasters(): {
             altUqc: i.altUqc ?? undefined,
             altFactor: i.altFactor ?? undefined,
             mrpPaise: i.mrpPaise ?? undefined,
+            origin: i.origin ?? 'local',
             saleAccountId: '',
             purchaseAccountId: '',
             isArchived: false,

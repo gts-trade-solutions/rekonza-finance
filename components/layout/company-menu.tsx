@@ -19,6 +19,7 @@ import { Field } from '@/components/shared/form-bits';
 import { api } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
 import { GST_STATES } from '@/lib/tax/gst';
+import { GstinLookupButton } from '@/components/gst/gstn-portal';
 
 interface Company { orgId: string; name: string; isDemo: boolean; role: string; needsCode: boolean }
 
@@ -114,8 +115,15 @@ export function CompanyMenu({ org, branch }: {
                   {Object.entries(GST_STATES).map(([code, name]) => <option key={code} value={code}>{name}</option>)}
                 </select>
               </Field>
-              <Field label="GSTIN" hint="Leave empty if it is not registered">
-                <Input value={f.gstin} onChange={(e) => setF({ ...f, gstin: e.target.value.toUpperCase() })} className="font-mono" maxLength={15} />
+              <Field label="GSTIN" hint="Fills the name and state; leave empty if it is not registered">
+                <div className="flex gap-2">
+                  <Input value={f.gstin} onChange={(e) => setF({ ...f, gstin: e.target.value.toUpperCase() })} className="font-mono" maxLength={15} />
+                  <GstinLookupButton gstin={f.gstin} onFound={(d) => setF({
+                    ...f,
+                    name: f.name.trim() ? f.name : d.legalName || d.tradeName || f.name,
+                    stateCode: d.address?.stateCode ?? f.stateCode,
+                  })} />
+                </div>
               </Field>
             </div>
           </div>

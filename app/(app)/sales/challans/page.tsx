@@ -25,6 +25,7 @@ import { AsyncPage } from '@/components/shared/async-state';
 import { Field } from '@/components/shared/form-bits';
 import { QuickDocumentDialog } from '@/components/shared/quick-document-dialog';
 import { LinePickDialog } from '@/components/shared/line-pick-dialog';
+import { InvoicesCell, ProductsCell } from '@/components/shared/doc-links';
 import { orderFlow, salesDocuments, type SalesDocListResponse, type SalesDocRow } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
 import { usePermission } from '@/lib/store/hooks';
@@ -46,6 +47,12 @@ const baseColumns: Column<SalesDocRow>[] = [
   { key: 'number', header: 'Challan #', sortValue: (r) => r.number, cell: (r) => <span className="font-medium">{r.number}</span> },
   { key: 'customer', header: 'Consignee', sortValue: (r) => r.customerName, cell: (r) => r.customerName },
   { key: 'date', header: 'Date', sortValue: (r) => r.date, cell: (r) => short(r.date) },
+  { key: 'products', header: 'Products', sortValue: (r) => r.items?.[0]?.name ?? '', cell: (r) => <ProductsCell items={r.items} /> },
+  {
+    key: 'order', header: 'Sales order', sortValue: (r) => r.salesOrder?.number ?? '',
+    cell: (r) => (r.salesOrder ? <span className="text-xs">{r.salesOrder.number}</span> : <span className="text-xs text-muted-foreground">—</span>),
+  },
+  { key: 'invoice', header: 'Invoice', sortValue: (r) => r.invoices?.[0]?.number ?? '', cell: (r) => <InvoicesCell invoices={r.invoices} /> },
   {
     key: 'type', header: 'Purpose', sortValue: (r) => r.detail ?? '',
     cell: (r) => (

@@ -189,6 +189,8 @@ export function InvoiceForm({ variant = 'invoice' }: { variant?: InvoiceVariant 
     setDueDate(dueDateFor(t, date));
     setPlaceOfSupply(c.stateCode);
     setPosTouched(false);
+    // What they buy narrows the items offered: a services-only customer sees services.
+    if (c.supplies) setSupplyKind(c.supplies);
   };
   const onPosChange = (v: string) => {
     setPlaceOfSupply(v);

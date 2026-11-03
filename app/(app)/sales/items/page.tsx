@@ -13,7 +13,7 @@
 // same dialog adds an item and edits one; click a row to edit it.
 
 import { useMemo, useState } from 'react';
-import { Package, Plus } from 'lucide-react';
+import { Globe2, MapPin, Package, Plus, Wrench } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -37,6 +37,9 @@ import { api, hsnCodes, items, type HsnCodeRow, type ItemRow } from '@/lib/api/c
 import { useApi, useApiAction } from '@/lib/api/use-api';
 import { useCanSeeCosts, usePermission } from '@/lib/store/hooks';
 import { GST_RATES } from '@/lib/tax/gst';
+import { useAppStore } from '@/lib/store';
+import { stateName } from '@/lib/tax/gst';
+import { cn } from '@/lib/utils';
 
 interface Loaded {
   items: ItemRow[];
@@ -44,7 +47,7 @@ interface Loaded {
 }
 
 const BLANK = {
-  name: '', sku: '', hsnSac: '', kind: 'goods' as 'goods' | 'service',
+  name: '', sku: '', hsnSac: '', kind: 'goods' as 'goods' | 'service', origin: 'local' as 'local' | 'imported', description: '',
   uqc: 'NOS', salePrice: 0, purchasePrice: 0, gstRatePct: 18,
   openingQty: '', openingRate: 0, trackBatches: false, trackSerials: false,
   mrp: 0, standardCost: 0, altUqc: '', altFactor: '', reorderLevel: '', minLevel: '',
@@ -105,6 +108,28 @@ export default function ItemsPage() {
       toast.error('Not added', { description: e instanceof Error ? e.message : String(e) });
     }
   };
+  const canAddCode = usePermission('settings', 'edit');
+  const homeState = useAppStore((s) => s.branches.find((b) => b.id === s.activeBranchId)?.stateCode ?? '');
+  // A code typed that is not on the approved list yet: its description and rate, to add it.
+  const [newCode, setNewCode] = useState<{ code: string; description: string; gstRatePct: number } | null>(null);
+  const [addingCode, setAddingCode] = useState(false);
+  const addCode = async () => {
+    if (!newCode) return;
+    if (!/^\d{4,8}$/.test(newCode.code)) { toast.error('An HSN or SAC code is 4 to 8 digits.'); return; }
+    if (!newCode.description.trim()) { toast.error('Describe what the code covers, as the GST tariff does.'); return; }
+    setAddingCode(true);
+    try {
+      await hsnCodes.create({ code: newCode.code, description: newCode.description.trim(), gstRatePct: newCode.gstRatePct, uqc: form.kind === 'goods' ? form.uqc || null : null });
+      await state.refetch();
+      set({ hsnSac: newCode.code, gstRatePct: newCode.gstRatePct, description: form.description || newCode.description.trim() });
+      toast.success(`${newCode.code} added to the approved codes`, { description: 'Its rate and description are on the item.' });
+      setNewCode(null);
+    } catch (e) {
+      toast.error('The code was not added', { description: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setAddingCode(false);
+    }
+  };
   const create = useApiAction(items.create);
   const update = useApiAction(items.update);
   const action = editing ? update : create;
@@ -115,6 +140,7 @@ export default function ItemsPage() {
     setEditing(r);
     setForm({
       name: r.name, sku: r.sku ?? '', hsnSac: r.hsnSac ?? '', kind: r.kind, uqc: r.uqc,
+      origin: r.origin ?? 'local', description: r.description ?? '',
       salePrice: r.salePricePaise, purchasePrice: r.purchasePricePaise, gstRatePct: r.gstRatePct,
       openingQty: s(r.openingStockQty), openingRate: r.openingStockRatePaise ?? 0,
       trackBatches: !!r.trackBatches, trackSerials: r.trackSerials,
@@ -144,6 +170,8 @@ export default function ItemsPage() {
       name: form.name.trim(),
       sku: form.sku || null,
       hsnSac: form.hsnSac || null,
+      description: form.description.trim() || null,
+      origin: form.origin,
       uqc: form.uqc || 'NOS',
       salePricePaise: form.salePrice,
       purchasePricePaise: form.purchasePrice,
@@ -272,7 +300,7 @@ export default function ItemsPage() {
         )}
       />
       <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) setEditing(null); }}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader><DialogTitle>{editing ? `Edit ${editing.name}` : 'New item'}</DialogTitle></DialogHeader>
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="Picture" className="sm:col-span-2">
@@ -282,21 +310,44 @@ export default function ItemsPage() {
             <Field label="Name" required error={action.fieldErrors.name} className="sm:col-span-2">
               <Input value={form.name} onChange={(e) => set({ name: e.target.value })} placeholder="Item name" />
             </Field>
-            <Field label="Type">
-              <Select value={form.kind} onValueChange={(v) => set({ kind: v as 'goods' | 'service', hsnSac: '' })}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="goods">Goods</SelectItem>
-                  <SelectItem value="service">Service</SelectItem>
-                </SelectContent>
-              </Select>
+            <Field label="Description" hint="Printed under the item on documents; filled from the HSN/SAC code" className="sm:col-span-2">
+              <Input value={form.description} onChange={(e) => set({ description: e.target.value })} placeholder="What it is" />
+            </Field>
+            <Field label="Goods or service" className="sm:col-span-2">
+              <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="Goods or service" data-slot="item-kind">
+                {[
+                  { v: 'goods' as const, icon: Package, label: 'Goods', hint: 'Has an HSN code; stock, units, batches and MRP' },
+                  { v: 'service' as const, icon: Wrench, label: 'Service', hint: 'Has a SAC code; no stock, billed by the job or hour' },
+                ].map((o) => (
+                  <button key={o.v} type="button" role="radio" aria-checked={form.kind === o.v}
+                    onClick={() => form.kind !== o.v && set({ kind: o.v, hsnSac: '', uqc: o.v === 'service' && form.uqc === 'NOS' ? 'OTH' : o.v === 'goods' && form.uqc === 'OTH' ? 'NOS' : form.uqc })}
+                    className={cn('flex items-start gap-2.5 rounded-md border p-2.5 text-left transition-colors', form.kind === o.v ? 'border-primary bg-primary/5' : 'hover:bg-accent/50')}>
+                    <o.icon className={cn('mt-0.5 size-4 shrink-0', form.kind === o.v ? 'text-primary' : 'text-muted-foreground')} />
+                    <span><span className="block text-sm font-medium">{o.label}</span><span className="block text-xs text-muted-foreground">{o.hint}</span></span>
+                  </button>
+                ))}
+              </div>
+            </Field>
+            <Field label={form.kind === 'goods' ? 'Where it comes from' : 'Where it is provided from'} className="sm:col-span-2">
+              <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="Local or imported" data-slot="item-origin">
+                {[
+                  { v: 'local' as const, icon: MapPin, label: form.kind === 'goods' ? 'Local' : 'From India', hint: form.kind === 'goods' ? 'Made or bought in India' : 'By a supplier in India' },
+                  { v: 'imported' as const, icon: Globe2, label: form.kind === 'goods' ? 'Imported' : 'From abroad', hint: form.kind === 'goods' ? 'Brought in from outside India' : 'Import of a service' },
+                ].map((o) => (
+                  <button key={o.v} type="button" role="radio" aria-checked={form.origin === o.v} onClick={() => set({ origin: o.v })}
+                    className={cn('flex items-start gap-2.5 rounded-md border p-2.5 text-left transition-colors', form.origin === o.v ? 'border-primary bg-primary/5' : 'hover:bg-accent/50')}>
+                    <o.icon className={cn('mt-0.5 size-4 shrink-0', form.origin === o.v ? 'text-primary' : 'text-muted-foreground')} />
+                    <span><span className="block text-sm font-medium">{o.label}</span><span className="block text-xs text-muted-foreground">{o.hint}</span></span>
+                  </button>
+                ))}
+              </div>
             </Field>
             <Field label="SKU">
               <Input value={form.sku} onChange={(e) => set({ sku: e.target.value })} placeholder="SKU-0001" />
             </Field>
             <Field
               label={form.kind === 'goods' ? 'HSN code' : 'SAC code'}
-              hint="Only codes an admin has approved"
+              hint="Fills the GST rate, unit and description"
               error={action.fieldErrors.hsnSac}
             >
               <Combobox
@@ -308,8 +359,11 @@ export default function ItemsPage() {
                     hsnSac: v,
                     gstRatePct: picked ? picked.gstRatePct : form.gstRatePct,
                     uqc: picked?.uqc || form.uqc,
+                    description: form.description.trim() ? form.description : picked?.description ?? '',
                   });
                 }}
+                createLabel={form.kind === 'goods' ? 'Add this HSN code' : 'Add this SAC code'}
+                onCreate={(q) => setNewCode({ code: q.replace(/\D/g, '').slice(0, 8), description: '', gstRatePct: form.gstRatePct })}
                 placeholder={form.kind === 'goods' ? 'Type 8 for 8xxx…' : 'Type 99…'}
                 searchPlaceholder="Type the first digits"
                 matchMode="prefix"
@@ -326,6 +380,30 @@ export default function ItemsPage() {
             <Field label="Purchase price">
               <MoneyInput valuePaise={form.purchasePrice} onChangePaise={(p) => set({ purchasePrice: p })} />
             </Field>
+            {newCode && (
+              <div className="space-y-2 rounded-md border border-primary/40 bg-primary/5 p-3 sm:col-span-2" data-slot="new-hsn">
+                <p className="text-sm font-medium">{newCode.code || 'This code'} is not on the approved list yet</p>
+                {canAddCode ? (
+                  <>
+                    <div className="grid gap-2 sm:grid-cols-[120px_1fr_110px]">
+                      <Input value={newCode.code} onChange={(e) => setNewCode({ ...newCode, code: e.target.value.replace(/\D/g, '').slice(0, 8) })} placeholder="Code" className="font-mono" aria-label="HSN or SAC code" />
+                      <Input value={newCode.description} onChange={(e) => setNewCode({ ...newCode, description: e.target.value })} placeholder="What it covers, as in the GST tariff" aria-label="Code description" />
+                      <select value={String(newCode.gstRatePct)} onChange={(e) => setNewCode({ ...newCode, gstRatePct: Number(e.target.value) })} aria-label="GST rate of the code"
+                        className="h-9 rounded-md border border-input bg-background px-2 text-sm">
+                        {GST_RATES.map((r) => <option key={r} value={r}>{r}%</option>)}
+                      </select>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button size="sm" onClick={() => void addCode()} disabled={addingCode}>{addingCode ? 'Adding…' : 'Add to approved codes'}</Button>
+                      <Button size="sm" variant="ghost" onClick={() => setNewCode(null)}>Cancel</Button>
+                    </div>
+                    <p className="text-[11px] text-muted-foreground">Check the rate against the GST rate schedule: GSTR-1 is validated against it.</p>
+                  </>
+                ) : (
+                  <p className="text-xs text-muted-foreground">Ask an admin to add it under Settings → HSN codes; only approved codes reach the GST return.</p>
+                )}
+              </div>
+            )}
             <Field label="GST rate" className="sm:col-span-2">
               <Select value={String(form.gstRatePct)} onValueChange={(v) => set({ gstRatePct: Number(v) })}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
@@ -334,6 +412,21 @@ export default function ItemsPage() {
                 </SelectContent>
               </Select>
             </Field>
+            <div className="space-y-1.5 rounded-md border bg-muted/30 p-3 text-xs sm:col-span-2" data-slot="gst-preview">
+              <p className="font-semibold">How GST falls on it at {form.gstRatePct}%</p>
+              <p><span className="text-muted-foreground">Sold within {homeState ? stateName(homeState) : 'your state'}:</span> CGST {form.gstRatePct / 2}% + SGST {form.gstRatePct / 2}%</p>
+              <p><span className="text-muted-foreground">Sold to another state:</span> IGST {form.gstRatePct}%</p>
+              <p><span className="text-muted-foreground">Exported:</span> zero-rated under your LUT, or IGST {form.gstRatePct}% refunded</p>
+              {form.origin === 'imported' ? (
+                <p data-slot="import-note"><span className="text-muted-foreground">{form.kind === 'goods' ? 'Imported:' : 'From abroad:'}</span>{' '}
+                  {form.kind === 'goods'
+                    ? `IGST ${form.gstRatePct}% paid at customs on the Bill of Entry, with the customs duty; claimed back as input credit`
+                    : `IGST ${form.gstRatePct}% paid by you under reverse charge, and claimed back as input credit`}
+                </p>
+              ) : (
+                <p><span className="text-muted-foreground">Bought:</span> CGST + SGST from a supplier in your state, IGST from another state</p>
+              )}
+            </div>
             {form.kind === 'goods' && (
               <>
                 <p className="border-t pt-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground sm:col-span-2">Stock</p>

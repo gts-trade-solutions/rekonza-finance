@@ -534,7 +534,7 @@ function NewBillForm() {
               <label className="block text-xs text-muted-foreground">
                 TDS Section
                 {vendor?.tdsSection && (
-                  <span className="ml-1 text-[11px]">(vendor default: {vendor.tdsSection})</span>
+                  <span className="ml-1 text-[11px]">(vendor default: {vendor.tdsSection}{(vendor.tdsSections?.length ?? 0) > 1 ? `; also ${vendor.tdsSections!.slice(1).join(', ')}` : ''})</span>
                 )}
               </label>
               <Combobox

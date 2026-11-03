@@ -22,7 +22,7 @@ const held = (r: SalesDocRow) => (r.paidPaise ?? 0) - (r.appliedPaise ?? 0);
 
 const columns: GridColumn<SalesDocRow>[] = [
   { key: 'date', header: 'Date', cell: (r) => <span className="tabular text-xs">{short(r.date)}</span>, csv: (r) => r.date },
-  { key: 'number', header: 'Retainer#', cell: (r) => <span className="font-medium">{r.number}</span>, csv: (r) => r.number },
+  { key: 'number', header: 'Service invoice#', cell: (r) => <span className="font-medium">{r.number}</span>, csv: (r) => r.number },
   { key: 'customer', header: 'Customer', cell: (r) => r.customerName, csv: (r) => r.customerName },
   { key: 'description', header: 'For', cell: (r) => <span className="text-xs text-muted-foreground">{r.detail}</span>, csv: (r) => r.detail ?? '' },
   { key: 'status', header: 'Status', cell: (r) => <StatusBadge status={r.status} />, csv: (r) => r.status },
@@ -41,7 +41,7 @@ export default function RetainerDetailsPage() {
 
   return (
     <ReportShell
-      title="Retainer Details"
+      title="Service Invoice Details"
       description="Advances billed, what has been received, and how much of that has actually been earned."
       range={range}
       onRangeChange={setRange}

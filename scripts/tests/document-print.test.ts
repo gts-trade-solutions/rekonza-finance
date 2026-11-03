@@ -103,7 +103,7 @@ test('each of the ten documents prints from what is stored: title, number, party
 
     const ret = await createRetainer(trx, orgId, null, { branchId, customerId: customer, date: '2026-10-06', description: 'Advance for the dies', amountPaise: 5_000_00, status: 'draft' });
     const r = await printableDocument(trx, orgId, 'retainer', ret.id);
-    assert.equal(r.title, 'Retainer Invoice');
+    assert.equal(r.title, 'Service Invoice');
     assert.deepEqual(r.after.map((a) => [a.label, a.paise]), [['Paid', 0], ['Balance due', 5_000_00]]);
 
     const rec = await receivePayment(trx, orgId, null, {

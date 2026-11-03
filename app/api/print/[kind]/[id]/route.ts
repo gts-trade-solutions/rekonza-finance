@@ -8,12 +8,14 @@ import { isPrintKind, PRINT_SIDE } from '@/lib/print-doc';
 // credit note, retainer, receipt, purchase order, vendor credit, payment
 // advice or bill. Seeing it needs the right to view sales or purchases.
 
-export const GET = route(async ({ orgId, role, user, params }) => {
+export const GET = route(async ({ orgId, role, user, params, req }) => {
   const kind = params.kind;
   if (!isPrintKind(kind)) throw notFound('There is no such document to print.');
   const area = PRINT_SIDE[kind] === 'customer' ? 'sales' : 'purchases';
   if (!hasPermission(role, area, 'view', user.permissions ?? null)) {
     throw forbidden(`Your role (${role}) cannot view ${area}. Ask an admin if you need this.`);
   }
-  return printableDocument(db, orgId, kind, idParam(params));
+  // A sales order prints as its proforma invoice when asked: ?as=proforma.
+  const proforma = kind === 'sales-order' && new URL(req.url).searchParams.get('as') === 'proforma';
+  return printableDocument(db, orgId, kind, idParam(params), { proforma });
 });

@@ -4,6 +4,7 @@ import { toPaiseFromSql } from '@/lib/server/money-sql';
 import { peekNumber, peekOrgNumber } from '@/lib/server/ledger/posting';
 import { fyLabelFor } from '@/lib/server/services/sales';
 import { hsnRateHistory } from '@/lib/server/tax/rates';
+import { parseSections } from '@/lib/tax/tds';
 
 /**
  * Everything a document form needs to render, in one request.
@@ -27,6 +28,7 @@ export const GET = route(
         .select([
           'id', 'kind', 'display_name', 'gstin', 'pan', 'gst_treatment', 'state_code',
           'email', 'phone', 'payment_terms', 'is_msme', 'tds_section', 'billing_address', 'currency', 'bill_wise',
+          'country', 'supplies',
         ])
         .where('org_id', '=', orgId)
         .where('is_archived', '=', 0)
@@ -36,7 +38,7 @@ export const GET = route(
         .selectFrom('items')
         .select([
           'id', 'kind', 'name', 'sku', 'hsn_sac', 'uqc', 'sale_price',
-          'purchase_price', 'gst_rate_pct', 'tax_pref', 'track_inventory', 'track_batches', 'track_serials', 'alt_uqc', 'alt_factor', 'mrp',
+          'purchase_price', 'gst_rate_pct', 'tax_pref', 'track_inventory', 'track_batches', 'track_serials', 'alt_uqc', 'alt_factor', 'mrp', 'origin',
         ])
         .where('org_id', '=', orgId)
         .where('is_archived', '=', 0)
@@ -150,12 +152,16 @@ export const GET = route(
         currency: c.currency,
         isMsme: !!c.is_msme,
         billWise: !!c.bill_wise,
-        tdsSection: c.tds_section,
+        tdsSection: parseSections(c.tds_section)[0] ?? null,
+        tdsSections: parseSections(c.tds_section),
         billingAddress: c.billing_address,
+        country: c.country,
+        supplies: c.supplies,
       })),
       items: items.map((i) => ({
         id: asId(i.id),
         kind: i.kind,
+        origin: i.origin,
         name: i.name,
         sku: i.sku,
         hsnSac: i.hsn_sac,
