@@ -376,7 +376,7 @@ export const PATCH = route(
 
     const existing = await db
       .selectFrom('contacts')
-      .select(['id', 'display_name', 'gstin', 'pan', 'state_code', 'gst_treatment'])
+      .select(['id', 'display_name', 'gstin', 'pan', 'state_code', 'gst_treatment', 'country'])
       .where('id', '=', id)
       .where('org_id', '=', orgId)
       .executeTakeFirst();
@@ -384,11 +384,14 @@ export const PATCH = route(
 
     // Validate the merged shape, not the patch: a partial update that changes
     // only the state code still has to agree with the GSTIN already on file.
+    // A GSTIN or PAN sent empty is being cleared, not left as it was.
+    const merged = <T>(sent: T | null | undefined, kept: T | null) => (sent === undefined ? kept : sent) ?? undefined;
     checkGstin({
-      gstin: input.gstin ?? existing.gstin ?? undefined,
+      gstin: merged(input.gstin, existing.gstin),
       stateCode: input.stateCode ?? existing.state_code,
       gstTreatment: (input.gstTreatment ?? existing.gst_treatment) as never,
-      pan: input.pan ?? existing.pan ?? undefined,
+      pan: merged(input.pan, existing.pan),
+      country: merged(input.country, existing.country),
     });
     // Only what the edit changes is checked against the others: the party
     // already on file is not its own duplicate.

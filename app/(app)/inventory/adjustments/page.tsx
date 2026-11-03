@@ -122,7 +122,7 @@ export default function StockAdjustmentsPage() {
     {
       key: 'reason', header: 'Reason', sortValue: (r) => r.reason,
       cell: (r) => (
-        <Badge variant="secondary" className="text-[10px] capitalize">{r.reason.replace('_', ' ')}</Badge>
+        <Badge variant="secondary" className="text-[10px] capitalize">{r.reason.replaceAll('_', ' ')}</Badge>
       ),
     },
     {

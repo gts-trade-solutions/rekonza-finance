@@ -44,7 +44,7 @@ test('templates: built-in until changed; saved wording is checked, used, and can
       const listed = await listTemplates(trx, orgId);
       assert.deepEqual(listed.filter((t) => t.custom).map((t) => t.kind), ['invoice']);
       assert.deepEqual(listed.map((t) => t.kind), [
-        'invoice', 'quote', 'sales_order', 'challan', 'credit_note', 'retainer', 'payment_receipt',
+        'invoice', 'quote', 'sales_order', 'proforma', 'challan', 'credit_note', 'retainer', 'payment_receipt',
         'purchase_order', 'vendor_credit', 'payment_advice', 'statement', 'reminder', 'portal_invite',
       ]);
 

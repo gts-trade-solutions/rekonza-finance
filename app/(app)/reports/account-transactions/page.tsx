@@ -74,10 +74,10 @@ const columns: GridColumn<Row>[] = [
     cell: (r) =>
       r.sourceId && SOURCE_ROUTE[r.sourceType] ? (
         <Link href={`${SOURCE_ROUTE[r.sourceType]}/${r.sourceId}`} className="text-xs capitalize text-primary hover:underline">
-          {r.sourceType.replace('_', ' ')} ↗
+          {r.sourceType.replaceAll('_', ' ')} ↗
         </Link>
       ) : (
-        <Badge variant="secondary" className="text-[9px] capitalize">{r.sourceType.replace('_', ' ')}</Badge>
+        <Badge variant="secondary" className="text-[9px] capitalize">{r.sourceType.replaceAll('_', ' ')}</Badge>
       ),
     csv: (r) => r.sourceType,
   },

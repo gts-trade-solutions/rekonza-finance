@@ -11,6 +11,7 @@
 // decision — and that is the only version that touches the bank.
 
 import { useState } from 'react';
+import { localDay } from '@/lib/selectors';
 import { FileMinus, Plus, Undo2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -48,7 +49,7 @@ const REASONS = [
 ];
 
 const RATE_OPTIONS = [0, 5, 12, 18, 28].map((r) => ({ value: String(r), label: `${r}%` }));
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => localDay(new Date());
 const short = (d: string) => new Date(d).toLocaleDateString('en-IN');
 
 export default function CreditNotesPage() {

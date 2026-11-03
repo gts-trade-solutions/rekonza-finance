@@ -73,7 +73,7 @@ export default function ApprovalsPage() {
                     <tr key={`${p.documentType}-${p.id}`} className="border-b last:border-0">
                       <td className="px-3 py-2 text-sm">
                         <Link href={href(p.documentType, p.id)} className="font-medium hover:underline">{p.number}</Link>
-                        <Badge variant="outline" className="ml-2 text-[10px]">{p.documentType.replace('_', ' ')}</Badge>
+                        <Badge variant="outline" className="ml-2 text-[10px]">{p.documentType.replaceAll('_', ' ')}</Badge>
                       </td>
                       <td className="px-3 py-2 text-sm">{p.partyName}</td>
                       <td className="px-3 py-2 text-xs text-muted-foreground">

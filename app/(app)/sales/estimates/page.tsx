@@ -8,6 +8,7 @@
 // the ledger finally hears about it.
 
 import { ArrowRight, FileText } from 'lucide-react';
+import { localDay } from '@/lib/selectors';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -25,12 +26,12 @@ import { useApi, useApiAction } from '@/lib/api/use-api';
 import { usePermission } from '@/lib/store/hooks';
 
 const short = (d: string | null) => (d ? new Date(d).toLocaleDateString('en-IN') : '—');
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => localDay(new Date());
 
 function inDays(n: number): string {
   const d = new Date();
   d.setDate(d.getDate() + n);
-  return d.toISOString().slice(0, 10);
+  return localDay(d);
 }
 
 export default function EstimatesPage() {

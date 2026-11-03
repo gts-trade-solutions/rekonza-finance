@@ -32,7 +32,7 @@ async function sender(ex: Executor, orgId: number) {
   return { name: org.legal_name || org.name, replyTo: org.email };
 }
 
-export interface EmailOptions { to?: string[]; cc?: string[]; message?: string | null; baseUrl?: string }
+export interface EmailOptions { to?: string[]; cc?: string[]; message?: string | null; baseUrl?: string; proforma?: boolean }
 
 export async function emailInvoice(orgId: number, userId: number | null, invoiceId: number, opts: EmailOptions = {}) {
   const inv = await db.selectFrom('invoices as i').innerJoin('contacts as c', 'c.id', 'i.customer_id')
@@ -99,8 +99,11 @@ function detailLine(d: PrintDoc): string {
  */
 export async function emailDocument(orgId: number, userId: number | null, kind: PrintKind, id: number, opts: EmailOptions = {}) {
   if (kind === 'bill' || !EMAILABLE[kind]) throw badRequest('A bill is the vendor’s own document; there is nothing to send them.');
-  const d = await printableDocument(db, orgId, kind, id);
-  if (d.tag === 'Cancelled') throw badRequest(`That ${PRINT_NOUN[kind]} was cancelled.`);
+  // A sales order's proforma invoice goes as itself, in its own words.
+  const proforma = kind === 'sales-order' && !!opts.proforma;
+  const noun = proforma ? 'proforma invoice' : PRINT_NOUN[kind];
+  const d = await printableDocument(db, orgId, kind, id, { proforma });
+  if (d.tag === 'Cancelled') throw badRequest(`That ${noun} was cancelled.`);
   const to = opts.to?.length ? opts.to : await documentRecipients(db, orgId, Number(d.partyId));
   if (!to.length) throw badRequest(`${d.party.name} has no email address. Add one to the contact, or to a contact person.`);
   const from = await sender(db, orgId);
@@ -111,11 +114,11 @@ export async function emailDocument(orgId: number, userId: number | null, kind: 
       if (kind === 'retainer') await trx.updateTable('retainer_invoices').set({ status: 'sent' }).where('id', '=', id).where('org_id', '=', orgId).execute();
       if (kind === 'purchase-order') await trx.updateTable('purchase_orders').set({ status: 'open' }).where('id', '=', id).where('org_id', '=', orgId).execute();
     }
-    const link = await createDocumentLink(trx, orgId, userId, { kind, id, days: 90 });
+    const link = await createDocumentLink(trx, orgId, userId, { kind, id, days: 90, proforma });
     const url = `${(opts.baseUrl ?? siteUrl()).replace(/\/$/, '')}${link.path}`;
-    const mail = await renderEmail(trx, orgId, EMAIL_KIND[kind], {
-      party: d.party.name, document: PRINT_NOUN[kind], number: d.number, date: dmy(d.date), total: inr(d.totalPaise),
-      detail_line: detailLine(d), link: url, business: from.name,
+    const mail = await renderEmail(trx, orgId, proforma ? 'proforma' : EMAIL_KIND[kind], {
+      party: d.party.name, document: noun, number: d.number, date: dmy(d.date), total: inr(d.totalPaise),
+      detail_line: proforma ? '' : detailLine(d), link: url, business: from.name,
     });
     const typed = opts.message?.trim();
     const text = typed ? (typed.includes(url) ? typed : `${typed}\n\nView or download it here: ${url}\n\nRegards,\n${from.name}`) : mail.text;

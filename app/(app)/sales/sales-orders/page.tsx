@@ -8,6 +8,7 @@
 // invoiced is the backlog still to deliver.
 
 import { useState } from 'react';
+import { localDay } from '@/lib/selectors';
 import { ArrowRight, ClipboardList, FileText, Hammer, PackageCheck, Truck } from 'lucide-react';
 import { toast } from 'sonner';
 import { useRouter } from 'next/navigation';
@@ -33,7 +34,7 @@ import { useApi } from '@/lib/api/use-api';
 import { usePermission } from '@/lib/store/hooks';
 
 const short = (d: string | null) => (d ? new Date(d).toLocaleDateString('en-IN') : '—');
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => localDay(new Date());
 
 type Stage = NonNullable<SalesDocRow['stage']>;
 const STAGES: { key: Stage; label: string; tone: string }[] = [
@@ -47,7 +48,7 @@ const stageOf = (r: SalesDocRow) => STAGES.find((s) => s.key === (r.stage ?? 'or
 function inDays(n: number): string {
   const d = new Date();
   d.setDate(d.getDate() + n);
-  return d.toISOString().slice(0, 10);
+  return localDay(d);
 }
 
 export default function SalesOrdersPage() {

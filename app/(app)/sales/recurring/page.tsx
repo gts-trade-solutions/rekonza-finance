@@ -11,6 +11,7 @@
 // so the GST, the numbering and the posting are identical.
 
 import { useState } from 'react';
+import { localDay } from '@/lib/selectors';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Bell, Mail, Play, Plus, Repeat, Trash2 } from 'lucide-react';
@@ -53,7 +54,7 @@ const TERMS = [
 ];
 
 
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => localDay(new Date());
 const short = (d: string | null) => (d ? new Date(d).toLocaleDateString('en-IN') : '—');
 
 const BLANK = {

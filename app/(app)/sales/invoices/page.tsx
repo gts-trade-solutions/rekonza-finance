@@ -44,6 +44,15 @@ const TAB_LABEL: Record<(typeof FILTERS)[number], string> = {
   void: 'Cancelled',
 };
 
+const SUPPLY_SHORT: Record<string, string> = {
+  intra: 'CGST+SGST',
+  inter: 'IGST',
+  export_lut: 'Export (LUT)',
+  export_with_tax: 'Export + IGST',
+  sez: 'SEZ',
+  nil_or_exempt: 'Nil / exempt',
+};
+
 export default function InvoicesPage() {
   const router = useRouter();
   const canCreate = usePermission('sales', 'create');
@@ -111,7 +120,7 @@ export default function InvoicesPage() {
       sortValue: (r) => r.supplyType,
       cell: (r) => (
         <span className="text-xs uppercase text-muted-foreground">
-          {r.supplyType === 'intra' ? 'CGST+SGST' : r.supplyType === 'inter' ? 'IGST' : r.supplyType.replace('_', ' ')}
+          {SUPPLY_SHORT[r.supplyType] ?? r.supplyType.replaceAll('_', ' ')}
         </span>
       ),
     },

@@ -21,7 +21,7 @@ const columns: GridColumn<SalesDocRow>[] = [
   { key: 'number', header: 'Quote#', cell: (r) => <span className="font-medium">{r.number}</span>, csv: (r) => r.number },
   { key: 'customer', header: 'Customer', cell: (r) => r.customerName, csv: (r) => r.customerName },
   { key: 'expiry', header: 'Valid Until', cell: (r) => <span className="tabular text-xs">{short(r.expiry)}</span>, csv: (r) => r.expiry ?? '' },
-  { key: 'converted', header: 'Converted To', cell: (r) => <span className="text-xs">{r.detail ? `${r.detail.replace('_', ' ')} #${r.linkedId}` : '—'}</span>, csv: (r) => (r.detail ? `${r.detail} ${r.linkedId}` : '') },
+  { key: 'converted', header: 'Converted To', cell: (r) => <span className="text-xs">{r.detail ? `${r.detail.replaceAll('_', ' ')} #${r.linkedId}` : '—'}</span>, csv: (r) => (r.detail ? `${r.detail} ${r.linkedId}` : '') },
   { key: 'status', header: 'Status', cell: (r) => <StatusBadge status={r.status} />, csv: (r) => r.status },
   { key: 'taxable', header: 'Taxable', align: 'right', cell: (r) => <Money value={r.subtotalPaise} />, csv: (r) => toRupees(r.subtotalPaise), total: (rs) => <Money value={rs.reduce((t, r) => t + r.subtotalPaise, 0)} /> },
   { key: 'total', header: 'Total', align: 'right', cell: (r) => <Money value={r.totalPaise} className="font-medium" />, csv: (r) => toRupees(r.totalPaise), total: (rs) => <Money value={rs.reduce((t, r) => t + r.totalPaise, 0)} /> },

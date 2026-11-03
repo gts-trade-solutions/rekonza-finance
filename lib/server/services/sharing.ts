@@ -29,7 +29,9 @@ export async function createShareLink(trx: Trx, orgId: number, userId: number | 
 }
 
 /** A link to one document's printed copy: what an emailed quote, order or receipt opens. */
-export async function createDocumentLink(trx: Trx, orgId: number, userId: number | null, input: { kind: PrintKind; id: number; days?: number }) {
+export async function createDocumentLink(
+  trx: Trx, orgId: number, userId: number | null, input: { kind: PrintKind; id: number; days?: number; proforma?: boolean },
+) {
   const doc = await documentParty(trx, orgId, input.kind, input.id);
   if (!doc) throw notFound('That document does not exist.');
   if (doc.status === 'draft' && input.kind !== 'estimate' && input.kind !== 'purchase-order' && input.kind !== 'retainer') {
@@ -38,9 +40,19 @@ export async function createDocumentLink(trx: Trx, orgId: number, userId: number
   const token = randomBytes(24).toString('base64url');
   const expiresAt = new Date(Date.now() + Math.min(Math.max(input.days ?? 30, 1), 180) * 86_400_000);
   await trx.insertInto('share_links').values({
-    org_id: orgId, token_hash: hash(token), doc_type: 'document', doc_kind: input.kind, doc_id: input.id, expires_at: expiresAt, created_by_user_id: userId,
+    org_id: orgId, token_hash: hash(token), doc_type: 'document', doc_kind: documentLinkKind(input.kind, input.proforma), doc_id: input.id,
+    expires_at: expiresAt, created_by_user_id: userId,
   }).execute();
   return { path: `/share/${token}`, expiresAt: expiresAt.toISOString() };
+}
+
+/** A sales order's proforma invoice is its own kind of link: it opens the proforma, not the order. */
+const PROFORMA_LINK = 'proforma';
+const documentLinkKind = (kind: PrintKind, proforma?: boolean) => (kind === 'sales-order' && proforma ? PROFORMA_LINK : kind);
+
+/** What a document link's stored kind opens: the kind to print, and whether as the proforma. */
+export function documentLinkTarget(docKind: string | null): { kind: string | null; proforma: boolean } {
+  return docKind === PROFORMA_LINK ? { kind: 'sales-order', proforma: true } : { kind: docKind, proforma: false };
 }
 
 /** A link to one employee's payslip in a posted payroll month. */
@@ -80,7 +92,8 @@ export async function listShareLinks(ex: Executor, orgId: number, invoiceId: num
 /** Every live link to one document (a quote, an order, a receipt …) stops working. */
 export async function revokeDocumentLinks(trx: Trx, orgId: number, kind: PrintKind, id: number) {
   const r = await trx.updateTable('share_links').set({ revoked_at: new Date() })
-    .where('org_id', '=', orgId).where('doc_type', '=', 'document').where('doc_kind', '=', kind).where('doc_id', '=', id)
+    .where('org_id', '=', orgId).where('doc_type', '=', 'document')
+    .where('doc_kind', 'in', kind === 'sales-order' ? [kind, PROFORMA_LINK] : [kind]).where('doc_id', '=', id)
     .where('revoked_at', 'is', null).where('expires_at', '>', new Date()).executeTakeFirst();
   return Number(r.numUpdatedRows);
 }

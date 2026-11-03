@@ -25,17 +25,20 @@ export const POST = route(
     const input = await body(req, z.object({
       invoiceId: z.coerce.number().int().positive().optional(), days: z.number().int().min(1).max(180).optional(),
       payslip: z.object({ runId: z.coerce.number().int().positive(), employeeId: z.coerce.number().int().positive() }).optional(),
-      document: z.object({ kind: z.enum(PRINT_KINDS as [PrintKind, ...PrintKind[]]), id: z.coerce.number().int().positive() }).optional(),
+      document: z.object({
+        kind: z.enum(PRINT_KINDS as [PrintKind, ...PrintKind[]]), id: z.coerce.number().int().positive(), proforma: z.boolean().optional(),
+      }).optional(),
     }));
     if (input.document) {
       const d = input.document;
       const area = PRINT_SIDE[d.kind] === 'customer' ? 'sales' : 'purchases';
       if (!hasPermission(role, area, 'export')) throw forbidden(`Sharing a document needs the right to export in ${area}.`);
       return transaction(async (trx) => {
-        const link = await createDocumentLink(trx, orgId, user.userId, { kind: d.kind, id: d.id, days: input.days });
+        const proforma = d.kind === 'sales-order' && !!d.proforma;
+        const link = await createDocumentLink(trx, orgId, user.userId, { kind: d.kind, id: d.id, days: input.days, proforma });
         await logAudit({
           trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'export', targetType: d.kind, targetId: d.id,
-          detail: `Share link to the ${PRINT_NOUN[d.kind]} made, open until ${link.expiresAt.slice(0, 10)}`, ...auditMeta(req),
+          detail: `Share link to the ${proforma ? 'proforma invoice' : PRINT_NOUN[d.kind]} made, open until ${link.expiresAt.slice(0, 10)}`, ...auditMeta(req),
         });
         return link;
       });
@@ -73,7 +76,9 @@ export const PATCH = route(
   async ({ orgId, user, role, req }) => {
     const input = await body(req, z.object({
       invoiceId: z.coerce.number().int().positive().optional(),
-      document: z.object({ kind: z.enum(PRINT_KINDS as [PrintKind, ...PrintKind[]]), id: z.coerce.number().int().positive() }).optional(),
+      document: z.object({
+        kind: z.enum(PRINT_KINDS as [PrintKind, ...PrintKind[]]), id: z.coerce.number().int().positive(), proforma: z.boolean().optional(),
+      }).optional(),
       payslip: z.object({ runId: z.coerce.number().int().positive(), employeeId: z.coerce.number().int().positive() }).optional(),
     }));
     if (input.document) {

@@ -24,8 +24,9 @@ import { CLONABLE, EMAILABLE, PRINT_NOUN, PRINT_SIDE, type PrintDoc, type PrintK
 
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
-/** Sending, sharing and cloning one document; shared by the row menu and the print screen. */
-function useDocumentActions(kind: PrintKind, id: string, onChanged?: () => void) {
+/** Sending, sharing and cloning one document; shared by the row menu and the print screen. A sales order can go as its proforma invoice. */
+function useDocumentActions(kind: PrintKind, id: string, onChanged?: () => void, proforma = false) {
+  const noun = proforma ? 'proforma invoice' : PRINT_NOUN[kind];
   const router = useRouter();
   const area = PRINT_SIDE[kind] === 'customer' ? 'sales' : 'purchases';
   const canShare = usePermission(area, 'export');
@@ -44,19 +45,19 @@ function useDocumentActions(kind: PrintKind, id: string, onChanged?: () => void)
     api.get<{ configured: boolean }>('/api/email', { docType: kind, docId: id }).then((r) => setMailReady(r.configured)).catch(() => setMailReady(false));
   };
   const link = async () => {
-    const r = await api.post<{ path: string }>('/api/share', { document: { kind, id } });
+    const r = await api.post<{ path: string }>('/api/share', { document: { kind, id, ...(proforma ? { proforma } : {}) } });
     return `${window.location.origin}${r.path}`;
   };
-  const doc = () => api.get<PrintDoc>(`/api/print/${kind}/${id}`);
+  const doc = () => api.get<PrintDoc>(`/api/print/${kind}/${id}`, proforma ? { as: 'proforma' } : undefined);
   const message = (d: PrintDoc, url: string) =>
-    `Dear ${d.party.name}, please find ${PRINT_NOUN[kind]} ${d.number} for ${formatINR(d.totalPaise)}: ${url}\n— ${d.seller.name}`;
+    `Dear ${d.party.name}, please find ${noun} ${d.number} for ${formatINR(d.totalPaise)}: ${url}\n— ${d.seller.name}`;
 
   return {
     busy, canShare, canSend, mailReady, checkMail,
-    canClone: canSend && CLONABLE[kind],
+    canClone: canSend && CLONABLE[kind] && !proforma,
     canEmail: canSend && EMAILABLE[kind],
     emailNow: () => run(async () => {
-      const r = await api.post<{ to: string[] }>('/api/email', { kind: 'document', docKind: kind, id });
+      const r = await api.post<{ to: string[] }>('/api/email', { kind: 'document', docKind: kind, id, ...(proforma ? { proforma } : {}) });
       toast.success('Emailed', { description: `To ${r.to.join(', ')}, with a link to view and download it.` });
       onChanged?.();
     }),
@@ -66,17 +67,17 @@ function useDocumentActions(kind: PrintKind, id: string, onChanged?: () => void)
     }),
     mailApp: () => run(async () => {
       const [d, url] = await Promise.all([doc(), link()]);
-      const subject = `${cap(PRINT_NOUN[kind])} ${d.number} from ${d.seller.name}`;
+      const subject = `${cap(noun)} ${d.number} from ${d.seller.name}`;
       window.open(`mailto:${encodeURIComponent(d.party.email ?? '')}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(message(d, url))}`, '_self');
     }),
     copyLink: () => run(async () => {
       const url = await link();
       await navigator.clipboard.writeText(url).catch(() => {});
-      toast.success('Link copied', { description: `It opens the ${PRINT_NOUN[kind]} for thirty days, without signing in.` });
+      toast.success('Link copied', { description: `It opens the ${noun} for thirty days, without signing in.` });
     }),
     canWithdraw: usePermission(area, 'edit'),
     withdraw: () => run(async () => {
-      if (!window.confirm(`Stop every link to this ${PRINT_NOUN[kind]} working? Anyone who has one will be told to ask for a new one.`)) return;
+      if (!window.confirm(`Stop every link to this ${noun} working? Anyone who has one will be told to ask for a new one.`)) return;
       const r = await api.patch<{ revoked: number }>('/api/share', { document: { kind, id } });
       toast.success(r.revoked ? `${r.revoked} link${r.revoked === 1 ? '' : 's'} withdrawn` : 'There were no live links');
     }),
@@ -136,8 +137,8 @@ function SendItems({ a, separated = false }: { a: ReturnType<typeof useDocumentA
 }
 
 /** Send and Clone beside Print on the printed copy's screen. */
-export function DocumentScreenActions({ kind, id }: { kind: PrintKind; id: string }) {
-  const a = useDocumentActions(kind, id);
+export function DocumentScreenActions({ kind, id, proforma = false }: { kind: PrintKind; id: string; proforma?: boolean }) {
+  const a = useDocumentActions(kind, id, undefined, proforma);
   return (
     <>
       {a.canShare && (

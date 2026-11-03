@@ -10,6 +10,7 @@
 // both the profit and the GST due on it.
 
 import { useState } from 'react';
+import { localDay } from '@/lib/selectors';
 import { HandCoins, Info, Plus } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card } from '@/components/ui/card';
@@ -37,7 +38,7 @@ import { useAppStore } from '@/lib/store';
 import { usePermission } from '@/lib/store/hooks';
 import { formatINR } from '@/lib/money';
 
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => localDay(new Date());
 const short = (d: string) => new Date(d).toLocaleDateString('en-IN');
 
 export default function RetainersPage() {

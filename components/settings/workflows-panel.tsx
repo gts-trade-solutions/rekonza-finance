@@ -31,7 +31,7 @@ const OPS = [
   { value: 'gt', label: 'is more than' }, { value: 'gte', label: 'is at least' }, { value: 'lt', label: 'is less than' },
   { value: 'lte', label: 'is at most' }, { value: 'eq', label: 'is' }, { value: 'ne', label: 'is not' }, { value: 'contains', label: 'contains' },
 ];
-const eventLabel = (e: string) => e.replace('_', ' ').replace('.', ' ').replace(/^./, (c) => c.toUpperCase());
+const eventLabel = (e: string) => e.replaceAll('_', ' ').replace('.', ' ').replace(/^./, (c) => c.toUpperCase());
 const BLANK: Rule = { id: '', name: '', event: 'invoice.created', conditions: [], actions: [{ type: 'notify', to: 'admins' }], isActive: true, runs: 0, lastRunAt: null };
 
 export function WorkflowsPanel({ canEdit }: { canEdit: boolean }) {

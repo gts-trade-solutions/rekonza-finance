@@ -21,11 +21,11 @@ import { ageingBucket } from './ledger/reports';
  * midnight and half past five in the morning IST those disagree, and dating a
  * tax invoice to yesterday is not a rounding error.
  */
-export const today = (): string => {
-  const d = new Date();
+export const localDay = (d: Date): string => {
   const pad = (n: number) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 };
+export const today = (): string => localDay(new Date());
 
 export function contactName(s: AppState, id: string | null | undefined): string {
   if (!id) return '—';

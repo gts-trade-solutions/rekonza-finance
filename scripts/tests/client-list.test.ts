@@ -14,6 +14,8 @@ import { raiseProforma, setOrderStage } from '../../lib/server/services/order-st
 import { postManualJournal } from '../../lib/server/services/journals';
 import { bankStatementAsOn } from '../../lib/server/reports/bank-statement';
 import { printableDocument } from '../../lib/server/services/document-print';
+import { createDocumentLink, documentLinkTarget, revokeDocumentLinks } from '../../lib/server/services/sharing';
+import { renderEmail } from '../../lib/server/mail/templates';
 import { daysOverdue, paymentStatusOf } from '../../components/shared/invoice-status';
 import { companyTypeFrom, COMPANY_TYPES, BUSINESS_NATURES, PARTY_KINDS } from '../../lib/company-profile';
 import { COUNTRIES, countryCurrency, countryName } from '../../lib/countries';
@@ -41,6 +43,8 @@ async function book(trx: Trx) {
   await trx.insertInto('hsn_codes').values([
     { org_id: orgId, code: '8708', kind: 'hsn', description: 'Motor vehicle parts', gst_rate_pct: 18, is_active: 1 },
     { org_id: orgId, code: '998714', kind: 'sac', description: 'Maintenance and repair of vehicles', gst_rate_pct: 18, is_active: 1 },
+    { org_id: orgId, code: '998719', kind: 'sac', description: 'Maintenance and repair services', gst_rate_pct: 18, is_active: 1 },
+    { org_id: orgId, code: '7318', kind: 'hsn', description: 'Screws, bolts and nuts', gst_rate_pct: 18, is_active: 1 },
   ]).execute();
   const goods = await item({ kind: 'goods', name: 'Brake pad set', hsn_sac: '8708', sale_price: '1000.0000' });
   const service = await item({ kind: 'service', name: 'Fitting labour', hsn_sac: '998714', sale_price: '500.0000', uqc: 'OTH' });
@@ -66,6 +70,16 @@ test('an order goes proforma → work in process → ready, and ready raises the
     assert.equal(printed.title, 'Proforma Invoice');
     assert.equal(printed.number, pi.number);
     assert.ok(printed.facts.some((f) => f.label === 'Against order' && f.value === so.number));
+
+    // Sent as itself: its link opens the proforma, its email says proforma, and withdrawing the order's links stops it too.
+    await createDocumentLink(trx, b.orgId, null, { kind: 'sales-order', id: so.id, proforma: true });
+    const stored = await trx.selectFrom('share_links').select('doc_kind').where('org_id', '=', b.orgId).where('doc_id', '=', so.id).executeTakeFirstOrThrow();
+    assert.deepEqual(documentLinkTarget(stored.doc_kind), { kind: 'sales-order', proforma: true });
+    assert.deepEqual(documentLinkTarget('sales-order'), { kind: 'sales-order', proforma: false });
+    const mail = await renderEmail(trx, b.orgId, 'proforma', { party: 'Order Customer', document: 'proforma invoice', number: pi.number, date: '02/06/2026', total: '₹4,720.00', detail_line: '', link: 'https://x/s/1', business: 'Client List Co' });
+    assert.equal(mail.subject, `Proforma invoice ${pi.number} from Client List Co`);
+    assert.match(mail.text, new RegExp(`proforma invoice ${pi.number} dated 02/06/2026`));
+    assert.equal(await revokeDocumentLinks(trx, b.orgId, 'sales-order', so.id), 1);
 
     assert.equal((await setOrderStage(trx, b.orgId, null, so.id, 'in_process', '2026-06-03')).stage, 'in_process');
 
@@ -100,6 +114,25 @@ test('an order goes proforma → work in process → ready, and ready raises the
     await assert.rejects(raiseProforma(trx, b.orgId, (await createSalesOrder(trx, b.orgId, null, {
       branchId: b.branchId, customerId: b.customerId, date: '2026-06-01', lines: [{ itemId: b.goods, qty: 1, ratePaise: 1000_00, gstRatePct: 18 }],
     })).id, '2026-06-02').then(() => raiseProforma(trx, b.orgId, so.id, '2026-06-13')), /already invoiced/);
+  });
+});
+
+test('ready for delivery: a typed line with a SAC code is a service, not on the challan', async () => {
+  await rolledBack(async (trx) => {
+    const b = await book(trx);
+    const so = await createSalesOrder(trx, b.orgId, null, {
+      branchId: b.branchId, customerId: b.customerId, date: '2026-06-01',
+      lines: [
+        { itemId: b.goods, qty: 1, ratePaise: 1000_00, gstRatePct: 18 },
+        { description: 'Installation charges', hsnSac: '998719', qty: 1, uqc: 'OTH', ratePaise: 750_00, gstRatePct: 18 },
+        { description: 'Spare bolts', hsnSac: '7318', qty: 10, uqc: 'NOS', ratePaise: 5_00, gstRatePct: 18 },
+      ],
+    });
+    const ready = await setOrderStage(trx, b.orgId, null, so.id, 'ready', '2026-06-04');
+    const invLines = await trx.selectFrom('invoice_lines').select('description').where('invoice_id', '=', ready.ready!.invoice!.id).execute();
+    assert.equal(invLines.length, 3, 'all three are invoiced');
+    const dcLines = await trx.selectFrom('challan_lines').select(['item_id', 'description']).where('challan_id', '=', ready.ready!.challan!.id).orderBy('line_no').execute();
+    assert.deepEqual(dcLines.map((l) => l.item_id ?? l.description), [b.goods, 'Spare bolts'], 'the goods travel; the installation does not');
   });
 });
 
@@ -162,6 +195,51 @@ test('the bank statement as on a date works the books through to the bank', asyn
     assert.deepEqual(early.notPresented.map((i) => i.amountPaise), [20_000_00], 'cheque 101 cleared on the 6th, not by the 5th');
     assert.equal(early.statementPaise, 50_000_00);
     assert.equal(early.differencePaise, 0);
+  });
+});
+
+test('the bank statement: a cheque issued before the first statement line, and a receipt booked after the bank had it', async () => {
+  await rolledBack(async (trx) => {
+    const b = await book(trx);
+    const bankId = Number((await trx.insertInto('bank_accounts').values({
+      org_id: b.orgId, kind: 'bank', name: 'Current Account', ledger_account_id: b.acc[CODE.BANK_DEFAULT], opening_balance: '0.0000',
+    }).executeTakeFirstOrThrow()).insertId);
+    const bank = b.acc[CODE.BANK_DEFAULT];
+    const post = (date: string, memo: string, dr: number, cr: number) => postManualJournal(trx, b.orgId, null, {
+      branchId: b.branchId, date, memo, approved: true,
+      lines: dr ? [{ accountId: bank, debitPaise: dr }, { accountId: b.acc[CODE.SALES], creditPaise: dr }]
+        : [{ accountId: b.acc[CODE.RENT], debitPaise: cr }, { accountId: bank, creditPaise: cr }],
+    });
+    await post('2026-06-20', 'Capital banked', 100_000_00, 0); // before the statement: in its opening balance
+    const cheque = await post('2026-06-28', 'Cheque 100 to landlord', 0, 10_000_00);
+    const receipt = await post('2026-08-02', 'Receipt from Acme', 3_000_00, 0);
+
+    let n = 0;
+    const line = (date: string, narration: string, deposit: number, withdrawal: number, balance: number, matched?: number) =>
+      trx.insertInto('bank_transactions').values({
+        org_id: b.orgId, bank_account_id: bankId, txn_date: date, narration, dedupe_hash: `p${++n}`,
+        deposit: (deposit / 100).toFixed(4), withdrawal: (withdrawal / 100).toFixed(4), running_balance: (balance / 100).toFixed(4),
+        status: matched ? 'matched' : 'unmatched', matched_type: matched ? 'journal_entry' : null, matched_id: matched ?? null,
+      }).execute();
+    await line('2026-07-01', 'INTEREST', 50_00, 0, 100_050_00);
+    await line('2026-07-05', 'CHQ 100', 0, 10_000_00, 90_050_00, Number(cheque.id));
+    await line('2026-07-31', 'NEFT ACME', 3_000_00, 0, 93_050_00, Number(receipt.id));
+
+    const before = await bankStatementAsOn(trx, b.orgId, bankId, '2026-07-03');
+    assert.equal(before.bookPaise, 90_000_00);
+    assert.deepEqual(before.notPresented.map((i) => i.amountPaise), [10_000_00], 'issued before the first line, presented after the date');
+    assert.equal(before.differencePaise, 0);
+
+    const monthEnd = await bankStatementAsOn(trx, b.orgId, bankId, '2026-07-31');
+    assert.equal(monthEnd.bookPaise, 90_000_00);
+    assert.deepEqual(monthEnd.notPresented, [], 'the cheque was presented on the 5th');
+    assert.deepEqual(monthEnd.bankCredits.map((i) => i.amountPaise), [50_00, 3_000_00], 'the NEFT is in the bank, not yet in the books');
+    assert.match(monthEnd.bankCredits[1].particulars, /in the books on 2026-08-02/);
+    assert.equal(monthEnd.differencePaise, 0);
+
+    const after = await bankStatementAsOn(trx, b.orgId, bankId, '2026-08-05');
+    assert.deepEqual(after.bankCredits.map((i) => i.amountPaise), [50_00]);
+    assert.equal(after.differencePaise, 0);
   });
 });
 

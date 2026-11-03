@@ -215,7 +215,7 @@ function AssetBody({ id, canEdit, onChanged, onClose }: { id: string; canEdit: b
             ))}
             {d.verifications.map((v) => (
               <li key={`v${v.id}`} className="flex justify-between gap-3 px-3 py-2">
-                <span>{fmt(v.date)} · verified {v.found ? 'and found' : '— NOT FOUND'}{v.condition ? `, ${v.condition.replace('_', ' ')}` : ''}{v.location ? `, at ${v.location}` : ''}{v.by ? ` (${v.by})` : ''}</span>
+                <span>{fmt(v.date)} · verified {v.found ? 'and found' : '— NOT FOUND'}{v.condition ? `, ${v.condition.replaceAll('_', ' ')}` : ''}{v.location ? `, at ${v.location}` : ''}{v.by ? ` (${v.by})` : ''}</span>
               </li>
             ))}
           </ul>

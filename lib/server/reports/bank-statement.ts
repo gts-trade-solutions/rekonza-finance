@@ -15,9 +15,14 @@ import 'server-only';
 // entry is cleared when a statement line dated on or before the date was
 // matched to it, or to the payment it records.
 //
+// A statement line and the entry it was matched to need not share a date: a
+// NEFT on the 31st entered in the books on the 2nd is in the bank and not in
+// the books as on the 31st, so it is listed with the bank's own credits.
+//
 // Statements are usually imported from some date on, not from the first day of
 // the account: an entry before the first imported line is taken to be in the
-// statement's own opening balance already, and is not listed.
+// statement's own opening balance already, and is not listed, unless a later
+// statement line was matched to it (a cheque issued before, presented after).
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { sql } from 'kysely';
@@ -49,6 +54,17 @@ export async function bankStatementAsOn(ex: Executor, orgId: number, bankAccount
            (SELECT MAX(t.txn_date) FROM bank_transactions t WHERE t.org_id = ${orgId} AND t.bank_account_id = ${account.id} AND t.txn_date <= ${asOf}) AS statement_date`.execute(ex);
   const firstLine = span[0]?.first_line ? day(span[0].first_line) : null;
 
+  // The entries statement lines were matched to (directly, or through the
+  // payment they record): every one, or those the bank had cleared by a date.
+  const matchedEntries = (upTo: string | null) => sql`
+    SELECT t.matched_id FROM bank_transactions t
+     WHERE t.org_id = ${orgId} AND t.bank_account_id = ${account.id} AND t.status IN ('matched', 'manually_added')
+       AND t.matched_type = 'journal_entry' AND t.matched_id IS NOT NULL ${upTo ? sql`AND t.txn_date <= ${upTo}` : sql``}
+    UNION
+    SELECT pm.journal_entry_id FROM bank_transactions t JOIN payments pm ON pm.id = t.matched_id AND pm.org_id = ${orgId}
+     WHERE t.org_id = ${orgId} AND t.bank_account_id = ${account.id} AND t.status IN ('matched', 'manually_added')
+       AND t.matched_type = 'payment' AND pm.journal_entry_id IS NOT NULL ${upTo ? sql`AND t.txn_date <= ${upTo}` : sql``}`;
+
   // Book entries on the account the bank has not cleared by the date.
   const { rows: open } = firstLine ? await sql<{
     entry_id: number; entry_no: number; entry_date: string; memo: string | null; description: string | null; party: string | null; source_type: string | null; debit: string; credit: string;
@@ -58,17 +74,10 @@ export async function bankStatementAsOn(ex: Executor, orgId: number, bankAccount
       JOIN journal_entries e ON e.id = l.entry_id
       LEFT JOIN contacts c ON c.id = l.contact_id
      WHERE l.org_id = ${orgId} AND l.account_id = ${account.ledger_account_id}
-       AND e.entry_date >= ${firstLine} AND e.entry_date <= ${asOf}
+       AND e.entry_date <= ${asOf}
+       AND (e.entry_date >= ${firstLine} OR e.id IN (${matchedEntries(null)}))
        AND COALESCE(e.source_type, '') NOT IN ('opening', 'opening_balance', 'opening_document')
-       AND e.id NOT IN (
-         SELECT t.matched_id FROM bank_transactions t
-          WHERE t.org_id = ${orgId} AND t.bank_account_id = ${account.id} AND t.status IN ('matched', 'manually_added')
-            AND t.matched_type = 'journal_entry' AND t.matched_id IS NOT NULL AND t.txn_date <= ${asOf}
-         UNION
-         SELECT pm.journal_entry_id FROM bank_transactions t JOIN payments pm ON pm.id = t.matched_id
-          WHERE t.org_id = ${orgId} AND t.bank_account_id = ${account.id} AND t.status IN ('matched', 'manually_added')
-            AND t.matched_type = 'payment' AND pm.journal_entry_id IS NOT NULL AND t.txn_date <= ${asOf}
-       )
+       AND e.id NOT IN (${matchedEntries(asOf)})
      ORDER BY e.entry_date, e.id`.execute(ex) : { rows: [] };
 
   const item = (r: (typeof open)[number], amount: number): StatementItem => ({
@@ -79,13 +88,23 @@ export async function bankStatementAsOn(ex: Executor, orgId: number, bankAccount
   const notPresented = open.filter((r) => p(r.credit) > 0).map((r) => item(r, p(r.credit)));
   const notCredited = open.filter((r) => p(r.debit) > 0).map((r) => item(r, p(r.debit)));
 
-  // Statement lines up to the date the books do not have yet.
-  const bankOnly = await ex.selectFrom('bank_transactions')
-    .select(['id', 'txn_date', 'narration', 'reference', 'deposit', 'withdrawal'])
-    .where('org_id', '=', orgId).where('bank_account_id', '=', account.id)
-    .where('status', '=', 'unmatched').where('txn_date', '<=', asOf).orderBy('txn_date').orderBy('id').execute();
+  // Statement lines up to the date the books do not have yet: unmatched, or
+  // matched to an entry the books date after it.
+  const { rows: bankOnly } = await sql<{
+    id: number; txn_date: string; narration: string; reference: string | null; deposit: string; withdrawal: string; booked_on: string | null;
+  }>`
+    SELECT t.id, t.txn_date, t.narration, t.reference, t.deposit, t.withdrawal, e.entry_date AS booked_on
+      FROM bank_transactions t
+      LEFT JOIN payments pm ON t.matched_type = 'payment' AND pm.id = t.matched_id AND pm.org_id = ${orgId}
+      LEFT JOIN journal_entries e ON e.org_id = ${orgId}
+       AND e.id = CASE WHEN t.matched_type = 'journal_entry' THEN t.matched_id ELSE pm.journal_entry_id END
+     WHERE t.org_id = ${orgId} AND t.bank_account_id = ${account.id} AND t.txn_date <= ${asOf}
+       AND (t.status = 'unmatched' OR (t.status IN ('matched', 'manually_added') AND e.entry_date > ${asOf}))
+     ORDER BY t.txn_date, t.id`.execute(ex);
   const line = (t: (typeof bankOnly)[number], amount: number): StatementItem => ({
-    date: day(t.txn_date), entryId: null, entryNo: null, particulars: t.narration, reference: t.reference, amountPaise: amount,
+    date: day(t.txn_date), entryId: null, entryNo: null,
+    particulars: t.booked_on ? `${t.narration} · in the books on ${day(t.booked_on)}` : t.narration,
+    reference: t.reference, amountPaise: amount,
   });
   const bankCredits = bankOnly.filter((t) => p(t.deposit) > 0).map((t) => line(t, p(t.deposit)));
   const bankDebits = bankOnly.filter((t) => p(t.withdrawal) > 0).map((t) => line(t, p(t.withdrawal)));

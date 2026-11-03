@@ -157,10 +157,10 @@ function GeneralLedger() {
                             <span className="ml-2 text-xs capitalize text-muted-foreground">
                               {route ? (
                                 <Link href={route} className="underline underline-offset-2">
-                                  {l.sourceType.replace('_', ' ')}
+                                  {l.sourceType.replaceAll('_', ' ')}
                                 </Link>
                               ) : (
-                                l.sourceType.replace('_', ' ')
+                                l.sourceType.replaceAll('_', ' ')
                               )}
                             </span>
                           </td>

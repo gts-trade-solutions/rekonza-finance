@@ -8,6 +8,7 @@
 // bill still needs a figure on it.
 
 import { useState } from 'react';
+import { localDay } from '@/lib/selectors';
 import { useRouter } from 'next/navigation';
 import { ArrowRight, Truck } from 'lucide-react';
 import { toast } from 'sonner';
@@ -40,8 +41,8 @@ const TYPE_LABEL: Record<string, string> = {
 const TYPE_OPTIONS = Object.entries(TYPE_LABEL).map(([value, label]) => ({ value, label }));
 
 const short = (d: string) => new Date(d).toLocaleDateString('en-IN');
-const today = () => new Date().toISOString().slice(0, 10);
-const inDays = (n: number) => { const d = new Date(); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
+const today = () => localDay(new Date());
+const inDays = (n: number) => { const d = new Date(); d.setDate(d.getDate() + n); return localDay(d); };
 
 const baseColumns: Column<SalesDocRow>[] = [
   { key: 'number', header: 'Challan #', sortValue: (r) => r.number, cell: (r) => <span className="font-medium">{r.number}</span> },

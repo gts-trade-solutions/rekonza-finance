@@ -1,6 +1,6 @@
 import { db } from '@/lib/server/db';
 import { route, notFound } from '@/lib/server/http';
-import { openShareLink } from '@/lib/server/services/sharing';
+import { documentLinkTarget, openShareLink } from '@/lib/server/services/sharing';
 import { invoiceDetail } from '@/lib/server/services/invoice-detail';
 import { runDetail } from '@/lib/server/payroll/payroll';
 import { livePaymentLink } from '@/lib/server/services/payment-links';
@@ -24,8 +24,9 @@ export const GET = route(
     }
     // A quote, an order, a receipt … (lib/print-doc.ts): its printed copy.
     if (opened.docType === 'document') {
-      if (!isPrintKind(opened.docKind)) throw notFound('This link has expired or been withdrawn. Ask the sender for a new one.');
-      const doc = await printableDocument(db, opened.orgId, opened.docKind, opened.docId);
+      const target = documentLinkTarget(opened.docKind);
+      if (!isPrintKind(target.kind)) throw notFound('This link has expired or been withdrawn. Ask the sender for a new one.');
+      const doc = await printableDocument(db, opened.orgId, target.kind, opened.docId, { proforma: target.proforma });
       if (doc.tag === 'Cancelled') throw notFound('This document was cancelled.');
       return { kind: 'document', doc: forOutside(doc) };
     }

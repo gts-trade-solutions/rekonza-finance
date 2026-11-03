@@ -23,7 +23,7 @@ export default function DocumentPrintPage() {
         <DocumentPrintView
           doc={doc}
           back={doc.kind === 'bill' ? `/purchases/bills/${doc.id}` : undefined}
-          actions={<DocumentScreenActions kind={doc.kind} id={doc.id} />}
+          actions={<DocumentScreenActions kind={doc.kind} id={doc.id} proforma={doc.kind === 'sales-order' && as === 'proforma'} />}
         />
       )}
     </AsyncPage>

@@ -14,6 +14,7 @@
 // offered are the ones the customer buys (goods, services or both).
 
 import { useMemo, useState, type ReactNode } from 'react';
+import { localDay } from '@/lib/selectors';
 import { ListPlus, Plus, Search, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -39,10 +40,10 @@ const DOC_TYPE: Record<string, VoucherDocType> = { estimate: 'EST', 'sales-order
 function inDays(n: number): string {
   const d = new Date();
   d.setDate(d.getDate() + n);
-  return d.toISOString().slice(0, 10);
+  return localDay(d);
 }
 
-const TODAY = () => new Date().toISOString().slice(0, 10);
+const TODAY = () => localDay(new Date());
 
 interface Line { key: number; itemId: string; qty: number; rate: number; discountPct: number; gstRatePct: number }
 let nextKey = 1;

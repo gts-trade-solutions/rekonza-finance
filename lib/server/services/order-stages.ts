@@ -84,7 +84,7 @@ export async function setOrderStage(
   if (so.stage === 'ready') throw conflict(`Sales order ${so.number} is already ready for delivery.`);
 
   const lines = await trx.selectFrom('sales_order_lines as l').leftJoin('items as i', 'i.id', 'l.item_id')
-    .select(['l.id', 'l.qty', 'l.qty_invoiced', 'l.qty_delivered', 'i.kind'])
+    .select(['l.id', 'l.qty', 'l.qty_invoiced', 'l.qty_delivered', 'l.hsn_sac', 'i.kind'])
     .where('l.sales_order_id', '=', soId).orderBy('l.line_no').execute();
   const challaned = await onOpenChallans(trx, lines.map((l) => l.id));
   const left = lines.map((l) => ({ ...l, toInvoice: Number(l.qty) - Number(l.qty_invoiced) - (challaned.get(l.id) ?? 0) }));
@@ -97,9 +97,11 @@ export async function setOrderStage(
     const created = await invoiceFromSalesOrder(trx, orgId, userId, soId, { date, dueDate, status: 'approved' });
     invoice = { id: created.id, number: created.number, totalPaise: created.totalPaise, heldForApproval: !!created.heldForApproval };
 
-    // The goods on that invoice go out on a challan naming it. Services are not delivered on one.
+    // The goods on that invoice go out on a challan naming it. Services are not
+    // delivered on one: an item marked a service, or a typed line with a SAC (99…).
+    const isService = (l: (typeof left)[number]) => l.kind === 'service' || (!l.kind && /^99/.test(l.hsn_sac ?? ''));
     const goods = left
-      .filter((l) => l.toInvoice > 1e-9 && l.kind !== 'service')
+      .filter((l) => l.toInvoice > 1e-9 && !isService(l))
       .map((l) => ({ lineId: l.id, qty: Math.min(l.toInvoice, Number(l.qty) - Number(l.qty_delivered)) }))
       .filter((p) => p.qty > 1e-9);
     if (goods.length) {

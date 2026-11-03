@@ -17,11 +17,11 @@ import { badRequest } from '../http';
 
 /** The emails that send one document's printed copy as a link (lib/print-doc.ts). */
 export type DocumentEmailKind =
-  | 'quote' | 'sales_order' | 'challan' | 'credit_note' | 'retainer' | 'payment_receipt'
+  | 'quote' | 'sales_order' | 'proforma' | 'challan' | 'credit_note' | 'retainer' | 'payment_receipt'
   | 'purchase_order' | 'vendor_credit' | 'payment_advice';
 export type EmailKind = 'invoice' | 'statement' | 'reminder' | 'portal_invite' | DocumentEmailKind;
 export const EMAIL_KINDS: EmailKind[] = [
-  'invoice', 'quote', 'sales_order', 'challan', 'credit_note', 'retainer', 'payment_receipt',
+  'invoice', 'quote', 'sales_order', 'proforma', 'challan', 'credit_note', 'retainer', 'payment_receipt',
   'purchase_order', 'vendor_credit', 'payment_advice', 'statement', 'reminder', 'portal_invite',
 ];
 
@@ -54,6 +54,8 @@ export const EMAIL_SPECS: Record<EmailKind, KindSpec> = {
     'Thank you for your enquiry. Please find our quote {number} dated {date} for {total}.'),
   sales_order: doc('Sales order', 'A sales order is emailed to the customer.', 'Sales order {number} from {business}',
     'Thank you for your order. Please find sales order {number} dated {date} for {total}.'),
+  proforma: doc('Proforma invoice', 'A sales order’s proforma invoice is emailed to the customer.', 'Proforma invoice {number} from {business}',
+    'Please find proforma invoice {number} dated {date} for {total}, for your approval or advance payment.'),
   challan: doc('Delivery challan', 'A delivery challan is emailed to the customer.', 'Delivery challan {number} from {business}',
     'Please find delivery challan {number} dated {date} for the goods we are sending you.'),
   credit_note: doc('Credit note', 'A credit note is emailed to the customer.', 'Credit note {number} from {business}',

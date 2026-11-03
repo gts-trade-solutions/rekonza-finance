@@ -35,7 +35,7 @@ const SendInput = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('invoice'), invoiceId: z.union([z.string(), z.number()]), to: emails, cc: emails, message: z.string().max(2000).nullish() }),
   z.object({
     kind: z.literal('document'), docKind: z.enum(PRINT_KINDS as [PrintKind, ...PrintKind[]]), id: z.union([z.string(), z.number()]),
-    to: emails, cc: emails, message: z.string().max(2000).nullish(),
+    to: emails, cc: emails, message: z.string().max(2000).nullish(), proforma: z.boolean().optional(),
   }),
   z.object({
     kind: z.literal('statement'), contactId: z.union([z.string(), z.number()]), side: z.enum(['customer', 'vendor']),
@@ -55,8 +55,9 @@ export const POST = route(async ({ orgId, user, role, req }) => {
   if (input.kind === 'document') {
     const area = PRINT_SIDE[input.docKind] === 'customer' ? 'sales' : 'purchases';
     if (!hasPermission(role, area, 'create')) throw forbidden(`You cannot send documents in ${area}.`);
-    const r = await emailDocument(orgId, user.userId, input.docKind, Number(input.id), { to: input.to, cc: input.cc, message: input.message, baseUrl });
-    await logAudit({ orgId, actorUserId: user.userId, actorName: user.name, action: 'send', targetType: input.docKind, targetId: Number(input.id), detail: `${PRINT_NOUN[input.docKind]} emailed to ${r.to.join(', ')}`, ...auditMeta(req) });
+    const proforma = input.docKind === 'sales-order' && !!input.proforma;
+    const r = await emailDocument(orgId, user.userId, input.docKind, Number(input.id), { to: input.to, cc: input.cc, message: input.message, baseUrl, proforma });
+    await logAudit({ orgId, actorUserId: user.userId, actorName: user.name, action: 'send', targetType: input.docKind, targetId: Number(input.id), detail: `${proforma ? 'proforma invoice' : PRINT_NOUN[input.docKind]} emailed to ${r.to.join(', ')}`, ...auditMeta(req) });
     return { to: r.to };
   }
   if (!hasPermission(role, input.side === 'customer' ? 'sales' : 'purchases', 'view')) throw forbidden('You cannot see that account.');
