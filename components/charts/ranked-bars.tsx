@@ -31,7 +31,7 @@ export function RankedBars({
 }: {
   rows: RankedRow[];
   emptyMessage?: string;
-  tone?: 'primary' | 'warning';
+  tone?: 'primary' | 'warning' | 'danger';
 }) {
   if (rows.length === 0) {
     return <p className="py-8 text-center text-sm text-muted-foreground">{emptyMessage}</p>;
@@ -57,7 +57,7 @@ export function RankedBars({
               <div
                 className={cn(
                   'h-full rounded-full transition-[width]',
-                  r.alert ? 'bg-destructive' : tone === 'warning' ? 'bg-warning' : 'bg-primary',
+                  r.alert || tone === 'danger' ? 'bg-destructive' : tone === 'warning' ? 'bg-warning' : 'bg-primary',
                 )}
                 style={{ width: `${Math.max(2, (r.value / max) * 100)}%` }}
               />

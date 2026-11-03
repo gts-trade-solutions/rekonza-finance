@@ -127,7 +127,7 @@ function ResultRow({ label, value, before, cols, strong }: { label: string; valu
   return (
     <tr className={cn('border-y-2', strong ? 'bg-muted/50 text-base font-semibold' : 'bg-muted/20 font-semibold')}>
       <td className="px-4 py-2.5">{label}</td>
-      <td className={cn('px-4 py-2.5 text-right', strong && (value >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive'))}><Money value={value} /></td>
+      <td className={cn('px-4 py-2.5 text-right', value < 0 ? 'text-destructive' : strong && 'text-emerald-600 dark:text-emerald-400')}><Money value={value} /></td>
       {cols > 2 && <td className="px-4 py-2.5 text-right text-muted-foreground"><Money value={before ?? 0} /></td>}
     </tr>
   );
@@ -187,7 +187,7 @@ export function GeneralBalanceSheet({ bs, prev, prevLabel }: { bs: GroupedBalanc
 
 // ── Horizontal (T-form) ──────────────────────────────────────────────────────
 
-interface TRow { label: string; amountPaise?: number; sub?: { name: string; amountPaise: number; href?: string }[]; strong?: boolean; muted?: boolean }
+interface TRow { label: string; amountPaise?: number; sub?: { name: string; amountPaise: number; href?: string }[]; strong?: boolean; muted?: boolean; loss?: boolean }
 
 function subsOf(g: StatementGroup, ledger: { from: string; to: string }, sign = 1): TRow['sub'] {
   const flat = (x: StatementGroup): StatementGroup['lines'] => [...x.lines, ...(x.groups ?? []).flatMap(flat)];
@@ -205,8 +205,8 @@ function Side({ title, rows, total }: { title: string; rows: TRow[]; total: numb
         {rows.map((r, i) => (
           <div key={`${r.label}-${i}`} className={cn('border-b border-dashed px-4 py-2 last:border-0', r.strong && 'bg-muted/25 font-semibold')}>
             <div className="flex items-baseline gap-3">
-              <span className={cn('min-w-0 flex-1 text-sm', r.muted && 'italic text-muted-foreground')}>{r.label}</span>
-              {r.amountPaise !== undefined && <Money value={r.amountPaise} className="text-sm" />}
+              <span className={cn('min-w-0 flex-1 text-sm', r.muted && 'italic text-muted-foreground', r.loss && 'text-destructive')}>{r.label}</span>
+              {r.amountPaise !== undefined && <Money value={r.amountPaise} className={cn('text-sm', r.loss && 'text-destructive')} />}
             </div>
             {r.sub && r.sub.length > 0 && (
               <div className="mt-1 space-y-0.5 pl-4">
@@ -264,18 +264,18 @@ export function horizontalProfitAndLoss(pl: GroupedProfitAndLossReport) {
     { label: 'To Purchases and Direct Expenses', amountPaise: directTotal, sub: subsOf(direct, ledger) },
     gp >= 0 ? { label: 'To Gross Profit c/d', amountPaise: gp, strong: true } : { label: '', muted: true },
     { label: 'Total', amountPaise: tradingDr, strong: true },
-    ...(gp < 0 ? [{ label: 'To Gross Loss b/d', amountPaise: -gp }] : []),
+    ...(gp < 0 ? [{ label: 'To Gross Loss b/d', amountPaise: -gp, loss: true }] : []),
     { label: 'To Indirect Expenses', amountPaise: indirectExp, sub: [...(subsOf(pl.operatingExpense, ledger) ?? []), ...(subsOf(pl.nonOperatingExpense, ledger) ?? [])] },
     ...(np >= 0 ? [{ label: 'To Net Profit', amountPaise: np, strong: true }] : []),
   ];
   const right: TRow[] = [
     { label: 'By Sales and Operating Income', amountPaise: pl.operatingIncome.totalPaise, sub: subsOf(pl.operatingIncome, ledger) },
     { label: 'By Closing Stock', amountPaise: pl.closingStockPaise },
-    gp < 0 ? { label: 'By Gross Loss c/d', amountPaise: -gp, strong: true } : { label: '', muted: true },
+    gp < 0 ? { label: 'By Gross Loss c/d', amountPaise: -gp, strong: true, loss: true } : { label: '', muted: true },
     { label: 'Total', amountPaise: tradingCr, strong: true },
     ...(gp >= 0 ? [{ label: 'By Gross Profit b/d', amountPaise: gp }] : []),
     { label: 'By Indirect Income', amountPaise: pl.nonOperatingIncome.totalPaise, sub: subsOf(pl.nonOperatingIncome, ledger) },
-    ...(np < 0 ? [{ label: 'By Net Loss', amountPaise: -np, strong: true }] : []),
+    ...(np < 0 ? [{ label: 'By Net Loss', amountPaise: -np, strong: true, loss: true }] : []),
   ];
   return { left, right, tradingDr, tradingCr, plDr, plCr };
 }

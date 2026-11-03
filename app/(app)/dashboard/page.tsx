@@ -11,7 +11,7 @@ import Link from 'next/link';
 import { useMemo, useState } from 'react';
 import {
   AlertTriangle, ArrowRight, Banknote, CheckCircle2, Clock, FileCheck2, Landmark,
-  Lock, Package, Receipt, Repeat, TrendingUp, Wallet, Wrench, XCircle,
+  Lock, Package, Receipt, Repeat, TrendingDown, TrendingUp, Wallet, Wrench, XCircle,
 } from 'lucide-react';
 import {
   Area, AreaChart, Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer,
@@ -184,7 +184,7 @@ export default function DashboardPage() {
                   value={formatINRCompact(d.position.payablePaise)}
                   sub="Bills awaiting payment"
                   icon={Banknote}
-                  color="orange"
+                  color="red"
                   href="/reports/ap-ageing"
                 />
                 <StatTile
@@ -192,7 +192,7 @@ export default function DashboardPage() {
                   value={formatINRCompact(d.position.cashPaise)}
                   sub={`Across ${d.cash.length} accounts`}
                   icon={Landmark}
-                  tone="positive"
+                  tone={d.position.cashPaise < 0 ? 'danger' : 'positive'}
                   color="emerald"
                   href="/banking"
                 />
@@ -200,9 +200,9 @@ export default function DashboardPage() {
                   label={d.profitAndLoss.netProfit >= 0 ? 'Profit (YTD)' : 'Loss (YTD)'}
                   value={formatINRCompact(Math.abs(d.profitAndLoss.netProfit))}
                   sub={`${d.netMargin.ytdPct === null ? '' : `Net margin ${d.netMargin.ytdPct.toFixed(1)}% · `}Income ${formatINRCompact(d.profitAndLoss.totalIncome)} − expenses ${formatINRCompact(d.profitAndLoss.totalExpense)}`}
-                  icon={TrendingUp}
+                  icon={d.profitAndLoss.netProfit >= 0 ? TrendingUp : TrendingDown}
                   tone={d.profitAndLoss.netProfit >= 0 ? 'positive' : 'danger'}
-                  color="violet"
+                  color={d.profitAndLoss.netProfit >= 0 ? 'violet' : 'red'}
                   href="/reports/profit-and-loss"
                 />
               </div>
@@ -226,7 +226,7 @@ export default function DashboardPage() {
                     : trend(d.workingCapital.payableDays, d.workingCapital.previous.payableDays, d.workingCapital.windowDays)}
                   icon={Banknote}
                   tone={(d.workingCapital.payableDays ?? 0) > 45 ? 'warning' : 'default'}
-                  color="amber"
+                  color="red"
                   href="/reports/ap-ageing"
                 />
                 <StatTile
@@ -287,7 +287,7 @@ export default function DashboardPage() {
                   sub="Unpaid, from invoices raised in the period"
                   icon={Clock}
                   tone={d.sales.outstanding > 0 ? 'warning' : 'default'}
-                  color="rose"
+                  color="amber"
                   href="/reports/ar-ageing"
                 />
                 <StatTile
@@ -342,7 +342,7 @@ export default function DashboardPage() {
                   <div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
                     <div>
                       <p className="micro-label">Gross margin</p>
-                      <p className="mt-1 tabular text-2xl font-semibold text-emerald-600 dark:text-emerald-400">
+                      <p className={`mt-1 tabular text-2xl font-semibold ${d.margin.gross >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
                         {formatINR(d.margin.gross)}
                       </p>
                       <p className="mt-0.5 text-xs text-muted-foreground">
@@ -532,7 +532,7 @@ export default function DashboardPage() {
                     </Button>
                   </div>
                   <RankedBars
-                    tone="warning"
+                    tone="danger"
                     rows={d.topCreditors.map((r) => ({
                       id: r.contactId,
                       name: r.name,

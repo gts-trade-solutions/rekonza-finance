@@ -85,13 +85,21 @@ function ProfitAndLoss() {
               <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                 {[
                   { label: 'Operating income', value: pl.operatingIncome.totalPaise, before: prev?.operatingIncome.totalPaise },
-                  { label: 'Gross profit', value: pl.grossProfitPaise, hint: 'Operating income less the cost of goods sold', before: prev?.grossProfitPaise },
-                  { label: 'Operating profit', value: pl.operatingProfitPaise, hint: 'After operating expenses', before: prev?.operatingProfitPaise },
+                  {
+                    label: pl.grossProfitPaise >= 0 ? 'Gross profit' : 'Gross loss', value: pl.grossProfitPaise,
+                    hint: 'Operating income less the cost of goods sold', before: prev?.grossProfitPaise,
+                    ...(pl.grossProfitPaise < 0 ? { tone: 'bad' as const } : {}),
+                  },
+                  {
+                    label: pl.operatingProfitPaise >= 0 ? 'Operating profit' : 'Operating loss', value: pl.operatingProfitPaise,
+                    hint: 'After operating expenses', before: prev?.operatingProfitPaise,
+                    ...(pl.operatingProfitPaise < 0 ? { tone: 'bad' as const } : {}),
+                  },
                   {
                     label: profitable ? 'Net profit' : 'Net loss',
                     value: Math.abs(pl.netProfitPaise),
                     hint: `${margin.toFixed(1)}% of income`,
-                    tone: profitable ? 'good' : 'bad',
+                    tone: profitable ? 'good' as const : 'bad' as const,
                     before: prev ? Math.abs(prev.netProfitPaise) : undefined,
                   },
                 ].map((t) => (
@@ -105,7 +113,7 @@ function ProfitAndLoss() {
                         {t.hint && <p className="mt-0.5 text-xs text-muted-foreground">{t.hint}</p>}
                         {t.before !== undefined && <p className="mt-0.5 text-xs text-muted-foreground">Against <Money value={t.before} /></p>}
                       </div>
-                      {t.tone && (profitable
+                      {t.tone && (t.tone === 'good'
                         ? <TrendingUp className="size-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
                         : <TrendingDown className="size-4 shrink-0 text-destructive" />)}
                     </div>

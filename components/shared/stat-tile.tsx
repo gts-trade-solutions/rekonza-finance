@@ -57,7 +57,7 @@ export function StatTile({
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className={cn('text-xs font-medium uppercase tracking-wide', own ? own.label : 'text-muted-foreground')}>{label}</p>
-          <p data-slot="stat-value" className={cn('mt-1.5 text-2xl font-semibold tracking-tight tabular', own && tone === 'danger' && 'text-red-600 dark:text-red-400')}>
+          <p data-slot="stat-value" className={cn('mt-1.5 text-2xl font-semibold tracking-tight tabular', own && (tone === 'danger' || color === 'red') && 'text-red-600 dark:text-red-400')}>
             {value}
           </p>
           {delta !== undefined && <Delta value={delta} label={deltaLabel} goodWhen={deltaGoodWhen} />}
@@ -75,10 +75,11 @@ export function StatTile({
   return href ? <Link href={href}>{body}</Link> : body;
 }
 
-export type TileColor = 'blue' | 'orange' | 'emerald' | 'violet' | 'sky' | 'amber' | 'teal' | 'indigo' | 'rose' | 'fuchsia' | 'cyan' | 'lime';
+export type TileColor = 'red' | 'blue' | 'orange' | 'emerald' | 'violet' | 'sky' | 'amber' | 'teal' | 'indigo' | 'rose' | 'fuchsia' | 'cyan' | 'lime';
 
 /** Whole class names, so Tailwind sees every one of them. */
 const TILE_COLORS: Record<TileColor, { card: string; label: string; chip: string }> = {
+  red: { card: 'border-l-red-600 bg-gradient-to-br from-red-500/10 to-transparent', label: 'text-red-700 dark:text-red-300', chip: 'bg-red-600 text-white' },
   blue: { card: 'border-l-blue-500 bg-gradient-to-br from-blue-500/10 to-transparent', label: 'text-blue-700 dark:text-blue-300', chip: 'bg-blue-500 text-white' },
   orange: { card: 'border-l-orange-500 bg-gradient-to-br from-orange-500/10 to-transparent', label: 'text-orange-700 dark:text-orange-300', chip: 'bg-orange-500 text-white' },
   emerald: { card: 'border-l-emerald-500 bg-gradient-to-br from-emerald-500/10 to-transparent', label: 'text-emerald-700 dark:text-emerald-300', chip: 'bg-emerald-500 text-white' },
