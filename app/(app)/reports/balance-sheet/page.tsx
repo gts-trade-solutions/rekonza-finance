@@ -78,7 +78,7 @@ function BalanceSheet() {
               <Scale className={'size-5 shrink-0 ' + (bs.balanced ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')} />
               <div className="min-w-0 flex-1">
                 <p className="text-sm font-medium">
-                  {bs.balanced ? 'Assets equal liabilities plus equities' : 'The sheet does NOT balance — investigate immediately'}
+                  {bs.balanced ? 'Assets equal liabilities plus equity' : 'The sheet does NOT balance — investigate immediately'}
                 </p>
                 <p className="mt-0.5 text-xs text-muted-foreground">
                   <Money value={bs.assets.totalPaise} /> in assets against <Money value={bs.liabilities.totalPaise} /> owed and{' '}

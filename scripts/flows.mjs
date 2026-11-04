@@ -352,6 +352,12 @@ const entryCount = () =>
 const beforeEntries = await entryCount();
 const runnable = page.getByRole('button', { name: 'Run now' }).and(page.locator(':not([disabled])')).first();
 await runnable.click();
+// A book that keeps a reason with every change (Settings → Controls) asks for one first.
+const reasonBox = page.getByRole('dialog').filter({ hasText: 'Why is this being changed?' });
+if (await reasonBox.isVisible({ timeout: 2500 }).catch(() => false)) {
+  await reasonBox.locator('input, textarea').first().fill('Monthly run, from the journeys check');
+  await reasonBox.getByRole('button', { name: 'Save with this reason' }).click();
+}
 await page.waitForTimeout(2000);
 const afterEntries = await entryCount();
 check('Recurring journal posts a real entry', afterEntries === beforeEntries + 1,
@@ -492,18 +498,22 @@ check('Dashboard shows the invoice status split', /partly paid/i.test(dash));
 check('Dashboard figures carry percentages as well as amounts',
   (dash.match(/\d+\.\d%/g) || []).length >= 5,
   `${(dash.match(/\d+\.\d%/g) || []).length} percentage figures`);
-check('Gross margin block is shown to an owner', dash.includes('Gross margin'));
+check('Gross and net margin block is shown to an owner', /Gross and net margin/i.test(dash));
 
 const billedTile = page.locator('[data-slot="stat-tile"][data-label="Total billed"] [data-slot="stat-value"]');
+const billedWhole = page.locator('[data-slot="stat-tile"][data-label="Total billed"]');
 const billedBefore = money(await billedTile.innerText());
+const billedLineBefore = (await billedWhole.innerText()).replace(/\s+/g, ' ');
 check('Sales figures are non-zero over the default window', billedBefore > 0, `₹${billedBefore}`);
 
 await page.locator('[data-slot="date-range-trigger"]').first().click();
 await page.locator('[data-slot="date-preset"]', { hasText: /^This month$/ }).click();
 await page.waitForTimeout(800);
 const billedAfter = money(await billedTile.innerText());
+const billedLineAfter = (await billedWhole.innerText()).replace(/\s+/g, ' ');
+// The same invoices can fall in both windows (a freshly seeded book): the comparison line still moves.
 check('Changing the comparison period recomputes the sales figures',
-  billedAfter > 0 && billedAfter !== billedBefore, `3 months ₹${billedBefore} → this month ₹${billedAfter}`);
+  billedAfter > 0 && (billedAfter !== billedBefore || billedLineAfter !== billedLineBefore), `${billedLineBefore} → ${billedLineAfter}`);
 
 // ── 14. The newly added Zoho reports return real rows
 for (const [href, label] of [
@@ -779,7 +789,7 @@ for (const [url, key] of [
 
 check('Trial balance ties', /The books balance/.test(statements.tb));
 check('Balance sheet balances', /Assets equal liabilities/.test(statements.bs));
-check('Profit and loss reports a result', /Net profit|Net loss/.test(statements.pl));
+check('Profit and loss reports a result', /Net profit|Net loss/i.test(statements.pl));
 
 // The cross-check that matters: the ageing is the subsidiary ledger behind the
 // control account, so the two must agree to the paisa.

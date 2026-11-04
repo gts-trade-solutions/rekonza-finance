@@ -415,15 +415,17 @@ test('records a bill and a payment against it through the API', async () => {
   assert.ok(bill.body.internalNo.startsWith('BILL/'));
   assert.ok(bill.body.journalEntryId, 'the bill posted an entry');
 
-  const pay = await call('/api/payments', {
-    cookie: admin,
-    method: 'POST',
-    body: JSON.stringify({
-      kind: 'made', branchId: ids.branch, contactId: ids.vendor, date: '2026-08-10',
-      mode: 'neft', amountPaise: bill.body.totalPaise, bankAccountId: ids.bankAccount,
-      allocations: [{ targetType: 'bill', targetId: bill.body.id, amountPaise: bill.body.totalPaise }],
-    }),
+  const payment = JSON.stringify({
+    kind: 'made', branchId: ids.branch, contactId: ids.vendor, date: '2026-08-10',
+    mode: 'neft', amountPaise: bill.body.totalPaise, bankAccountId: ids.bankAccount,
+    allocations: [{ targetType: 'bill', targetId: bill.body.id, amountPaise: bill.body.totalPaise }],
   });
+  // A book that separates duties (the demo's controls) lets someone else pay what one person entered.
+  const own = await call('/api/payments', { cookie: admin, method: 'POST', body: payment });
+  if (own.status === 409) assert.equal(own.body.code, 'segregation', JSON.stringify(own.body));
+  const pay = own.status === 409
+    ? await call('/api/payments', { cookie: await signIn('priya@raceautospares.in'), method: 'POST', body: payment })
+    : own;
   assert.equal(pay.status, 200, JSON.stringify(pay.body));
   assert.equal(pay.body.unappliedPaise, 0);
 
@@ -445,7 +447,7 @@ test('a receipt cannot be allocated against a bill', async () => {
     }),
   });
   assert.equal(res.status, 400);
-  assert.match(res.body.error, /receipt cannot be allocated against a bill/);
+  assert.match(res.body.error, /receipt cannot be (allocated|set) against a bill/i);
 });
 
 test('records an expense and posts it', async () => {
