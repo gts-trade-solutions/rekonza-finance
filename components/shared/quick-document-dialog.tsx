@@ -31,7 +31,9 @@ import { VoucherTypePicker, type VoucherDocType } from '@/components/forms/vouch
 import { useApiAction } from '@/lib/api/use-api';
 import { useAppStore } from '@/lib/store';
 import { itemOptionsFor } from '@/lib/options';
-import { formatINR } from '@/lib/money';
+import { formatINR, mulQty, roundToRupee } from '@/lib/money';
+import { computeLineTax, resolveSupplyType, supplyTypeLabel } from '@/lib/tax/gst';
+import type { SupplyType } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
 const DOC_TYPE: Record<string, VoucherDocType> = { estimate: 'EST', 'sales-order': 'SO', challan: 'DC', 'credit-note': 'CN' };
@@ -49,12 +51,12 @@ interface Line { key: number; itemId: string; qty: number; rate: number; discoun
 let nextKey = 1;
 const blankLine = (): Line => ({ key: nextKey++, itemId: '', qty: 1, rate: 0, discountPct: 0, gstRatePct: 18 });
 
-/** A line's figures, as the server works them: discount off the rate, GST on what is left. */
-function figures(l: Line) {
-  const gross = Math.round(l.rate * l.qty);
-  const taxable = Math.round(gross * (1 - l.discountPct / 100));
-  const tax = Math.round((taxable * l.gstRatePct) / 100);
-  return { gross, discount: gross - taxable, taxable, tax, total: taxable + tax };
+/** A line's figures, by the server's own arithmetic (lib/tax/gst.ts): discount off the rate, GST on what is left. */
+function figures(l: Line, supplyType: SupplyType) {
+  const gross = mulQty(l.rate, l.qty);
+  const c = computeLineTax({ ratePaise: l.rate, qty: l.qty, discountPct: l.discountPct, gstRatePct: l.gstRatePct, supplyType });
+  const tax = c.total - c.taxable;
+  return { gross, discount: gross - c.taxable, taxable: c.taxable, tax, total: c.total };
 }
 
 export function QuickDocumentDialog({
@@ -92,19 +94,30 @@ export function QuickDocumentDialog({
 
   const create = useApiAction(salesDocuments.create);
   // A challan carries no tax, and neither does a business not registered for GST, or on composition.
+  // Otherwise the customer decides, as the server decides: an export or an SEZ unit is zero-rated.
   const chargesGst = !['unregistered', 'composition'].includes(store.org?.gstRegistrationType ?? 'regular');
-  const taxed = kind !== 'challan' && chargesGst;
+  const customer = store.contacts.find((c) => c.id === customerId);
+  const branchState = store.branches.find((b) => b.id === store.activeBranchId)?.stateCode ?? '';
+  const supplyType: SupplyType = kind === 'challan' || !chargesGst ? 'nil_or_exempt'
+    : customer ? resolveSupplyType({ branchStateCode: branchState, placeOfSupply: customer.stateCode, customerTreatment: customer.gstTreatment }) : 'intra';
+  const taxed = supplyType === 'intra' || supplyType === 'inter' || supplyType === 'export_with_tax';
+  const zeroRated = kind !== 'challan' && chargesGst && (supplyType === 'export_lut' || supplyType === 'sez');
   const offers = kind === 'estimate' || kind === 'sales-order';
 
   // What the customer buys decides the items offered.
-  const supplies = store.contacts.find((c) => c.id === customerId)?.supplies ?? 'both';
+  const supplies = customer?.supplies ?? 'both';
   const itemChoices = useMemo(() => itemOptionsFor(store as never, supplies), [store, supplies]);
   const allowed = useMemo(() => new Set(itemChoices.map((o) => o.value)), [itemChoices]);
 
-  const totals = useMemo(() => lines.filter((l) => l.itemId).map(figures).reduce(
-    (t, f) => ({ gross: t.gross + f.gross, discount: t.discount + f.discount, taxable: t.taxable + f.taxable, tax: t.tax + f.tax, total: t.total + f.total }),
-    { gross: 0, discount: 0, taxable: 0, tax: 0, total: 0 },
-  ), [lines]);
+  const totals = useMemo(() => {
+    const t = lines.filter((l) => l.itemId).map((l) => figures(l, supplyType)).reduce(
+      (s, f) => ({ gross: s.gross + f.gross, discount: s.discount + f.discount, taxable: s.taxable + f.taxable, tax: s.tax + f.tax, total: s.total + f.total }),
+      { gross: 0, discount: 0, taxable: 0, tax: 0, total: 0 },
+    );
+    // A challan's value is what it carries; the others are rounded to the rupee, as saved.
+    const { rounded, roundOff } = kind === 'challan' ? { rounded: t.total, roundOff: 0 } : roundToRupee(t.total);
+    return { ...t, rounded, roundOff };
+  }, [lines, supplyType, kind]);
 
   const reset = () => {
     setCustomerId('');
@@ -227,7 +240,7 @@ export function QuickDocumentDialog({
               </thead>
               <tbody>
                 {lines.map((l, i) => {
-                  const f = figures(l);
+                  const f = figures(l, supplyType);
                   return (
                     <tr key={l.key} className="border-t align-top" data-slot="quick-line">
                       <td className="px-2 py-1.5">
@@ -303,7 +316,11 @@ export function QuickDocumentDialog({
               )}
               <div className="flex justify-between gap-4 text-muted-foreground"><span>{taxed ? 'Taxable' : 'Goods value'}</span><Money value={totals.taxable} /></div>
               {taxed && <div className="flex justify-between gap-4 text-muted-foreground"><span>GST</span><Money value={totals.tax} /></div>}
-              <div className="flex justify-between gap-4 border-t pt-1 font-semibold"><span>Total</span><Money value={taxed ? totals.total : totals.taxable} /></div>
+              {zeroRated && <div className="text-xs text-muted-foreground" data-slot="zero-rated">{supplyTypeLabel(supplyType)}</div>}
+              {totals.roundOff !== 0 && (
+                <div className="flex justify-between gap-4 text-muted-foreground"><span>Rounded off</span><span className="tabular">{totals.roundOff > 0 ? '+' : '−'}{formatINR(Math.abs(totals.roundOff))}</span></div>
+              )}
+              <div className="flex justify-between gap-4 border-t pt-1 font-semibold"><span>Total</span><Money value={totals.rounded} /></div>
             </div>
           </div>
 

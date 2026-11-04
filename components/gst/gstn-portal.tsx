@@ -500,7 +500,11 @@ export function GstinLookupButton({ gstin, onFound, className, auto = true, endp
  * number, and the exact date and name from the MCA record when a company
  * lookup service is set up.
  */
-export function CinLookupButton({ cin, onFound, className }: { cin: string; onFound: (d: CompanyDetails) => void; className?: string }) {
+export function CinLookupButton({ cin, onFound, className, auto = true }: {
+  cin: string; onFound: (d: CompanyDetails) => void; className?: string;
+  /** Look a complete CIN up as soon as it is typed. Off for the number already saved; the button still asks. */
+  auto?: boolean;
+}) {
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState('');
   const c = cin.trim().toUpperCase();
@@ -523,11 +527,11 @@ export function CinLookupButton({ cin, onFound, className }: { cin: string; onFo
     }
   };
   useEffect(() => {
-    if (!ready || c === done) return;
+    if (!auto || !ready || c === done) return;
     const t = setTimeout(() => void look(c), 350);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [c, ready]);
+  }, [c, ready, auto]);
   return (
     <Button type="button" size="sm" variant="outline" className={cn('h-9 shrink-0 gap-1.5', className)} disabled={!ready || busy} onClick={() => void look(c)}
       title="Fill the incorporation date from the CIN" data-slot="cin-fetch">

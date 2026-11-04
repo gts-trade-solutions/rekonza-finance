@@ -9,7 +9,9 @@ import assert from 'node:assert/strict';
 import { db, type Trx } from '../../lib/server/db';
 import { installChartOfAccounts, accountIds, CODE } from '../../lib/server/ledger/chart-of-accounts';
 import { createSalesOrder } from '../../lib/server/services/sales-documents';
-import { invoiceFromChallan } from '../../lib/server/services/order-flow';
+import { challanFromSalesOrder, invoiceFromChallan, invoiceFromSalesOrder } from '../../lib/server/services/order-flow';
+import { dueDateFor } from '../../lib/options';
+import { voidInvoice } from '../../lib/server/services/sales';
 import { raiseProforma, setOrderStage } from '../../lib/server/services/order-stages';
 import { postManualJournal } from '../../lib/server/services/journals';
 import { bankStatementAsOn } from '../../lib/server/reports/bank-statement';
@@ -114,6 +116,159 @@ test('an order goes proforma → work in process → ready, and ready raises the
     await assert.rejects(raiseProforma(trx, b.orgId, (await createSalesOrder(trx, b.orgId, null, {
       branchId: b.branchId, customerId: b.customerId, date: '2026-06-01', lines: [{ itemId: b.goods, qty: 1, ratePaise: 1000_00, gstRatePct: 18 }],
     })).id, '2026-06-02').then(() => raiseProforma(trx, b.orgId, so.id, '2026-06-13')), /already invoiced/);
+  });
+});
+
+test('a voided Ready invoice gives everything back: the challan reopens, the order goes back a stage, Ready invoices it again', async () => {
+  await rolledBack(async (trx) => {
+    const b = await book(trx);
+    const so = await createSalesOrder(trx, b.orgId, null, {
+      branchId: b.branchId, customerId: b.customerId, date: '2026-06-01',
+      lines: [{ itemId: b.goods, qty: 4, ratePaise: 1000_00, gstRatePct: 18 }, { itemId: b.service, qty: 2, ratePaise: 500_00, gstRatePct: 18 }],
+    });
+    const first = (await setOrderStage(trx, b.orgId, null, so.id, 'ready', '2026-06-10')).ready!;
+    await voidInvoice(trx, b.orgId, null, first.invoice!.id, 'Wrong price');
+
+    const order = await trx.selectFrom('sales_orders').select(['status', 'stage', 'invoiced_amount']).where('id', '=', so.id).executeTakeFirstOrThrow();
+    assert.deepEqual([order.status, order.stage, Number(order.invoiced_amount)], ['open', 'in_process', 0]);
+    const soLines = await trx.selectFrom('sales_order_lines').select(['qty_invoiced', 'qty_delivered']).where('sales_order_id', '=', so.id).orderBy('line_no').execute();
+    assert.deepEqual(soLines.map((l) => [Number(l.qty_invoiced), Number(l.qty_delivered)]), [[0, 4], [0, 0]], 'nothing invoiced; the goods are still delivered');
+    const dc = await trx.selectFrom('delivery_challans').select(['status', 'invoice_id']).where('id', '=', first.challan!.id).executeTakeFirstOrThrow();
+    assert.deepEqual([dc.status, dc.invoice_id], ['open', null]);
+
+    // Ready again: one invoice for all of it, closing the challan already sent, and no second challan.
+    const again = (await setOrderStage(trx, b.orgId, null, so.id, 'ready', '2026-06-11')).ready!;
+    assert.equal(again.challan, null, 'the goods went out already');
+    assert.deepEqual(again.closedChallans.map((c) => c.id), [first.challan!.id]);
+    const lines = await trx.selectFrom('invoice_lines').select(['item_id', 'qty']).where('invoice_id', '=', again.invoice!.id).orderBy('line_no').execute();
+    assert.deepEqual(lines.map((l) => [l.item_id, Number(l.qty)]), [[b.goods, 4], [b.service, 2]]);
+    const closed = await trx.selectFrom('delivery_challans').select(['status', 'invoice_id']).where('id', '=', first.challan!.id).executeTakeFirstOrThrow();
+    assert.deepEqual([closed.status, Number(closed.invoice_id)], ['invoiced', again.invoice!.id]);
+    const after = await trx.selectFrom('sales_orders').select(['status', 'stage']).where('id', '=', so.id).executeTakeFirstOrThrow();
+    assert.deepEqual([after.status, after.stage], ['invoiced', 'ready']);
+    await assert.rejects(invoiceFromChallan(trx, b.orgId, null, first.challan!.id, { date: '2026-06-12', dueDate: '2026-06-27' }), /invoiced|Nothing is left/);
+  });
+});
+
+test('ready for delivery after part was sent: one invoice for all of it, the sent challan closed against it', async () => {
+  await rolledBack(async (trx) => {
+    const b = await book(trx);
+    const so = await createSalesOrder(trx, b.orgId, null, {
+      branchId: b.branchId, customerId: b.customerId, date: '2026-06-01', lines: [{ itemId: b.goods, qty: 4, ratePaise: 1000_00, gstRatePct: 18 }],
+    });
+    const soLine = await trx.selectFrom('sales_order_lines').select('id').where('sales_order_id', '=', so.id).executeTakeFirstOrThrow();
+    const part = await challanFromSalesOrder(trx, b.orgId, null, so.id, { date: '2026-06-03', lines: [{ lineId: soLine.id, qty: 1 }] });
+    const ready = (await setOrderStage(trx, b.orgId, null, so.id, 'ready', '2026-06-10')).ready!;
+    const invQty = await trx.selectFrom('invoice_lines').select('qty').where('invoice_id', '=', ready.invoice!.id).execute();
+    assert.deepEqual(invQty.map((l) => Number(l.qty)), [4], 'the one sent and the three not sent');
+    assert.deepEqual(ready.closedChallans.map((c) => c.id), [part.id]);
+    const fresh = await trx.selectFrom('challan_lines').select('qty').where('challan_id', '=', ready.challan!.id).execute();
+    assert.deepEqual(fresh.map((l) => Number(l.qty)), [3], 'a new challan for the three not sent yet');
+    assert.equal(ready.openChallans, 0);
+    await assert.rejects(invoiceFromChallan(trx, b.orgId, null, part.id, { date: '2026-06-12', dueDate: '2026-06-27' }), /invoiced|Nothing is left/);
+  });
+});
+
+test('voiding an invoice raised from a challan gives the quantities back to the challan and its order', async () => {
+  await rolledBack(async (trx) => {
+    const b = await book(trx);
+    const so = await createSalesOrder(trx, b.orgId, null, {
+      branchId: b.branchId, customerId: b.customerId, date: '2026-06-01', lines: [{ itemId: b.goods, qty: 2, ratePaise: 1000_00, gstRatePct: 18 }],
+    });
+    const dc = await challanFromSalesOrder(trx, b.orgId, null, so.id, { date: '2026-06-02' });
+    const inv = await invoiceFromChallan(trx, b.orgId, null, dc.id, { date: '2026-06-03', dueDate: '2026-06-18' });
+    assert.equal((await trx.selectFrom('sales_orders').select('status').where('id', '=', so.id).executeTakeFirstOrThrow()).status, 'invoiced');
+    await voidInvoice(trx, b.orgId, null, inv.id, 'Raised twice');
+    const dcRow = await trx.selectFrom('delivery_challans').select('status').where('id', '=', dc.id).executeTakeFirstOrThrow();
+    const dcLine = await trx.selectFrom('challan_lines').select('qty_invoiced').where('challan_id', '=', dc.id).executeTakeFirstOrThrow();
+    const soRow = await trx.selectFrom('sales_orders').select(['status', 'invoiced_amount']).where('id', '=', so.id).executeTakeFirstOrThrow();
+    assert.deepEqual([dcRow.status, Number(dcLine.qty_invoiced), soRow.status, Number(soRow.invoiced_amount)], ['open', 0, 'open', 0]);
+    const again = await invoiceFromChallan(trx, b.orgId, null, dc.id, { date: '2026-06-04', dueDate: '2026-06-19' });
+    assert.ok(again.id, 'invoiced again from the challan');
+  });
+});
+
+test('goods invoiced from the order before they are sent: their challan is invoiced already, and a void of Ready leaves it so', async () => {
+  await rolledBack(async (trx) => {
+    const b = await book(trx);
+    const so = await createSalesOrder(trx, b.orgId, null, {
+      branchId: b.branchId, customerId: b.customerId, date: '2026-06-01',
+      lines: [{ itemId: b.goods, qty: 10, ratePaise: 1000_00, gstRatePct: 18 }, { itemId: b.service, qty: 5, ratePaise: 500_00, gstRatePct: 18 }],
+    });
+    const [goodsLine, serviceLine] = await trx.selectFrom('sales_order_lines').select('id').where('sales_order_id', '=', so.id).orderBy('line_no').execute();
+    // "Invoice part": the goods, before they go out. Then "Deliver part": the same goods.
+    await invoiceFromSalesOrder(trx, b.orgId, null, so.id, { date: '2026-06-02', dueDate: '2026-06-17', lines: [{ lineId: goodsLine.id, qty: 10 }] });
+    const dc = await challanFromSalesOrder(trx, b.orgId, null, so.id, { date: '2026-06-03', lines: [{ lineId: goodsLine.id, qty: 10 }] });
+    const dcRow = await trx.selectFrom('delivery_challans').select('status').where('id', '=', dc.id).executeTakeFirstOrThrow();
+    assert.equal(dcRow.status, 'invoiced', 'sent against the invoice already raised');
+    await assert.rejects(invoiceFromChallan(trx, b.orgId, null, dc.id, { date: '2026-06-04', dueDate: '2026-06-19' }), /Nothing is left/);
+
+    // Ready invoices the service only; voiding that leaves the goods' challan invoiced.
+    const ready = (await setOrderStage(trx, b.orgId, null, so.id, 'ready', '2026-06-05')).ready!;
+    const readyLines = await trx.selectFrom('invoice_lines').select(['source_line_id', 'qty']).where('invoice_id', '=', ready.invoice!.id).execute();
+    assert.deepEqual(readyLines.map((l) => [Number(l.source_line_id), Number(l.qty)]), [[serviceLine.id, 5]]);
+    await voidInvoice(trx, b.orgId, null, ready.invoice!.id, 'Service price wrong');
+    const after = await trx.selectFrom('delivery_challans').select('status').where('id', '=', dc.id).executeTakeFirstOrThrow();
+    assert.equal(after.status, 'invoiced');
+    const soLines = await trx.selectFrom('sales_order_lines').select('qty_invoiced').where('sales_order_id', '=', so.id).orderBy('line_no').execute();
+    assert.deepEqual(soLines.map((l) => Number(l.qty_invoiced)), [10, 0], 'the goods stay invoiced once; the service is open again');
+  });
+});
+
+test('a challan delivered before Ready, already part invoiced from the order: a void of Ready gives back only its own share', async () => {
+  await rolledBack(async (trx) => {
+    const b = await book(trx);
+    const so = await createSalesOrder(trx, b.orgId, null, {
+      branchId: b.branchId, customerId: b.customerId, date: '2026-06-01', lines: [{ itemId: b.goods, qty: 10, ratePaise: 1000_00, gstRatePct: 18 }],
+    });
+    const [line] = await trx.selectFrom('sales_order_lines').select('id').where('sales_order_id', '=', so.id).execute();
+    await invoiceFromSalesOrder(trx, b.orgId, null, so.id, { date: '2026-06-02', dueDate: '2026-06-17', lines: [{ lineId: line.id, qty: 6 }] });
+    const dc = await challanFromSalesOrder(trx, b.orgId, null, so.id, { date: '2026-06-03', lines: [{ lineId: line.id, qty: 10 }] });
+    assert.equal((await trx.selectFrom('delivery_challans').select('status').where('id', '=', dc.id).executeTakeFirstOrThrow()).status, 'partially_invoiced', '6 of the 10 invoiced already');
+    const ready = (await setOrderStage(trx, b.orgId, null, so.id, 'ready', '2026-06-05')).ready!;
+    assert.equal(Number((await trx.selectFrom('invoice_lines').select('qty').where('invoice_id', '=', ready.invoice!.id).executeTakeFirstOrThrow()).qty), 4);
+    assert.equal(ready.challan, null);
+    await voidInvoice(trx, b.orgId, null, ready.invoice!.id, 'Raised early');
+    const dcLine = await trx.selectFrom('challan_lines').select('qty_invoiced').where('challan_id', '=', dc.id).executeTakeFirstOrThrow();
+    assert.equal(Number(dcLine.qty_invoiced), 6, 'the 4 Ready invoiced are open again, the 6 before stay');
+    const again = await invoiceFromChallan(trx, b.orgId, null, dc.id, { date: '2026-06-06', dueDate: '2026-06-21' });
+    assert.equal(Number((await trx.selectFrom('invoice_lines').select('qty').where('invoice_id', '=', again.id).executeTakeFirstOrThrow()).qty), 4);
+    assert.equal(Number((await trx.selectFrom('sales_order_lines').select('qty_invoiced').where('id', '=', line.id).executeTakeFirstOrThrow()).qty_invoiced), 10, 'never more than the order');
+  });
+});
+
+test('due dates by the customer’s terms, end of the month included, on Ready and on the form', async () => {
+  assert.equal(dueDateFor('due_end_of_month', '2026-11-05'), '2026-11-30');
+  assert.equal(dueDateFor('due_end_of_next_month', '2026-11-05'), '2026-12-31');
+  assert.equal(dueDateFor('due_end_of_month', '2027-02-10'), '2027-02-28');
+  assert.equal(dueDateFor('net_15', '2026-11-25'), '2026-12-10');
+  assert.equal(dueDateFor('due_on_receipt', '2026-11-05'), '2026-11-05');
+  await rolledBack(async (trx) => {
+    const b = await book(trx);
+    await trx.updateTable('contacts').set({ payment_terms: 'due_end_of_month' }).where('id', '=', b.customerId).execute();
+    const so = await createSalesOrder(trx, b.orgId, null, {
+      branchId: b.branchId, customerId: b.customerId, date: '2026-11-01', lines: [{ itemId: b.service, qty: 1, ratePaise: 500_00, gstRatePct: 18 }],
+    });
+    const ready = (await setOrderStage(trx, b.orgId, null, so.id, 'ready', '2026-11-05')).ready!;
+    const inv = await trx.selectFrom('invoices').select('due_date').where('id', '=', ready.invoice!.id).executeTakeFirstOrThrow();
+    assert.equal(String(inv.due_date).slice(0, 10), '2026-11-30');
+  });
+});
+
+test('a business not registered for GST prices its quotes and orders with no GST, as its invoices', async () => {
+  await rolledBack(async (trx) => {
+    const b = await book(trx);
+    await trx.updateTable('organizations').set({ gst_registration_type: 'unregistered' }).where('id', '=', b.orgId).execute();
+    const so = await createSalesOrder(trx, b.orgId, null, {
+      branchId: b.branchId, customerId: b.customerId, date: '2026-06-01', lines: [{ itemId: b.goods, qty: 1, ratePaise: 1000_00, gstRatePct: 18 }],
+    });
+    const row = await trx.selectFrom('sales_orders').select(['total', 'supply_type']).where('id', '=', so.id).executeTakeFirstOrThrow();
+    assert.deepEqual([Number(row.total), row.supply_type], [1000, 'nil_or_exempt']);
+    // Moved back to Order received and raised again: the same PI, at Proforma sent.
+    const pi = await raiseProforma(trx, b.orgId, so.id, '2026-06-02');
+    await setOrderStage(trx, b.orgId, null, so.id, 'order', '2026-06-03');
+    const again = await raiseProforma(trx, b.orgId, so.id, '2026-06-04');
+    assert.deepEqual([again.number, again.stage], [pi.number, 'proforma']);
   });
 });
 

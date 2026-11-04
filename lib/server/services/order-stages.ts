@@ -11,8 +11,10 @@ import 'server-only';
 //
 // Ready for delivery raises the tax invoice from the order on its own — every
 // line still to invoice, at the order's prices and discounts — and, for the
-// goods on it, the delivery challan they travel with. That challan names the
-// invoice and is already invoiced, so it can never be invoiced a second time.
+// goods on it not sent yet, the delivery challan they travel with. Goods sent
+// earlier on a challan of the order go on the same invoice. Every challan it
+// covers names the invoice and is invoiced, so it is never invoiced twice;
+// voiding the invoice opens them again (services/order-release.ts).
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { Trx } from '../db';
@@ -20,6 +22,8 @@ import { allocateNumber } from '../ledger/posting';
 import { conflict, notFound } from '../http';
 import { fyLabelFor } from './sales';
 import { challanFromSalesOrder, invoiceFromSalesOrder, onOpenChallans } from './order-flow';
+import { statusFor } from './order-release';
+import { dueDateFor as termsDueDate } from '../../options';
 
 export type OrderStage = 'order' | 'proforma' | 'in_process' | 'ready';
 export const STAGE_LABEL: Record<OrderStage, string> = {
@@ -36,13 +40,10 @@ async function orderOf(trx: Trx, orgId: number, soId: number) {
   return so;
 }
 
-/** The due date the customer's terms give: net 30 is thirty days on, due on receipt is the same day. */
+/** The due date the customer's terms give, by the same rule as the invoice form (lib/options.ts). */
 async function dueDateFor(trx: Trx, orgId: number, customerId: number, date: string) {
   const c = await trx.selectFrom('contacts').select('payment_terms').where('id', '=', customerId).where('org_id', '=', orgId).executeTakeFirst();
-  const days = Number(/^net_(\d+)$/.exec(c?.payment_terms ?? '')?.[1] ?? (c?.payment_terms === 'due_on_receipt' ? 0 : 30));
-  const d = new Date(`${date}T00:00:00Z`);
-  d.setUTCDate(d.getUTCDate() + days);
-  return d.toISOString().slice(0, 10);
+  return termsDueDate(c?.payment_terms ?? 'net_30', date);
 }
 
 /**
@@ -52,7 +53,11 @@ async function dueDateFor(trx: Trx, orgId: number, customerId: number, date: str
 export async function raiseProforma(trx: Trx, orgId: number, soId: number, date: string) {
   const so = await orderOf(trx, orgId, soId);
   if (so.status === 'invoiced') throw conflict(`Sales order ${so.number} is already invoiced: send the tax invoice instead.`);
-  if (so.proforma_number) return { number: so.proforma_number, date: String(so.proforma_date).slice(0, 10), stage: so.stage as OrderStage };
+  if (so.proforma_number) {
+    // Raised again from Order received (it was moved back): the same PI, and the order is at Proforma sent again.
+    if (so.stage === 'order') await trx.updateTable('sales_orders').set({ stage: 'proforma', stage_changed_at: new Date() }).where('id', '=', soId).execute();
+    return { number: so.proforma_number, date: String(so.proforma_date).slice(0, 10), stage: (so.stage === 'order' ? 'proforma' : so.stage) as OrderStage };
+  }
   const number = await allocateNumber(trx, orgId, so.branch_id, 'PI', fyLabelFor(date), { prefix: 'PI' });
   const stage: OrderStage = so.stage === 'order' ? 'proforma' : (so.stage as OrderStage);
   await trx.updateTable('sales_orders')
@@ -64,7 +69,9 @@ export async function raiseProforma(trx: Trx, orgId: number, soId: number, date:
 export interface ReadyResult {
   invoice: { id: number; number: string; totalPaise: number; heldForApproval: boolean } | null;
   challan: { id: number; number: string } | null;
-  /** Goods already on a challan of this order that is not invoiced: invoiced from that challan. */
+  /** Challans of this order already sent and not invoiced, which this invoice covers. */
+  closedChallans: { id: number; number: string }[];
+  /** Order lines with goods out on approval (or gas measured later): invoiced from their challan. */
   openChallans: number;
 }
 
@@ -86,23 +93,53 @@ export async function setOrderStage(
   const lines = await trx.selectFrom('sales_order_lines as l').leftJoin('items as i', 'i.id', 'l.item_id')
     .select(['l.id', 'l.qty', 'l.qty_invoiced', 'l.qty_delivered', 'l.hsn_sac', 'i.kind'])
     .where('l.sales_order_id', '=', soId).orderBy('l.line_no').execute();
-  const challaned = await onOpenChallans(trx, lines.map((l) => l.id));
-  const left = lines.map((l) => ({ ...l, toInvoice: Number(l.qty) - Number(l.qty_invoiced) - (challaned.get(l.id) ?? 0) }));
-  const openChallans = [...challaned.values()].filter((q) => q > 0).length;
+  const lineIds = lines.map((l) => l.id);
+  const challaned = await onOpenChallans(trx, lineIds);
+
+  // Goods already sent on an ordinary challan of this order and not invoiced
+  // yet go on the same invoice, and that challan is closed against it. Goods
+  // out on approval, or gas measured later, stay to invoice from their challan.
+  const sent = lineIds.length ? await trx.selectFrom('challan_lines as cl').innerJoin('delivery_challans as dc', 'dc.id', 'cl.challan_id')
+    .select(['cl.id', 'cl.challan_id', 'cl.so_line_id', 'cl.qty', 'cl.qty_invoiced', 'dc.number'])
+    .where('dc.org_id', '=', orgId).where('cl.so_line_id', 'in', lineIds)
+    .where('dc.status', 'in', ['open', 'partially_invoiced']).where('dc.challan_type', '=', 'other')
+    .execute() : [];
+  const sentQty = new Map<number, number>();
+  for (const c of sent) sentQty.set(Number(c.so_line_id), (sentQty.get(Number(c.so_line_id)) ?? 0) + Number(c.qty) - Number(c.qty_invoiced));
+
+  const left = lines.map((l) => {
+    const fresh = Number(l.qty) - Number(l.qty_invoiced) - (challaned.get(l.id) ?? 0);
+    return { ...l, fresh, toInvoice: fresh + (sentQty.get(l.id) ?? 0) };
+  });
+  const openChallans = [...challaned.entries()].filter(([id, q]) => q - (sentQty.get(id) ?? 0) > 1e-9).length;
 
   let invoice: ReadyResult['invoice'] = null;
   let challan: ReadyResult['challan'] = null;
+  const closedChallans: ReadyResult['closedChallans'] = [];
   if (left.some((l) => l.toInvoice > 1e-9)) {
     const dueDate = await dueDateFor(trx, orgId, so.customer_id, date);
-    const created = await invoiceFromSalesOrder(trx, orgId, userId, soId, { date, dueDate, status: 'approved' });
+    const created = await invoiceFromSalesOrder(trx, orgId, userId, soId, { date, dueDate, status: 'approved', alsoOnChallans: sentQty });
     invoice = { id: created.id, number: created.number, totalPaise: created.totalPaise, heldForApproval: !!created.heldForApproval };
 
-    // The goods on that invoice go out on a challan naming it. Services are not
+    // The challans already sent are invoiced by it.
+    for (const c of sent) {
+      await trx.updateTable('challan_lines').set((eb) => ({ qty_invoiced: eb.ref('qty') })).where('id', '=', c.id).execute();
+    }
+    for (const [id, number] of new Map(sent.map((c) => [c.challan_id, c.number]))) {
+      const after = await trx.selectFrom('challan_lines').select(['qty', 'qty_invoiced']).where('challan_id', '=', id).execute();
+      await trx.updateTable('delivery_challans').set({
+        status: statusFor(after.map((l) => ({ qty: l.qty, done: Number(l.qty_invoiced) })), 'invoiced', 'partially_invoiced', 'open') as 'open',
+        invoice_id: created.id,
+      }).where('id', '=', id).execute();
+      closedChallans.push({ id, number });
+    }
+
+    // The goods not sent yet go out on a challan naming it. Services are not
     // delivered on one: an item marked a service, or a typed line with a SAC (99…).
     const isService = (l: (typeof left)[number]) => l.kind === 'service' || (!l.kind && /^99/.test(l.hsn_sac ?? ''));
     const goods = left
-      .filter((l) => l.toInvoice > 1e-9 && !isService(l))
-      .map((l) => ({ lineId: l.id, qty: Math.min(l.toInvoice, Number(l.qty) - Number(l.qty_delivered)) }))
+      .filter((l) => l.fresh > 1e-9 && !isService(l))
+      .map((l) => ({ lineId: l.id, qty: Math.min(l.fresh, Number(l.qty) - Number(l.qty_delivered)) }))
       .filter((p) => p.qty > 1e-9);
     if (goods.length) {
       const dc = await challanFromSalesOrder(trx, orgId, userId, soId, {
@@ -116,5 +153,5 @@ export async function setOrderStage(
   }
 
   await trx.updateTable('sales_orders').set({ stage: 'ready', stage_changed_at: new Date() }).where('id', '=', soId).execute();
-  return { stage: 'ready', ready: { invoice, challan, openChallans } };
+  return { stage: 'ready', ready: { invoice, challan, closedChallans, openChallans } };
 }

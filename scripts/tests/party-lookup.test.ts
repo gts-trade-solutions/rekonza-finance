@@ -126,6 +126,13 @@ test('a service set to POST sends the body with the number in it', async () => {
   assert.equal(d.legalName, 'Raj Firm');
   assert.equal(d.registeredOn, '2019-04-01');
   assert.equal(d.constitution, 'Partnership firm or LLP', 'kept from the PAN when the reply has none');
+
+  // Another number to the same URL is asked for afresh, not answered from the first one's reply.
+  await lookupParty(COMPANY, null);
+  assert.equal(calls.length, 2, 'a POST lookup is kept by its body as well as its URL');
+  assert.deepEqual(JSON.parse(String(calls[1].init.body)), { gstin: COMPANY, token: 'abc' });
+  await lookupParty(FIRM, null);
+  assert.equal(calls.length, 2, 'the same number again is kept');
 });
 
 test('a number the service does not know falls back to the number; a failing service says so', async () => {

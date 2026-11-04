@@ -77,13 +77,14 @@ export default function SalesOrdersPage() {
       if (stage === 'ready') {
         setReadying(null);
         if (done.invoice) {
+          const covers = done.closedChallans?.length ? ` It covers the goods already sent on ${done.closedChallans.map((c) => c.number).join(', ')}.` : '';
           toast.success(`Invoice ${done.invoice.number} raised${done.challan ? ` with challan ${done.challan.number}` : ''}`, {
-            description: done.invoice.heldForApproval ? 'A rule holds the invoice for approval; it posts then.' : 'Posted to the ledger.',
+            description: (done.invoice.heldForApproval ? 'A rule holds the invoice for approval; it posts then.' : 'Posted to the ledger.') + covers,
           });
           router.push(`/sales/invoices/${done.invoice.id}`);
           return;
         }
-        toast.success(`${row.number} is ready for delivery`, { description: done.openChallans ? 'Its goods are on a challan still to invoice: invoice it from Delivery challans.' : 'Everything on it was invoiced already.' });
+        toast.success(`${row.number} is ready for delivery`, { description: done.openChallans ? 'Goods out on approval are on a challan still to invoice: invoice it from Delivery challans.' : 'Everything on it was invoiced already.' });
       } else {
         toast.success(`${row.number}: ${STAGES.find((s) => s.key === stage)?.label}`);
       }

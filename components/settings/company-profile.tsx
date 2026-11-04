@@ -26,14 +26,17 @@ import { CinLookupButton, GstinLookupButton } from '@/components/gst/gstn-portal
 import { BUSINESS_NATURES, COMPANY_TYPES, companyTypeFrom } from '@/lib/company-profile';
 import { api } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
+import { usePermission } from '@/lib/store/hooks';
 
 export interface Registration {
   legalName: string; pan: string; address: string;
   constitution: string; businessNature: string[]; cin: string; incorporatedOn: string; gstRegisteredOn: string;
 }
 
-export function CompanyRegistration({ value, onChange, canEdit, gstin, registrationType }: {
+export function CompanyRegistration({ value, onChange, canEdit, gstin, registrationType, savedCin = '' }: {
   value: Registration;
+  /** The CIN on file: not looked up again by itself. */
+  savedCin?: string;
   onChange: (v: Registration) => void;
   canEdit: boolean;
   /** The primary branch's GSTIN; edited with the branch. */
@@ -85,7 +88,7 @@ export function CompanyRegistration({ value, onChange, canEdit, gstin, registrat
           <div className="flex gap-2">
             <Input value={value.cin} onChange={(e) => set({ cin: e.target.value.toUpperCase() })} className="font-mono" maxLength={21}
               placeholder="U74999TN2015PTC123456" disabled={!canEdit} />
-            {canEdit && <CinLookupButton cin={value.cin} onFound={(d) => set({
+            {canEdit && <CinLookupButton cin={value.cin} auto={value.cin.trim().toUpperCase() !== savedCin.trim().toUpperCase()} onFound={(d) => set({
               incorporatedOn: d.incorporatedOn ?? value.incorporatedOn,
               constitution: value.constitution || companyTypeFrom(d.kind) || '',
             })} />}
@@ -101,7 +104,10 @@ export function CompanyRegistration({ value, onChange, canEdit, gstin, registrat
 
 interface Centre { id: string; code: string; name: string; category: string | null; isActive: boolean }
 
-export function DivisionsCard({ canEdit }: { canEdit: boolean }) {
+export function DivisionsCard({ canEdit: settingsEdit }: { canEdit: boolean }) {
+  // A division is a cost centre: adding one needs the accountant's right to edit them.
+  const mayAddCentres = usePermission('accountant', 'edit');
+  const canEdit = settingsEdit && mayAddCentres;
   const state = useApi(() => api.get<{ centres: Centre[] }>('/api/cost-centres'), []);
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
@@ -110,10 +116,14 @@ export function DivisionsCard({ canEdit }: { canEdit: boolean }) {
   const add = async () => {
     const n = name.trim();
     if (!n) return;
-    const code = n.toUpperCase().replace(/[^A-Z0-9]+/g, '').slice(0, 10) || 'DIV';
+    // A code from the name, numbered on until no cost centre has it.
+    const base = n.toUpperCase().replace(/[^A-Z0-9]+/g, '').slice(0, 10) || 'DIV';
+    const taken = new Set((state.data?.centres ?? []).map((c) => c.code.toUpperCase()));
+    let code = base;
+    for (let i = 2; taken.has(code); i++) code = `${base.slice(0, 10 - String(i).length)}${i}`;
     setBusy(true);
     try {
-      await api.post('/api/cost-centres', { code: divisions.some((d) => d.code === code) ? `${code.slice(0, 8)}${divisions.length + 1}` : code, name: n, category: 'Division' });
+      await api.post('/api/cost-centres', { code, name: n, category: 'Division' });
       toast.success(`${n} added`, { description: 'Pick it on invoices, bills and expenses; its profit shows under Cost centres.' });
       setName('');
       void state.refetch();

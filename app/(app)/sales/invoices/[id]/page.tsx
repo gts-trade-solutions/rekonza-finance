@@ -242,8 +242,15 @@ export default function InvoiceDetailPage() {
                           <td className="px-4 py-2.5 text-right"><Money value={l.ratePaise} /></td>
                           <td className="px-4 py-2.5 text-right"><Money value={l.taxablePaise} /></td>
                           <td className="px-4 py-2.5 text-right">
-                            <span className="text-xs text-muted-foreground">{l.gstRatePct}%</span>{' '}
-                            <Money value={l.cgstPaise + l.sgstPaise + l.igstPaise} />
+                            {/* A bill of supply charges no GST, so it shows no rate (as it prints). */}
+                            {inv.supplyType === 'nil_or_exempt' ? (
+                              <span className="text-xs text-muted-foreground" data-slot="line-gst-nil">Nil</span>
+                            ) : (
+                              <>
+                                <span className="text-xs text-muted-foreground">{l.gstRatePct}%</span>{' '}
+                                <Money value={l.cgstPaise + l.sgstPaise + l.igstPaise} />
+                              </>
+                            )}
                           </td>
                           <td className="px-4 py-2.5 text-right font-medium"><Money value={l.totalPaise} /></td>
                         </tr>

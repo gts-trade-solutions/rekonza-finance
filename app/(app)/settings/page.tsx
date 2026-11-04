@@ -299,6 +299,7 @@ export default function SettingsPage() {
                 canEdit={canEdit}
                 gstin={d.branches.find((b) => b.isPrimary)?.gstin ?? d.branches[0]?.gstin ?? null}
                 registrationType={d.org.gstRegistrationType}
+                savedCin={d.org.cin ?? ''}
               />
               {canEdit && (
                 <div className="flex justify-end">

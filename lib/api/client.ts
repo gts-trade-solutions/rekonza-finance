@@ -2698,7 +2698,7 @@ export const orderFlow = {
     api.patch<{
       stage: string; proformaNumber?: string; proformaDate?: string;
       invoice?: { id: string; number: string; heldForApproval: boolean } | null;
-      challan?: { id: string; number: string } | null; openChallans?: number;
+      challan?: { id: string; number: string } | null; closedChallans?: { id: string; number: string }[]; openChallans?: number;
     }>('/api/sales-documents', { action: 'stage', id, stage, date }),
   deliver: (id: string, input: { date: string; challanType?: 'supply_on_approval' | 'liquid_gas' | 'other'; lines?: LinePick[] }) =>
     api.patch<{ challanId: string; number: string }>('/api/sales-documents', { action: 'deliver', id, ...input }),

@@ -27,6 +27,7 @@ import { roundToRupee } from '../../money';
 import { toPaiseFromSql, toSqlFromPaise } from '../money-sql';
 import { allocateNumber, allocateOrgNumber, assertGstDocNumber, postEntry, reverseEntry, type DraftLine } from '../ledger/posting';
 import { seriesFor } from './voucher-types';
+import { registrationOn } from './statutory';
 import { returnCostLines } from './stock-ledger';
 import { CODE, accountIds, requireAccount } from '../ledger/chart-of-accounts';
 import { costLines, type DocumentLineInput } from './lines';
@@ -60,6 +61,8 @@ async function partyContext(
   branchId: number,
   customerId: number,
   placeOfSupplyOverride?: string,
+  /** The document's date: priced as the business was registered then, as an invoice is. */
+  date?: string,
 ): Promise<PartyContext> {
   const branch = await trx
     .selectFrom('branches')
@@ -78,12 +81,14 @@ async function partyContext(
   if (!customer) throw notFound('That customer does not exist.');
 
   const placeOfSupply = placeOfSupplyOverride || customer.state_code;
+  // A composition dealer, or a business not registered at all, charges no GST (services/sales.ts).
+  const unregistered = date ? (await registrationOn(trx, orgId, date)) !== 'regular' : false;
   return {
     branchStateCode: branch.state_code,
     branchGstin: branch.gstin,
     customerName: customer.display_name,
     placeOfSupply,
-    supplyType: resolveSupplyType({
+    supplyType: unregistered ? 'nil_or_exempt' : resolveSupplyType({
       branchStateCode: branch.state_code,
       placeOfSupply,
       customerTreatment: customer.gst_treatment as never,
@@ -133,7 +138,7 @@ export async function createEstimate(
   userId: number | null,
   input: CreateEstimateInput,
 ): Promise<CreatedDocument> {
-  const ctx = await partyContext(trx, orgId, input.branchId, input.customerId, input.placeOfSupply);
+  const ctx = await partyContext(trx, orgId, input.branchId, input.customerId, input.placeOfSupply, input.date);
   const costed = await costLines(trx, orgId, ctx.supplyType, input.lines, 'sale_price', input.date);
   const { rounded } = roundToRupee(costed.tax.taxablePaise + totalTaxPaise(costed.tax));
 
@@ -215,7 +220,7 @@ export async function createSalesOrder(
   userId: number | null,
   input: CreateSalesOrderInput,
 ): Promise<CreatedDocument> {
-  const ctx = await partyContext(trx, orgId, input.branchId, input.customerId, input.placeOfSupply);
+  const ctx = await partyContext(trx, orgId, input.branchId, input.customerId, input.placeOfSupply, input.date);
   const costed = await costLines(trx, orgId, ctx.supplyType, input.lines, 'sale_price', input.date);
   const { rounded } = roundToRupee(costed.tax.taxablePaise + totalTaxPaise(costed.tax));
 
@@ -425,7 +430,7 @@ export async function createCreditNote(
     throw badRequest('A credit note needs a reason — it is reported in GSTR-1.');
   }
 
-  const ctx = await partyContext(trx, orgId, input.branchId, input.customerId, input.placeOfSupply);
+  const ctx = await partyContext(trx, orgId, input.branchId, input.customerId, input.placeOfSupply, input.date);
   const costed = await costLines(trx, orgId, ctx.supplyType, input.lines, 'sale_price', input.date);
   const { rounded } = roundToRupee(costed.tax.taxablePaise + totalTaxPaise(costed.tax));
 

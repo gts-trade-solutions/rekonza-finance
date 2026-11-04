@@ -66,8 +66,17 @@ export function ContactEditDialog({ contact, onClose, onSaved }: {
   const priceLists = useApi<{ lists: { id: string; name: string; isActive: boolean }[] }>(() => api.get('/api/price-lists'), []);
   // The book's people, for the account owner (exceptions about this customer go to them).
   const users = useAppStore((st) => st.users);
+  const homeState = useAppStore((st) => st.branches.find((b) => b.id === st.activeBranchId)?.stateCode ?? '');
 
   if (!f) return <Dialog open={false} />;
+  // Overseas puts the party in state 96 with no GSTIN; turning it back to an
+  // Indian treatment puts it in India again, in rupees, with no foreign country.
+  const treatmentChanged = (v: Editable['gstTreatment']) => {
+    if (v === 'overseas') return setF({ ...f, gstTreatment: v, stateCode: '96', gstin: null });
+    if (f.gstTreatment !== 'overseas' && f.stateCode !== '96') return setF({ ...f, gstTreatment: v });
+    const indian = contact?.stateCode && contact.stateCode !== '96' ? contact.stateCode : homeState;
+    setF({ ...f, gstTreatment: v, stateCode: indian, country: null, currency: 'INR' });
+  };
   const isVendor = f.kind !== 'customer';
   const set = <K extends keyof Editable>(k: K, v: Editable[K]) => setF({ ...f, [k]: v });
 
@@ -123,7 +132,7 @@ export function ContactEditDialog({ contact, onClose, onSaved }: {
             <Field label="Legal name"><Input value={s(f.legalName)} onChange={(e) => set('legalName', e.target.value)} /></Field>
             <Field label="GST treatment">
               <Combobox options={TREATMENTS} value={f.gstTreatment}
-                onChange={(v) => setF({ ...f, gstTreatment: v as Editable['gstTreatment'], ...(v === 'overseas' ? { stateCode: '96', gstin: null } : {}) })}
+                onChange={(v) => treatmentChanged(v as Editable['gstTreatment'])}
                 showAvatar={false} />
             </Field>
             {f.gstTreatment === 'overseas' && (
@@ -164,7 +173,7 @@ export function ContactEditDialog({ contact, onClose, onSaved }: {
             <Field label="CIN (companies and LLPs)" error={errors.cin}>
               <div className="flex gap-2">
                 <Input value={s(f.cin ?? null)} onChange={(e) => set('cin', e.target.value.toUpperCase())} className="font-mono" maxLength={21} placeholder="U74999TN2015PTC123456" />
-                <CinLookupButton cin={s(f.cin ?? null)} onFound={(d) => setF({ ...f, incorporatedOn: d.incorporatedOn ?? f.incorporatedOn, constitution: f.constitution || companyTypeFrom(d.kind) || d.kind })} />
+                <CinLookupButton cin={s(f.cin ?? null)} auto={s(f.cin ?? null) !== s(contact?.cin ?? null)} onFound={(d) => setF({ ...f, incorporatedOn: d.incorporatedOn ?? f.incorporatedOn, constitution: f.constitution || companyTypeFrom(d.kind) || d.kind })} />
               </div>
             </Field>
             <Field label="Incorporated on" error={errors.incorporatedOn}>

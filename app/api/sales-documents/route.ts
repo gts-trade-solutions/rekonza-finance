@@ -419,6 +419,7 @@ export const PATCH = route(
           stage: done.stage,
           invoice: done.ready?.invoice ? { id: asId(done.ready.invoice.id), number: done.ready.invoice.number, heldForApproval: done.ready.invoice.heldForApproval } : null,
           challan: done.ready?.challan ? { id: asId(done.ready.challan.id), number: done.ready.challan.number } : null,
+          closedChallans: (done.ready?.closedChallans ?? []).map((c) => ({ id: asId(c.id), number: c.number })),
           openChallans: done.ready?.openChallans ?? 0,
         };
       }

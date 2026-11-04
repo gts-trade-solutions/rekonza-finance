@@ -34,6 +34,7 @@ import { recordSerials } from './serials';
 import { checkGodown } from './godowns';
 import { createBill } from './purchases';
 import { createChallan, type CreatedDocument } from './sales-documents';
+import { statusFor } from './order-release';
 
 /** Quantities are DECIMAL(19,6); arithmetic stays at that precision. */
 const q6 = (n: number) => Math.round(n * 1e6) / 1e6;
@@ -74,11 +75,6 @@ function choose<L extends { id: number; line_no: number }>(
   return out;
 }
 
-const statusFor = (lines: { qty: string | number; done: number }[], full: string, part: string, none: string) => {
-  const all = lines.every((l) => q6(l.done) >= q6(Number(l.qty)));
-  const any = lines.some((l) => l.done > 0);
-  return all ? full : any ? part : none;
-};
 
 // ── Sales ────────────────────────────────────────────────────────────────────
 
@@ -127,12 +123,17 @@ export async function onOpenChallans(trx: Executor, soLineIds: number[]): Promis
 /** Invoice what is left on a sales order, or the lines and quantities picked. */
 export async function invoiceFromSalesOrder(
   trx: Trx, orgId: number, userId: number | null, soId: number,
-  input: { date: string; dueDate: string; status?: 'draft' | 'approved'; lines?: LinePick[] },
+  input: {
+    date: string; dueDate: string; status?: 'draft' | 'approved'; lines?: LinePick[];
+    /** Goods on open challans to invoice with the order all the same (order line → quantity); the caller closes those challans. */
+    alsoOnChallans?: Map<number, number>;
+  },
 ): Promise<CreatedDocument> {
   const { so, lines } = await loadOrder(trx, orgId, soId);
   const challaned = await onOpenChallans(trx, lines.map((l) => l.id));
+  const held = (id: number) => Math.max((challaned.get(id) ?? 0) - (input.alsoOnChallans?.get(id) ?? 0), 0);
   const picked = choose(
-    lines, (l) => Number(l.qty) - Number(l.qty_invoiced) - (challaned.get(l.id) ?? 0), input.lines, `sales order ${so.number}`,
+    lines, (l) => Number(l.qty) - Number(l.qty_invoiced) - held(l.id), input.lines, `sales order ${so.number}`,
   );
 
   const created = await createInvoice(trx, orgId, userId, {
@@ -161,6 +162,11 @@ export async function challanFromSalesOrder(
 ): Promise<CreatedDocument> {
   const { so, lines } = await loadOrder(trx, orgId, soId);
   const picked = choose(lines, (l) => Number(l.qty) - Number(l.qty_delivered), input.lines, `sales order ${so.number}`);
+  // Goods invoiced from the order before they were sent: invoiced, less what
+  // was sent and invoiced already. They go out on this challan as invoiced.
+  const challaned = await onOpenChallans(trx, picked.map(({ line }) => line.id));
+  const billedUnsent = (l: (typeof lines)[number]) =>
+    Math.max(0, Number(l.qty_invoiced) - (Number(l.qty_delivered) - (challaned.get(l.id) ?? 0)));
 
   const created = await createChallan(trx, orgId, userId, {
     branchId: so.branch_id, customerId: so.customer_id, date: input.date,
@@ -175,11 +181,21 @@ export async function challanFromSalesOrder(
   await trx.updateTable('delivery_challans').set({ source_so_id: so.id }).where('id', '=', created.id).execute();
   const challanLines = await trx.selectFrom('challan_lines').select(['id', 'line_no'])
     .where('challan_id', '=', created.id).orderBy('line_no').execute();
+  let anyBilled = false;
   for (let i = 0; i < picked.length; i++) {
     const { line, qty } = picked[i];
-    await trx.updateTable('challan_lines').set({ so_line_id: line.id }).where('id', '=', challanLines[i].id).execute();
+    const billed = q6(Math.min(qty, billedUnsent(line)));
+    if (billed > 0) anyBilled = true;
+    await trx.updateTable('challan_lines').set({ so_line_id: line.id, ...(billed > 0 ? { qty_invoiced: String(billed) } : {}) })
+      .where('id', '=', challanLines[i].id).execute();
     await trx.updateTable('sales_order_lines')
       .set({ qty_delivered: add('qty_delivered', qty) }).where('id', '=', line.id).execute();
+  }
+  if (anyBilled) {
+    const after = await trx.selectFrom('challan_lines').select(['qty', 'qty_invoiced']).where('challan_id', '=', created.id).execute();
+    await trx.updateTable('delivery_challans').set({
+      status: statusFor(after.map((l) => ({ qty: l.qty, done: Number(l.qty_invoiced) })), 'invoiced', 'partially_invoiced', 'open') as 'open',
+    }).where('id', '=', created.id).execute();
   }
   return created;
 }
@@ -202,10 +218,15 @@ export async function invoiceFromChallan(
     .leftJoin('sales_order_lines as sol', 'sol.id', 'cl.so_line_id')
     .select([
       'cl.id', 'cl.line_no', 'cl.item_id', 'cl.description', 'cl.hsn_sac', 'cl.qty', 'cl.qty_invoiced', 'cl.uqc', 'cl.rate',
-      'cl.so_line_id', 'sol.gst_rate_pct as so_gst_rate', 'sol.qty_invoiced as so_qty_invoiced', 'sol.sales_order_id',
+      'cl.so_line_id', 'sol.gst_rate_pct as so_gst_rate', 'sol.qty as so_qty', 'sol.qty_invoiced as so_qty_invoiced', 'sol.sales_order_id',
     ])
     .where('cl.challan_id', '=', challanId).orderBy('cl.line_no').execute();
-  const picked = choose(lines, (l) => Number(l.qty) - Number(l.qty_invoiced), input.lines, `challan ${dc.number}`);
+  // Never more than the order still has to invoice: goods it invoiced before
+  // they went out are not invoiced again from the challan.
+  const picked = choose(lines, (l) => {
+    const onChallan = Number(l.qty) - Number(l.qty_invoiced);
+    return l.so_line_id == null ? onChallan : Math.min(onChallan, Math.max(0, Number(l.so_qty) - Number(l.so_qty_invoiced)));
+  }, input.lines, `challan ${dc.number}`);
 
   const created = await createInvoice(trx, orgId, userId, {
     branchId: dc.branch_id, customerId: dc.customer_id, date: input.date, dueDate: input.dueDate,

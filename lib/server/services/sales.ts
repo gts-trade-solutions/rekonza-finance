@@ -23,6 +23,7 @@ import { saleCostLines } from './stock-ledger';
 import { checkSerials, recordSerials } from './serials';
 import { checkGodown } from './godowns';
 import { voidReason, voidStamp } from './void-reason';
+import { releaseInvoiceQuantities } from './order-release';
 import { einvoiceApplicability, irnRequired, registrationOn } from './statutory';
 import { bestDiscount, discountsFor, pricesFor } from './price-lists';
 import { batchesForSale } from './batches';
@@ -623,6 +624,8 @@ export async function voidInvoice(
     .select(['id', 'number', 'status', 'journal_entry_id', 'amount_paid'])
     .where('id', '=', invoiceId)
     .where('org_id', '=', orgId)
+    // Held until the void is done: a second void at the same moment waits, then finds it void.
+    .forUpdate()
     .executeTakeFirst();
   if (!inv) throw notFound('Invoice not found.');
   if (inv.status === 'void') throw new ApiError(409, 'That invoice is already void.', 'conflict');
@@ -682,6 +685,8 @@ export async function voidInvoice(
   // Hours and expenses it billed are unbilled again, for the invoice that replaces it.
   await trx.updateTable('time_entries').set({ invoice_id: null }).where('org_id', '=', orgId).where('invoice_id', '=', invoiceId).execute();
   await trx.updateTable('expenses').set({ billed_invoice_id: null }).where('org_id', '=', orgId).where('billed_invoice_id', '=', invoiceId).execute();
+  // So are the order and challan quantities it invoiced.
+  await releaseInvoiceQuantities(trx, orgId, invoiceId);
 }
 
 /** Mark an approved invoice as sent. Posts it first if it was still a draft. */

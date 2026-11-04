@@ -139,15 +139,13 @@ export function termsOptions(): ComboboxOption[] {
 /** Resolve a terms preset to a concrete due date. */
 export function dueDateFor(termsValue: string, invoiceDate: string): string {
   const t = PAYMENT_TERMS.find((x) => x.value === termsValue) ?? PAYMENT_TERMS[2];
-  const d = new Date(invoiceDate);
-  if (t.days === -1) {
-    return new Date(d.getFullYear(), d.getMonth() + 1, 0).toISOString().slice(0, 10);
-  }
-  if (t.days === -2) {
-    return new Date(d.getFullYear(), d.getMonth() + 2, 0).toISOString().slice(0, 10);
-  }
-  d.setDate(d.getDate() + t.days);
-  return d.toISOString().slice(0, 10);
+  // Calendar arithmetic on the date alone, in UTC: a local midnight read back
+  // with toISOString() is the day before anywhere east of Greenwich, India included.
+  const [y, m, d] = invoiceDate.slice(0, 10).split('-').map(Number);
+  const day = (ms: number) => new Date(ms).toISOString().slice(0, 10);
+  if (t.days === -1) return day(Date.UTC(y, m, 0)); // the last day of this month
+  if (t.days === -2) return day(Date.UTC(y, m + 1, 0)); // the last day of next month
+  return day(Date.UTC(y, m - 1, d + t.days));
 }
 
 /** Best-fit terms preset for a customer's stored payment-term days. */

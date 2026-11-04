@@ -84,21 +84,24 @@ async function callService(prefix: 'GSTIN_LOOKUP' | 'COMPANY_LOOKUP', vars: Reco
   const all = { ...vars, key: process.env[`${prefix}_KEY`]?.trim() ?? '' };
   const fill = (t: string, enc: boolean) => t.replace(/\{(\w+)\}/g, (w, k: string) => (k in all ? (enc ? encodeURIComponent(all[k as keyof typeof all]) : all[k as keyof typeof all]) : w));
   const url = fill(template, true);
-  const hit = cache.get(url);
+  const bodyTemplate = process.env[`${prefix}_BODY`]?.trim();
+  const body = bodyTemplate ? fill(bodyTemplate, false) : null;
+  // A service asked by POST carries the number in the body, not the URL: both make the key.
+  const key = `${prefix} ${url} ${body ?? ''}`;
+  const hit = cache.get(key);
   if (hit && Date.now() - hit.at < KEEP_MS) return hit.value;
   let headers: Record<string, string> = { accept: 'application/json' };
   const rawHeaders = process.env[`${prefix}_HEADERS`]?.trim();
   if (rawHeaders) {
     try { headers = { ...headers, ...JSON.parse(fill(rawHeaders, false)) as Record<string, string> }; } catch { /* a malformed setting is ignored, not fatal */ }
   }
-  const body = process.env[`${prefix}_BODY`]?.trim();
   const res = await fetcher(url, body
-    ? { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: fill(body, false) }
+    ? { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body }
     : { method: 'GET', headers });
   if (res.status === 404) return null;
   if (!res.ok) throw new ApiError(502, `The lookup service answered ${res.status}. Check its key and how many lookups are left.`, 'lookup_failed');
   const value = await res.json().catch(() => null);
-  cache.set(url, { at: Date.now(), value });
+  cache.set(key, { at: Date.now(), value });
   return value;
 }
 

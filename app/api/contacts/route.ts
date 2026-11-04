@@ -290,6 +290,10 @@ function checkGstin(input: Partial<z.infer<typeof ContactInput>>) {
   if (input.gstTreatment === 'overseas' && input.gstin) {
     throw badRequest('An overseas party has no Indian GSTIN. Leave it empty, or choose another GST treatment.');
   }
+  // 96 is the code for a place outside India: invoices to it go as exports, with no GST.
+  if (input.gstTreatment && input.gstTreatment !== 'overseas' && input.stateCode === '96') {
+    throw badRequest('This party is in India: pick its state. State 96 is only for a party outside India (GST treatment Overseas).');
+  }
   if (input.gstin && input.stateCode && input.gstin.slice(0, 2) !== input.stateCode) {
     throw badRequest(
       `The GSTIN starts with ${input.gstin.slice(0, 2)}, which is a different state from the one selected. ` +
