@@ -96,7 +96,7 @@ async function record(kind, startedAt, fields) {
       `INSERT INTO backup_runs (kind, started_at, finished_at, ok, file, bytes, sha256, files_count, detail, host)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [kind, startedAt, new Date(), fields.ok ? 1 : 0, fields.file ?? null, fields.bytes ?? null,
-        fields.sha256 ?? null, fields.filesCount ?? null, fields.detail?.slice(0, 1000) ?? null, hostname().slice(0, 120)],
+        fields.sha256 ?? null, fields.filesCount ?? null, fields.detail?.slice(0, 1000) ?? null, (process.env.BACKUP_HOST_NAME?.trim() || hostname()).slice(0, 120)],
     );
     await conn.end();
   } catch (err) {
@@ -363,7 +363,13 @@ async function restore(file, into, filesInto) {
   client.stderr.on('data', (c) => { stderr += c; });
   const exited = new Promise((resolve) => client.on('close', resolve));
   try {
-    await pipeline(body, decipher, createGunzip(), client.stdin);
+    try {
+      await pipeline(body, decipher, createGunzip(), client.stdin);
+    } catch (err) {
+      // mysql stopped reading because it failed: its own words say why, not the broken pipe.
+      const code = await exited;
+      throw new Error(`mysql exited with ${code} part-way through the restore: ${stderr.trim() || err.message}`);
+    }
     const code = await exited;
     if (code !== 0) throw new Error(`mysql exited with ${code}: ${stderr.trim()}`);
   } finally {

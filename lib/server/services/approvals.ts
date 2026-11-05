@@ -238,6 +238,25 @@ export async function pendingApprovals(ex: Executor, orgId: number): Promise<Pen
   return out.sort((a, b) => (a.submittedAt ?? '').localeCompare(b.submittedAt ?? ''));
 }
 
+export interface ApprovalDecision {
+  documentType: RuleDoc; id: string; number: string; action: 'submitted' | 'approved' | 'rejected'; note: string | null; by: string | null; at: string;
+}
+
+/** The latest submissions and decisions across every kind of document: the approval history at a glance. */
+export async function recentDecisions(ex: Executor, orgId: number, limit = 25): Promise<ApprovalDecision[]> {
+  const rows = await ex.selectFrom('approval_actions as a').leftJoin('users as u', 'u.id', 'a.user_id')
+    .leftJoin('bills as b', (j) => j.onRef('b.id', '=', 'a.document_id').on('a.document_type', '=', 'bill'))
+    .leftJoin('invoices as i', (j) => j.onRef('i.id', '=', 'a.document_id').on('a.document_type', '=', 'invoice'))
+    .leftJoin('payment_batches as p', (j) => j.onRef('p.id', '=', 'a.document_id').on('a.document_type', '=', 'payment_batch'))
+    .select(['a.document_type', 'a.document_id', 'a.action', 'a.note', 'a.created_at', 'u.name', 'b.internal_no', 'i.number as invoice_no', 'p.number as batch_no'])
+    .where('a.org_id', '=', orgId).orderBy('a.created_at', 'desc').orderBy('a.id', 'desc').limit(limit).execute();
+  return rows.map((r) => ({
+    documentType: r.document_type as RuleDoc, id: String(r.document_id),
+    number: r.internal_no ?? r.invoice_no ?? r.batch_no ?? `Journal ${r.document_id}`,
+    action: r.action, note: r.note, by: r.name, at: new Date(r.created_at).toISOString(),
+  }));
+}
+
 export async function approvalHistory(ex: Executor, orgId: number, doc: RuleDoc, id: number) {
   const rows = await ex.selectFrom('approval_actions as a').leftJoin('users as u', 'u.id', 'a.user_id')
     .select(['a.action', 'a.note', 'a.created_at', 'u.name'])

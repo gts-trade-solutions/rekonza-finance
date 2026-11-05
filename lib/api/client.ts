@@ -2743,7 +2743,10 @@ export interface PendingApproval {
 }
 
 export const approvals = {
-  overview: () => api.get<{ rules: ApprovalRule[]; pending: PendingApproval[]; canEditRules: boolean }>('/api/approvals'),
+  overview: () => api.get<{
+    rules: ApprovalRule[]; pending: PendingApproval[]; canEditRules: boolean;
+    recent: { documentType: ApprovalDoc; id: string; number: string; action: 'submitted' | 'approved' | 'rejected'; note: string | null; by: string | null; at: string }[];
+  }>('/api/approvals'),
   history: (doc: ApprovalDoc, id: string) =>
     api.get<{ history: { action: string; note: string | null; by: string | null; at: string }[] }>('/api/approvals', { doc, id }),
   saveRule: (rule: Omit<ApprovalRule, 'id'> & { id?: string | null }) => api.post<{ id: string }>('/api/approvals', { action: 'save-rule', ...rule }),

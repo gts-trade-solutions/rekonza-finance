@@ -37,6 +37,13 @@ function daysAgo(n: number): string {
 
 const R = (rupees: number) => Math.round(rupees * 100);
 
+// Month words in the book's narrations follow its dates, so a bill dated in
+// October is not for "August" when the book is built in November.
+const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const monthOf = (day: string) => MONTH_NAMES[Number(day.slice(5, 7)) - 1];
+const monShort = (day: string) => monthOf(day).slice(0, 3);
+const yearOf = (day: string) => day.slice(0, 4);
+
 interface Sale {
   customer: string;
   daysAgo: number;
@@ -52,7 +59,7 @@ interface Sale {
  * which makes a working dashboard look broken.
  */
 const SALES: Sale[] = [
-  // Prior quarter — April to June.
+  // The months before.
   { customer: 'c_sharma', daysAgo: 128, terms: 30, lines: [{ item: 'i_tyre', qty: 12 }, { item: 'i_fitment', qty: 12 }], pay: 'full' },
   { customer: 'c_national', daysAgo: 121, terms: 30, lines: [{ item: 'i_battery', qty: 14 }], pay: 'full' },
   { customer: 'c_marina', daysAgo: 114, terms: 15, lines: [{ item: 'i_engineoil', qty: 30 }, { item: 'i_oilfilter', qty: 40 }], pay: 'full' },
@@ -68,7 +75,7 @@ const SALES: Sale[] = [
   { customer: 'c_national', daysAgo: 45, terms: 30, lines: [{ item: 'i_wiper', qty: 35 }, { item: 'i_airfilter', qty: 28 }], pay: 'full' },
   { customer: 'c_ridez', daysAgo: 40, terms: 0, lines: [{ item: 'i_engineoil', qty: 6 }, { item: 'i_fitment', qty: 3 }], pay: 'full' },
 
-  // Current quarter — July and August.
+  // The last five weeks.
   { customer: 'c_sharma', daysAgo: 34, terms: 30, lines: [{ item: 'i_brakepad', qty: 20 }, { item: 'i_oilfilter', qty: 30 }], pay: 'full' },
   { customer: 'c_apex', daysAgo: 30, terms: 30, lines: [{ item: 'i_battery', qty: 25 }, { item: 'i_fitment', qty: 25 }], pay: 'full', tds: true },
   { customer: 'c_velocity', daysAgo: 27, terms: 30, lines: [{ item: 'i_tyre', qty: 16 }], pay: 'part' },
@@ -111,28 +118,27 @@ const PURCHASES: Purchase[] = [
   { vendor: 'v_gabriel', daysAgo: 12, terms: 30, vendorNo: 'GS/26/0912',
     lines: [{ item: 'i_shocker', qty: 42, rate: 1500 }] },
   // MSME, deliberately aged past 40 days so the 43B(h) tracker has something.
-  { vendor: 'v_sundaram', daysAgo: 41, terms: 30, vendorNo: 'SF/2026/331',
+  { vendor: 'v_sundaram', daysAgo: 41, terms: 30, vendorNo: `SF/${yearOf(daysAgo(41))}/331`,
     lines: [{ item: 'i_beltkit', qty: 12, rate: 2500 }] },
   { vendor: 'v_menon', daysAgo: 10, terms: 15, vendorNo: 'MA/26-27/044',
     lines: [{ qty: 1, rate: 45_000, desc: 'Statutory audit & GST advisory — Q1', account: CODE.PROFESSIONAL }] },
-  { vendor: 'v_swift', daysAgo: 8, terms: 15, vendorNo: 'SL/2026/2231',
-    lines: [{ qty: 1, rate: 38_000, desc: 'Freight — July consignments', account: CODE.FREIGHT }] },
+  { vendor: 'v_swift', daysAgo: 8, terms: 15, vendorNo: `SL/${yearOf(daysAgo(8))}/2231`,
+    lines: [{ qty: 1, rate: 38_000, desc: `Freight — ${monthOf(daysAgo(38))} consignments`, account: CODE.FREIGHT }] },
   { vendor: 'v_kamal', daysAgo: 6, terms: 15, vendorNo: 'KE/771',
     lines: [{ item: 'i_greasekit', qty: 60, rate: 150 }] },
   // Unregistered landlord: we owe the GST ourselves under reverse charge.
-  { vendor: 'v_cityprop', daysAgo: 5, terms: 7, vendorNo: 'RENT/AUG/26', rcm: true,
-    lines: [{ qty: 1, rate: 85_000, desc: 'Office & godown rent — August 2026', account: CODE.RENT }] },
+  { vendor: 'v_cityprop', daysAgo: 5, terms: 7, vendorNo: `RENT/${monShort(daysAgo(5)).toUpperCase()}/${yearOf(daysAgo(5)).slice(2)}`, rcm: true,
+    lines: [{ qty: 1, rate: 85_000, desc: `Office & godown rent — ${monthOf(daysAgo(5))} ${yearOf(daysAgo(5))}`, account: CODE.RENT }] },
   { vendor: 'v_bosch', daysAgo: 3, terms: 30, vendorNo: 'BOS/26-27/1244',
     lines: [{ item: 'i_clutch', qty: 30, rate: 2250 }] },
 ];
 
 const EXPENSES = [
-  { account: CODE.UTILITIES, amount: 12_400, gst: 18, note: 'EB bill — Guindy godown (Jul)', days: 9, bank: 'ba_hdfc' },
-  { account: CODE.INTERNET, amount: 1_500, gst: 18, note: 'Airtel broadband — August', days: 7, bank: 'ba_hdfc' },
+  { account: CODE.UTILITIES, amount: 12_400, gst: 18, note: `EB bill — Guindy godown (${monShort(daysAgo(39))})`, days: 9, bank: 'ba_hdfc' },
+  { account: CODE.INTERNET, amount: 1_500, gst: 18, note: `Airtel broadband — ${monthOf(daysAgo(7))}`, days: 7, bank: 'ba_hdfc' },
   { account: CODE.FUEL, amount: 4_500, gst: 0, note: 'Fuel — delivery van TN09 AB 1234', days: 3, bank: 'ba_card' },
   { account: CODE.OFFICE, amount: 3_200, gst: 18, note: 'Stationery & printer toner', days: 6, bank: 'ba_cash' },
-  { account: CODE.MARKETING, amount: 25_000, gst: 18, note: 'Google Ads — August campaign', days: 5, bank: 'ba_card' },
-  { account: CODE.SALARIES, amount: 2_85_000, gst: 0, note: 'Staff salaries — July 2026', days: 6, bank: 'ba_hdfc' },
+  { account: CODE.MARKETING, amount: 25_000, gst: 18, note: `Google Ads — ${monthOf(daysAgo(5))} campaign`, days: 5, bank: 'ba_card' },
 ];
 
 /** Statement lines: some will match seeded payments, some deliberately will not. */
@@ -140,7 +146,7 @@ const STATEMENT = [
   { date: daysAgo(30), narration: 'NEFT CR SHARMA TRADERS', depositPaise: R(2_15_000) },
   { date: daysAgo(24), narration: 'BHARAT PETRO FUEL CARD', withdrawalPaise: R(4_500) },
   { date: daysAgo(20), narration: 'UPI CR MARINA CAR CARE', depositPaise: R(48_000) },
-  { date: daysAgo(15), narration: 'CITY PROPERTIES RENT AUG', withdrawalPaise: R(85_000) },
+  { date: daysAgo(15), narration: `CITY PROPERTIES RENT ${monShort(daysAgo(15)).toUpperCase()}`, withdrawalPaise: R(85_000) },
   { date: daysAgo(12), narration: 'NEFT DR BOSCH AUTOMOTIVE', withdrawalPaise: R(3_20_000) },
   { date: daysAgo(9), narration: 'BANK CHARGES QTR', withdrawalPaise: R(590) },
   { date: daysAgo(6), narration: 'AIRTEL BROADBAND AUTOPAY', withdrawalPaise: R(1_500) },
@@ -243,7 +249,7 @@ export async function seedDemoBook(trx: Trx, ids: IdMap): Promise<BookResult> {
 
   // ── Bank statement ─────────────────────────────────────────────────────────
   const imported = await importStatement(
-    trx, ids.orgId, ids.users.u_arun, ids.bankAccounts.ba_hdfc, 'HDFC-Aug-2026.csv', STATEMENT,
+    trx, ids.orgId, ids.users.u_arun, ids.bankAccounts.ba_hdfc, `HDFC-${monShort(DEMO_TODAY)}-${yearOf(DEMO_TODAY)}.csv`, STATEMENT,
   );
 
   return {

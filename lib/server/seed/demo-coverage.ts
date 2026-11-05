@@ -52,6 +52,7 @@ import { saveWebhook } from '../integrations/webhooks';
 import { confirmEnrolment, startEnrolment } from '../auth/mfa';
 import { codeAt, stepAt } from '../auth/totp';
 import { seal } from '../crypto/fields';
+import { trueUpStock } from '../services/stock-ledger';
 import { registerInvoice } from '../integrations/gst/einvoice-service';
 import { categoriseTransaction, matchToPayment } from '../services/banking';
 import { queueReminders } from '../services/reminders';
@@ -104,6 +105,10 @@ export async function seedDemoCoverage(trx: Trx, ids: IdMap): Promise<CoverageRe
   await trx.updateTable('organizations').set({
     tan: 'CHER04231F', cin: 'U34300TN2012PTC084231', incorporated_on: '2012-06-14', gst_registered_on: '2017-07-01',
     constitution: 'Private limited company', business_nature: 'Trader (wholesale),Retailer,Service provider',
+    // Settings › Statutory: the TDS deductor and the PF and ESI registrations.
+    deductor_type: 'K', tds_rp_name: 'Arun Kumar', tds_rp_designation: 'Director', tds_rp_pan: 'AJKPK4231L',
+    tds_rp_mobile: '9840012345', tds_rp_email: 'accounts@raceautospares.in',
+    pf_establishment_code: 'TNMAS0084231000', esi_employer_code: '51000842310001001',
   }).where('id', '=', org).execute();
 
   // ── Security: a finance controller who signs in with a code from a phone ──
@@ -315,11 +320,11 @@ export async function seedDemoCoverage(trx: Trx, ids: IdMap): Promise<CoverageRe
 
   // ── Payroll: five employees, April to July paid, leave taken ──────────────
   const STAFF = [
-    { code: 'E001', name: 'Karthik S', gender: 'male' as const, joined: '2019-06-01', designation: 'Store manager', department: 'Stores', pan: 'BKSPK4471M', basic: 25_000, hra: 10_000, special: 8_000 },
-    { code: 'E002', name: 'Lakshmi R', gender: 'female' as const, joined: '2021-02-15', designation: 'Accounts executive', department: 'Accounts', pan: 'CLRPL5582N', basic: 20_000, hra: 8_000, special: 5_000 },
-    { code: 'E003', name: 'Suresh M', gender: 'male' as const, joined: '2022-08-01', designation: 'Sales executive', department: 'Sales', pan: 'DSMPS6693P', basic: 18_000, hra: 7_200, special: 6_000 },
-    { code: 'E004', name: 'Meena P', gender: 'female' as const, joined: '2023-04-10', designation: 'Workshop technician', department: 'Service', pan: 'EMPPM7714Q', basic: 11_000, hra: 4_400, special: 2_600 },
-    { code: 'E005', name: 'Anand K', gender: 'male' as const, joined: '2024-01-05', designation: 'Delivery driver', department: 'Logistics', pan: 'FAKPA8825R', basic: 10_000, hra: 4_000, special: 1_500 },
+    { code: 'E001', name: 'Karthik S', gender: 'male' as const, joined: '2019-06-01', designation: 'Store manager', department: 'Stores', pan: 'BKSPK4471M', basic: 14_000, hra: 5_600, special: 5_400 },
+    { code: 'E002', name: 'Lakshmi R', gender: 'female' as const, joined: '2021-02-15', designation: 'Accounts executive', department: 'Accounts', pan: 'CLRPL5582N', basic: 11_000, hra: 4_400, special: 2_600 },
+    { code: 'E003', name: 'Suresh M', gender: 'male' as const, joined: '2022-08-01', designation: 'Sales executive', department: 'Sales', pan: 'DSMPS6693P', basic: 9_000, hra: 3_600, special: 2_400 },
+    { code: 'E004', name: 'Meena P', gender: 'female' as const, joined: '2023-04-10', designation: 'Workshop technician', department: 'Service', pan: 'EMPPM7714Q', basic: 7_500, hra: 3_000, special: 1_500 },
+    { code: 'E005', name: 'Anand K', gender: 'male' as const, joined: '2024-01-05', designation: 'Delivery driver', department: 'Logistics', pan: 'FAKPA8825R', basic: 6_000, hra: 2_400, special: 1_600 },
   ];
   const staff: number[] = [];
   for (const [i, s] of STAFF.entries()) {
@@ -442,6 +447,11 @@ export async function seedDemoIrns(ids: IdMap): Promise<number> {
  */
 export async function seedDemoHistory(trx: Trx, ids: IdMap): Promise<{ reminders: number; auditEntries: number }> {
   const org = ids.orgId;
+  // The book went onto perpetual inventory at the start of this month (demo-controls.ts), after
+  // this month's sales were seeded: the stock account is brought into line as at the book's
+  // date, as the month-end job does, so the statements show no stray "stock not in the ledger".
+  await trueUpStock(trx, org, ids.users.u_priya, DEMO_TODAY, `Stock brought into line with its valuation at ${DEMO_TODAY}`);
+
   // The daily reminder sweep, as it would have run each day of the last month.
   let reminders = 0;
   for (let n = 30; n >= 0; n--) reminders += await queueReminders(trx, org, day(n));

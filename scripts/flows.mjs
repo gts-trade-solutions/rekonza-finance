@@ -354,7 +354,8 @@ const runnable = page.getByRole('button', { name: 'Run now' }).and(page.locator(
 await runnable.click();
 // A book that keeps a reason with every change (Settings → Controls) asks for one first.
 const reasonBox = page.getByRole('dialog').filter({ hasText: 'Why is this being changed?' });
-if (await reasonBox.isVisible({ timeout: 2500 }).catch(() => false)) {
+// (isVisible does not wait; waitFor does, for the refusal to come back and the box to open.)
+if (await reasonBox.waitFor({ state: 'visible', timeout: 5000 }).then(() => true).catch(() => false)) {
   await reasonBox.locator('input, textarea').first().fill('Monthly run, from the journeys check');
   await reasonBox.getByRole('button', { name: 'Save with this reason' }).click();
 }

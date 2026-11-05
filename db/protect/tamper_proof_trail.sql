@@ -15,6 +15,10 @@
 -- these rows, but a direct UPDATE in a database console would have gone
 -- through silently. These triggers make the database refuse it.
 --
+-- Every body is a BEGIN…END block, one statement or several: a one-line body
+-- is stored with its own semicolon, and mysqldump then writes it as
+-- "…'; */;;", which stops a restore at the "*/". Backups must restore.
+--
 -- The one exception is the demo book. Resetting the sample company deletes its
 -- rows (scripts/seed.ts --fresh), and a sample company has no statutory record
 -- to protect. A real book is never a demo one.
@@ -22,7 +26,9 @@
 DROP TRIGGER IF EXISTS trg_audit_log_no_update;
 CREATE TRIGGER trg_audit_log_no_update BEFORE UPDATE ON audit_log
 FOR EACH ROW
+BEGIN
   SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'The audit trail cannot be changed.';
+END;
 
 DROP TRIGGER IF EXISTS trg_audit_log_no_delete;
 CREATE TRIGGER trg_audit_log_no_delete BEFORE DELETE ON audit_log
@@ -37,7 +43,9 @@ END;
 DROP TRIGGER IF EXISTS trg_journal_entries_no_update;
 CREATE TRIGGER trg_journal_entries_no_update BEFORE UPDATE ON journal_entries
 FOR EACH ROW
+BEGIN
   SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'A posted journal entry cannot be changed. Reverse it instead.';
+END;
 
 DROP TRIGGER IF EXISTS trg_journal_entries_no_delete;
 CREATE TRIGGER trg_journal_entries_no_delete BEFORE DELETE ON journal_entries
@@ -51,7 +59,9 @@ END;
 DROP TRIGGER IF EXISTS trg_journal_lines_no_update;
 CREATE TRIGGER trg_journal_lines_no_update BEFORE UPDATE ON journal_lines
 FOR EACH ROW
+BEGIN
   SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'A posted journal line cannot be changed. Reverse the entry instead.';
+END;
 
 DROP TRIGGER IF EXISTS trg_journal_lines_no_delete;
 CREATE TRIGGER trg_journal_lines_no_delete BEFORE DELETE ON journal_lines

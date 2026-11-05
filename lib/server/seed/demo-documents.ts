@@ -255,7 +255,7 @@ export async function seedDemoDocuments(trx: Trx, ids: IdMap): Promise<Documents
     branchId: ids.branches.br_chennai,
     customerId: ids.contacts.c_marina,
     date: daysAgo(45),
-    description: 'Annual maintenance contract — fleet servicing, FY 2026-27',
+    description: `Annual maintenance contract — fleet servicing, FY ${fyOf(DEMO_TODAY)}`,
     amountPaise: R(1_50_000),
     status: 'sent',
   });

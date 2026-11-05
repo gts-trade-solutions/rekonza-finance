@@ -105,6 +105,43 @@ export default function ApprovalsPage() {
               </ReportTable>
             )}
 
+            <section className="space-y-2" data-slot="approval-history">
+              <h3 className="text-sm font-semibold">Approval history</h3>
+              {d.recent.length === 0 ? (
+                <p className="text-xs text-muted-foreground">Nothing has been submitted for approval yet.</p>
+              ) : (
+                <ReportTable>
+                  <thead>
+                    <tr className="border-b bg-muted/50">
+                      <th className={`${th} text-left`}>When</th>
+                      <th className={`${th} text-left`}>Document</th>
+                      <th className={`${th} text-left`}>Decision</th>
+                      <th className={`${th} text-left`}>By</th>
+                      <th className={`${th} text-left`}>Note</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {d.recent.map((r, i) => (
+                      <tr key={`${r.documentType}-${r.id}-${r.at}-${i}`} className="border-b last:border-0" data-slot="approval-decision">
+                        <td className="px-3 py-2 text-xs text-muted-foreground tabular">{new Date(r.at).toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</td>
+                        <td className="px-3 py-2 text-sm">
+                          <Link href={href(r.documentType, r.id)} className="font-medium hover:underline">{r.number}</Link>
+                          <Badge variant="outline" className="ml-2 text-[10px]">{r.documentType.replaceAll('_', ' ')}</Badge>
+                        </td>
+                        <td className="px-3 py-2 text-xs">
+                          <Badge variant="outline" className={r.action === 'approved' ? 'border-emerald-500/40 text-emerald-700 dark:text-emerald-300' : r.action === 'rejected' ? 'border-red-500/40 text-red-700 dark:text-red-300' : ''}>
+                            {r.action === 'approved' ? 'Approved' : r.action === 'rejected' ? 'Sent back' : 'Submitted'}
+                          </Badge>
+                        </td>
+                        <td className="px-3 py-2 text-xs">{r.by ?? '—'}</td>
+                        <td className="px-3 py-2 text-xs text-muted-foreground">{r.note ?? ''}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </ReportTable>
+              )}
+            </section>
+
             <Rules rules={d.rules} canEdit={d.canEditRules} onChanged={refresh} />
           </div>
         )}

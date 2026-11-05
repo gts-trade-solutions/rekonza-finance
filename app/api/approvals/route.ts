@@ -4,7 +4,7 @@ import { route, body, asId, badRequest, forbidden } from '@/lib/server/http';
 import { hasPermission } from '@/lib/rbac';
 import { logAudit, auditMeta } from '@/lib/server/audit';
 import {
-  approvalHistory, approve, deleteRule, listRules, mayApprove, pendingApprovals, reject, saveRule, submitForApproval,
+  approvalHistory, approve, deleteRule, listRules, mayApprove, pendingApprovals, recentDecisions, reject, saveRule, submitForApproval,
   type RuleDoc,
 } from '@/lib/server/services/approvals';
 import { approveHeldJournal, rejectHeldJournal } from '@/lib/server/services/held-journals';
@@ -27,9 +27,11 @@ export const GET = route(async ({ orgId, role, user, req }) => {
     if (!hasPermission(role, MODULE[doc], 'view')) throw forbidden('You cannot see that document.');
     return { history: await approvalHistory(db, orgId, doc, id) };
   }
-  const [rules, pending] = await Promise.all([listRules(db, orgId), pendingApprovals(db, orgId)]);
+  const [rules, pending, recent] = await Promise.all([listRules(db, orgId), pendingApprovals(db, orgId), recentDecisions(db, orgId)]);
   return {
     rules,
+    // The approval history: what was submitted, approved or sent back, by whom and when.
+    recent: recent.filter((r) => hasPermission(role, MODULE[r.documentType], 'view')),
     pending: pending
       .filter((p) => hasPermission(role, MODULE[p.documentType], 'view'))
       .map((p) => ({
