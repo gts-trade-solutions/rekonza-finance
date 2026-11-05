@@ -18,6 +18,7 @@ import { api } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
 import { toRupees } from '@/lib/money';
 import { cn } from '@/lib/utils';
+import { dayLabel } from '@/lib/date-range';
 
 interface Row { code: string; name: string; by: Record<string, number>; total: number }
 interface Sum { by: Record<string, number>; total: number }
@@ -84,7 +85,7 @@ export default function ConsolidatedPage() {
                       {rows('Income', d.income, d.totalIncome)}
                       {rows('Expenses', d.expenses, d.totalExpense)}
                       {line('Net profit', d.netProfit, true)}
-                      <tr className="border-b"><td colSpan={ids.length + 2} className="px-3 pt-4 pb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Balance sheet on {d.to}</td></tr>
+                      <tr className="border-b"><td colSpan={ids.length + 2} className="px-3 pt-4 pb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Balance sheet on {dayLabel(d.to)}</td></tr>
                       {line('Assets', d.totalAssets)}
                       {line('Liabilities', d.totalLiabilities)}
                       {line("Owners' equity", d.totalEquity)}

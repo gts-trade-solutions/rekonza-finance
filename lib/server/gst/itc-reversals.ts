@@ -27,6 +27,7 @@ import { toPaiseFromSql, toSqlFromPaise } from '../money-sql';
 import { badRequest, conflict } from '../http';
 import { postEntry } from '../ledger/posting';
 import { CODE, accountIds, requireAccount } from '../ledger/chart-of-accounts';
+import { monthLabel } from '../../date-range';
 
 const p = toPaiseFromSql;
 const pad = (n: number) => String(n).padStart(2, '0');
@@ -252,7 +253,7 @@ export async function postCommonCredit(trx: Trx, orgId: number, userId: number |
   const acc = await accountIds(trx, orgId);
   const entry = await postEntry(trx, {
     orgId, branchId: await primaryBranch(trx, orgId), date: lastDay(month), userId, module: 'purchases',
-    memo: `Rules 42/43: exempt share (${(c.ratio * 100).toFixed(2)}%) of common credit for ${month}`, sourceType: 'itc_reversal_42', sourceId: null,
+    memo: `Rules 42/43: exempt share (${(c.ratio * 100).toFixed(2)}%) of common credit for ${monthLabel(month)}`, sourceType: 'itc_reversal_42', sourceId: null,
     lines: [
       { accountId: requireAccount(acc, CODE.ITC_REVERSED_EXEMPT), debit: sumHeads(total) },
       ...ITC_CODES.filter(([k]) => total[k] > 0).map(([k, code]) => ({ accountId: requireAccount(acc, code), credit: total[k] })),

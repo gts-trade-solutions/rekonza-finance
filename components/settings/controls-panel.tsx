@@ -18,6 +18,7 @@ import { AsyncPage } from '@/components/shared/async-state';
 import { api, ApiError } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
 import { cn } from '@/lib/utils';
+import { dayLabel } from '@/lib/date-range';
 
 type Status = 'in_place' | 'partial' | 'off' | 'attention';
 type Enforcement = 'off' | 'warn' | 'block';
@@ -101,7 +102,7 @@ export function ControlsPanel({ canEdit }: { canEdit: boolean }) {
   };
 
   const switchPerpetual = async () => {
-    if (!window.confirm(`Switch to perpetual inventory from ${from}? The stock on hand the day before is posted into the Inventory account, and from then every sale posts its cost. This is not undone by a switch back.`)) return;
+    if (!window.confirm(`Switch to perpetual inventory from ${dayLabel(from)}? The stock on hand the day before is posted into the Inventory account, and from then every sale posts its cost. This is not undone by a switch back.`)) return;
     setBusy(true);
     try {
       const r = await api.post<{ from: string; openingPaise: number }>('/api/settings/stock-accounting', { action: 'switch', from });

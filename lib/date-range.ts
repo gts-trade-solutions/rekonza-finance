@@ -51,6 +51,12 @@ const addDays = (s: string, n: number): string => {
 
 export const startOfMonth = (s: string): string => `${s.slice(0, 7)}-01`;
 
+/** '1 Oct 2026' from '2026-10-01': how a date reads in words the books write (narrations, headings). */
+export function dayLabel(s: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(s ?? ''));
+  return m ? `${Number(m[3])} ${MONTH_NAMES[Number(m[2]) - 1]} ${m[1]}` : String(s ?? '');
+}
+
 export const endOfMonth = (s: string): string => {
   const d = parse(s);
   return iso(new Date(d.getFullYear(), d.getMonth() + 1, 0));

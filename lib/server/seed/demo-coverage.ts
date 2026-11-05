@@ -56,6 +56,7 @@ import { trueUpStock } from '../services/stock-ledger';
 import { registerInvoice } from '../integrations/gst/einvoice-service';
 import { categoriseTransaction, matchToPayment } from '../services/banking';
 import { queueReminders } from '../services/reminders';
+import { monthLabel } from '../../date-range';
 
 const R = (rupees: number) => Math.round(rupees * 100);
 const iso = (v: unknown) => String(v instanceof Date ? v.toISOString() : v).slice(0, 10);
@@ -450,7 +451,7 @@ export async function seedDemoHistory(trx: Trx, ids: IdMap): Promise<{ reminders
   // The book went onto perpetual inventory at the start of this month (demo-controls.ts), after
   // this month's sales were seeded: the stock account is brought into line as at the book's
   // date, as the month-end job does, so the statements show no stray "stock not in the ledger".
-  await trueUpStock(trx, org, ids.users.u_priya, DEMO_TODAY, `Stock brought into line with its valuation at ${DEMO_TODAY}`);
+  await trueUpStock(trx, org, ids.users.u_priya, DEMO_TODAY);
 
   // The daily reminder sweep, as it would have run each day of the last month.
   let reminders = 0;
@@ -487,7 +488,7 @@ export async function seedDemoHistory(trx: Trx, ids: IdMap): Promise<{ reminders
   }
   for (const r of (await sql<{ id: number; month: string; created_by_user_id: number | null }>`
     SELECT id, month, created_by_user_id FROM payroll_runs WHERE org_id = ${org}`.execute(trx)).rows) {
-    add('create', 'payroll', r.id, r.month, `Payroll for ${r.month} prepared, posted and paid`, r.created_by_user_id, `${r.month}-28`);
+    add('create', 'payroll', r.id, monthLabel(r.month), `Payroll for ${monthLabel(r.month)} prepared, posted and paid`, r.created_by_user_id, `${r.month}-28`);
   }
   for (const r of (await sql<{ id: number; tag_no: string; name: string; acquired_on: string }>`
     SELECT id, tag_no, name, acquired_on FROM fixed_assets WHERE org_id = ${org}`.execute(trx)).rows) {

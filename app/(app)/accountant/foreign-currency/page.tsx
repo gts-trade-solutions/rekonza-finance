@@ -21,6 +21,7 @@ import { api } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
 import { usePermission } from '@/lib/store/hooks';
 import { today } from '@/lib/selectors';
+import { dayLabel } from '@/lib/date-range';
 
 interface Data {
   asOf: string;
@@ -102,7 +103,7 @@ export default function ForeignCurrencyPage() {
                   <ul className="divide-y rounded-md border text-sm">
                     {d.rates.slice(0, 12).map((r) => (
                       <li key={r.id} className="flex gap-4 px-3 py-1.5">
-                        <span className="w-12 font-mono">{r.currency}</span><span className="w-28 text-muted-foreground">{r.date}</span><span className="tabular-nums">₹{r.rate.toFixed(4)}</span>{r.source && <span className="ml-auto text-xs text-muted-foreground">{r.source.replace(/^Feed: /, '')}</span>}
+                        <span className="w-12 font-mono">{r.currency}</span><span className="w-28 text-muted-foreground">{dayLabel(r.date)}</span><span className="tabular-nums">₹{r.rate.toFixed(4)}</span>{r.source && <span className="ml-auto text-xs text-muted-foreground">{r.source.replace(/^Feed: /, '')}</span>}
                       </li>
                     ))}
                   </ul>

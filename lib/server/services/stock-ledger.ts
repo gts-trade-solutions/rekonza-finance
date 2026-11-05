@@ -41,6 +41,7 @@ import { dayBefore, stockPosition } from '../reports/stock';
 import { inventoryInLedger } from '../reports/statements';
 import { getPolicies } from './org-settings';
 import { indiaToday } from './held-journals';
+import { dayLabel } from '../../date-range';
 
 /** Is the book on perpetual inventory on this date? */
 export async function perpetualOn(ex: Executor, orgId: number, date: string): Promise<boolean> {
@@ -133,7 +134,7 @@ export async function trueUpStock(trx: Trx, orgId: number, userId: number | null
   const cogs = requireAccount(acc, CODE.COGS);
   await postEntry(trx, {
     orgId, branchId: Number(branch.id), date: asOf, module: 'accountant', userId,
-    memo: memo ?? `Stock brought into line with its valuation at ${asOf}`,
+    memo: memo ?? `Stock brought into line with its valuation at ${dayLabel(asOf)}`,
     sourceType: 'stock_valuation', sourceId: Number(asOf.replace(/-/g, '')),
     lines: diff > 0
       ? [{ accountId: inv, debit: diff }, { accountId: cogs, credit: diff }]
@@ -171,7 +172,7 @@ async function stockOnHandInto(trx: Trx, orgId: number, userId: number | null, f
   const branch = await trx.selectFrom('branches').select('id').where('org_id', '=', orgId).where('is_primary', '=', 1).executeTakeFirstOrThrow();
   await postEntry(trx, {
     orgId, branchId: Number(branch.id), date: from, module: 'accountant', userId,
-    memo: `Stock on hand taken into the ledger: perpetual inventory from ${from}`,
+    memo: `Stock on hand taken into the ledger: perpetual inventory from ${dayLabel(from)}`,
     sourceType: 'stock_opening', sourceId: Number(from.replace(/-/g, '')),
     lines: value > 0
       ? [{ accountId: requireAccount(acc, CODE.INVENTORY), debit: value }, { accountId: requireAccount(acc, CODE.COGS), credit: value }]

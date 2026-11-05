@@ -15,6 +15,7 @@ import { Money } from '@/components/shared/money';
 import { api } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
 import { cn } from '@/lib/utils';
+import { dayLabel } from '@/lib/date-range';
 
 interface Anomaly {
   kind: string; severity: 'low' | 'medium' | 'high'; title: string; detail: string;
@@ -76,7 +77,7 @@ export default function RiskPage() {
             </section>
 
             <section className="space-y-2">
-              <h2 className="text-sm font-semibold">Anomalies, {d.from} to {d.to}</h2>
+              <h2 className="text-sm font-semibold">Anomalies, {dayLabel(d.from)} to {dayLabel(d.to)}</h2>
               {d.anomalies.length === 0 ? (
                 <Card className="p-4 text-sm text-muted-foreground">Nothing unusual found in the period.</Card>
               ) : (

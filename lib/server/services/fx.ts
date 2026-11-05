@@ -18,6 +18,7 @@ import { toPaiseFromSql } from '../money-sql';
 import { badRequest, conflict } from '../http';
 import { postEntry, reverseEntry, type DraftLine } from '../ledger/posting';
 import { CODE, accountIds, requireAccount } from '../ledger/chart-of-accounts';
+import { dayLabel } from '../../date-range';
 
 const nextDay = (iso: string) => new Date(Date.parse(`${iso}T00:00:00Z`) + 86_400_000).toISOString().slice(0, 10);
 
@@ -111,8 +112,8 @@ export async function revalue(trx: Trx, orgId: number, userId: number | null, da
   const branch = (await trx.selectFrom('branches').select('id').where('org_id', '=', orgId).orderBy('is_primary', 'desc').executeTakeFirstOrThrow()).id;
   const entry = await postEntry(trx, {
     orgId, branchId: branch, date, userId, module: 'accountant', sourceType: 'fx_revaluation', sourceId: null,
-    memo: `Foreign-currency balances restated at closing rates on ${date}`, lines,
+    memo: `Foreign-currency balances restated at closing rates on ${dayLabel(date)}`, lines,
   });
-  await reverseEntry(trx, orgId, entry.id, { date: nextDay(date), memo: `Restatement of ${date} reversed`, userId, module: 'accountant' });
+  await reverseEntry(trx, orgId, entry.id, { date: nextDay(date), memo: `Restatement of ${dayLabel(date)} reversed`, userId, module: 'accountant' });
   return { entryId: entry.id, netPaise: net, documents: lines.length - 1 };
 }

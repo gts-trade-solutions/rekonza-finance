@@ -29,6 +29,7 @@ import { CODE, accountIds, requireAccount } from '../ledger/chart-of-accounts';
 import { badRequest } from '../http';
 import { ACT_2025_FROM, sectionLabel } from '../../tax/statutory-rates';
 import { tcsRates, tdsRates } from './rates';
+import { monthLabel } from '../../date-range';
 
 export type Quarter = 1 | 2 | 3 | 4;
 
@@ -319,7 +320,7 @@ export async function recordChallan(trx: Trx, orgId: number, userId: number | nu
   const acc = await accountIds(trx, orgId);
   const entry = await postEntry(trx, {
     orgId, branchId, date: input.date, userId, module: 'banking',
-    memo: `${input.kind.toUpperCase()} deposit for ${input.forMonth} — challan ${input.bsrCode}/${input.serial}`,
+    memo: `${input.kind.toUpperCase()} deposit for ${monthLabel(input.forMonth)} — challan ${input.bsrCode}/${input.serial}`,
     sourceType: 'tds_challan',
     lines: [
       { accountId: requireAccount(acc, input.kind === 'tds' ? CODE.TDS_PAYABLE : CODE.TCS_PAYABLE), debit: input.taxPaise },

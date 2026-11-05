@@ -35,6 +35,7 @@ import { badRequest, conflict, notFound } from '../http';
 import { booksStartDate } from './opening-balances';
 import { createInvoice } from './sales';
 import { getPolicies } from './org-settings';
+import { dayLabel } from '../../date-range';
 
 // ── Dates ────────────────────────────────────────────────────────────────────
 
@@ -450,7 +451,7 @@ export async function runDepreciation(trx: Trx, orgId: number, userId: number | 
     created_by_user_id: userId,
   }).executeTakeFirstOrThrow()).insertId);
   const entry = await postEntry(trx, {
-    orgId, branchId, date: to, module: 'accountant', memo: `Depreciation, ${p.from} to ${to}`,
+    orgId, branchId, date: to, module: 'accountant', memo: `Depreciation, ${dayLabel(p.from)} to ${dayLabel(to)}`,
     sourceType: 'depreciation', sourceId: runId, userId,
     lines: [
       { accountId: requireAccount(acc, CODE.DEPRECIATION), debit: p.totalPaise },
@@ -478,7 +479,7 @@ export async function reverseLatestRun(trx: Trx, orgId: number, userId: number |
     throw conflict(`${disposedSince.name} was disposed of after this run began; its depreciation to that day was settled at disposal.`);
   }
   if (run.journal_entry_id) {
-    await reverseEntry(trx, orgId, run.journal_entry_id, { userId, module: 'accountant', memo: `Depreciation run of ${String(run.period_to).slice(0, 10)} undone` });
+    await reverseEntry(trx, orgId, run.journal_entry_id, { userId, module: 'accountant', memo: `Depreciation run to ${dayLabel(String(run.period_to))} undone` });
   }
   await trx.updateTable('depreciation_runs').set({ reversed: 1 }).where('id', '=', run.id).execute();
   await trx.updateTable('depreciation_lines').set({ reversed: 1 }).where('run_id', '=', run.id).execute();

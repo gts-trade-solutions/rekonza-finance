@@ -35,6 +35,7 @@ import { Money } from '@/components/shared/money';
 import { api, ApiError, files as fileApi } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
 import { usePermission } from '@/lib/store/hooks';
+import { dayLabel } from '@/lib/date-range';
 import {
   guessMapping, MAPPING_FIELDS, readWithMapping, type DateOrder, type StatementMapping, type StatementRow,
 } from '@/lib/bank-statement';
@@ -470,7 +471,7 @@ function MappingDialog({ file, onClose, onSave }: { file: QueuedFile; onClose: (
             <tbody>
               {preview.rows.slice(0, 5).map((r, i) => (
                 <tr key={i} className="border-b last:border-0">
-                  <td className="whitespace-nowrap px-3 py-1.5">{r.date}</td>
+                  <td className="whitespace-nowrap px-3 py-1.5">{dayLabel(r.date)}</td>
                   <td className="px-3 py-1.5">{r.narration}</td>
                   <td className="px-3 py-1.5 text-right">{r.withdrawalPaise ? <Money value={-r.withdrawalPaise} /> : <span className="text-emerald-600 dark:text-emerald-400"><Money value={r.depositPaise} /></span>}</td>
                 </tr>

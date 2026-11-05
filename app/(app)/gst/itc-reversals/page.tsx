@@ -22,6 +22,7 @@ import { api } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
 import { usePermission } from '@/lib/store/hooks';
 import { today } from '@/lib/selectors';
+import { monthLabel } from '@/lib/date-range';
 
 interface Heads { cgst: number; sgst: number; igst: number; cess: number }
 interface Rule37Row {
@@ -101,7 +102,7 @@ function Rule37() {
               {canEdit && (
                 <div className="ml-auto flex gap-2">
                   <Button size="sm" disabled={!due.length || !!busy} className="gap-1.5" onClick={() => void act({ action: 'reverse-37', month }, 'Credit reversed')}>
-                    {busy === 'reverse-37' && <Loader2 className="size-3.5 animate-spin" />} Reverse in {month}
+                    {busy === 'reverse-37' && <Loader2 className="size-3.5 animate-spin" />} Reverse in {monthLabel(month)}
                   </Button>
                   <Button size="sm" variant="outline" disabled={!back.length || !!busy} className="gap-1.5" onClick={() => void act({ action: 'reclaim-37', month }, 'Credit taken back')}>
                     {busy === 'reclaim-37' && <Loader2 className="size-3.5 animate-spin" />} Take back paid

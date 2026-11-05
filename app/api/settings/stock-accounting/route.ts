@@ -4,6 +4,7 @@ import { route, body } from '@/lib/server/http';
 import { switchToPerpetual, trueUpStock } from '@/lib/server/services/stock-ledger';
 import { indiaToday } from '@/lib/server/services/held-journals';
 import { logAudit, auditMeta } from '@/lib/server/audit';
+import { dayLabel } from '@/lib/date-range';
 
 // Perpetual inventory (services/stock-ledger.ts): switch a book onto it, or
 // bring its Inventory account into line with the stock valuation now.
@@ -20,7 +21,7 @@ export const POST = route(async ({ orgId, user, req }) => {
       const r = await switchToPerpetual(trx, orgId, user.userId, input.from);
       await logAudit({
         trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'update', targetType: 'organization', targetId: orgId,
-        targetLabel: 'Stock accounting', detail: `Switched to perpetual inventory from ${r.from}; ₹${(r.openingPaise / 100).toFixed(2)} of stock on hand taken into the ledger`,
+        targetLabel: 'Stock accounting', detail: `Switched to perpetual inventory from ${dayLabel(r.from)}; ₹${(r.openingPaise / 100).toFixed(2)} of stock on hand taken into the ledger`,
         ...auditMeta(req),
       });
       return r;

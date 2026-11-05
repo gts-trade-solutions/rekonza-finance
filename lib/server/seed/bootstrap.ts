@@ -22,6 +22,7 @@ import { SEED_CUSTOMERS, SEED_VENDORS } from '../../mock/seed/contacts';
 import { SEED_ITEMS } from '../../mock/seed/items';
 import { SEED_HSN_CODES } from '../../mock/seed/hsn';
 import { toSqlFromPaise } from '../money-sql';
+import { dayLabel } from '../../date-range';
 
 /** Maps the demo's string keys to the row ids the database assigned. */
 export interface IdMap {
@@ -387,7 +388,7 @@ export async function bootstrap(trx: Trx, options: BootstrapOptions = {}): Promi
       orgId,
       branchId: branches[SEED_BRANCHES[0].id],
       date: SEED_ORG.fiscalYearStart,
-      memo: `Opening balances as at ${SEED_ORG.fiscalYearStart}`,
+      memo: `Opening balances as at ${dayLabel(SEED_ORG.fiscalYearStart)}`,
       sourceType: 'opening',
       userId: users[SEED_USERS[0].id],
       module: 'accountant',

@@ -14,6 +14,7 @@ import { api } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
 import { useAppStore } from '@/lib/store';
 import { sourceHref } from '@/lib/source-links';
+import { dayLabel } from '@/lib/date-range';
 
 interface Ledger {
   item: { id: string; name: string; sku: string | null; uqc: string };
@@ -67,12 +68,12 @@ export default function StockLedgerPage() {
               </tr>
             </thead>
             <tbody>
-              <tr className="border-t"><td className="px-3 py-2">{range.from}</td><td className="px-3 py-2 font-medium" colSpan={4}>Opening</td><td className="px-3 py-2 text-right tabular-nums">{qty(d.openingQty) || '0'}</td></tr>
+              <tr className="border-t"><td className="px-3 py-2">{dayLabel(range.from)}</td><td className="px-3 py-2 font-medium" colSpan={4}>Opening</td><td className="px-3 py-2 text-right tabular-nums">{qty(d.openingQty) || '0'}</td></tr>
               {d.lines.map((l, i) => {
                 const href = sourceHref(l.sourceType, l.sourceId ? String(l.sourceId) : null) ?? HREF[l.sourceType];
                 return (
                   <tr key={i} className="border-t">
-                    <td className="px-3 py-2 tabular-nums">{l.date}</td>
+                    <td className="px-3 py-2 tabular-nums">{dayLabel(l.date)}</td>
                     <td className="px-3 py-2 capitalize">{l.kind}</td>
                     <td className="px-3 py-2">{href ? <Link href={href} className="text-primary hover:underline">{l.number}</Link> : l.number}</td>
                     <td className="px-3 py-2 text-right tabular-nums">{qty(l.qtyIn)}</td>
@@ -82,7 +83,7 @@ export default function StockLedgerPage() {
                 );
               })}
               <tr className="border-t bg-muted/30 font-semibold">
-                <td className="px-3 py-2">{range.to}</td><td className="px-3 py-2" colSpan={2}>Closing · value <Money value={d.closingValuePaise} /></td>
+                <td className="px-3 py-2">{dayLabel(range.to)}</td><td className="px-3 py-2" colSpan={2}>Closing · value <Money value={d.closingValuePaise} /></td>
                 <td className="px-3 py-2 text-right tabular-nums">{qty(d.inQty)}</td><td className="px-3 py-2 text-right tabular-nums">{qty(d.outQty)}</td>
                 <td className="px-3 py-2 text-right tabular-nums">{qty(d.closingQty) || '0'}</td>
               </tr>

@@ -28,6 +28,7 @@ import { ApiError, badRequest, conflict, notFound } from '../http';
 import { applyAllocations } from './payments';
 import { ruleFor } from './approvals';
 import { ageing } from '../reports/statements';
+import { dayLabel } from '../../date-range';
 
 export interface JournalLineInput {
   accountId: number;
@@ -233,7 +234,7 @@ export async function adjustProvision(
     : [{ accountId: prov, debit: amt }, { accountId: exp, credit: amt }];
   const entry = await postEntry(trx, {
     orgId, branchId, date: asOf, module: 'accountant', userId, sourceType: 'doubtful_debts',
-    memo: `Provision for doubtful debts ${plan.changePaise > 0 ? 'raised' : 'released'} to ₹${(plan.targetPaise / 100).toLocaleString('en-IN')} at ${asOf}`,
+    memo: `Provision for doubtful debts ${plan.changePaise > 0 ? 'raised' : 'released'} to ₹${(plan.targetPaise / 100).toLocaleString('en-IN')} at ${dayLabel(asOf)}`,
     lines,
   });
   return { entryId: entry.id, plan };

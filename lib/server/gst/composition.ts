@@ -27,6 +27,7 @@ import { postEntry } from '../ledger/posting';
 import { CODE, accountIds, requireAccount } from '../ledger/chart-of-accounts';
 import { quarterRange, type Quarter } from '../tax/tds-returns';
 import { registrationResolver } from '../services/statutory';
+import { dayLabel } from '../../date-range';
 
 export type CompositionCategory = 'manufacturer' | 'trader' | 'restaurant' | 'services';
 export const COMPOSITION_RATES: Record<CompositionCategory, { ratePct: number; label: string; taxableOnly: boolean }> = {
@@ -139,7 +140,7 @@ export async function bookCmp08(trx: Trx, orgId: number, userId: number | null, 
     const acc = await accountIds(trx, orgId);
     const entry = await postEntry(trx, {
       orgId, branchId: branch.id, date: c.to, userId, module: 'accountant',
-      memo: `Composition tax, ${c.from} to ${c.to}: ${c.ratePct}% of ₹${(c.turnoverPaise / 100).toLocaleString('en-IN')}`,
+      memo: `Composition tax, ${dayLabel(c.from)} to ${dayLabel(c.to)}: ${c.ratePct}% of ₹${(c.turnoverPaise / 100).toLocaleString('en-IN')}`,
       sourceType: 'composition', sourceId: null,
       lines: [
         { accountId: requireAccount(acc, CODE.COMPOSITION_TAX), debit: tax },
