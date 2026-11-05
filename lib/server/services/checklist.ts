@@ -19,12 +19,21 @@ import { sql } from 'kysely';
 import type { Executor } from '../db';
 import { mailStatus } from '../mail/mailer';
 import { gatewayStatus } from './payment-links';
+import { stockPosition } from '../reports/stock';
+import { budgetVsActual } from '../reports/budgets';
+import { assetRegister } from './fixed-assets';
+import { indiaToday } from './held-journals';
+import { formatINR } from '../../money';
 
 export type AreaStatus = 'in_use' | 'ready' | 'needs_setup';
+/** One point of the checklist, in the reviewer's words, with what this company's books show and where. */
+export interface ChecklistPoint { label: string; value: string; href: string; ok: boolean }
 export interface ChecklistArea {
   key: string;
   area: string;
   status: AreaStatus;
+  /** The checklist's own points for the area, each with its live figure. */
+  points: ChecklistPoint[];
   /** What this company's records show, in plain words. */
   evidence: string[];
   /** Where to see it. */
@@ -39,7 +48,7 @@ export async function checklist(ex: Executor, orgId: number): Promise<ChecklistA
   const c = (table: string, where = sql``) => n(sql`SELECT COUNT(*) AS n FROM ${sql.table(table)} WHERE org_id = ${orgId} ${where}`);
   const day = (v: unknown) => (v ? new Date(String(v)).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : null);
 
-  const org = await one(sql<{ name: string; fy: number; pan: string | null; tan: string | null }>`SELECT name, fiscal_year_start_month AS fy, pan, tan FROM organizations WHERE id = ${orgId}`);
+  const org = await one(sql<{ name: string; fy: number; pan: string | null; tan: string | null; cin: string | null }>`SELECT name, fiscal_year_start_month AS fy, pan, tan, cin FROM organizations WHERE id = ${orgId}`);
   const [users, roles, customRoles, mfa, backups, lastBackup, companies] = await Promise.all([
     c('users', sql`AND is_active = 1`),
     n(sql`SELECT COUNT(DISTINCT role) AS n FROM users WHERE org_id = ${orgId} AND is_active = 1`),
@@ -108,7 +117,119 @@ export async function checklist(ex: Executor, orgId: number): Promise<ChecklistA
     return `${k.toLocaleString('en-IN')} ${k === 1 ? word : many}`;
   };
 
-  return [
+  // The figures the points show beside the counts above.
+  const today = indiaToday();
+  const [customers, vendors, gstins, drills, lastDrill, bankCount, rules, lastFiled, tb] = await Promise.all([
+    c('contacts', sql`AND kind IN ('customer', 'both')`), c('contacts', sql`AND kind IN ('vendor', 'both')`),
+    n(sql`SELECT COUNT(*) AS n FROM branches WHERE org_id = ${orgId} AND gstin IS NOT NULL AND gstin <> ''`),
+    n(sql`SELECT COUNT(*) AS n FROM backup_runs WHERE ok = 1 AND kind = 'drill'`),
+    one(sql<{ at: string | null }>`SELECT MAX(finished_at) AS at FROM backup_runs WHERE ok = 1 AND kind = 'drill'`),
+    c('bank_accounts', sql`AND is_active = 1 AND kind IN ('bank', 'cash', 'card')`), c('approval_rules', sql`AND is_active = 1`),
+    one(sql<{ p: string | null }>`SELECT MAX(period) AS p FROM compliance_filings WHERE org_id = ${orgId} AND item_key = 'gstr3b'`),
+    one(sql<{ dr: string | null; cr: string | null }>`SELECT SUM(debit) AS dr, SUM(credit) AS cr FROM journal_lines WHERE org_id = ${orgId}`),
+  ]);
+  const [stock, budget, register] = await Promise.all([
+    stockPosition(ex, orgId, today).catch(() => null),
+    budgets ? budgetVsActual(ex, orgId, { today }).catch(() => null) : Promise.resolve(null),
+    assets ? assetRegister(ex, orgId, today).catch(() => []) : Promise.resolve([]),
+  ]);
+  const inr = (paise: number) => formatINR(paise);
+  const rupees = (v: string | null | undefined) => Math.round(Number(v ?? 0) * 100);
+  const fyStart = org?.fy ?? 4;
+  const [ty, tm] = today.split('-').map(Number);
+  const fyFrom = tm >= fyStart ? ty : ty - 1;
+  const MONTH = ['', 'January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  const fyLabel = `FY ${fyFrom}-${String((fyFrom + 1) % 100).padStart(2, '0')}`;
+  const assetCost = register.reduce((t, r) => t + r.costPaise, 0);
+  const assetNet = register.reduce((t, r) => t + r.netPaise, 0);
+  const p = (label: string, value: string, href: string, ok = true): ChecklistPoint => ({ label, value, href, ok });
+  /** 2026-10 as October 2026. */
+  const monthOf = (ym: string | null | undefined) => (ym && /^\d{4}-\d{2}$/.test(ym) ? `${MONTH[Number(ym.slice(5))]} ${ym.slice(0, 4)}` : ym ?? '');
+  const POINTS: Record<string, ChecklistPoint[]> = {
+    company: [
+      p('Company', `${org?.name ?? ''}${companies > 1 ? ` · ${companies} companies` : ''}`, '/settings?tab=org'),
+      p('Financial year setup', `${fyLabel}, ${MONTH[fyStart]} to ${MONTH[((fyStart + 10) % 12) + 1]}`, '/accountant/period-close'),
+      p('Backup and restore', backups ? `${plural(backups, 'backup')}, last ${day(lastBackup?.at)}${drills ? `; restore proved ${day(lastDrill?.at)}` : ''}` : 'Daily encrypted backup and restore drill (npm run db:backup)', '/settings?tab=backups', !!backups),
+      p('Statutory configuration', [gstins && `${plural(gstins, 'GSTIN')}`, org?.pan && 'PAN', org?.tan && 'TAN', org?.cin && 'CIN'].filter(Boolean).join(' · ') || 'Not set', '/settings?tab=statutory', !!(gstins || org?.pan)),
+    ],
+    security: [
+      p('Role based access', `${plural(users, 'user')} in ${plural(roles, 'role')}${customRoles ? `, ${plural(customRoles, 'custom role')}` : ''}`, '/settings?tab=users'),
+      p('Audit logs', `${plural(audit, 'entry')}, none editable`, '/accountant/audit-trail', audit > 0),
+      p('MFA', `${mfa} of ${users} users on two-step sign-in`, '/settings?tab=policies', mfa > 0),
+      p('Approval history', `${plural(approvals, 'approval step')}${rules ? ` under ${plural(rules, 'rule')}` : ''}`, '/approvals', approvals > 0),
+    ],
+    masters: [
+      p('Customers and suppliers', `${plural(customers, 'customer')} · ${plural(vendors, 'supplier')}`, '/sales/customers', customers > 0),
+      p('Cost centres', plural(costCentres, 'cost centre'), '/accountant/cost-centres', costCentres > 0),
+      p('Employee masters', plural(employees, 'employee'), '/payroll/employees', employees > 0),
+      p('Warehouse masters', plural(warehouses, 'warehouse'), '/inventory/warehouses', warehouses > 0),
+      p('Items and stock groups', `${plural(items, 'item')} in ${plural(stockGroups, 'group')}`, '/sales/items', items > 0),
+    ],
+    vouchers: [
+      p('Sales invoices and bills', `${plural(Number(v.inv), 'invoice')} · ${plural(Number(v.bill), 'bill')}`, '/sales/invoices', v.inv > 0),
+      p('Journal', plural(Number(v.jv), 'journal'), '/accountant/journals', v.jv > 0),
+      p('Contra', plural(Number(v.contra), 'contra entry'), '/banking/transfers', v.contra > 0),
+      p('Debit note', plural(Number(v.dn), 'debit note'), '/sales/debit-notes', v.dn > 0),
+      p('Credit note', plural(Number(v.cn), 'credit note'), '/sales/credit-notes', v.cn > 0),
+      p('Receipts and payments', `${plural(Number(v.rcpt), 'receipt')} · ${plural(Number(v.pay), 'payment')}`, '/sales/payments', v.rcpt + v.pay > 0),
+    ],
+    inventory: [
+      p('Stock adjustment', `${plural(adjustments, 'adjustment')}${issues ? `, ${issues} issued` : ''}`, '/inventory/adjustments', adjustments > 0),
+      p('Transfer', `${plural(transfers, 'transfer')} between godowns`, '/inventory/transfers', transfers > 0),
+      p('Valuation reports', stock ? `Stock worth ${inr(stock.totalValuePaise)} at ${valuation?.v?.includes('fifo') ? 'FIFO' : 'weighted average'} cost` : 'Stock summary and valuation', '/inventory/stock', !!stock),
+      p('Goods receipts', plural(grn, 'goods receipt'), '/purchases/goods-receipts', grn > 0),
+    ],
+    banking: [
+      p('Bank accounts', plural(bankCount, 'account'), '/banking', bankCount > 0),
+      p('Bank reconciliation', `${Number(bank?.matched ?? 0)} of ${Number(bank?.total ?? 0)} statement lines reconciled`, '/banking/reconcile', Number(bank?.matched ?? 0) > 0),
+      p('Payment processing', `${plural(batches, 'NEFT batch')} · ${plural(chequePayments, 'cheque payment')}`, '/purchases/payment-batches', batches + chequePayments > 0),
+    ],
+    receivables: [
+      p('Customer balances and ageing', `${plural(customers, 'customer')}, aged by days overdue`, '/reports/ar-ageing', v.inv > 0),
+      p('Collections', `${plural(followUps, 'follow-up')} · ${plural(reminders, 'reminder')}`, '/sales/collections', followUps + reminders > 0),
+      p('Balance confirmations', plural(confirmationsC, 'confirmation'), '/accountant/balance-confirmations', confirmationsC > 0),
+    ],
+    payables: [
+      p('Supplier balances and ageing', `${plural(vendors, 'supplier')}, aged by days overdue`, '/reports/ap-ageing', v.bill > 0),
+      p('MSME 45-day watch', plural(msme, 'MSME supplier'), '/purchases/msme-tracker', msme > 0),
+      p('Balance confirmations', plural(confirmationsV, 'confirmation'), '/accountant/balance-confirmations', confirmationsV > 0),
+    ],
+    assets: [
+      p('Asset register', assets ? `${plural(assets, 'asset')}, cost ${inr(assetCost)}` : 'No assets yet', '/accountant/fixed-assets', assets > 0),
+      p('Depreciation', depRuns ? `${plural(depRuns, 'run')} to ${day(lastDep?.at)}; written down to ${inr(assetNet)}` : 'Schedule II, monthly or yearly', '/accountant/fixed-assets', depRuns > 0),
+    ],
+    payroll: [
+      p('Employee records', plural(employees, 'employee'), '/payroll/employees', employees > 0),
+      p('Payroll processing', payrollRuns ? `${plural(payrollRuns, 'month')} posted, latest ${monthOf(lastRun?.p)}` : 'No month posted yet', '/payroll/runs', payrollRuns > 0),
+      p('Leave', plural(leave, 'leave entry'), '/payroll/leave', leave > 0),
+    ],
+    gst: [
+      p('GST returns', filings ? `${plural(filings, 'return')} filed${lastFiled?.p ? `, GSTR-3B to ${monthOf(lastFiled.p)}` : ''}` : 'GSTR-1, 3B, 9 prepared from the books', '/gst/compliance-calendar', filings > 0),
+      p('E-invoicing (IRN)', plural(irns, 'IRN'), '/gst/einvoices', irns > 0),
+      p('TDS / TCS', `TDS on ${plural(tdsDocs, 'bill')}`, '/gst/tds-tcs', tdsDocs > 0),
+      p('Tax reporting', `${plural(itcRecon, 'GSTR-2B line')} reconciled`, '/gst/itc-reconciliation', itcRecon > 0),
+    ],
+    budgets: [
+      p('Budgets', `${plural(budgets, 'budget')} for ${fyLabel}`, '/accountant/budgets', budgets > 0),
+      p('Variance analysis', budget ? `${inr(budget.totals.actualPaise)} spent of ${inr(budget.totals.budgetPaise)} budgeted` : 'Budget against actual, with the variance', '/accountant/budgets', !!budget),
+      p('Cost centres', `${plural(costCentres, 'cost centre')}, profit by each`, '/accountant/cost-centres', costCentres > 0),
+    ],
+    reporting: [
+      p('Trial balance', rupees(tb?.dr) === rupees(tb?.cr) ? `Ties: ${inr(rupees(tb?.dr))} each side` : 'Does not tie', '/reports/trial-balance', rupees(tb?.dr) === rupees(tb?.cr)),
+      p('Balance sheet', 'Schedule III, with the previous year', '/reports/balance-sheet'),
+      p('Profit and loss', 'Schedule III, monthly or yearly', '/reports/profit-and-loss'),
+      p('Cash flow and fund flow', 'Indirect method; sources and uses', '/reports/cash-flow'),
+    ],
+    integration: [
+      p('API', plural(apiKeys, 'live key'), '/settings?tab=developer', apiKeys > 0),
+      p('ERP (webhooks)', plural(webhooks, 'webhook'), '/settings?tab=developer', webhooks > 0),
+      p('BI (Power BI, Excel)', apiKeys ? 'Live tables over the API key' : 'Live tables, once a key is made', '/settings?tab=developer', apiKeys > 0),
+      p('Tally', tally ? plural(tally, 'live connector') : 'Import, export and live connector', '/tally'),
+      p('Payroll', 'Built in; or imported as journals', '/payroll/runs', payrollRuns > 0),
+    ],
+  };
+
+  const areas: Omit<ChecklistArea, 'points'>[] = [
     {
       key: 'company', area: 'Company Management', status: status(true),
       evidence: [
@@ -205,7 +326,7 @@ export async function checklist(ex: Executor, orgId: number): Promise<ChecklistA
     {
       key: 'payroll', area: 'Payroll', status: status(payrollRuns > 0),
       evidence: [
-        `${plural(employees, 'employee')}; ${plural(payrollRuns, 'payroll month')} posted${lastRun?.p ? `, the latest ${lastRun.p}` : ''}`,
+        `${plural(employees, 'employee')}; ${plural(payrollRuns, 'payroll month')} posted${lastRun?.p ? `, the latest ${monthOf(lastRun.p)}` : ''}`,
         `PF, ESI, professional tax and TDS worked out; ${plural(leave, 'leave entry', )}; payslips, Form 16 and full and final settlement`,
       ],
       screens: [{ label: 'Employees', href: '/payroll/employees' }, { label: 'Payroll runs and payslips', href: '/payroll/runs' }, { label: 'Leave', href: '/payroll/leave' }],
@@ -252,4 +373,5 @@ export async function checklist(ex: Executor, orgId: number): Promise<ChecklistA
       outside: ['Bank APIs need the bank’s own agreement or an Account Aggregator partner; an ERP connects through the open API and webhooks.'],
     },
   ];
+  return areas.map((a) => ({ ...a, points: POINTS[a.key] ?? [] }));
 }

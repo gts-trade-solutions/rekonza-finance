@@ -1,0 +1,1 @@
+{"rules":[{"id":"18","documentType":"bill","thresholdPaise":10000000,"approverRole":"admin","isActive":true},{"id":"17","documentType":"payment_batch","thresholdPaise":0,"approverRole":"admin","isActive":true}],"pending":[],"canEditRules":true}

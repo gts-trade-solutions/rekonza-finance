@@ -18,6 +18,7 @@ import 'server-only';
 import { sql } from 'kysely';
 import type { Trx } from '../db';
 import type { IdMap } from './bootstrap';
+import { DEMO_TODAY } from './demo-book';
 import {
   applyRetainer, convertToInvoice, createChallan, createCreditNote,
   createEstimate, createRetainer, createSalesOrder, refundCreditNote,
@@ -27,8 +28,7 @@ import {
   convertPoToBill, createPurchaseOrder, createVendorCredit, refundVendorCredit,
 } from '../services/purchase-documents';
 
-/** The book is built as at this date. Matches the invoices seeder exactly. */
-const DEMO_TODAY = '2026-08-07';
+// The book is built as at the same day as the invoices (demo-book.ts).
 
 function daysAgo(n: number): string {
   const d = new Date(DEMO_TODAY);
@@ -37,6 +37,19 @@ function daysAgo(n: number): string {
 }
 
 const R = (rupees: number) => Math.round(rupees * 100);
+
+/** The financial year (April to March) a day falls in, as budgets label it: 2026-27. */
+function fyOf(day: string): string {
+  const [y, m] = day.split('-').map(Number);
+  const start = m >= 4 ? y : y - 1;
+  return `${start}-${String(start + 1).slice(2)}`;
+}
+
+/** A day of a month some months after the book's date: when a recurring template next runs. */
+function monthsOn(months: number, dayOfMonth: number): string {
+  const [y, m] = DEMO_TODAY.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1 + months, dayOfMonth)).toISOString().slice(0, 10);
+}
 
 interface Quote {
   customer: string;
@@ -380,7 +393,7 @@ export async function seedDemoDocuments(trx: Trx, ids: IdMap): Promise<Documents
         org_id: ids.orgId,
         branch_id: 0,
         account_id: account,
-        fy_label: '2026-27',
+        fy_label: fyOf(DEMO_TODAY),
         amount: (b.amount).toFixed(4),
         created_by_user_id: admin,
       })
@@ -391,11 +404,11 @@ export async function seedDemoDocuments(trx: Trx, ids: IdMap): Promise<Documents
   // The three entries almost every business repeats. They are templates: none
   // of them has posted anything yet.
   const RECURRING: { name: string; freq: 'monthly' | 'quarterly'; next: string; dr: string; cr: string; amount: number; memo: string; active: boolean }[] = [
-    { name: 'Monthly depreciation — furniture & equipment', freq: 'monthly', next: '2026-09-01',
+    { name: 'Monthly depreciation — furniture & equipment', freq: 'monthly', next: monthsOn(1, 1),
       dr: '6900', cr: '1600', amount: 12_500, memo: 'Depreciation for the month', active: true },
-    { name: 'Prepaid insurance amortisation', freq: 'monthly', next: '2026-09-01',
+    { name: 'Prepaid insurance amortisation', freq: 'monthly', next: monthsOn(1, 1),
       dr: '6600', cr: '1600', amount: 4_200, memo: 'Insurance expense for the month', active: true },
-    { name: 'Accrued audit fee', freq: 'quarterly', next: '2026-10-01',
+    { name: 'Accrued audit fee', freq: 'quarterly', next: monthsOn(2, 1),
       dr: '6300', cr: '2100', amount: 25_000, memo: 'Audit fee accrual', active: false },
   ];
 
@@ -514,11 +527,11 @@ export async function seedDemoDocuments(trx: Trx, ids: IdMap): Promise<Documents
   // Contracts that bill the same amount every period. Templates only — nothing
   // has been raised from them yet.
   const RECURRING_SALES: { name: string; customer: string; freq: 'monthly' | 'quarterly'; next: string; item: string; qty: number; rate: number; auto: boolean; active: boolean }[] = [
-    { name: 'Monthly fleet maintenance retainer', customer: 'c_bluehill', freq: 'monthly', next: '2026-09-01',
+    { name: 'Monthly fleet maintenance retainer', customer: 'c_bluehill', freq: 'monthly', next: monthsOn(1, 1),
       item: 'i_engineoil', qty: 24, rate: 4_800, auto: true, active: true },
-    { name: 'Quarterly parts supply contract', customer: 'c_orbit', freq: 'quarterly', next: '2026-10-01',
+    { name: 'Quarterly parts supply contract', customer: 'c_orbit', freq: 'quarterly', next: monthsOn(2, 1),
       item: 'i_brakepad', qty: 60, rate: 2_100, auto: false, active: true },
-    { name: 'AMC — workshop consumables', customer: 'c_marina', freq: 'monthly', next: '2026-09-05',
+    { name: 'AMC — workshop consumables', customer: 'c_marina', freq: 'monthly', next: monthsOn(1, 5),
       item: 'i_greasekit', qty: 20, rate: 1_400, auto: true, active: false },
   ];
 

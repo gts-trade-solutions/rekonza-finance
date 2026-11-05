@@ -15,6 +15,7 @@ import { db, transaction } from '../lib/server/db';
 import { bootstrap } from '../lib/server/seed/bootstrap';
 import { seedDemoBook } from '../lib/server/seed/demo-book';
 import { seedDemoDocuments } from '../lib/server/seed/demo-documents';
+import { seedDemoCoverage, seedDemoHistory, seedDemoIrns } from '../lib/server/seed/demo-coverage';
 import { turnOnDemoControls } from '../lib/server/seed/demo-controls';
 import { wipeOrganizations } from '../lib/server/seed/wipe';
 import { verifyLedgerBalances } from '../lib/server/ledger/posting';
@@ -60,10 +61,17 @@ async function main() {
     // The surrounding documents come second: the credit notes attach to real
     // invoices and the retainer is applied against one.
     const around = masters ? null : await seedDemoDocuments(trx, created);
+    // Then every other area of the software checklist, so none of them is empty.
+    if (!masters) await seedDemoCoverage(trx, created);
     // Last: perpetual inventory takes the stock the documents above left on hand.
     if (!masters) await turnOnDemoControls(trx, created.orgId);
+    // And the reminders and audit trail the book would carry by its date.
+    if (!masters) await seedDemoHistory(trx, created);
     return { ids: created, book: history, docs: around };
   });
+
+  // IRNs once the book is committed, as a user registers them.
+  if (!masters) await seedDemoIrns(ids);
 
   const check = await transaction(async (trx) => verifyLedgerBalances(trx, ids.orgId));
 

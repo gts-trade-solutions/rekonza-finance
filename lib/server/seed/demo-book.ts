@@ -20,9 +20,14 @@ import { createInvoice, markInvoiceSent } from '../services/sales';
 import { createBill, createExpense } from '../services/purchases';
 import { receivePayment, makePayment } from '../services/payments';
 import { importStatement } from '../services/banking';
+import { indiaToday } from '../services/held-journals';
 
-/** The book is built as at this date. Matches the frontend demo exactly. */
-export const DEMO_TODAY = '2026-08-07';
+/**
+ * The book is built as at the day it is seeded, so whoever opens the demo
+ * sees a current book: this month's sales, last month's payroll, invoices
+ * young enough for an IRN. DEMO_AS_OF=YYYY-MM-DD builds it as at another day.
+ */
+export const DEMO_TODAY = /^\d{4}-\d{2}-\d{2}$/.test(process.env.DEMO_AS_OF ?? '') ? process.env.DEMO_AS_OF! : indiaToday();
 
 function daysAgo(n: number): string {
   const d = new Date(DEMO_TODAY);

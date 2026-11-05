@@ -21,7 +21,7 @@ import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { PageHeader } from '@/components/shared/page-header';
-import { ChecklistCard } from '@/components/layout/checklist-card';
+import { ChecklistBoard } from '@/components/dashboard/checklist-board';
 import { DateRangePicker } from '@/components/shared/date-range-picker';
 import { StatTile } from '@/components/shared/stat-tile';
 import { Money } from '@/components/shared/money';
@@ -119,7 +119,7 @@ export default function DashboardPage() {
         }
       />
 
-      <ChecklistCard />
+      <ChecklistBoard />
 
       <AsyncPage state={state} loading={<LoadingRows rows={6} />}>
         {(d) => {
