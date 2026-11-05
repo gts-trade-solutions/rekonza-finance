@@ -233,7 +233,7 @@ async function backup() {
     );
     await record('backup', startedAt, {
       ok: true, file: name, bytes: manifest.bytes, sha256: manifest.sha256, filesCount: counter.count,
-      detail: `Written to ${DIR}`,
+      detail: `Written to ${process.env.BACKUP_DIR_NAME?.trim() || DIR}`,
     });
     return out;
   } catch (err) {

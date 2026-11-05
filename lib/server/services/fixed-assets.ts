@@ -625,7 +625,10 @@ export async function assetRegister(ex: Executor, orgId: number, asOf = new Date
       const amc = d(r.amc_expiry);
       if (ins && ins <= soon) flags.push(ins < asOf ? 'Insurance lapsed' : 'Insurance due');
       if (amc && amc <= soon) flags.push(amc < asOf ? 'AMC lapsed' : 'AMC due');
-      if (r.status === 'in_use' && (!last || last < yearAgo)) flags.push('Not verified in a year');
+      // Due a physical check once a year from its last one, or from the day it was put to use:
+      // an asset bought four months ago is not overdue for one.
+      const since = last ?? d(r.put_to_use_on) ?? d(r.acquired_on);
+      if (r.status === 'in_use' && (!since || since < yearAgo)) flags.push(last ? 'Not verified in a year' : 'Never verified');
     }
     return {
       id: String(r.id), tagNo: r.tag_no, name: r.name, classId: String(r.class_id), className: r.class_name,

@@ -54,7 +54,7 @@ export default function PayrollRunsPage() {
 
   const cols: Column<RunRow>[] = [
     { key: 'month', header: 'Month', sortValue: (r) => r.month, cell: (r) => <span className="font-medium">{monthName(r.month)}</span> },
-    { key: 'status', header: 'Status', sortValue: (r) => r.status, cell: (r) => <Badge variant="outline" className={`text-[10px] capitalize ${STATUS[r.status]}`}>{r.status}{r.paidOn ? ` ${r.paidOn}` : ''}</Badge> },
+    { key: 'status', header: 'Status', sortValue: (r) => r.status, cell: (r) => <Badge variant="outline" className={`text-[10px] capitalize ${STATUS[r.status]}`}>{r.status}{r.paidOn ? ` ${new Date(`${r.paidOn.slice(0, 10)}T00:00:00`).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}` : ''}</Badge> },
     { key: 'employees', header: 'Employees', align: 'right', sortValue: (r) => r.employees, cell: (r) => <span className="tabular-nums">{r.employees}</span> },
     { key: 'gross', header: 'Gross', align: 'right', sortValue: (r) => r.grossPaise, cell: (r) => <Money value={r.grossPaise} /> },
     { key: 'net', header: 'Net pay', align: 'right', sortValue: (r) => r.netPaise, cell: (r) => <Money value={r.netPaise} className="font-medium" /> },

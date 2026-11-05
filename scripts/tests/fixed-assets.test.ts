@@ -103,7 +103,10 @@ test('bought, depreciated in runs, and the runs post', async () => {
     const reg = await assetRegister(f.trx, f.orgId, '2027-03-31');
     assert.equal(reg[0].id, String(id));
     assert.equal(reg[0].netPaise, 15_00_000_00 - r1.totalPaise - r2.totalPaise);
-    assert.ok(reg[0].flags.includes('Not verified in a year'));
+    // Put to use in October: not due a physical check by March, overdue a year on.
+    assert.ok(!reg[0].flags.some((x) => /verified/i.test(x)), 'six months in use is not overdue');
+    const later = await assetRegister(f.trx, f.orgId, '2027-10-15');
+    assert.ok(later[0].flags.includes('Never verified'), 'a year in use with no check is');
   });
 });
 
