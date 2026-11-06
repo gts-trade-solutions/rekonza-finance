@@ -58,7 +58,7 @@ tallyhttp.log
 connector/dist/
 
 # Encrypted database backups (npm run db:backup). Never commit them.
-backups/
+/backups/
 
 # Attachments on disk (the stand-in for object storage)
 /storage/
