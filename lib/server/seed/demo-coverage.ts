@@ -50,6 +50,7 @@ import { grantLeave, listLeaveTypes, recordLeave } from '../payroll/leave';
 import { createApiKey } from '../auth/api-keys';
 import { saveWebhook } from '../integrations/webhooks';
 import { confirmEnrolment, startEnrolment } from '../auth/mfa';
+import { saveCustomRole } from '../services/users';
 import { codeAt, stepAt } from '../auth/totp';
 import { seal } from '../crypto/fields';
 import { trueUpStock } from '../services/stock-ledger';
@@ -105,7 +106,7 @@ export async function seedDemoCoverage(trx: Trx, ids: IdMap): Promise<CoverageRe
   // ── Company: the statutory details beside the PAN ─────────────────────────
   await trx.updateTable('organizations').set({
     tan: 'CHER04231F', cin: 'U34300TN2012PTC084231', incorporated_on: '2012-06-14', gst_registered_on: '2017-07-01',
-    constitution: 'Private limited company', business_nature: 'Trader (wholesale),Retailer,Service provider',
+    constitution: 'Private limited company', business_nature: 'Trader (wholesale),Retailer,Service provider,Exporter',
     // Settings › Statutory: the TDS deductor and the PF and ESI registrations.
     deductor_type: 'K', tds_rp_name: 'Arun Kumar', tds_rp_designation: 'Director', tds_rp_pan: 'AJKPK4231L',
     tds_rp_mobile: '9840012345', tds_rp_email: 'accounts@raceautospares.in',
@@ -121,6 +122,35 @@ export async function seedDemoCoverage(trx: Trx, ids: IdMap): Promise<CoverageRe
   await trx.insertInto('user_branches').values(Object.values(ids.branches).map((b) => ({ user_id: controller, branch_id: b }))).execute();
   const enrol = await startEnrolment(trx, { userId: controller, email: 'ramesh@raceautospares.in' }, 'Rekonza');
   await confirmEnrolment(trx, controller, codeAt(enrol.secret, stepAt(Date.now())));
+
+  // ── Security: roles of the book's own, part by part, with people on them ──
+  const out = ['view', 'print', 'export'] as const;
+  const billingClerk = await saveCustomRole(trx, org, {
+    name: 'Billing clerk', baseRole: 'sales', description: 'Raises invoices and receipts; sees the sales reports only',
+    permissions: { sales: ['view', 'create', 'edit', 'print', 'export'], 'reports.sales': [...out] },
+  });
+  const storekeeper = await saveCustomRole(trx, org, {
+    name: 'Storekeeper', baseRole: 'staff', description: 'Receives, issues and moves stock; sees no prices',
+    permissions: { inventory: ['view', 'create', 'edit', 'print'] },
+  });
+  const auditor = await saveCustomRole(trx, org, {
+    name: 'Statutory auditor', baseRole: 'viewer', description: 'Reads and exports the books and reports; changes nothing',
+    permissions: {
+      sales: [...out], purchases: [...out], banking: [...out], accountant: [...out], gst: [...out], inventory: [...out], payroll: [...out],
+      'reports.financial': [...out], 'reports.sales': [...out], 'reports.purchases': [...out], 'reports.banking': [...out],
+    },
+  });
+  for (const u of [
+    { name: 'Kavya Menon', email: 'kavya@raceautospares.in', role: 'sales' as const, custom: billingClerk },
+    { name: 'Suresh Babu', email: 'suresh@raceautospares.in', role: 'staff' as const, custom: storekeeper },
+    { name: 'Meena Raghavan', email: 'meena.ca@raceautospares.in', role: 'viewer' as const, custom: auditor },
+  ]) {
+    const id = Number((await trx.insertInto('users').values({
+      org_id: org, name: u.name, email: u.email, password_hash: arun.password_hash,
+      role: u.role, custom_role_id: u.custom, home_branch_id: chennai, is_active: 1,
+    }).executeTakeFirstOrThrow()).insertId);
+    await trx.insertInto('user_branches').values({ user_id: id, branch_id: chennai }).execute();
+  }
 
   // ── Masters: the divisions as cost centres, stock groups ──────────────────
   const centre = {

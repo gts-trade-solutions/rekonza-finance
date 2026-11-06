@@ -168,6 +168,10 @@ To record it again after a change, with the app running against a seeded databas
 
 The AI assistant answers on the online demo too, from `lib/server/ai/demo-recording.json`: what every lookup returned for the demo book, for each customer, supplier, item, account and the periods a question is likely to name. With `OPENAI_API_KEY` set on the deployment, OpenAI answers from those figures, limited per visitor and to `DEMO_AI_DAILY_LIMIT` questions a day (default 300); without a key, the stand-in answers. Nothing is charged, and a conversation is kept only in the server's memory. Record it again together with the screens: `npx tsx --conditions=react-server --env-file=.env.local scripts/demo-ai-snapshot.ts`. It only reads.
 
+## Deploying to a VPS
+
+A server of your own runs the full app with its database, backups and TLS: `sudo DOMAIN=… EMAIL=… bash deploy/vps/setup.sh` on Ubuntu, then `sudo bash deploy/vps/update.sh` for each new version. See [docs/vps.md](docs/vps.md).
+
 ## Deploying to Vercel
 
 Vercel runs the app; it does not run the database. You need:

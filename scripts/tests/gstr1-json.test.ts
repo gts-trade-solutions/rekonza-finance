@@ -25,7 +25,7 @@ async function withFixture(fn: (f: Fixture) => Promise<void>) {
   const rollback = Symbol('rollback');
   try {
     await db.transaction().execute(async (trx) => {
-      const orgId = Number((await trx.insertInto('organizations').values({ name: 'GSTR-1 File Co' }).executeTakeFirstOrThrow()).insertId);
+      const orgId = Number((await trx.insertInto('organizations').values({ name: 'GSTR-1 File Co', lut_declared: 1, lut_arn: 'AD330426012345X', lut_valid_from: '2024-04-01', lut_valid_to: '2028-03-31' }).executeTakeFirstOrThrow()).insertId);
       const branchId = Number((await trx.insertInto('branches').values({
         org_id: orgId, name: 'HQ', state_code: '33', is_primary: 1, gstin: '33AABCG1111G1Z5',
       }).executeTakeFirstOrThrow()).insertId);

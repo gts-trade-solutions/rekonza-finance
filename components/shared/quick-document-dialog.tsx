@@ -32,7 +32,7 @@ import { useApiAction } from '@/lib/api/use-api';
 import { useAppStore } from '@/lib/store';
 import { itemOptionsFor } from '@/lib/options';
 import { formatINR, mulQty, roundToRupee } from '@/lib/money';
-import { computeLineTax, resolveSupplyType, supplyTypeLabel } from '@/lib/tax/gst';
+import { computeLineTax, exportPaysIgstByDefault, isExportSupply, resolveSupplyType, supplyTypeLabel } from '@/lib/tax/gst';
 import type { SupplyType } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
@@ -99,7 +99,11 @@ export function QuickDocumentDialog({
   const customer = store.contacts.find((c) => c.id === customerId);
   const branchState = store.branches.find((b) => b.id === store.activeBranchId)?.stateCode ?? '';
   const supplyType: SupplyType = kind === 'challan' || !chargesGst ? 'nil_or_exempt'
-    : customer ? resolveSupplyType({ branchStateCode: branchState, placeOfSupply: customer.stateCode, customerTreatment: customer.gstTreatment }) : 'intra';
+    : customer ? resolveSupplyType({
+      branchStateCode: branchState, placeOfSupply: customer.stateCode, customerTreatment: customer.gstTreatment,
+      // An export pays IGST unless a LUT covers today and exports go under it, as the server decides.
+      exportWithTax: isExportSupply(customer.gstTreatment, customer.stateCode) ? exportPaysIgstByDefault(store.org?.trade, TODAY()) : undefined,
+    }) : 'intra';
   const taxed = supplyType === 'intra' || supplyType === 'inter' || supplyType === 'export_with_tax';
   const zeroRated = kind !== 'challan' && chargesGst && (supplyType === 'export_lut' || supplyType === 'sez');
   const offers = kind === 'estimate' || kind === 'sales-order';

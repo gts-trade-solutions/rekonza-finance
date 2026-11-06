@@ -126,6 +126,7 @@ export const TEMPLATES: Record<ImportKind, Template> = {
       { key: 'rate', label: 'Rate', required: true, example: '850' },
       { key: 'discount_pct', label: 'Discount %', example: '' },
       { key: 'gst_rate', label: 'GST rate', example: '18' },
+      { key: 'export_igst', label: 'Export IGST', example: '', hint: 'an export only: nil (under LUT) or paid; blank is nil, as most exports are' },
     ],
   },
   bills: {
@@ -143,6 +144,7 @@ export const TEMPLATES: Record<ImportKind, Template> = {
       { key: 'qty', label: 'Quantity', required: true, example: '20' },
       { key: 'rate', label: 'Rate', required: true, example: '600' },
       { key: 'gst_rate', label: 'GST rate', example: '18' },
+      { key: 'export_igst', label: 'Export IGST', example: '', hint: 'an export only: nil (under LUT) or paid; blank is nil, as most exports are' },
     ],
   },
   estimates: {
@@ -161,6 +163,7 @@ export const TEMPLATES: Record<ImportKind, Template> = {
       { key: 'rate', label: 'Rate', required: true, example: '850' },
       { key: 'discount_pct', label: 'Discount %', example: '' },
       { key: 'gst_rate', label: 'GST rate', example: '18' },
+      { key: 'export_igst', label: 'Export IGST', example: '', hint: 'an export only: nil (under LUT) or paid; blank is nil, as most exports are' },
     ],
   },
   'sales-orders': {
@@ -179,6 +182,7 @@ export const TEMPLATES: Record<ImportKind, Template> = {
       { key: 'rate', label: 'Rate', required: true, example: '850' },
       { key: 'discount_pct', label: 'Discount %', example: '' },
       { key: 'gst_rate', label: 'GST rate', example: '18' },
+      { key: 'export_igst', label: 'Export IGST', example: '', hint: 'an export only: nil (under LUT) or paid; blank is nil, as most exports are' },
     ],
   },
   'credit-notes': {
@@ -198,6 +202,7 @@ export const TEMPLATES: Record<ImportKind, Template> = {
       { key: 'rate', label: 'Rate', required: true, example: '850' },
       { key: 'discount_pct', label: 'Discount %', example: '' },
       { key: 'gst_rate', label: 'GST rate', example: '18' },
+      { key: 'export_igst', label: 'Export IGST', example: '', hint: 'an export only: nil (under LUT) or paid; blank is nil, as most exports are' },
     ],
   },
   'purchase-orders': {
@@ -216,6 +221,7 @@ export const TEMPLATES: Record<ImportKind, Template> = {
       { key: 'rate', label: 'Rate', required: true, example: '600' },
       { key: 'discount_pct', label: 'Discount %', example: '' },
       { key: 'gst_rate', label: 'GST rate', example: '18' },
+      { key: 'export_igst', label: 'Export IGST', example: '', hint: 'an export only: nil (under LUT) or paid; blank is nil, as most exports are' },
     ],
   },
   expenses: {

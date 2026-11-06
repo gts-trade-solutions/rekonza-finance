@@ -51,6 +51,10 @@ interface Sale {
   lines: { item: string; qty: number }[];
   pay?: 'full' | 'part';
   tds?: boolean;
+  /** An export with IGST paid; left out, an export goes under the LUT with IGST nil. */
+  exportWithTax?: boolean;
+  /** An export of goods: its shipping bill, two days after the invoice. */
+  shippingBill?: boolean;
 }
 
 /**
@@ -74,6 +78,9 @@ const SALES: Sale[] = [
   { customer: 'c_trichy', daysAgo: 52, terms: 30, lines: [{ item: 'i_brakepad', qty: 30 }, { item: 'i_greasekit', qty: 25 }], pay: 'part' },
   { customer: 'c_national', daysAgo: 45, terms: 30, lines: [{ item: 'i_wiper', qty: 35 }, { item: 'i_airfilter', qty: 28 }], pay: 'full' },
   { customer: 'c_ridez', daysAgo: 40, terms: 0, lines: [{ item: 'i_engineoil', qty: 6 }, { item: 'i_fitment', qty: 3 }], pay: 'full' },
+  // Exports: goods with IGST paid (refund claimed), and services under the LUT.
+  { customer: 'c_lanka', daysAgo: 48, terms: 45, lines: [{ item: 'i_sparkplug', qty: 20 }], pay: 'full', exportWithTax: true, shippingBill: true },
+  { customer: 'c_gulf', daysAgo: 38, terms: 30, lines: [{ item: 'i_advisory', qty: 4 }], pay: 'full' },
 
   // The last five weeks.
   { customer: 'c_sharma', daysAgo: 34, terms: 30, lines: [{ item: 'i_brakepad', qty: 20 }, { item: 'i_oilfilter', qty: 30 }], pay: 'full' },
@@ -87,7 +94,9 @@ const SALES: Sale[] = [
   { customer: 'c_kochi', daysAgo: 14, terms: 30, lines: [{ item: 'i_radiator', qty: 4 }, { item: 'i_coolant', qty: 30 }] },
   { customer: 'c_orbit', daysAgo: 12, terms: 30, lines: [{ item: 'i_sparkplug', qty: 30 }, { item: 'i_fitment', qty: 15 }], tds: true },
   { customer: 'c_sez', daysAgo: 11, terms: 30, lines: [{ item: 'i_brakepad', qty: 40 }] },
-  { customer: 'c_lanka', daysAgo: 10, terms: 45, lines: [{ item: 'i_clutch', qty: 25 }] },
+  { customer: 'c_lanka', daysAgo: 10, terms: 45, lines: [{ item: 'i_clutch', qty: 25 }], shippingBill: true },
+  // An export of services with IGST paid.
+  { customer: 'c_gulf', daysAgo: 8, terms: 30, lines: [{ item: 'i_advisory', qty: 2 }], exportWithTax: true },
   { customer: 'c_bluehill', daysAgo: 9, terms: 30, lines: [{ item: 'i_engineoil', qty: 12 }, { item: 'i_cabinfilter', qty: 18 }] },
   { customer: 'c_trichy', daysAgo: 7, terms: 30, lines: [{ item: 'i_mirrror', qty: 6 }, { item: 'i_hornset', qty: 10 }] },
   { customer: 'c_ridez', daysAgo: 6, terms: 0, lines: [{ item: 'i_wiper', qty: 2 }, { item: 'i_fitment', qty: 1 }], pay: 'full' },
@@ -168,6 +177,17 @@ export async function seedDemoBook(trx: Trx, ids: IdMap): Promise<BookResult> {
   const chennai = ids.branches.br_chennai;
   let payments = 0;
 
+  // ── Sales and exports ──────────────────────────────────────────────────────
+  // The business sells within India and abroad, goods and services, and has
+  // filed its LUT for the year: exports go with IGST nil unless chosen otherwise.
+  const [ty, tm] = DEMO_TODAY.split('-').map(Number);
+  const fyStart = tm >= 4 ? ty : ty - 1;
+  await trx.updateTable('organizations').set({
+    trade_scope: 'both', supplies: 'both', lut_declared: 1, export_igst: 'nil_lut',
+    lut_arn: `AD3303${String(fyStart).slice(2)}0456781`,
+    lut_valid_from: `${fyStart}-04-01`, lut_valid_to: `${fyStart + 1}-03-31`,
+  }).where('id', '=', ids.orgId).execute();
+
   // ── Sales ──────────────────────────────────────────────────────────────────
   for (const sale of SALES) {
     const inv = await createInvoice(trx, ids.orgId, ids.users.u_arun, {
@@ -179,6 +199,13 @@ export async function seedDemoBook(trx: Trx, ids: IdMap): Promise<BookResult> {
       terms: 'Goods once sold will not be taken back. Interest @18% p.a. on overdue amounts.',
       // No rate given, so each line takes the item's catalogue price.
       lines: sale.lines.map((l) => ({ itemId: ids.items[l.item], qty: l.qty })),
+      ...(sale.exportWithTax ? { exportWithTax: true } : {}),
+      ...(sale.shippingBill ? {
+        exportDetails: {
+          shippingBillNo: String(4_100_000 + sale.daysAgo * 137), shippingBillDate: daysAgo(Math.max(0, sale.daysAgo - 2)),
+          portCode: 'INMAA1', countryCode: 'LK',
+        },
+      } : {}),
     });
     await markInvoiceSent(trx, ids.orgId, ids.users.u_arun, inv.id);
 

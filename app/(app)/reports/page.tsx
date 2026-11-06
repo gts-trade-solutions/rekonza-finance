@@ -73,6 +73,7 @@ const CATALOGUE: { group: string; blurb: string; reports: ReportDef[] }[] = [
       { title: 'Sales by Item', href: '/reports/sales-by-item', description: 'What actually sells, by value and quantity.' },
       { title: 'Sales by Salesperson', href: '/reports/sales-by-salesperson', description: 'Who booked it, and how much they collected.' },
       { title: 'Sales Summary', href: '/reports/sales-summary', description: 'Month by month: invoices, credit notes, net sales and GST charged.' },
+      { title: 'Sales by Supply', href: '/reports/sales-by-supply', description: 'Domestic and international, goods and services separately; exports under LUT (IGST nil) and with IGST paid.' },
     ],
   },
   {

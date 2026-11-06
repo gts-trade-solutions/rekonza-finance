@@ -68,3 +68,8 @@ backups/
 
 # This machine's own Claude Code permissions.
 .claude/settings.local.json
+
+# The VPS build folders and which one is live (deploy/vps).
+/.next-a/
+/.next-b/
+/.build-dir

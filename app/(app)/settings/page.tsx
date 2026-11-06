@@ -18,6 +18,7 @@ import { Input } from '@/components/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { PageHeader } from '@/components/shared/page-header';
 import { Field } from '@/components/shared/form-bits';
+import { TradeProfileCard, type TradeForm } from '@/components/settings/trade-profile-card';
 import { AsyncPage } from '@/components/shared/async-state';
 import { BranchDialog, type EditableBranch } from '@/components/settings/branch-dialog';
 import { IntegrationsPanel } from '@/components/settings/integrations-panel';
@@ -51,6 +52,7 @@ interface SettingsResponse {
   org: {
     id: string; name: string; legalName: string | null; pan: string | null; tan: string | null;
     lutArn: string | null; lutValidFrom: string | null; lutValidTo: string | null;
+    tradeScope?: TradeForm['tradeScope']; supplies?: TradeForm['supplies']; lutDeclared?: boolean; exportIgst?: TradeForm['exportIgst'];
     constitution?: string | null; businessNature?: string[]; cin?: string | null; incorporatedOn?: string | null; gstRegisteredOn?: string | null;
     email: string | null; phone: string | null; address: string | null;
     fiscalYearStartMonth: number; currency: string;
@@ -116,6 +118,7 @@ export default function SettingsPage() {
   const [form, setForm] = useState({
     name: '', legalName: '', pan: '', tan: '', email: '', phone: '', address: '', lutArn: '', lutValidFrom: '', lutValidTo: '',
     constitution: '', businessNature: [] as string[], cin: '', incorporatedOn: '', gstRegisteredOn: '',
+    tradeScope: 'domestic' as TradeForm['tradeScope'], supplies: 'both' as TradeForm['supplies'], lutDeclared: false, exportIgst: 'nil_lut' as TradeForm['exportIgst'],
   });
   const [editingBranch, setEditingBranch] = useState<EditableBranch | null>(null);
   // Opened on a tab when linked to one — "Settings → Integrations" from the
@@ -146,6 +149,10 @@ export default function SettingsPage() {
       cin: o.cin ?? '',
       incorporatedOn: o.incorporatedOn ?? '',
       gstRegisteredOn: o.gstRegisteredOn ?? '',
+      tradeScope: o.tradeScope ?? 'domestic',
+      supplies: o.supplies ?? 'both',
+      lutDeclared: !!o.lutDeclared,
+      exportIgst: o.exportIgst ?? 'nil_lut',
     });
   }, [state.data]);
 
@@ -166,12 +173,30 @@ export default function SettingsPage() {
       cin: form.cin || null,
       incorporatedOn: form.incorporatedOn || null,
       gstRegisteredOn: form.gstRegisteredOn || null,
+      tradeScope: form.tradeScope,
+      supplies: form.supplies,
+      // The LUT section shows only for a business that sells abroad; nothing
+      // about it is sent, or checked, for one that does not.
+      ...(form.tradeScope !== 'domestic' ? { lutDeclared: form.lutDeclared, exportIgst: form.lutDeclared ? form.exportIgst : 'paid' } : {}),
     });
     if (!done) {
       toast.error(save.error ?? 'The changes were not saved');
       return;
     }
     toast.success('Organisation settings saved');
+    // The invoice form reads where the business sells and its LUT from the
+    // app's own copy: brought up to date here, without a reload.
+    useAppStore.setState((s) => (s.org ? {
+      org: {
+        ...s.org,
+        trade: {
+          tradeScope: form.tradeScope, supplies: form.supplies,
+          lutDeclared: form.tradeScope !== 'domestic' ? form.lutDeclared : !!s.org.trade?.lutDeclared,
+          lutArn: form.lutArn || null, lutValidFrom: form.lutValidFrom || null, lutValidTo: form.lutValidTo || null,
+          exportIgst: form.tradeScope !== 'domestic' ? (form.lutDeclared ? form.exportIgst : 'paid') : s.org.trade?.exportIgst ?? 'paid',
+        },
+      },
+    } : {}));
     state.refetch();
   };
 
@@ -240,13 +265,6 @@ export default function SettingsPage() {
                       disabled={!canEdit}
                     />
                   </Field>
-                  <Field label="LUT ARN" hint="Letter of Undertaking, for exports and SEZ supplies without IGST" error={save.fieldErrors.lutArn}>
-                    <Input value={form.lutArn} onChange={(e) => setForm({ ...form, lutArn: e.target.value.toUpperCase() })} className="font-mono" maxLength={20} disabled={!canEdit} />
-                  </Field>
-                  <div className="grid grid-cols-2 gap-2">
-                    <Field label="LUT valid from"><Input type="date" value={form.lutValidFrom} onChange={(e) => setForm({ ...form, lutValidFrom: e.target.value })} disabled={!canEdit} /></Field>
-                    <Field label="to"><Input type="date" value={form.lutValidTo} onChange={(e) => setForm({ ...form, lutValidTo: e.target.value })} disabled={!canEdit} /></Field>
-                  </div>
                   <Field label="Email" error={save.fieldErrors.email}>
                     <Input
                       value={form.email}
@@ -301,6 +319,7 @@ export default function SettingsPage() {
                 registrationType={d.org.gstRegistrationType}
                 savedCin={d.org.cin ?? ''}
               />
+              <TradeProfileCard value={form} onChange={(v) => setForm({ ...form, ...v })} canEdit={canEdit} errors={save.fieldErrors} />
               {canEdit && (
                 <div className="flex justify-end">
                   <Button size="sm" onClick={submit} disabled={save.busy} data-slot="org-save">

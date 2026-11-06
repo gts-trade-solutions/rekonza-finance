@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { sql } from 'kysely';
 import { db } from '@/lib/server/db';
+import { lutPatch } from '@/lib/server/services/trade-profile';
 import { route, body, asId, badRequest } from '@/lib/server/http';
 import { isValidGstin } from '@/lib/tax/gst';
 import { logAudit, auditMeta, snapshot, changesBetween, describeChanges } from '@/lib/server/audit';
@@ -74,6 +75,11 @@ export const GET = route(
         lutArn: org.lut_arn,
         lutValidFrom: org.lut_valid_from ? String(org.lut_valid_from).slice(0, 10) : null,
         lutValidTo: org.lut_valid_to ? String(org.lut_valid_to).slice(0, 10) : null,
+        // Where it sells and what it supplies; the LUT as a yes or no, and what an export takes.
+        tradeScope: org.trade_scope,
+        supplies: org.supplies,
+        lutDeclared: !!org.lut_declared,
+        exportIgst: org.export_igst,
         constitution: org.constitution,
         businessNature: (org.business_nature ?? '').split(',').map((x) => x.trim()).filter(Boolean),
         cin: org.cin,
@@ -137,6 +143,14 @@ const OrgInput = z.object({
     .or(z.literal('').transform(() => null)),
   lutValidFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullish().or(z.literal('').transform(() => null)),
   lutValidTo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullish().or(z.literal('').transform(() => null)),
+  /** Within India only, abroad as well, or abroad only. */
+  tradeScope: z.enum(['domestic', 'both', 'international']).optional(),
+  /** Goods, services, or both. */
+  supplies: z.enum(['goods', 'services', 'both']).optional(),
+  /** A LUT is filed for the year: yes or no. */
+  lutDeclared: z.boolean().optional(),
+  /** What an export takes when nobody chooses: IGST nil under the LUT, or IGST paid. */
+  exportIgst: z.enum(['nil_lut', 'paid']).optional(),
   /** The kind of company (lib/company-profile.ts), what it does, and its registrations. */
   constitution: z.string().trim().max(60).nullish(),
   businessNature: z.array(z.string().trim().min(1).max(40)).max(8).optional(),
@@ -177,7 +191,13 @@ export const PATCH = route(
       ...(input.cin !== undefined ? { cin: input.cin } : {}),
       ...(input.incorporatedOn !== undefined ? { incorporated_on: input.incorporatedOn } : {}),
       ...(input.gstRegisteredOn !== undefined ? { gst_registered_on: input.gstRegisteredOn } : {}),
+      ...(input.tradeScope !== undefined ? { trade_scope: input.tradeScope } : {}),
+      ...(input.supplies !== undefined ? { supplies: input.supplies } : {}),
     };
+    // The LUT as a yes or no. A yes needs its ARN and its dates (sent now or
+    // already on file); without one, exports cannot go with IGST nil, so they
+    // pay IGST. A no keeps the old ARN, which earlier exports are checked against.
+    Object.assign(patch, await lutPatch(db, orgId, input));
     const todayIso = new Date().toISOString().slice(0, 10);
     if (input.incorporatedOn && input.incorporatedOn > todayIso) throw badRequest('The company cannot be incorporated in the future.');
     if (input.lutValidFrom && input.lutValidTo && input.lutValidTo < input.lutValidFrom) {

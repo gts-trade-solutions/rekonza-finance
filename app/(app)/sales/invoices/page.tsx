@@ -47,8 +47,8 @@ const TAB_LABEL: Record<(typeof FILTERS)[number], string> = {
 const SUPPLY_SHORT: Record<string, string> = {
   intra: 'CGST+SGST',
   inter: 'IGST',
-  export_lut: 'Export (LUT)',
-  export_with_tax: 'Export + IGST',
+  export_lut: 'Export · IGST nil (LUT)',
+  export_with_tax: 'Export · IGST paid',
   sez: 'SEZ',
   nil_or_exempt: 'Nil / exempt',
 };

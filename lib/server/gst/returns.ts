@@ -98,11 +98,11 @@ export async function gstr1(ex: Executor, orgId: number, month: string, branchId
     customer_name: string; gstin: string | null; place_of_supply: string;
     supply_type: string; subtotal: string; cgst: string; sgst: string;
     igst: string; cess: string; total: string; irn_status: string | null;
-    doc_kind: 'invoice' | 'debit_note'; note_reason: string | null; against_number: string | null;
+    doc_kind: 'invoice' | 'debit_note'; note_reason: string | null; against_number: string | null; export_lut_arn: string | null;
   }>`
     SELECT i.id, i.number, i.invoice_date, i.status, i.doc_kind, i.note_reason, o.number AS against_number,
            c.display_name AS customer_name, c.gstin, i.place_of_supply, i.supply_type,
-           i.subtotal, i.cgst, i.sgst, i.igst, i.cess, i.total,
+           i.subtotal, i.cgst, i.sgst, i.igst, i.cess, i.total, i.export_lut_arn,
            e.status AS irn_status
       FROM invoices i
       JOIN contacts c ON c.id = i.customer_id
@@ -267,7 +267,9 @@ export async function gstr1(ex: Executor, orgId: number, month: string, branchId
 
   // An export or SEZ supply without tax needs a Letter of Undertaking in force
   // on the invoice date; without one the IGST was due.
-  const zeroRated = live.filter((r) => r.supply_type === 'export_lut' || (r.supply_type === 'sez' && toPaiseFromSql(r.igst) === 0));
+  // One raised under a LUT in force (its ARN kept with it) was checked when it
+  // was saved, so next year's LUT on file does not make it look uncovered.
+  const zeroRated = live.filter((r) => (r.supply_type === 'export_lut' && !r.export_lut_arn) || (r.supply_type === 'sez' && toPaiseFromSql(r.igst) === 0));
   if (zeroRated.length) {
     const org = await ex.selectFrom('organizations').select(['lut_arn', 'lut_valid_from', 'lut_valid_to'])
       .where('id', '=', orgId).executeTakeFirst();

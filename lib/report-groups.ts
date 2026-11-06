@@ -22,7 +22,7 @@ const GROUP: Record<string, ReportGroup> = {
   'sales-by-salesperson': 'sales', 'time-to-get-paid': 'sales', 'refund-history': 'sales', 'pending-sales-orders': 'sales',
   'invoice-details': 'sales', 'estimate-details': 'sales', 'sales-order-details': 'sales', 'credit-note-details': 'sales',
   'payments-received': 'sales', 'retainer-details': 'sales', 'portal-activities': 'sales',
-  'receivable-details': 'sales', 'sales-summary': 'sales', 'committed-stock': 'sales', 'abc-classification': 'sales', 'timesheet-details': 'sales', 'project-summary': 'sales',
+  'receivable-details': 'sales', 'sales-summary': 'sales', 'sales-by-supply': 'sales', 'committed-stock': 'sales', 'abc-classification': 'sales', 'timesheet-details': 'sales', 'project-summary': 'sales',
   'ap-ageing': 'purchases', 'ap-ageing-details': 'purchases', 'vendor-balances': 'purchases', 'purchases-by-vendor': 'purchases', 'expenses-by-category': 'purchases',
   'pending-purchase-orders': 'purchases', 'bill-details': 'purchases', 'expense-details': 'purchases', 'payments-made': 'purchases',
   'purchases-by-item': 'purchases', 'purchase-order-details': 'purchases', 'vendor-credit-details': 'purchases', 'expenses-by-customer': 'purchases',

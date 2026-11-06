@@ -346,6 +346,8 @@ const invoices: GroupHandler = async (trx, ctx, l, rows) => {
     branchId: ctx.branchId, customerId: party(l, rows[0].customer, 'customer', 'Customer'),
     number: str(rows[0].invoice_no), date: when, dueDate: str(rows[0].due_date) ? date(rows[0].due_date, 'Due date') : when,
     status: 'approved', lines,
+    // An export comes in as it was billed: IGST paid when the sheet says so, nil otherwise.
+    exportAsBilled: /^(paid|igst|with)/i.test(str(rows[0].export_igst)),
   });
 };
 

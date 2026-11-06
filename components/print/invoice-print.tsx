@@ -128,7 +128,9 @@ function documentTitle(inv: InvoiceDetail): { title: string; endorsement: string
     case 'export_lut':
       return {
         title: 'Tax Invoice',
-        endorsement: 'Supply meant for export under bond or letter of undertaking without payment of integrated tax',
+        endorsement: inv.exportInfo?.lutArn
+          ? `Supply meant for export under letter of undertaking (ARN ${inv.exportInfo.lutArn}) without payment of integrated tax`
+          : 'Supply meant for export under bond or letter of undertaking without payment of integrated tax',
       };
     case 'sez':
       return {
@@ -376,6 +378,13 @@ function InvoiceSheet({ inv, copyLabel, last }: { inv: InvoiceDetail; copyLabel:
           </div>
           {inv.voucherType?.heading && <p className="text-sm font-semibold">{inv.voucherType.heading}</p>}
           {endorsement && <p className="text-[11px] font-semibold uppercase">{endorsement}</p>}
+          {inv.exportInfo?.shippingBillNo && (
+            <p className="text-[10px]">
+              Shipping bill {inv.exportInfo.shippingBillNo}
+              {inv.exportInfo.shippingBillDate ? ` dated ${day(inv.exportInfo.shippingBillDate)}` : ''}
+              {inv.exportInfo.portCode ? `, port ${inv.exportInfo.portCode}` : ''}
+            </p>
+          )}
           {t.showLogo && inv.seller.logoUrl && (
             // eslint-disable-next-line @next/next/no-img-element -- printed as-is; next/image adds nothing on paper
             <img

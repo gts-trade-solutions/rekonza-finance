@@ -6,6 +6,7 @@
 
 import type { DocTaxBreakup, GstTreatment, Paise, SupplyType, TaxPref } from '../types';
 import { mulQty, pctOf } from '../money';
+import { dayLabel } from '../date-range';
 
 /** GST state codes (first 2 digits of every GSTIN). '96' = foreign/other territory. */
 export const GST_STATES: Record<string, string> = {
@@ -105,6 +106,76 @@ export function resolveSupplyType(opts: {
   }
   if (customerTreatment === 'sez') return 'sez';
   return branchStateCode === placeOfSupply ? 'intra' : 'inter';
+}
+
+/** Whether a supply to this customer, at this place of supply, is an export. */
+export function isExportSupply(customerTreatment: GstTreatment | string | null | undefined, placeOfSupply: string | null | undefined): boolean {
+  return customerTreatment === 'overseas' || placeOfSupply === '96';
+}
+
+/**
+ * The organisation's exports: its Letter of Undertaking (Form GST RFD-11, filed
+ * each financial year) and what an export takes when nobody chooses.
+ */
+export interface ExportProfile {
+  lutDeclared: boolean;
+  lutArn: string | null;
+  lutValidFrom: string | null;
+  lutValidTo: string | null;
+  /** IGST nil under the LUT, or IGST paid and claimed back as a refund. */
+  exportIgst: 'nil_lut' | 'paid';
+}
+
+/**
+ * Why an export dated `date` cannot go under the LUT, or null when it can: a
+ * LUT is declared, its ARN is on file, and the date falls inside it. Without
+ * one in force an export pays IGST (IGST Act s.16(3)).
+ */
+export function lutGap(p: ExportProfile | null | undefined, date: string): string | null {
+  if (!p?.lutDeclared) return 'No LUT is declared for the organisation';
+  if (!p.lutArn) return 'The LUT has no ARN on file';
+  if (!p.lutValidFrom || !p.lutValidTo) return `The LUT ${p.lutArn} has no dates on file`;
+  if (date < p.lutValidFrom || date > p.lutValidTo) {
+    return `The LUT ${p.lutArn} runs from ${dayLabel(p.lutValidFrom)} to ${dayLabel(p.lutValidTo)}, and this export is dated ${dayLabel(date)}`;
+  }
+  return null;
+}
+
+/**
+ * The IGST an export takes, and why, from the strongest say to the weakest:
+ *
+ *   asked     picked on the invoice itself (the form, the API). IGST nil
+ *             without a LUT in force is refused.
+ *   source    what the order, estimate or challan it comes from took. Kept
+ *             where the law allows; an order under LUT invoiced on a date no
+ *             LUT covers pays IGST, with a note saying so.
+ *   history   what an imported invoice was actually billed as: kept as it is.
+ *   default   the organisation's setting (Settings → Organisation).
+ */
+export function exportTaxFor(
+  p: ExportProfile | null | undefined,
+  date: string,
+  say: { asked?: boolean; source?: boolean; history?: boolean },
+): { withTax: boolean; refused: string | null; note: string | null } {
+  const gap = lutGap(p, date);
+  if (say.asked !== undefined) return { withTax: say.asked, refused: !say.asked && gap ? gap : null, note: null };
+  if (say.history !== undefined) return { withTax: say.history, refused: null, note: null };
+  if (say.source !== undefined) {
+    return !say.source && gap
+      ? { withTax: true, refused: null, note: `${gap}, so this export pays IGST although the document it comes from went under the LUT.` }
+      : { withTax: say.source, refused: null, note: null };
+  }
+  return { withTax: exportPaysIgstByDefault(p, date), refused: null, note: null };
+}
+
+/** What an export document chose, for the invoice raised from it: true for IGST paid, false under LUT. */
+export function exportTaxOf(supplyType: string | null | undefined): boolean | undefined {
+  return supplyType === 'export_with_tax' ? true : supplyType === 'export_lut' ? false : undefined;
+}
+
+/** Whether an export on `date` pays IGST when nobody chose: not when a LUT covers it and exports go under it. */
+export function exportPaysIgstByDefault(p: ExportProfile | null | undefined, date: string): boolean {
+  return !(lutGap(p, date) === null && p?.exportIgst === 'nil_lut');
 }
 
 /**

@@ -137,6 +137,16 @@ export const GET = route(
         email: org.email,
         phone: org.phone,
         isDemo: !!org.is_demo,
+        // Where it sells and what it supplies, and its LUT (Settings → Organisation).
+        trade: {
+          tradeScope: org.trade_scope,
+          supplies: org.supplies,
+          lutDeclared: !!org.lut_declared,
+          lutArn: org.lut_arn,
+          lutValidFrom: org.lut_valid_from ? String(org.lut_valid_from).slice(0, 10) : null,
+          lutValidTo: org.lut_valid_to ? String(org.lut_valid_to).slice(0, 10) : null,
+          exportIgst: org.export_igst,
+        },
       },
       contacts: contacts.map((c) => ({
         id: asId(c.id),

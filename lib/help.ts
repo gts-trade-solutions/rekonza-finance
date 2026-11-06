@@ -27,7 +27,7 @@ export const HELP: HelpTopic[] = [
     summary: 'Who can sign in, what each may do, and the extra code that protects an account.',
     steps: [
       'Settings → Users & roles → Add user. A temporary password is shown once; pass it on privately. They change it in Settings → Sign-ins.',
-      'Choose a standard role, or one of your own: New role sets, part by part, what it may view, create, edit, approve or void — including which groups of reports.',
+      'Choose a standard role, or one of your own: Add role sets, part by part, what it may view, create, edit, approve, void, print or export — including which groups of reports. Each role lists what it may do, and how many people have it.',
       'Settings → Sign-ins → Two-step sign-in: scan the code with an authenticator app and keep the ten recovery codes.',
       'Settings → Policies → Require two-step sign-in, for admins or everyone. Turn it on for yourself first.',
       'Lost phone: an admin clears the user\'s two-step sign-in from Users & roles; they set it up again at the next sign-in.',
@@ -56,6 +56,19 @@ export const HELP: HelpTopic[] = [
       'A mistake is corrected by a credit note, or by voiding with a reason — never by editing a posted invoice.',
     ],
     links: [{ label: 'Invoices', href: '/sales/invoices' }],
+  },
+  {
+    id: 'exports', area: 'Sales & purchases', title: 'Exports, the LUT, and goods and services',
+    summary: 'Where you sell, what you supply, and whether exports go with IGST nil under a LUT or pay IGST.',
+    steps: [
+      'Settings → Organisation → Sales and exports. Where you sell: domestic (within India), domestic and international, or international only. What you supply: goods (HSN codes), services (SAC codes), or both.',
+      'LUT declaration: Yes when the Letter of Undertaking (Form GST RFD-11) is filed for the year; then give its ARN and the dates it covers. No means exports pay IGST.',
+      'IGST on exports: nil under the LUT, or IGST paid and claimed back as a refund. This is what a new export invoice starts with.',
+      'On the invoice, an overseas customer brings "IGST on this export": Under LUT — IGST nil, or IGST paid. IGST nil is refused when no LUT covers the invoice date. The printed invoice quotes the LUT ARN.',
+      'An export of goods carries its shipping bill and port code; an export of services has none. Orders, estimates and credit notes follow the same IGST as their invoice.',
+      'Items show goods and services on separate tabs. Reports → Sales by Supply shows sales within India and exports, goods and services, each on its own line, with exports under LUT apart from those with IGST paid.',
+    ],
+    links: [{ label: 'Settings → Organisation', href: '/settings?tab=org' }, { label: 'Sales by Supply', href: '/reports/sales-by-supply' }, { label: 'Items', href: '/sales/items' }],
   },
   {
     id: 'receipts', area: 'Sales & purchases', title: 'Money received',

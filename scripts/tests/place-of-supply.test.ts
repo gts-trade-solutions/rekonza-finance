@@ -82,22 +82,40 @@ test('goods shipped to another state are inter-state; to a third party, or servi
 
 test('an export’s shipping bill reaches GSTR-1, and a LUT must be in force', async () => {
   await withFixture(async (f) => {
-    const exp = await createInvoice(f.trx, f.orgId, null, {
+    const exportOn = (extra: Record<string, unknown> = {}) => createInvoice(f.trx, f.orgId, null, {
       branchId: f.branchId, customerId: f.overseas, date: '2026-08-05', dueDate: '2026-09-05', status: 'approved',
-      lines: [{ description: 'Brake pads', hsnSac: '8708', qty: 100, ratePaise: 500_00, gstRatePct: 18 }],
-    });
-    let g = await gstr1(f.trx, f.orgId, '2026-08');
-    assert.ok(g.issues.some((i) => /no Letter of Undertaking is on file/.test(i.message)));
+      lines: [{ description: 'Brake pads', hsnSac: '8708', qty: 100, ratePaise: 500_00, gstRatePct: 18 }], ...extra,
+    } as never);
+    // No LUT: an export pays IGST, and cannot be made to go without it.
+    const paid = await exportOn();
+    const paidHead = await head(f, paid.id);
+    assert.deepEqual([paidHead.supply_type, Number(paidHead.igst)], ['export_with_tax', 9000]);
+    await assert.rejects(exportOn({ exportWithTax: false }), /No LUT is declared/);
 
-    await f.trx.updateTable('organizations').set({ lut_arn: 'AD330426012345X', lut_valid_from: '2026-04-01', lut_valid_to: '2027-03-31' })
+    // With the LUT declared and in force, an export goes with IGST nil.
+    await f.trx.updateTable('organizations').set({ lut_declared: 1, lut_arn: 'AD330426012345X', lut_valid_from: '2026-04-01', lut_valid_to: '2027-03-31' })
       .where('id', '=', f.orgId).execute();
-    g = await gstr1(f.trx, f.orgId, '2026-08');
+    const exp = await exportOn({ exportWithTax: false });
+    const kept = await f.trx.selectFrom('invoices').select(['supply_type', 'igst', 'export_lut_arn']).where('id', '=', exp.id).executeTakeFirstOrThrow();
+    assert.deepEqual([kept.supply_type, Number(kept.igst), kept.export_lut_arn], ['export_lut', 0, 'AD330426012345X']);
+    let g = await gstr1(f.trx, f.orgId, '2026-08');
     assert.ok(!g.issues.some((i) => /Undertaking|LUT/.test(i.message)));
+    // Outside the LUT's dates it is refused, and the reason names them.
+    await assert.rejects(exportOn({ exportWithTax: false, date: '2027-04-02', dueDate: '2027-05-02' }), /runs from 1 Apr 2026 to 31 Mar 2027/);
+
+    // An export made without IGST before any LUT was on file is still caught by the return.
+    // (one saved before invoices kept their ARN: none on it, and none on file)
+    await f.trx.updateTable('invoices').set({ export_lut_arn: null }).where('id', '=', exp.id).execute();
+    await f.trx.updateTable('organizations').set({ lut_arn: null }).where('id', '=', f.orgId).execute();
+    g = await gstr1(f.trx, f.orgId, '2026-08');
+    assert.ok(g.issues.some((i) => /no Letter of Undertaking is on file/.test(i.message)));
+    await f.trx.updateTable('organizations').set({ lut_arn: 'AD330426012345X' }).where('id', '=', f.orgId).execute();
 
     await assert.rejects(setExportDetails(f.trx, f.orgId, exp.id, { portCode: 'chennai' }), /port code/);
     await setExportDetails(f.trx, f.orgId, exp.id, { shippingBillNo: '4417823', shippingBillDate: '2026-08-07', portCode: 'INMAA1' });
     const file = await gstr1PortalFile(f.trx, f.orgId, '2026-08') as { exp?: { exp_typ: string; inv: Record<string, unknown>[] }[] };
-    const inv = file.exp![0].inv[0];
+    const inv = file.exp!.find((e) => e.exp_typ === 'WOPAY')!.inv[0];
+    assert.ok(file.exp!.some((e) => e.exp_typ === 'WPAY'), 'the export with IGST paid files as WPAY');
     assert.deepEqual([inv.sbnum, inv.sbpcode, inv.sbdt], ['4417823', 'INMAA1', '07-08-2026']);
 
     const sale2 = await sale(f, {});

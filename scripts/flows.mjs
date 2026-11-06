@@ -439,7 +439,7 @@ await page.locator('[data-slot="combobox-trigger"]').nth(5).click();
 await page.waitForTimeout(300);
 const serviceItems = await page.locator('[role="option"]').allInnerTexts();
 check('A services invoice offers service items only',
-  serviceItems.length > 0 && serviceItems.every((t) => /Fitment|Labour/i.test(t)),
+  serviceItems.length > 0 && serviceItems.every((t) => /Fitment|Labour|Advisory/i.test(t)),
   `${serviceItems.length} item(s)`);
 await page.keyboard.press('Escape');
 

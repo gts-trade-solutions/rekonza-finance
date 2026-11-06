@@ -24,6 +24,9 @@ import { budgetVsActual } from '../reports/budgets';
 import { assetRegister } from './fixed-assets';
 import { indiaToday } from './held-journals';
 import { formatINR } from '../../money';
+import { supplyMix } from '../reports/supply-mix';
+import { tradeProfile } from './trade-profile';
+import { dayLabel } from '../../date-range';
 
 export type AreaStatus = 'in_use' | 'ready' | 'needs_setup';
 /** One point of the checklist, in the reviewer's words, with what this company's books show and where. */
@@ -143,9 +146,44 @@ export async function checklist(ex: Executor, orgId: number): Promise<ChecklistA
   const assetCost = register.reduce((t, r) => t + r.costPaise, 0);
   const assetNet = register.reduce((t, r) => t + r.netPaise, 0);
   const p = (label: string, value: string, href: string, ok = true): ChecklistPoint => ({ label, value, href, ok });
+
+  // Exports, roles, and goods and services (Settings → Organisation, Sales by Supply).
+  const fyFromDay = `${fyFrom}-${String(fyStart).padStart(2, '0')}-01`;
+  const [trade, mix, roleNames, onCustom, overseas, goodsItems, serviceItems, exportsByTax] = await Promise.all([
+    tradeProfile(ex, orgId),
+    supplyMix(ex, orgId, { from: fyFromDay, to: today }).catch(() => []),
+    (async () => (await sql<{ name: string }>`SELECT name FROM custom_roles WHERE org_id = ${orgId} ORDER BY name`.execute(ex)).rows.map((r) => r.name))(),
+    c('users', sql`AND is_active = 1 AND custom_role_id IS NOT NULL`),
+    c('contacts', sql`AND gst_treatment = 'overseas' AND is_archived = 0`),
+    c('items', sql`AND is_archived = 0 AND kind = 'goods'`),
+    c('items', sql`AND is_archived = 0 AND kind = 'service'`),
+    one(sql<{ lut: number | string | null; paid: number | string | null }>`
+      SELECT SUM(supply_type = 'export_lut') AS lut, SUM(supply_type = 'export_with_tax') AS paid FROM invoices
+       WHERE org_id = ${orgId} AND status NOT IN ('draft', 'void') AND invoice_date BETWEEN ${fyFromDay} AND ${today}`),
+  ]);
+  const sum = (rows: typeof mix, f: (r: (typeof mix)[number]) => boolean, k: 'taxablePaise' | 'igstPaise' | 'invoices') => rows.filter(f).reduce((t, r) => t + r[k], 0);
+  // Counted as invoices: one with both goods and services lines is one export.
+  const lutExports = Number(exportsByTax?.lut ?? 0);
+  const paidExports = Number(exportsByTax?.paid ?? 0);
+  const paidIgst = sum(mix, (r) => r.exportIgst === 'paid', 'igstPaise');
+  const lutValue = sum(mix, (r) => r.exportIgst === 'nil_lut', 'taxablePaise');
+  const goodsSales = sum(mix, (r) => r.kind === 'goods', 'taxablePaise');
+  const serviceSales = sum(mix, (r) => r.kind === 'service', 'taxablePaise');
+  const SCOPE = { domestic: 'Domestic only (within India)', both: 'Domestic and international', international: 'International (exports only)' } as const;
+  const SUPPLIES = { goods: 'goods', services: 'services', both: 'goods and services' } as const;
   /** 2026-10 as October 2026. */
   const monthOf = (ym: string | null | undefined) => (ym && /^\d{4}-\d{2}$/.test(ym) ? `${MONTH[Number(ym.slice(5))]} ${ym.slice(0, 4)}` : ym ?? '');
   const POINTS: Record<string, ChecklistPoint[]> = {
+    trade: [
+      p('Role adding', customRoles ? `${plural(customRoles, 'role')} added: ${roleNames.join(', ')}; ${plural(onCustom, 'user')} on them` : 'Settings → Users & roles → Add role', '/settings?tab=users', customRoles > 0),
+      p('Domestic and international', trade.tradeScope === 'domestic'
+        ? 'Set to within India only (Settings → Organisation)'
+        : `${trade.tradeScope === 'both' ? 'Sells within India and abroad' : 'Sells abroad only'}: ${plural(overseas, 'overseas customer')}, ${plural(lutExports + paidExports, 'export')} in ${fyLabel}`,
+      '/settings?tab=org', trade.tradeScope !== 'domestic'),
+      p('LUT declaration (yes or no)', trade.lutDeclared ? `Yes — ARN ${trade.lutArn}${trade.lutValidFrom && trade.lutValidTo ? `, ${dayLabel(trade.lutValidFrom)} to ${dayLabel(trade.lutValidTo)}` : ''}` : 'No — exports pay IGST', '/settings?tab=org', trade.lutDeclared || trade.tradeScope === 'domestic'),
+      p('IGST nil under LUT, or IGST paid', `${plural(lutExports, 'export')} under LUT, IGST nil (${inr(lutValue)}) · ${plural(paidExports, 'export')} with IGST paid (${inr(paidIgst)})`, '/reports/sales-by-supply', lutExports + paidExports > 0),
+      p('Goods and services separately', `Sells ${SUPPLIES[trade.supplies]}: goods ${inr(goodsSales)} · services ${inr(serviceSales)} in ${fyLabel}; ${plural(goodsItems, 'goods item')}, ${plural(serviceItems, 'service')}`, '/reports/sales-by-supply', goodsSales > 0 && serviceSales > 0),
+    ],
     company: [
       p('Company', `${org?.name ?? ''}${companies > 1 ? ` · ${companies} companies` : ''}`, '/settings?tab=org'),
       p('Financial year setup', `${fyLabel}, ${MONTH[fyStart]} to ${MONTH[((fyStart + 10) % 12) + 1]}`, '/accountant/period-close'),
@@ -230,6 +268,16 @@ export async function checklist(ex: Executor, orgId: number): Promise<ChecklistA
   };
 
   const areas: Omit<ChecklistArea, 'points'>[] = [
+    {
+      key: 'trade', area: 'Organisation, Exports & Roles', status: status(trade.tradeScope !== 'domestic' || customRoles > 0),
+      evidence: [
+        `Sells ${SCOPE[trade.tradeScope].toLowerCase()}; supplies ${SUPPLIES[trade.supplies]}, each kept separately (HSN for goods, SAC for services)`,
+        trade.lutDeclared ? `LUT on file: ${trade.lutArn}; exports start with ${trade.exportIgst === 'nil_lut' ? 'IGST nil under it' : 'IGST paid'}, and each invoice can choose` : 'No LUT declared, so exports pay IGST and claim it back',
+        `${plural(customRoles, 'custom role')} on top of the five standard ones, each with its own rights part by part`,
+      ],
+      screens: [{ label: 'Settings → Organisation', href: '/settings?tab=org' }, { label: 'Users & roles', href: '/settings?tab=users' }, { label: 'Sales by Supply', href: '/reports/sales-by-supply' }, { label: 'Items: goods and services', href: '/sales/items' }],
+      outside: [],
+    },
     {
       key: 'company', area: 'Company Management', status: status(true),
       evidence: [

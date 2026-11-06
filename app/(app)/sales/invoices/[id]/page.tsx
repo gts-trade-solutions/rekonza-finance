@@ -160,7 +160,9 @@ export default function InvoiceDetailPage() {
               <InvoiceStatus status={inv.status} dueDate={inv.dueDate} balancePaise={inv.balancePaise} />
               <EInvoiceMark einvoice={{ status: inv.einvoice.status as never, irn: inv.einvoice.irn ?? undefined }} />
               <Badge variant="outline" className="text-[10px] uppercase">
-                {inv.supplyType === 'intra' ? `CGST + ${stateTaxLabel(inv.placeOfSupply)}` : inv.supplyType === 'inter' ? 'IGST' : inv.supplyType.replace(/_/g, ' ')}
+                {inv.supplyType === 'intra' ? `CGST + ${stateTaxLabel(inv.placeOfSupply)}` : inv.supplyType === 'inter' ? 'IGST'
+                  : inv.supplyType === 'export_lut' ? 'Export · IGST nil under LUT' : inv.supplyType === 'export_with_tax' ? 'Export · IGST paid'
+                  : inv.supplyType.replace(/_/g, ' ')}
               </Badge>
               <Badge variant="secondary" className="text-[10px] capitalize">{inv.supplyKind}</Badge>
               {inv.foreign && (
@@ -243,7 +245,7 @@ export default function InvoiceDetailPage() {
                           <td className="px-4 py-2.5 text-right"><Money value={l.taxablePaise} /></td>
                           <td className="px-4 py-2.5 text-right">
                             {/* A bill of supply charges no GST, so it shows no rate (as it prints). */}
-                            {inv.supplyType === 'nil_or_exempt' ? (
+                            {inv.supplyType === 'nil_or_exempt' || inv.supplyType === 'export_lut' ? (
                               <span className="text-xs text-muted-foreground" data-slot="line-gst-nil">Nil</span>
                             ) : (
                               <>
@@ -292,6 +294,12 @@ export default function InvoiceDetailPage() {
                           <dd><Money value={value as number} /></dd>
                         </div>
                       ))}
+                      {inv.supplyType === 'export_lut' && (
+                        <div className="flex justify-between gap-4" data-slot="igst-nil-lut">
+                          <dt className="text-muted-foreground">IGST</dt>
+                          <dd className="text-right text-xs font-medium">Nil — under LUT{inv.exportInfo?.lutArn ? ` ${inv.exportInfo.lutArn}` : ''}</dd>
+                        </div>
+                      )}
                       <div className="flex justify-between gap-4 border-t pt-2 text-base font-semibold">
                         <dt>Total</dt>
                         <dd><Money value={inv.totalPaise} /></dd>

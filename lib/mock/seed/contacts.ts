@@ -121,6 +121,13 @@ export const SEED_CUSTOMERS: Contact[] = [
     billingAddress: addr('Union Place', 'Colombo', '96', '—'),
     paymentTermsDays: 45,
   }),
+  // Buys workshop advice, not parts: an export of services.
+  cust('c_gulf', 'Gulf Fleet Services LLC', '96', {
+    gstTreatment: 'overseas',
+    billingAddress: addr('Sheikh Zayed Road', 'Dubai', '96', '—'),
+    paymentTermsDays: 30,
+    email: 'accounts@gulffleet.ae',
+  }),
   cust('c_orbit', 'Orbit Fleet Services', '29', {
     gstin: '29AABCO1212K1ZM',
     billingAddress: addr('2 Whitefield Main Rd', 'Bengaluru', '29', '560066'),

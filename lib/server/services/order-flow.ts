@@ -35,6 +35,7 @@ import { checkGodown } from './godowns';
 import { createBill } from './purchases';
 import { createChallan, type CreatedDocument } from './sales-documents';
 import { statusFor } from './order-release';
+import { exportTaxOf } from '../../tax/gst';
 
 /** Quantities are DECIMAL(19,6); arithmetic stays at that precision. */
 const q6 = (n: number) => Math.round(n * 1e6) / 1e6;
@@ -80,7 +81,7 @@ function choose<L extends { id: number; line_no: number }>(
 
 async function loadOrder(trx: Trx, orgId: number, soId: number) {
   const so = await trx.selectFrom('sales_orders')
-    .select(['id', 'number', 'branch_id', 'customer_id', 'place_of_supply', 'status', 'invoiced_amount'])
+    .select(['id', 'number', 'branch_id', 'customer_id', 'place_of_supply', 'supply_type', 'status', 'invoiced_amount'])
     .where('id', '=', soId).where('org_id', '=', orgId).forUpdate().executeTakeFirst();
   if (!so) throw notFound('That sales order does not exist.');
   if (so.status === 'cancelled') throw conflict(`Sales order ${so.number} was cancelled.`);
@@ -139,6 +140,8 @@ export async function invoiceFromSalesOrder(
   const created = await createInvoice(trx, orgId, userId, {
     branchId: so.branch_id, customerId: so.customer_id, date: input.date, dueDate: input.dueDate,
     placeOfSupply: so.place_of_supply, status: input.status ?? 'approved', orderNumber: so.number,
+    // An export order's invoice charges the IGST the order did, or none under the LUT while one covers it.
+    exportFromSource: exportTaxOf(so.supply_type),
     sourceDocType: 'sales_order', sourceDocId: so.id, holdForApproval: true,
     lines: picked.map(({ line, qty }) => ({
       itemId: line.item_id, description: line.description, hsnSac: line.hsn_sac, qty, uqc: line.uqc,
@@ -228,9 +231,14 @@ export async function invoiceFromChallan(
     return l.so_line_id == null ? onChallan : Math.min(onChallan, Math.max(0, Number(l.so_qty) - Number(l.so_qty_invoiced)));
   }, input.lines, `challan ${dc.number}`);
 
+  // Goods sent against an export order are invoiced with the IGST the order took.
+  const order = dc.source_so_id
+    ? await trx.selectFrom('sales_orders').select('supply_type').where('id', '=', dc.source_so_id).where('org_id', '=', orgId).executeTakeFirst()
+    : null;
   const created = await createInvoice(trx, orgId, userId, {
     branchId: dc.branch_id, customerId: dc.customer_id, date: input.date, dueDate: input.dueDate,
     placeOfSupply: dc.place_of_supply, status: input.status ?? 'approved',
+    exportFromSource: exportTaxOf(order?.supply_type),
     sourceDocType: 'challan', sourceDocId: dc.id, holdForApproval: true,
     notes: `Goods sent on delivery challan ${dc.number}`,
     lines: picked.map(({ line, qty }) => ({

@@ -18,6 +18,8 @@ import { checklist } from '../../lib/server/services/checklist';
 
 // The client's points, area by area, as the review lists them as not evidenced.
 const CLIENT_POINTS: Record<string, string[]> = {
+  // The latest five: roles, domestic and international, the LUT, exports' IGST, goods and services.
+  'Organisation, Exports & Roles': ['Role adding', 'Domestic and international', 'LUT declaration (yes or no)', 'IGST nil under LUT, or IGST paid', 'Goods and services separately'],
   'Company Management': ['Financial year setup', 'Statutory configuration'],
   'Security & Audit Trail': ['Role based access', 'Audit logs', 'MFA', 'Approval history'],
   'Master Data': ['Cost centres', 'Employee masters', 'Warehouse masters'],

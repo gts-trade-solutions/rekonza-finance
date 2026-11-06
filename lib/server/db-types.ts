@@ -1726,6 +1726,7 @@ export interface Invoices {
   exchange_rate: Generated<Decimal>;
   export_country: string | null;
   export_currency: string | null;
+  export_lut_arn: string | null;
   export_port_code: string | null;
   export_shipping_bill_date: ColumnType<string | null, string | null, string | null>;
   export_shipping_bill_no: string | null;
@@ -2090,6 +2091,7 @@ export interface Organizations {
   einvoice_from: ColumnType<string | null, string | null, string | null>;
   email: string | null;
   esi_employer_code: string | null;
+  export_igst: Generated<"nil_lut" | "paid">;
   fiscal_year_start_month: Generated<number>;
   gst_filing_frequency: Generated<"monthly" | "quarterly">;
   gst_registered_on: ColumnType<string | null, string | null, string | null>;
@@ -2100,6 +2102,7 @@ export interface Organizations {
   legal_name: string | null;
   logo_file_id: number | null;
   lut_arn: string | null;
+  lut_declared: Generated<number>;
   lut_valid_from: ColumnType<string | null, string | null, string | null>;
   lut_valid_to: ColumnType<string | null, string | null, string | null>;
   name: string;
@@ -2112,12 +2115,14 @@ export interface Organizations {
   print_template: Json | null;
   print_upi_qr: Generated<number>;
   signatory_name: string | null;
+  supplies: Generated<"both" | "goods" | "services">;
   tan: string | null;
   tds_rp_designation: string | null;
   tds_rp_email: string | null;
   tds_rp_mobile: string | null;
   tds_rp_name: string | null;
   tds_rp_pan: string | null;
+  trade_scope: Generated<"both" | "domestic" | "international">;
   updated_at: Generated<Date>;
   upi_id: string | null;
   upi_payee_name: string | null;

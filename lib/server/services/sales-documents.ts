@@ -22,7 +22,9 @@ import 'server-only';
 
 import type { Trx } from '../db';
 import type { Paise, SupplyType } from '../../types';
-import { resolveSupplyType, totalTaxPaise } from '../../tax/gst';
+import { exportTaxFor, exportTaxOf, isExportSupply, resolveSupplyType, totalTaxPaise } from '../../tax/gst';
+import { tradeProfile } from './trade-profile';
+import { indiaToday } from './held-journals';
 import { roundToRupee } from '../../money';
 import { toPaiseFromSql, toSqlFromPaise } from '../money-sql';
 import { allocateNumber, allocateOrgNumber, assertGstDocNumber, postEntry, reverseEntry, type DraftLine } from '../ledger/posting';
@@ -63,6 +65,12 @@ async function partyContext(
   placeOfSupplyOverride?: string,
   /** The document's date: priced as the business was registered then, as an invoice is. */
   date?: string,
+  export_?: {
+    /** The invoice a credit note corrects: an export's note takes the IGST the invoice took. */
+    againstInvoiceId?: number | null;
+    /** The estimate an order comes from: its IGST, kept where a LUT still allows it. */
+    fromSource?: boolean;
+  },
 ): Promise<PartyContext> {
   const branch = await trx
     .selectFrom('branches')
@@ -83,6 +91,17 @@ async function partyContext(
   const placeOfSupply = placeOfSupplyOverride || customer.state_code;
   // A composition dealer, or a business not registered at all, charges no GST (services/sales.ts).
   const unregistered = date ? (await registrationOn(trx, orgId, date)) !== 'regular' : false;
+  // An export pays IGST unless a LUT covers its date and exports go under it
+  // (Settings → Organisation), as the invoice raised from it will.
+  let exportWithTax: boolean | undefined;
+  if (!unregistered && isExportSupply(customer.gst_treatment, placeOfSupply)) {
+    const against = export_?.againstInvoiceId
+      ? await trx.selectFrom('invoices').select('supply_type').where('id', '=', export_.againstInvoiceId).where('org_id', '=', orgId).executeTakeFirst()
+      : null;
+    exportWithTax = against && (against.supply_type === 'export_lut' || against.supply_type === 'export_with_tax')
+      ? against.supply_type === 'export_with_tax'
+      : exportTaxFor(await tradeProfile(trx, orgId), date ?? indiaToday(), { source: export_?.fromSource }).withTax;
+  }
   return {
     branchStateCode: branch.state_code,
     branchGstin: branch.gstin,
@@ -92,6 +111,7 @@ async function partyContext(
       branchStateCode: branch.state_code,
       placeOfSupply,
       customerTreatment: customer.gst_treatment as never,
+      exportWithTax,
     }) as SupplyType,
   };
 }
@@ -204,6 +224,8 @@ export async function createEstimate(
 export interface CreateSalesOrderInput extends BaseDocInput {
   expectedShipDate?: string | null;
   sourceEstimateId?: number | null;
+  /** An export: the IGST of the estimate it comes from (true paid, false under the LUT). */
+  exportFromSource?: boolean;
 }
 
 /**
@@ -220,7 +242,7 @@ export async function createSalesOrder(
   userId: number | null,
   input: CreateSalesOrderInput,
 ): Promise<CreatedDocument> {
-  const ctx = await partyContext(trx, orgId, input.branchId, input.customerId, input.placeOfSupply, input.date);
+  const ctx = await partyContext(trx, orgId, input.branchId, input.customerId, input.placeOfSupply, input.date, { fromSource: input.exportFromSource });
   const costed = await costLines(trx, orgId, ctx.supplyType, input.lines, 'sale_price', input.date);
   const { rounded } = roundToRupee(costed.tax.taxablePaise + totalTaxPaise(costed.tax));
 
@@ -430,7 +452,7 @@ export async function createCreditNote(
     throw badRequest('A credit note needs a reason — it is reported in GSTR-1.');
   }
 
-  const ctx = await partyContext(trx, orgId, input.branchId, input.customerId, input.placeOfSupply, input.date);
+  const ctx = await partyContext(trx, orgId, input.branchId, input.customerId, input.placeOfSupply, input.date, { againstInvoiceId: input.againstInvoiceId });
   const costed = await costLines(trx, orgId, ctx.supplyType, input.lines, 'sale_price', input.date);
   const { rounded } = roundToRupee(costed.tax.taxablePaise + totalTaxPaise(costed.tax));
 
@@ -864,7 +886,7 @@ export async function salesOrderFromEstimate(
   input: { date: string; expectedShipDate?: string | null },
 ): Promise<CreatedDocument> {
   const est = await trx.selectFrom('estimates')
-    .select(['id', 'number', 'branch_id', 'customer_id', 'place_of_supply', 'status'])
+    .select(['id', 'number', 'branch_id', 'customer_id', 'place_of_supply', 'supply_type', 'status'])
     .where('id', '=', estimateId).where('org_id', '=', orgId).executeTakeFirst();
   if (!est) throw notFound('That estimate does not exist.');
   if (est.status === 'converted') throw conflict(`Estimate ${est.number} has already been converted.`);
@@ -875,7 +897,7 @@ export async function salesOrderFromEstimate(
   return createSalesOrder(trx, orgId, userId, {
     branchId: est.branch_id, customerId: est.customer_id, date: input.date,
     expectedShipDate: input.expectedShipDate ?? null, placeOfSupply: est.place_of_supply,
-    sourceEstimateId: est.id,
+    sourceEstimateId: est.id, exportFromSource: exportTaxOf(est.supply_type),
     lines: lines.map((l) => ({
       itemId: l.item_id, description: l.description, hsnSac: l.hsn_sac, qty: Number(l.qty), uqc: l.uqc,
       ratePaise: toPaiseFromSql(l.rate), discountPct: Number(l.discount_pct), gstRatePct: Number(l.gst_rate_pct),
@@ -901,7 +923,7 @@ export async function convertToInvoice(
   if (source.type === 'estimate') {
     const est = await trx
       .selectFrom('estimates')
-      .select(['id', 'number', 'branch_id', 'customer_id', 'place_of_supply', 'status', 'notes'])
+      .select(['id', 'number', 'branch_id', 'customer_id', 'place_of_supply', 'supply_type', 'status', 'notes'])
       .where('id', '=', source.id)
       .where('org_id', '=', orgId)
       .executeTakeFirst();
@@ -922,6 +944,7 @@ export async function convertToInvoice(
       date: input.date,
       dueDate: input.dueDate,
       placeOfSupply: est.place_of_supply,
+      exportFromSource: exportTaxOf(est.supply_type),
       status: input.status ?? 'approved',
       notes: est.notes,
       sourceDocType: 'estimate',

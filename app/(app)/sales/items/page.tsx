@@ -12,7 +12,7 @@
 // second unit, reorder and minimum levels, and batch or serial tracking. The
 // same dialog adds an item and edits one; click a row to edit it.
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Globe2, MapPin, Package, Plus, Wrench } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -72,6 +72,12 @@ export default function ItemsPage() {
   const [editing, setEditing] = useState<ItemRow | null>(null);
   const [form, setForm] = useState(BLANK);
   const [grouping, setGrouping] = useState(false);
+  // Goods and services, each on its own: ?kind=goods or ?kind=service opens on one.
+  const [kind, setKind] = useState<'all' | 'goods' | 'service'>('all');
+  useEffect(() => {
+    const k = new URLSearchParams(window.location.search).get('kind');
+    if (k === 'goods' || k === 'service') setKind(k);
+  }, []);
 
   const state = useApi<Loaded>(
     async () => {
@@ -520,14 +526,28 @@ export default function ItemsPage() {
           d.items.length === 0 ? (
             <EmptyState icon={Package} title="No items yet" description="Add what you sell to speed up invoicing." />
           ) : (
-            <DataTable
-              rows={d.items}
-              columns={columns}
-              getRowId={(r) => r.id}
-              onRowClick={canEdit ? openEdit : undefined}
-              searchPlaceholder="Search item, SKU or HSN…"
-              emptyMessage="No items match."
-            />
+            <div className="space-y-3">
+              <div className="inline-flex rounded-md border p-0.5" role="tablist" aria-label="Goods and services" data-slot="item-kind-tabs">
+                {([
+                  ['all', 'All', d.items.length],
+                  ['goods', 'Goods', d.items.filter((i) => i.kind === 'goods').length],
+                  ['service', 'Services', d.items.filter((i) => i.kind === 'service').length],
+                ] as const).map(([k, label, n]) => (
+                  <button key={k} type="button" role="tab" aria-selected={kind === k} onClick={() => setKind(k)}
+                    className={cn('rounded px-3 py-1 text-sm', kind === k ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-accent')}>
+                    {label} <span className="tabular text-xs opacity-80">{n}</span>
+                  </button>
+                ))}
+              </div>
+              <DataTable
+                rows={kind === 'all' ? d.items : d.items.filter((i) => i.kind === kind)}
+                columns={columns}
+                getRowId={(r) => r.id}
+                onRowClick={canEdit ? openEdit : undefined}
+                searchPlaceholder={kind === 'service' ? 'Search service or SAC…' : 'Search item, SKU or HSN…'}
+                emptyMessage={kind === 'goods' ? 'No goods match.' : kind === 'service' ? 'No services match.' : 'No items match.'}
+              />
+            </div>
           )
         }
       </AsyncPage>

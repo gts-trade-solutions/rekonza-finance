@@ -17,7 +17,8 @@ import 'server-only';
 import { sql } from 'kysely';
 import type { Trx } from '../db';
 import type { Paise, SupplyKind, SupplyType } from '../../types';
-import { computeLineTax, placeOfSupplyFor, resolveSupplyType, totalTaxPaise } from '../../tax/gst';
+import { computeLineTax, exportTaxFor, isExportSupply, placeOfSupplyFor, resolveSupplyType, totalTaxPaise } from '../../tax/gst';
+import { tradeProfile } from './trade-profile';
 import { checkCreditHold, checkCreditLimit, checkMrp, checkStock } from './guards';
 import { saleCostLines } from './stock-ledger';
 import { checkSerials, recordSerials } from './serials';
@@ -99,7 +100,15 @@ export interface CreateInvoiceInput {
   tcsCode?: string | null;
   /** A TCS amount worked out elsewhere. Ignored when `tcsCode` is given. */
   tcsPaise?: Paise;
+  /** An export, picked on the invoice: true pays IGST, false goes under the LUT (refused without one in force). */
   exportWithTax?: boolean;
+  /**
+   * An export's IGST from the order, estimate or challan it comes from: kept
+   * where a LUT still allows it, IGST paid where none covers the invoice date.
+   */
+  exportFromSource?: boolean;
+  /** An imported invoice's IGST, as it was billed: kept as it is. */
+  exportAsBilled?: boolean;
   sourceDocType?: string | null;
   sourceDocId?: number | null;
   /** Index for index with `lines`: the order or challan line each one came from. */
@@ -260,17 +269,43 @@ export async function createInvoice(
     servicesOnly: ship ? await servicesOnly(trx, orgId, input.lines) : true,
     override: input.placeOfSupply,
   });
-  let supplyType = resolveSupplyType({
-    branchStateCode: branch.state_code,
-    placeOfSupply,
-    customerTreatment: customer.gst_treatment as never,
-    exportWithTax: input.exportWithTax,
-  }) as SupplyType;
-
   // A composition dealer, or a business not registered at all, issues a bill
   // of supply with no tax on it. A composition dealer may not supply across a
   // state border either, exports and SEZs included (CGST Act s.10(2)(d), (2A)(c)).
   const registration = await registrationOn(trx, orgId, input.date);
+
+  // An export goes without IGST only under a Letter of Undertaking in force on
+  // its date; otherwise IGST is paid on it and claimed back (lib/tax/gst.ts
+  // exportTaxFor). A debit note is part of the supply it corrects, so it
+  // always takes what that invoice took, and the LUT that invoice went under.
+  const exporting = registration === 'regular' && isExportSupply(customer.gst_treatment, placeOfSupply);
+  const trade = exporting ? await tradeProfile(trx, orgId) : null;
+  let exportWithTax: boolean | undefined;
+  let lutArn = trade?.lutArn ?? null;
+  const exportNotes: string[] = [];
+  if (exporting) {
+    const against = input.docKind === 'debit_note' && input.againstInvoiceId
+      ? await trx.selectFrom('invoices').select(['supply_type', 'export_lut_arn']).where('id', '=', input.againstInvoiceId).where('org_id', '=', orgId).executeTakeFirst()
+      : null;
+    if (against && (against.supply_type === 'export_lut' || against.supply_type === 'export_with_tax')) {
+      exportWithTax = against.supply_type === 'export_with_tax';
+      lutArn = against.export_lut_arn ?? lutArn;
+    } else {
+      const decided = exportTaxFor(trade, input.date, { asked: input.exportWithTax, source: input.exportFromSource, history: input.exportAsBilled });
+      if (decided.refused) {
+        throw badRequest(`${decided.refused}, so this export cannot go with IGST nil. Raise it with IGST paid, or record the LUT in Settings → Organisation.`);
+      }
+      if (decided.note) exportNotes.push(decided.note);
+      exportWithTax = decided.withTax;
+    }
+  }
+  let supplyType = resolveSupplyType({
+    branchStateCode: branch.state_code,
+    placeOfSupply,
+    customerTreatment: customer.gst_treatment as never,
+    exportWithTax,
+  }) as SupplyType;
+
   if (registration === 'composition' && supplyType !== 'intra' && supplyType !== 'nil_or_exempt') {
     throw badRequest(
       'A composition dealer cannot make an inter-state supply, an export or a supply to an SEZ. ' +
@@ -330,7 +365,7 @@ export async function createInvoice(
 
   // The book's own rules, as the sale is made: the customer's credit limit,
   // and stock that is not there to sell. A draft is not a sale yet.
-  const warnings: string[] = [];
+  const warnings: string[] = [...exportNotes];
   if (status !== 'draft') {
     await checkCreditLimit(trx, orgId, input.customerId, rounded, warnings, input.overrideLimits);
     await checkCreditHold(trx, orgId, input.customerId, input.date, warnings, input.overrideLimits);
@@ -421,6 +456,8 @@ export async function createInvoice(
       export_port_code: input.exportDetails?.portCode ?? null,
       export_country: input.exportDetails?.countryCode ?? null,
       export_currency: input.exportDetails?.currency ?? null,
+      // The LUT it went under, kept with it: next year's never reprints on it.
+      export_lut_arn: supplyType === 'export_lut' ? lutArn : null,
       created_by_user_id: userId,
     })
     .executeTakeFirstOrThrow();

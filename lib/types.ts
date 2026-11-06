@@ -55,6 +55,18 @@ export interface Org {
   address: string;
   email: string;
   phone: string;
+  /** Where it sells, what it supplies, and its Letter of Undertaking (Settings → Organisation). */
+  trade?: TradeSettings;
+}
+
+export interface TradeSettings {
+  tradeScope: 'domestic' | 'both' | 'international';
+  supplies: 'goods' | 'services' | 'both';
+  lutDeclared: boolean;
+  lutArn: string | null;
+  lutValidFrom: string | null;
+  lutValidTo: string | null;
+  exportIgst: 'nil_lut' | 'paid';
 }
 
 // ── Chart of accounts & ledger ───────────────────────────────────────────────

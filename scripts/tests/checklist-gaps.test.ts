@@ -131,7 +131,7 @@ test('the checklist answers every area with evidence and somewhere to see it', a
   await withBook(async ({ trx, orgId }) => {
     const areas = await checklist(trx, orgId);
     assert.deepEqual(areas.map((a) => a.area), [
-      'Company Management', 'Security & Audit Trail', 'Master Data', 'Accounting Vouchers', 'Inventory', 'Banking',
+      'Organisation, Exports & Roles', 'Company Management', 'Security & Audit Trail', 'Master Data', 'Accounting Vouchers', 'Inventory', 'Banking',
       'Accounts Receivable', 'Accounts Payable', 'Fixed Assets', 'Payroll', 'GST & Compliance', 'Budgeting & Costing', 'Reporting', 'Integration',
     ]);
     for (const a of areas) {

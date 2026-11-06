@@ -204,6 +204,8 @@ const CreateInput = z.object({
   lines: z.array(LineInput).min(1, 'Add at least one line.'),
   placeOfSupply: z.string().length(2).optional(),
   supplyKind: z.enum(['goods', 'service', 'both']).optional(),
+  /** An export: true pays IGST, false goes under the LUT with IGST nil. Left out, the organisation's setting decides. */
+  exportWithTax: z.boolean().optional(),
   status: z.enum(['draft', 'approved']).optional(),
   number: z.string().optional(),
   orderNumber: z.string().nullish(),
@@ -274,6 +276,7 @@ export const POST = route(
         dueDate: input.dueDate,
         placeOfSupply: input.placeOfSupply,
         supplyKind: input.supplyKind,
+        exportWithTax: input.exportWithTax,
         status: input.status,
         number: input.number,
         orderNumber: input.orderNumber,

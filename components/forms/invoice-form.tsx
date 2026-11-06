@@ -37,8 +37,11 @@ import type { ContactAddress } from '@/components/shared/contact-addresses';
 import { PendingAttachments, uploadPending } from '@/components/shared/attachments';
 import { useApi } from '@/lib/api/use-api';
 import {
-  computeLineTax, placeOfSupplyFor, resolveSupplyType, stateName, stateTaxLabel, sumTax, supplyTypeLabel, totalTaxPaise,
+  computeLineTax, exportPaysIgstByDefault, isExportSupply, lutGap, placeOfSupplyFor, resolveSupplyType, stateName, stateTaxLabel, sumTax,
+  supplyTypeLabel, totalTaxPaise,
 } from '@/lib/tax/gst';
+import { dayLabel } from '@/lib/date-range';
+import { cn } from '@/lib/utils';
 import { formatINR, roundToRupee, toRupees } from '@/lib/money';
 import type { SupplyKind } from '@/lib/types';
 import { CostCentrePicker } from '@/components/forms/cost-centre-picker';
@@ -92,7 +95,10 @@ export function InvoiceForm({ variant = 'invoice' }: { variant?: InvoiceVariant 
   const voucherTypes = useApi<{ types: { id: string; docType: string; name: string; prefix: string; isActive: boolean }[] }>(() => api.get('/api/voucher-types'), []);
   const invoiceTypes = (voucherTypes.data?.types ?? []).filter((t) => t.docType === 'INV' && t.isActive);
   const [fxRate, setFxRate] = useState('');
-  const [supplyKind, setSupplyKind] = useState<SupplyKind>('goods');
+  // A business that supplies only services starts on services (Settings → Organisation).
+  const [supplyKind, setSupplyKind] = useState<SupplyKind>(s.org?.trade?.supplies === 'services' ? 'service' : 'goods');
+  // An export's IGST, picked by hand: true paid, false nil under the LUT. Null follows the organisation's setting.
+  const [exportChoice, setExportChoice] = useState<boolean | null>(null);
   const [lines, setLines] = useState<EditorLine[]>([newEditorLine('l1')]);
   // The company's own wording when it has set some (Settings → Invoice print).
   const [notes, setNotes] = useState(s.invoiceDefaults.notes ?? 'Thanks for your business.');
@@ -189,6 +195,8 @@ export function InvoiceForm({ variant = 'invoice' }: { variant?: InvoiceVariant 
     setDueDate(dueDateFor(t, date));
     setPlaceOfSupply(c.stateCode);
     setPosTouched(false);
+    // A new customer starts from the organisation's setting again.
+    setExportChoice(null);
     // What they buy narrows the items offered: a services-only customer sees services.
     if (c.supplies) setSupplyKind(c.supplies);
   };
@@ -207,6 +215,23 @@ export function InvoiceForm({ variant = 'invoice' }: { variant?: InvoiceVariant 
     setDueDate(dueDateFor(paymentTerms, d));
   };
 
+  // The customer's issued invoices, for the one a debit note corrects.
+  const theirInvoices = useApi<{ invoices: { id: string; number: string; date: string; totalPaise: number; supplyType?: string }[] }>(
+    () => (debitNote && customerId ? api.get('/api/invoices', { customerId, kind: 'invoice', limit: 200 }) : Promise.resolve({ invoices: [] })),
+    [debitNote, customerId],
+  );
+
+  // An export goes with IGST nil only under a LUT in force on its date;
+  // otherwise IGST is paid on it and claimed back (Settings → Organisation).
+  // A debit note is part of the export it corrects, and takes its IGST.
+  const trade = s.org?.trade;
+  const exporting = !!customer && (s.org?.gstRegistrationType ?? 'regular') === 'regular' && isExportSupply(customer.gstTreatment, pos);
+  const corrected = debitNote ? (theirInvoices.data?.invoices ?? []).find((i) => i.id === againstInvoiceId) : undefined;
+  const followsInvoice = corrected?.supplyType === 'export_lut' || corrected?.supplyType === 'export_with_tax';
+  const lutMissing = exporting && !followsInvoice ? lutGap(trade, date) : null;
+  const exportWithTax = !exporting ? undefined
+    : followsInvoice ? corrected!.supplyType === 'export_with_tax'
+    : (exportChoice === false && lutMissing ? true : exportChoice ?? exportPaysIgstByDefault(trade, date));
   const supplyType = useMemo(
     () =>
       customer && branch
@@ -214,9 +239,10 @@ export function InvoiceForm({ variant = 'invoice' }: { variant?: InvoiceVariant 
             branchStateCode: branch.stateCode,
             placeOfSupply: pos,
             customerTreatment: customer.gstTreatment,
+            exportWithTax,
           })
         : 'intra',
-    [customer, branch, pos],
+    [customer, branch, pos, exportWithTax],
   );
 
   const totals = useMemo(() => {
@@ -246,11 +272,6 @@ export function InvoiceForm({ variant = 'invoice' }: { variant?: InvoiceVariant 
     return { tax, discount, grossBeforeDiscount, tcs, rounded, roundOff, qty };
   }, [lines, supplyType, shipping, adjustment, tcsCode, tcsHeads, customer]);
 
-  // The customer's issued invoices, for the one a debit note corrects.
-  const theirInvoices = useApi<{ invoices: { id: string; number: string; date: string; totalPaise: number }[] }>(
-    () => (debitNote && customerId ? api.get('/api/invoices', { customerId, kind: 'invoice', limit: 200 }) : Promise.resolve({ invoices: [] })),
-    [debitNote, customerId],
-  );
   const invoiceOptions = useMemo(
     () => (theirInvoices.data?.invoices ?? []).map((i) => ({ value: i.id, label: i.number, sublabel: `${i.date} · ${formatINR(i.totalPaise)}` })),
     [theirInvoices.data],
@@ -290,6 +311,7 @@ export function InvoiceForm({ variant = 'invoice' }: { variant?: InvoiceVariant 
       if (inv.notes) setNotes(inv.notes);
       if (inv.terms) setTerms(inv.terms);
       setSupplyKind(inv.supplyKind as SupplyKind);
+      if (inv.supplyType === 'export_with_tax' || inv.supplyType === 'export_lut') setExportChoice(inv.supplyType === 'export_with_tax');
       setLines(inv.lines.map((l, i) => ({
         ...newEditorLine(`c${i}`),
         itemId: l.itemId, description: l.description ?? '', hsnSac: l.hsnSac ?? '', qty: l.qty, uqc: l.uqc ?? '',
@@ -361,6 +383,8 @@ export function InvoiceForm({ variant = 'invoice' }: { variant?: InvoiceVariant 
               }
             : null,
           supplyKind,
+          // A debit note's IGST is the corrected invoice's; the server takes it from there.
+          exportWithTax: followsInvoice ? undefined : exportWithTax,
           status: mode === 'draft' ? 'draft' : 'approved',
           number: number && number !== nextNumber ? number : undefined,
           orderNumber: orderNumber || undefined,
@@ -705,7 +729,41 @@ export function InvoiceForm({ variant = 'invoice' }: { variant?: InvoiceVariant 
           </FormRow>
         )}
 
-        {isExport && (
+        {exporting && followsInvoice && (
+          <FormRow label="IGST on this export" hint="A debit note takes the IGST of the invoice it corrects">
+            <p className="text-sm" data-slot="export-igst-follows">
+              As {corrected!.number}: {exportWithTax ? 'IGST paid' : 'under LUT — IGST nil'}
+            </p>
+          </FormRow>
+        )}
+
+        {exporting && !followsInvoice && (
+          <FormRow label="IGST on this export" required width="lg" hint="Nil under a Letter of Undertaking, or paid and claimed back as a refund">
+            <div className="space-y-2">
+              <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="IGST on this export" data-slot="export-igst">
+                {[
+                  { v: false, label: 'Under LUT — IGST nil', hint: lutMissing ? `${lutMissing}.` : `LUT ${trade?.lutArn}, ${dayLabel(trade?.lutValidFrom ?? '')} to ${dayLabel(trade?.lutValidTo ?? '')}` },
+                  { v: true, label: 'IGST paid', hint: 'Charged at the item rates and claimed back as a refund' },
+                ].map((o) => (
+                  <button key={String(o.v)} type="button" role="radio" aria-checked={exportWithTax === o.v} disabled={!o.v && !!lutMissing}
+                    onClick={() => setExportChoice(o.v)}
+                    className={cn('rounded-md border p-2.5 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-60',
+                      exportWithTax === o.v ? 'border-primary bg-primary/5' : 'hover:bg-accent/50')}>
+                    <span className="block text-sm font-medium">{o.label}</span>
+                    <span className="block text-xs text-muted-foreground">{o.hint}</span>
+                  </button>
+                ))}
+              </div>
+              {trade?.tradeScope === 'domestic' && (
+                <p className="text-xs text-amber-700 dark:text-amber-400">
+                  Settings → Organisation says this business sells within India only. Set it to domestic and international to export.
+                </p>
+              )}
+            </div>
+          </FormRow>
+        )}
+
+        {isExport && supplyKind !== 'service' && (
           <FormRow label="Shipping bill" hint="For the IGST refund and GSTR-1; it can be added later from the invoice">
             <div className="grid gap-2 sm:grid-cols-3">
               <Input placeholder="Shipping bill no." value={exportDetails.shippingBillNo} onChange={(e) => setExportDetails({ ...exportDetails, shippingBillNo: e.target.value.replace(/\D/g, '') })} />
@@ -724,7 +782,9 @@ export function InvoiceForm({ variant = 'invoice' }: { variant?: InvoiceVariant 
                 {' — supplying from '}{stateName(branch.stateCode)}{' to '}{stateName(pos)}
                 {supplyType === 'intra' && '. Same state, so the tax splits equally between centre and state.'}
                 {supplyType === 'inter' && '. Different states, so a single integrated tax applies.'}
-                {supplyType === 'export_lut' && '. Exports under LUT are zero-rated.'}
+                {supplyType === 'export_lut' && `. Exports under LUT are zero-rated: IGST nil${trade?.lutArn ? ` under ${trade.lutArn}` : ''}.`}
+                {supplyType === 'export_with_tax' && '. IGST is charged on the export and claimed back as a refund.'}
+                {exporting && supplyKind === 'service' && ' An export of services has no shipping bill; it counts as an export once paid in foreign exchange.'}
                 {supplyType === 'sez' && '. Supplies to an SEZ unit are zero-rated.'}
               </span>
             </p>
@@ -800,6 +860,12 @@ export function InvoiceForm({ variant = 'invoice' }: { variant?: InvoiceVariant 
               <div className="flex items-center justify-between">
                 <dt className="text-muted-foreground">IGST</dt>
                 <dd className="tabular">{formatINR(totals.tax.igstPaise)}</dd>
+              </div>
+            )}
+            {supplyType === 'export_lut' && (
+              <div className="flex items-center justify-between">
+                <dt className="text-muted-foreground">IGST</dt>
+                <dd className="text-xs font-medium">Nil (under LUT)</dd>
               </div>
             )}
 

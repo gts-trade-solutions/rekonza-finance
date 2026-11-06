@@ -110,7 +110,7 @@ function RoleEditor({ role, onClose, onSaved }: { role: CustomRole | 'new'; onCl
     <Dialog open onOpenChange={(v) => !v && onClose()}>
       <DialogContent className="max-w-3xl">
         <DialogHeader>
-          <DialogTitle>{start ? `Edit ${start.name}` : 'New role'}</DialogTitle>
+          <DialogTitle>{start ? `Edit ${start.name}` : 'Add a role'}</DialogTitle>
           <DialogDescription>
             What people with this role may do, part by part. The standard role it is built on decides approvals under an
             approval rule and whether cost prices show.
@@ -310,7 +310,7 @@ export function UsersPanel({ canEdit, currentUserId, branches }: {
                   Roles of your own: a billing clerk who raises invoices and sees only the sales reports, a storekeeper who sees stock and nothing that costs it.
                 </p>
               </div>
-              {canEdit && <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setEditingRole('new')}><Plus className="size-3.5" /> New role</Button>}
+              {canEdit && <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setEditingRole('new')} data-slot="add-role"><Plus className="size-3.5" /> Add role</Button>}
             </div>
             {d.roles.length === 0 ? (
               <p className="rounded-md border px-3 py-4 text-center text-sm text-muted-foreground">None yet: everyone has one of the standard roles below.</p>
@@ -328,6 +328,12 @@ export function UsersPanel({ canEdit, currentUserId, branches }: {
                           onClick={() => void post(`role-${r.id}`, { action: 'delete-role', id: r.id }, `${r.name} deleted`)}><Trash2 className="size-3.5" /></Button>
                       </span>
                     )}
+                    {/* What it may do, part by part. */}
+                    <span className="basis-full text-[11px] text-muted-foreground" data-slot="role-rights">
+                      {PERMISSION_MODULES.filter((m) => (r.permissions[m.key] ?? []).length > 0)
+                        .map((m) => `${m.label.replace(/ \(.*\)$/, '')} — ${(r.permissions[m.key] ?? []).join(', ')}`)
+                        .join(' · ') || 'Nothing ticked yet'}
+                    </span>
                   </li>
                 ))}
               </ul>

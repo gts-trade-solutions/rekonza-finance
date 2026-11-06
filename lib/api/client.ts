@@ -224,6 +224,8 @@ export interface InvoiceDetail {
   debitNote?: { reason: string | null; against: { id: string; number: string; date: string } | null } | null;
   /** Priced in another currency: its own figures, and the rate it was booked at. */
   foreign?: { currency: string; rate: number; totalPaise: number; paidPaise: number } | null;
+  /** An export: the LUT it went under (IGST nil; none when IGST was paid), and its shipping bill. */
+  exportInfo?: { lutArn: string | null; shippingBillNo: string | null; shippingBillDate: string | null; portCode: string | null } | null;
   /** When, why and by whom it was cancelled; null unless void. Older voids have no reason. */
   voided: { at: string | null; reason: string | null; by: string | null } | null;
   /** Maker and checker: whether a rule holds this document for approval. */

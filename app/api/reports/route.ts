@@ -20,6 +20,7 @@ import {
   purchaseOrderDetails, purchasesByItem, realisedFx, reconciliationStatus, salesSummary, systemMails, timesheetDetails, unrealisedFx,
   vendorCreditDetails,
 } from '@/lib/server/reports/zoho-reports';
+import { supplyMix } from '@/lib/server/reports/supply-mix';
 
 const ReportQuery = z.object({
   report: z.enum([
@@ -42,6 +43,8 @@ const ReportQuery = z.object({
     // The rest of Zoho Books' list (lib/server/reports/zoho-reports.ts).
     'purchases-by-item', 'purchase-order-details', 'vendor-credit-details', 'expenses-by-customer', 'expenses-by-project',
     'billable-expense-details', 'timesheet-details', 'project-summary', 'receivable-details', 'payable-details', 'sales-summary',
+    // Domestic and international, goods and services, exports by their IGST.
+    'sales-by-supply',
     'abc-classification', 'system-mails', 'realised-fx',
     // As at a date: no start needed.
     'inventory-valuation', 'committed-stock', 'reconciliation-status', 'unrealised-fx',
@@ -203,6 +206,8 @@ export const GET = route(
             return { report: q.report, ...w, rows: await partyRegister(db, orgId, 'vendor', w) };
           case 'sales-summary':
             return { report: q.report, ...w, rows: await salesSummary(db, orgId, w) };
+          case 'sales-by-supply':
+            return { report: q.report, ...w, rows: await supplyMix(db, orgId, w) };
           case 'abc-classification':
             return { report: q.report, ...w, rows: await abcClassification(db, orgId, w) };
           case 'system-mails':

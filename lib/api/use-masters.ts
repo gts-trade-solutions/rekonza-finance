@@ -30,7 +30,7 @@
 import { useEffect, useState } from 'react';
 import { api } from './client';
 import { useAppStore } from '@/lib/store';
-import type { Account, BankAccount, Contact, HsnCode, Item, Org, User } from '@/lib/types';
+import type { Account, BankAccount, Contact, HsnCode, Item, Org, TradeSettings, User } from '@/lib/types';
 
 interface MastersResponse {
   org: {
@@ -39,6 +39,7 @@ interface MastersResponse {
     fiscalYearLabel: string; fiscalYearStart: string; fiscalYearEnd: string;
     baseCurrency: string; address: string | null; email: string | null;
     phone: string | null; isDemo: boolean;
+    trade?: TradeSettings;
   } | null;
   contacts: {
     id: string; kind: 'customer' | 'vendor' | 'both'; displayName: string;
@@ -136,6 +137,7 @@ export function useMasters(): {
             address: m.org.address ?? '',
             email: m.org.email ?? '',
             phone: m.org.phone ?? '',
+            trade: m.org.trade,
           },
 
           contacts: m.contacts.map<Contact>((c) => ({
