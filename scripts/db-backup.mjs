@@ -70,10 +70,21 @@ function key() {
   return buf;
 }
 
+/**
+ * A value in a MySQL option file, quoted: unquoted, a # starts a comment and a
+ * password like "ab#cd" reaches the server as "ab". Backslashes are escapes
+ * inside the quotes, so they are doubled; the quote is whichever of " and '
+ * the value does not contain.
+ */
+function optionValue(v) {
+  const s = String(v).replace(/\\/g, '\\\\');
+  return s.includes('"') ? `'${s}'` : `"${s}"`;
+}
+
 /** Credentials go in a private temp file, not on the command line where `ps` shows them. */
 function credentialsFile() {
   const file = path.join(tmpdir(), `rk-my-${process.pid}-${Date.now()}.cnf`);
-  writeFileSync(file, `[client]\nuser=${DB.user}\npassword=${DB.password}\nhost=${DB.host}\nport=${DB.port}\n`, { mode: 0o600 });
+  writeFileSync(file, `[client]\nuser=${optionValue(DB.user)}\npassword=${optionValue(DB.password)}\nhost=${DB.host}\nport=${DB.port}\n`, { mode: 0o600 });
   return file;
 }
 
