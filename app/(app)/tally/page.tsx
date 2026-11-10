@@ -11,7 +11,7 @@
 
 import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
-import { Building2, ChevronRight, MonitorDown, MonitorX, PlayCircle, Plug, TriangleAlert, Upload } from 'lucide-react';
+import { ArrowRight, Building2, ChevronRight, Download, MonitorDown, MonitorX, PlayCircle, Plug, TriangleAlert, Upload } from 'lucide-react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -61,11 +61,16 @@ export default function TallyPage() {
     <>
       <PageHeader
         title="Tally"
-        description="Your TallyPrime companies, read from the PC where Tally runs. Read-only here: entries are still made in Tally, and every figure shows the day it was last synced."
+        description="Bring your Tally data in from its XML files, send these books back to Tally as a file, or connect the PC where TallyPrime runs and see its companies here."
         actions={
           <div className="flex items-center gap-2">
             <Button variant="ghost" size="sm" onClick={() => setTutorial(true)} data-slot="tally-tutorial-open">
               <PlayCircle className="size-3.5" /> Watch the tutorial
+            </Button>
+            <Button variant="outline" size="sm" asChild data-slot="tally-import-link">
+              <Link href="/tally/import">
+                <Download className="size-3.5" /> Import from Tally
+              </Link>
             </Button>
             {/* The other direction: our own documents, sent to Tally. */}
             <Button variant="outline" size="sm" asChild data-slot="tally-export-link">
@@ -82,9 +87,25 @@ export default function TallyPage() {
         }
       />
 
+      <div className="grid gap-4 md:grid-cols-2" data-slot="tally-file-options">
+        <FileOption
+          href="/tally/import" slot="tally-import-card" icon={Download} tone="bg-emerald-600"
+          band="border-t-emerald-500" title="Import from Tally"
+          detail="Your Tally XML files: masters (ledgers, groups, stock items, opening balances, unpaid bills) and vouchers from the Day Book. Checked before anything is saved."
+          action="Choose Tally files"
+        />
+        <FileOption
+          href="/tally/export" slot="tally-export-card" icon={Upload} tone="bg-blue-600"
+          band="border-t-blue-500" title="Export to Tally"
+          detail="These books as a Tally XML file: masters, and every invoice, bill, payment and journal as vouchers, for your accountant to import into TallyPrime."
+          action="Make the Tally file"
+        />
+      </div>
+
       <AsyncPage state={state}>
         {(d) => (
           <div className="space-y-6">
+            <h2 className="micro-label">Connected Tally</h2>
             {d.companies.length === 0 ? (
               <SetupSteps canEdit={canEdit} onConnect={() => setPairing(true)} hasConnector={d.connectors.some((c) => c.status === 'active')} />
             ) : (
@@ -116,6 +137,26 @@ export default function TallyPage() {
       <PairingDialog open={pairing} onOpenChange={setPairing} pairedMachine={pairedMachine} />
       <DisconnectDialog connector={disconnecting} onClose={() => setDisconnecting(null)} onDone={() => void refetch()} />
     </>
+  );
+}
+
+/** One of the two file routes, as a card to press. */
+function FileOption({ href, slot, icon: Icon, tone, band, title, detail, action }: {
+  href: string; slot: string; icon: typeof Download; tone: string; band: string; title: string; detail: string; action: string;
+}) {
+  return (
+    <Link href={href} className="group block" data-slot={slot}>
+      <Card className={cn('h-full border-t-4 p-5 transition-shadow group-hover:shadow-md', band)}>
+        <div className="flex items-start gap-3">
+          <span className={cn('grid size-10 shrink-0 place-items-center rounded-lg text-white', tone)}><Icon className="size-5" /></span>
+          <div className="min-w-0">
+            <p className="text-base font-semibold">{title}</p>
+            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{detail}</p>
+            <p className="mt-3 inline-flex items-center gap-1 text-sm font-medium text-primary">{action} <ArrowRight className="size-3.5 transition-transform group-hover:translate-x-0.5" /></p>
+          </div>
+        </div>
+      </Card>
+    </Link>
   );
 }
 

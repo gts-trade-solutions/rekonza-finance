@@ -4,7 +4,7 @@ import {
   ReceiptIndianRupee, Repeat, ScrollText, Settings, ShieldCheck, ShoppingCart,
   Truck, Users, Wallet, FileCheck2, HandCoins, ClipboardList, CalendarClock,
   FileMinus, Building, AlertTriangle, Split, Lock, ChartColumnBig, MonitorDown, PackageCheck, Scale, CalendarDays, LifeBuoy,
-  ScanBarcode, BellRing, AlertOctagon, FolderOpen, Radar, FilePlus2, Timer, FolderKanban, Ship, PhoneCall, ListChecks, LayoutTemplate, Shuffle, Globe,
+  ScanBarcode, BellRing, Download, Upload, ArrowLeftRight, FileUp, FileDown, AlertOctagon, FolderOpen, Radar, FilePlus2, Timer, FolderKanban, Ship, PhoneCall, ListChecks, LayoutTemplate, Shuffle, Globe,
 } from 'lucide-react';
 
 export interface NavItem {
@@ -18,6 +18,8 @@ export interface NavItem {
   registration?: 'regular' | 'composition';
   /** A part of the app a book can switch off (Settings → Policies). */
   feature?: FeatureKey | FeatureKey[];
+  /** Lit only on its own address, not on the pages under it (which have rows of their own). */
+  exact?: boolean;
 }
 
 export type FeatureKey = 'inventory' | 'fixedAssets' | 'tdsTcs' | 'ewayBills' | 'approvals' | 'tally' | 'analytics' | 'payroll' | 'gst' | 'multiCurrency' | 'costCentres';
@@ -173,6 +175,33 @@ export const NAV_GROUPS: NavGroup[] = [
       { label: 'Warehouses', href: '/inventory/warehouses', icon: Building, module: 'inventory' },
     ],
   },
+  {
+    // Every way data comes in or goes out: spreadsheets, CSV and any delimited
+    // text, QuickBooks and Tally in; CSV, text, Excel, JSON and Tally out.
+    label: 'Import & Export',
+    icon: ArrowLeftRight,
+    module: 'accountant',
+    items: [
+      { label: 'Import Excel, CSV, Text', href: '/settings/import', icon: FileUp, module: 'accountant', exact: true },
+      { label: 'Import from QuickBooks', href: '/settings/import/quickbooks', icon: FileUp, module: 'accountant' },
+      { label: 'Import from Tally', href: '/tally/import', icon: Download, module: 'tally', feature: 'tally' },
+      { label: 'Export CSV, Text, Excel', href: '/settings/export', icon: FileDown, module: 'accountant' },
+      { label: 'Export to Tally', href: '/tally/export', icon: Upload, module: 'tally', feature: 'tally' },
+      { label: 'Tableau, Power BI, OneStream', href: '/settings?tab=developer', icon: ChartColumnBig, module: 'settings' },
+    ],
+  },
+  {
+    // Tally's two files, each way, and the PC where TallyPrime runs.
+    label: 'Tally',
+    icon: MonitorDown,
+    module: 'tally',
+    feature: 'tally',
+    items: [
+      { label: 'Import from Tally', href: '/tally/import', icon: Download, module: 'tally' },
+      { label: 'Export to Tally', href: '/tally/export', icon: Upload, module: 'tally' },
+      { label: 'Connected Tally', href: '/tally', icon: MonitorDown, module: 'tally', exact: true },
+    ],
+  },
 ];
 
 export const TOP_LEVEL: NavItem[] = [
@@ -183,7 +212,6 @@ export const TOP_LEVEL: NavItem[] = [
 export const BOTTOM_LEVEL: NavItem[] = [
   { label: 'Reports', href: '/reports', icon: BarChart3, module: 'reports' },
   { label: 'Software Checklist', href: '/checklist', icon: ListChecks, module: 'reports' },
-  { label: 'Tally', href: '/tally', icon: MonitorDown, module: 'tally', feature: 'tally' },
   { label: 'Analytics', href: '/analytics', icon: ChartColumnBig, module: 'analytics', feature: 'analytics' },
   { label: 'AI Assistant', href: '/ai', icon: Bot, module: 'ai' },
   { label: 'Settings', href: '/settings', icon: Settings, module: 'settings' },

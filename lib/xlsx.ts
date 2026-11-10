@@ -181,6 +181,25 @@ function zip(entries: [string, Uint8Array][]): Uint8Array {
   return out;
 }
 
+/** Text files in one stored zip: the whole book as one CSV per part. */
+export function zipText(files: [name: string, text: string][]): Uint8Array {
+  return zip(files.map(([name, text]) => [name, enc.encode(text)]));
+}
+
+/** In the browser: hand a zip of text files to the user as a download. */
+export function downloadZip(filename: string, files: [name: string, text: string][]) {
+  if (!allowOutput('export', filename)) return;
+  const blob = new Blob([zipText(files) as BlobPart], { type: 'application/zip' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename.endsWith('.zip') ? filename : `${filename}.zip`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 /** In the browser: hand the workbook to the user as a download. */
 export function downloadWorkbook(filename: string, sheets: Sheet[]) {
   if (!allowOutput('export', filename)) return;

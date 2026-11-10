@@ -1,7 +1,8 @@
 'use client';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Bringing data in: from a spreadsheet, or a company from Tally.
+// Bringing data in: from a spreadsheet, CSV or any delimited text file (tab,
+// pipe, semicolon…), JSON, or a whole company from Tally or QuickBooks.
 //
 // Every import is checked first. The check does the whole import and throws it
 // away, so what it reports is exactly what the real run will do; the real run
@@ -11,7 +12,7 @@
 import { useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import Papa from 'papaparse';
-import { AlertTriangle, ArrowLeft, CheckCircle2, Download, FileSpreadsheet, Loader2, Upload } from 'lucide-react';
+import { ArrowLeft, Download, FileSpreadsheet, Loader2, Upload } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -19,18 +20,15 @@ import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { PageHeader } from '@/components/shared/page-header';
 import { downloadCsv, downloadJson } from '@/components/shared/report-shell';
-import { api, imports, type ImportOutcome, type ImportResponse } from '@/lib/api/client';
+import { api, imports, type ImportResponse } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
 import { columnFor, IMPORT_KINDS, MAX_IMPORT_ROWS, TEMPLATES, templateCsv, templateSheets, type ImportKind } from '@/lib/imports/templates';
 import { downloadWorkbook } from '@/lib/xlsx';
+import { Outcomes } from '@/components/shared/import-outcomes';
+import { TallyFileImport } from '@/components/tally/file-import';
 import { jsonGrid, templateJson } from '@/lib/imports/json';
-
-const PART_LABEL: Record<string, string> = {
-  contacts: 'Customers and vendors', items: 'Items', accounts: 'Accounts', 'opening-ledger': 'Ledger openings',
-  'opening-bills': 'Unpaid bills', journals: 'Journal vouchers', invoices: 'Invoices', bills: 'Bills',
-  estimates: 'Quotes', 'sales-orders': 'Sales orders', 'credit-notes': 'Credit notes', 'purchase-orders': 'Purchase orders',
-  expenses: 'Expenses', 'payments-received': 'Payments received', 'payments-made': 'Payments made',
-};
+import { DELIMITERS, delimiterName, guessDelimiter, readTextFile, TEXT_FILE_TYPES } from '@/lib/delimited';
+import { QuickBooksImport } from '@/components/quickbooks/file-import';
 
 /** A cell as text the server reads: dates as yyyy-mm-dd. */
 const cellText = (v: unknown) =>
@@ -41,7 +39,7 @@ export default function ImportPage() {
     <>
       <PageHeader
         title="Import"
-        description="Bring masters, opening balances and vouchers in from a spreadsheet or JSON file, or a whole company from Tally."
+        description="Bring masters, opening balances and vouchers in from Excel, CSV, text (tab, pipe or any separator) or JSON — or a whole company from Tally or QuickBooks."
         actions={
           <Button variant="outline" size="sm" asChild>
             <Link href="/settings"><ArrowLeft className="mr-1.5 size-3.5" /> Settings</Link>
@@ -50,62 +48,15 @@ export default function ImportPage() {
       />
       <Tabs defaultValue="sheet">
         <TabsList>
-          <TabsTrigger value="sheet">From a spreadsheet or JSON</TabsTrigger>
+          <TabsTrigger value="sheet">Excel, CSV, text or JSON</TabsTrigger>
           <TabsTrigger value="tally">From Tally</TabsTrigger>
+          <TabsTrigger value="quickbooks">From QuickBooks</TabsTrigger>
         </TabsList>
         <TabsContent value="sheet" className="mt-4"><SheetImport /></TabsContent>
-        <TabsContent value="tally" className="mt-4"><TallyImport /></TabsContent>
+        <TabsContent value="quickbooks" className="mt-4"><QuickBooksImport /></TabsContent>
+        <TabsContent value="tally" className="mt-4 space-y-6"><TallyFileImport /><TallyImport /></TabsContent>
       </Tabs>
     </>
-  );
-}
-
-function Outcomes({ result }: { result: ImportResponse }) {
-  const failed = result.outcomes.reduce((t, o) => t + o.errors.length, 0);
-  return (
-    <Card className={`space-y-3 p-5 ${failed ? 'border-destructive/40' : 'border-emerald-500/40'}`}>
-      <p className="flex items-center gap-2 text-sm font-medium">
-        {failed ? <AlertTriangle className="size-4 text-destructive" /> : <CheckCircle2 className="size-4 text-emerald-600" />}
-        {result.committed
-          ? 'Imported.'
-          : failed ? `${failed} problem(s) to fix. Nothing was imported.` : 'The check passed. Nothing has been imported yet.'}
-      </p>
-      <div className="grid gap-2 sm:grid-cols-3">
-        {result.outcomes.filter((o) => o.rows > 0).map((o, i) => (
-          <div key={`${o.kind}-${i}`} className="rounded-md border p-3 text-sm">
-            <p className="font-medium">{PART_LABEL[o.kind] ?? o.kind}</p>
-            <p className="mt-0.5 text-xs text-muted-foreground">
-              {o.created} {result.committed ? 'added' : 'to add'}{o.skipped ? `, ${o.skipped} already there` : ''}
-            </p>
-          </div>
-        ))}
-      </div>
-      <ErrorList outcomes={result.outcomes} />
-      {result.outcomes.some((o) => o.notes.length > 0) && (
-        <ul className="list-disc space-y-1 pl-5 text-xs text-muted-foreground">
-          {result.outcomes.flatMap((o) => o.notes).map((n) => <li key={n}>{n}</li>)}
-        </ul>
-      )}
-    </Card>
-  );
-}
-
-function ErrorList({ outcomes }: { outcomes: ImportOutcome[] }) {
-  const errors = outcomes.flatMap((o) => o.errors.map((e) => ({ ...e, kind: o.kind })));
-  if (!errors.length) return null;
-  return (
-    <div className="max-h-72 overflow-y-auto rounded-md border thin-scroll">
-      <table className="w-full text-sm">
-        <tbody>
-          {errors.slice(0, 500).map((e, i) => (
-            <tr key={i} className="border-b last:border-0">
-              <td className="w-20 px-3 py-1.5 text-xs text-muted-foreground">{e.row ? `Row ${e.row}` : PART_LABEL[e.kind] ?? e.kind}</td>
-              <td className="px-3 py-1.5 text-xs">{e.message}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
   );
 }
 
@@ -118,6 +69,11 @@ function SheetImport() {
   const [result, setResult] = useState<ImportResponse | null>(null);
   const [busy, setBusy] = useState<false | 'check' | 'import'>(false);
   const input = useRef<HTMLInputElement>(null);
+  // For a text file: the separator, found by itself unless one is chosen; and the file, to read again with another.
+  const [sep, setSep] = useState<string>('auto');
+  const [otherSep, setOtherSep] = useState('');
+  const [readWith, setReadWith] = useState<string | null>(null);
+  const [lastFile, setLastFile] = useState<File | null>(null);
   const t = TEMPLATES[kind];
 
   const missing = useMemo(
@@ -127,9 +83,10 @@ function SheetImport() {
 
   const reset = (k: ImportKind) => { setKind(k); setRows([]); setHeadings([]); setFileName(''); setResult(null); };
 
-  const load = async (file: File | undefined) => {
+  const load = async (file: File | undefined | null, chosen = sep === 'other' ? otherSep : sep) => {
     if (!file) return;
     setResult(null);
+    setReadWith(null);
     try {
       let grid: unknown[][];
       if (/\.xlsx$/i.test(file.name)) {
@@ -140,8 +97,12 @@ function SheetImport() {
         // The same grid a spreadsheet gives (lib/imports/json.ts).
         grid = jsonGrid(await file.text(), kind);
       } else {
-        const text = (await file.text()).replace(/^﻿/, '');
-        grid = Papa.parse<string[]>(text, { skipEmptyLines: 'greedy' }).data;
+        // CSV or any delimited text: comma, tab, pipe, semicolon, or a separator of the user's own.
+        const text = await readTextFile(file);
+        const delimiter = chosen === 'auto' || !chosen ? guessDelimiter(text) : chosen;
+        grid = Papa.parse<string[]>(text, { delimiter, skipEmptyLines: 'greedy' }).data;
+        setReadWith(delimiter);
+        setLastFile(file);
       }
       if (grid.length < 2) throw new Error('The file needs a row of headings and at least one row under it.');
       const map = grid[0].map((h, idx) => ({ heading: cellText(h).trim(), key: columnFor(kind, cellText(h)), idx }));
@@ -206,17 +167,32 @@ function SheetImport() {
               </Button>
             </div>
           </div>
+          <div className="flex flex-wrap items-center gap-2 text-xs" data-slot="sheet-separator">
+            <span className="text-muted-foreground">Text files, separated by</span>
+            <select className="h-8 rounded-md border bg-background px-2 text-xs" value={sep} aria-label="Separator"
+              onChange={(e) => { setSep(e.target.value); if (e.target.value !== 'other') void load(lastFile, e.target.value); }}>
+              <option value="auto">Find it by itself</option>
+              {DELIMITERS.map((d) => <option key={d.key} value={d.char}>{d.label}</option>)}
+              <option value="other">Another character</option>
+            </select>
+            {sep === 'other' && (
+              <input value={otherSep} maxLength={1} placeholder="~" aria-label="Separator character"
+                className="h-8 w-12 rounded-md border bg-background px-2 text-center font-mono text-xs"
+                onChange={(e) => { setOtherSep(e.target.value); if (e.target.value) void load(lastFile, e.target.value); }} />
+            )}
+            <span className="text-muted-foreground">· .csv, .txt, .tsv, .dsv, .psv; UTF-8 or Excel&apos;s Unicode text</span>
+          </div>
           <div className="flex flex-wrap gap-1.5">
             {t.columns.map((c) => (
               <Badge key={c.key} variant={c.required ? 'default' : 'outline'} className="text-[10px]" title={c.hint}>{c.label}</Badge>
             ))}
           </div>
           <div className="flex flex-wrap items-center gap-3">
-            <input ref={input} type="file" accept=".csv,.xlsx,.json,application/json" className="hidden" onChange={(e) => void load(e.target.files?.[0])} />
+            <input ref={input} type="file" accept={`${TEXT_FILE_TYPES},.xlsx,.json,application/json`} className="hidden" data-slot="sheet-file-input" onChange={(e) => void load(e.target.files?.[0])} />
             <Button size="sm" className="gap-1.5" onClick={() => input.current?.click()}>
-              <Upload className="size-3.5" /> Choose a CSV, Excel or JSON file
+              <Upload className="size-3.5" /> Choose an Excel, CSV, text or JSON file
             </Button>
-            {fileName && <span className="text-xs text-muted-foreground"><FileSpreadsheet className="mr-1 inline size-3.5" />{fileName}: {rows.length} row(s)</span>}
+            {fileName && <span className="text-xs text-muted-foreground" data-slot="sheet-file-read"><FileSpreadsheet className="mr-1 inline size-3.5" />{fileName}: {rows.length} row(s){readWith ? `, separated by ${delimiterName(readWith).toLowerCase()}` : ''}</span>}
             {['contacts', 'items', 'accounts'].includes(kind) && (
               <label className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
                 Already in the books:
@@ -279,29 +255,21 @@ function SheetImport() {
   );
 }
 
-/** Tally writes its XML in UTF-16; a saved copy may be UTF-8. */
-async function readTallyFile(file: File): Promise<string> {
-  const buf = new Uint8Array(await file.arrayBuffer());
-  const utf16 = (buf[0] === 0xff && buf[1] === 0xfe) || (buf.length > 1 && buf[1] === 0);
-  return new TextDecoder(utf16 ? 'utf-16le' : 'utf-8').decode(buf).replace(/^﻿/, '');
-}
-
 function TallyImport() {
   const companies = useApi(
     () => api.get<{ companies: { id: string; name: string; asOf: string | null; ledgers: number; stockItems: number }[] }>('/api/tally')
       .catch(() => ({ companies: [] })),
     [],
   );
-  const [source, setSource] = useState<{ kind: 'xml'; xml: string; name: string } | { kind: 'company'; id: string; name: string } | null>(null);
+  const [source, setSource] = useState<{ kind: 'company'; id: string; name: string } | null>(null);
   const [result, setResult] = useState<ImportResponse | null>(null);
   const [busy, setBusy] = useState<false | 'check' | 'import'>(false);
-  const input = useRef<HTMLInputElement>(null);
 
   const run = async (dryRun: boolean) => {
     if (!source) return;
     setBusy(dryRun ? 'check' : 'import');
     try {
-      const r = source.kind === 'xml' ? await imports.tallyXml(source.xml, dryRun) : await imports.tallyCompany(source.id, dryRun);
+      const r = await imports.tallyCompany(source.id, dryRun);
       setResult(r);
       if (r.committed) toast.success(`${source.name} brought in`);
     } catch (e) {
@@ -314,31 +282,7 @@ function TallyImport() {
 
   return (
     <div className="space-y-4">
-      <Card className="space-y-3 p-5 text-sm">
-        <p className="font-medium">What comes across</p>
-        <p className="text-xs leading-relaxed text-muted-foreground">
-          Sundry debtors and creditors become customers and vendors, with their unpaid bills (bill by bill when Tally kept
-          them so). Bank and cash ledgers become bank and cash accounts. GST and TDS ledgers map to this book&apos;s own.
-          Every other ledger becomes an account, and stock items become items with their quantity and value. Balances
-          land as opening balances on the day the books start, set under Accountant → Opening balances; set that date first.
-        </p>
-      </Card>
-      <div className="grid gap-4 md:grid-cols-2">
-        <Card className="space-y-3 p-5">
-          <p className="text-sm font-medium">A Tally XML file</p>
-          <p className="text-xs text-muted-foreground">In TallyPrime: Export → Masters, format XML (data interchange). Opening balances are as at Tally&apos;s books beginning date.</p>
-          <input ref={input} type="file" accept=".xml" className="hidden" onChange={async (e) => {
-            const f = e.target.files?.[0];
-            if (!f) return;
-            setResult(null);
-            setSource({ kind: 'xml', xml: await readTallyFile(f), name: f.name });
-            if (input.current) input.current.value = '';
-          }} />
-          <Button size="sm" variant="outline" className="gap-1.5" onClick={() => input.current?.click()}>
-            <Upload className="size-3.5" /> Choose the XML file
-          </Button>
-          {source?.kind === 'xml' && <p className="text-xs">{source.name}</p>}
-        </Card>
+      <div className="grid gap-4">
         <Card className="space-y-3 p-5">
           <p className="text-sm font-medium">A connected Tally company</p>
           <p className="text-xs text-muted-foreground">Uses the balances at the end of the period the connector last read.</p>

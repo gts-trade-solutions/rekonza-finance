@@ -16,6 +16,7 @@ import { Download, FileCheck2, Mail, Plus, Receipt, Send } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
+import { tileColors } from '@/components/shared/stat-tile';
 import { PageHeader } from '@/components/shared/page-header';
 import { DataTable, type Column } from '@/components/shared/data-table';
 import { BulkPrintButton } from '@/components/shared/document-menu';
@@ -186,8 +187,8 @@ export default function InvoicesPage() {
                   { label: 'Outstanding', value: formatINRCompact(data.summary.duePaise), warn: data.summary.duePaise > 0 },
                   { label: 'Awaiting IRN', value: String(awaitingIrn) },
                 ].map((t) => (
-                  <Card key={t.label} className="p-4">
-                    <p className="text-xs text-muted-foreground">{t.label}</p>
+                  <Card key={t.label} className={`p-4 ${tileColors(t.label, t.warn ? 'warning' : 'default').card}`}>
+                    <p className={`text-xs font-medium ${tileColors(t.label, t.warn ? 'warning' : 'default').label}`}>{t.label}</p>
                     <p className={`mt-1.5 tabular text-2xl font-semibold ${t.warn ? 'text-warning' : ''}`}>
                       {t.value}
                     </p>

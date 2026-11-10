@@ -202,12 +202,35 @@ export const HELP: HelpTopic[] = [
   },
   {
     id: 'tally', area: 'Connecting', title: 'Tally',
-    summary: 'Bring a Tally company in, or send these books to Tally.',
+    summary: 'Bring a Tally company in from its files, or send these books to Tally as a file.',
     steps: [
-      'Tally → import masters and vouchers from a Tally export, or pair the connector on the PC that runs Tally.',
-      'Export ledgers and vouchers for Tally, named as your Tally company names them.',
+      'In TallyPrime, Alt+E Export → Masters → All Masters, format XML (Data Interchange): the ledgers, groups and stock items, with their opening balances and unpaid bills.',
+      'Open the Day Book, set the period with F2, then Alt+E Export → Current, format XML: the vouchers.',
+      'Tally → Import from Tally: choose the files (one or several). What they hold shows first; Check runs the whole import without saving; Bring it in saves it. The same voucher never comes in twice.',
+      'Tally → Export to Tally: these books as a Tally XML file, masters and vouchers, named as your Tally company names them, for TallyPrime to import.',
+      'Or pair the connector on the PC that runs Tally, and its companies stay in step here.',
     ],
-    links: [{ label: 'Tally', href: '/tally' }],
+    links: [
+      { label: 'Import from Tally', href: '/tally/import' },
+      { label: 'Export to Tally', href: '/tally/export' },
+      { label: 'Connected Tally', href: '/tally' },
+    ],
+  },
+  {
+    id: 'import-export', area: 'Connecting', title: 'Import and export: CSV, text, Excel, QuickBooks',
+    summary: 'Bring data in from any spreadsheet, CSV or delimited text file, or from QuickBooks; take it out the same ways.',
+    steps: [
+      'Import & Export → Import Excel, CSV, Text: pick what you are bringing in (customers, items, accounts, opening balances, invoices, bills, journals…), download its template if you like, and choose the file: Excel, CSV, text (.txt, .tsv) or any delimited file (.dsv, pipe, semicolon). The separator is found by itself, or choose it.',
+      'Import & Export → Import from QuickBooks: QuickBooks Desktop’s IIF files (File → Utilities → Export → Lists to IIF Files), and QuickBooks Online’s Account List, Customers, Vendors, Products and Services, and the Journal report (as Excel or CSV). Accounts, parties, items and every transaction come across.',
+      'Every import shows what the file holds first; Check runs it without saving; Bring it in keeps it all or none of it. The same QuickBooks or Tally transaction never comes in twice.',
+      'Import & Export → Export CSV, Text, Excel: any part of the books as CSV, tab-separated text, delimited text with the separator you choose, Excel or JSON — or everything at once as a zip of CSV or text files.',
+      'Every report’s Export menu gives Excel, CSV, and tab- or pipe-separated text.',
+    ],
+    links: [
+      { label: 'Import Excel, CSV, Text', href: '/settings/import' },
+      { label: 'Import from QuickBooks', href: '/settings/import/quickbooks' },
+      { label: 'Export CSV, Text, Excel', href: '/settings/export' },
+    ],
   },
   {
     id: 'api', area: 'Connecting', title: 'API keys and webhooks',

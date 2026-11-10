@@ -3,10 +3,10 @@ import 'server-only';
 // ─────────────────────────────────────────────────────────────────────────────
 // Moving a company across from Tally.
 //
-// Two sources give the same thing: the XML file TallyPrime writes from
-// Export → Masters, or a company the connector has already mirrored. Either
-// way the ledgers, groups and stock items become this book's masters and
-// openings:
+// Two sources give the same thing: the XML files TallyPrime writes (Export →
+// Masters, and Export → Transactions for the vouchers), or a company the
+// connector has already mirrored. Either way the ledgers, groups and stock
+// items become this book's masters and openings:
 //
 //   Sundry Debtors / Creditors   customers and vendors, with their unpaid
 //                                bills (bill by bill when Tally kept them so)
@@ -27,125 +27,13 @@ import { createBankAccount } from '../services/banking';
 import { booksStartDate } from '../services/opening-balances';
 import { runImport, type ImportContext, type ImportOutcome, type Row } from './run';
 
-export interface TallyLedger {
-  name: string;
-  parent: string;
-  /** Debit positive. */
-  balancePaise: Paise;
-  gstin: string | null;
-  pan: string | null;
-  stateName: string | null;
-  email: string | null;
-  phone: string | null;
-  address: string | null;
-  pincode: string | null;
-  creditDays: number | null;
-  /** Unpaid bills, when the ledger is kept bill by bill. Debit positive. */
-  bills: { ref: string; date: string | null; amountPaise: Paise; creditDays: number | null }[];
-}
+import {
+  parseTallyMastersXml, NON_ACCOUNTING_TYPES, postsToBooks,
+  type TallyMasters, type TallyFileVoucher,
+} from '../../tally/xml';
 
-export interface TallyStockItem {
-  name: string;
-  unit: string | null;
-  hsn: string | null;
-  gstRatePct: number | null;
-  qty: number;
-  valuePaise: Paise;
-}
-
-export interface TallyMasters {
-  groups: Map<string, string>;
-  ledgers: TallyLedger[];
-  stockItems: TallyStockItem[];
-}
-
-// ── Reading Tally's XML ──────────────────────────────────────────────────────
-
-const ENT: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
-const unescape = (s: string) =>
-  s.replace(/&(amp|lt|gt|quot|apos);/g, (_, e: string) => ENT[e]).replace(/&#(\d+);/g, (_, n: string) => {
-    const c = Number(n);
-    return c < 32 && c !== 9 && c !== 10 && c !== 13 ? '' : String.fromCharCode(c);
-  });
-
-const tag = (block: string, name: string) => {
-  const m = new RegExp(`<${name.replace(/\./g, '\\.')}(?:\\s[^>]*)?>([\\s\\S]*?)</${name.replace(/\./g, '\\.')}>`).exec(block);
-  const v = m ? unescape(m[1]).trim() : '';
-  return v || null;
-};
-const blocks = (xml: string, name: string) => {
-  const re = new RegExp(`<${name.replace(/\./g, '\\.')}(\\s[^>]*)?>([\\s\\S]*?)</${name.replace(/\./g, '\\.')}>`, 'g');
-  const out: { attrs: string; body: string }[] = [];
-  for (let m = re.exec(xml); m; m = re.exec(xml)) out.push({ attrs: m[1] ?? '', body: m[2] });
-  return out;
-};
-const nameAttr = (attrs: string, body: string) => {
-  const m = /NAME="([^"]*)"/.exec(attrs);
-  return unescape(m ? m[1] : (tag(body, 'NAME') ?? '')).trim();
-};
-
-/** Tally's signed rupees, debits negative, as paise with debits positive. */
-export function debitPaise(value: string | null): Paise {
-  if (!value) return 0;
-  const n = Number(value.replace(/[^0-9.-]/g, ''));
-  return Number.isFinite(n) ? -Math.round(n * 100) : 0;
-}
-/** "30 Days" → 30. */
-const days = (v: string | null) => {
-  const n = v ? parseInt(v, 10) : NaN;
-  return Number.isFinite(n) ? n : null;
-};
-/** 20260331 → 2026-03-31. */
-const tallyDate = (v: string | null) => (v && /^\d{8}$/.test(v) ? `${v.slice(0, 4)}-${v.slice(4, 6)}-${v.slice(6, 8)}` : null);
-
-export function parseTallyMastersXml(xml: string): TallyMasters {
-  const groups = new Map<string, string>();
-  for (const g of blocks(xml, 'GROUP')) groups.set(nameAttr(g.attrs, g.body), tag(g.body, 'PARENT') ?? '');
-
-  const ledgers: TallyLedger[] = blocks(xml, 'LEDGER').map((l) => {
-    const gstReg = blocks(l.body, 'LEDGSTREGDETAILS.LIST')[0]?.body ?? '';
-    const mailing = blocks(l.body, 'LEDMAILINGDETAILS.LIST')[0]?.body ?? '';
-    const address = blocks(mailing || l.body, 'ADDRESS.LIST')
-      .flatMap((a) => blocks(a.body, 'ADDRESS').map((x) => unescape(x.body).trim()))
-      .filter(Boolean).join(', ');
-    return {
-      name: nameAttr(l.attrs, l.body),
-      parent: tag(l.body, 'PARENT') ?? '',
-      balancePaise: debitPaise(tag(l.body, 'OPENINGBALANCE')),
-      gstin: (tag(gstReg, 'GSTIN') ?? tag(l.body, 'PARTYGSTIN'))?.toUpperCase() ?? null,
-      pan: tag(l.body, 'INCOMETAXNUMBER')?.toUpperCase() ?? null,
-      stateName: tag(mailing, 'STATE') ?? tag(l.body, 'LEDSTATENAME') ?? tag(gstReg, 'STATE'),
-      email: tag(l.body, 'EMAIL'),
-      phone: tag(l.body, 'LEDGERMOBILE') ?? tag(l.body, 'LEDGERPHONE'),
-      address: address || null,
-      pincode: tag(mailing, 'PINCODE') ?? tag(l.body, 'PINCODE'),
-      creditDays: days(tag(l.body, 'BILLCREDITPERIOD')),
-      bills: blocks(l.body, 'BILLALLOCATIONS.LIST').map((b) => ({
-        ref: tag(b.body, 'NAME') ?? 'Opening',
-        date: tallyDate(tag(b.body, 'BILLDATE')),
-        amountPaise: debitPaise(tag(b.body, 'OPENINGBALANCE')),
-        creditDays: days(tag(b.body, 'BILLCREDITPERIOD')),
-      })).filter((b) => b.amountPaise !== 0),
-    };
-  }).filter((l) => l.name);
-
-  const stockItems: TallyStockItem[] = blocks(xml, 'STOCKITEM').map((s) => {
-    const gst = blocks(s.body, 'GSTDETAILS.LIST').map((g) => g.body).join('');
-    const igst = blocks(gst, 'RATEDETAILS.LIST').find((r) => /IGST|Integrated/i.test(tag(r.body, 'GSTRATEDUTYHEAD') ?? ''));
-    const qty = Number((tag(s.body, 'OPENINGBALANCE') ?? '').replace(/[^0-9.-]/g, '')) || 0;
-    return {
-      name: nameAttr(s.attrs, s.body),
-      unit: tag(s.body, 'BASEUNITS'),
-      hsn: tag(gst, 'HSNCODE') ?? tag(s.body, 'HSNCODE'),
-      gstRatePct: igst ? Number(tag(igst.body, 'GSTRATE')) || null : null,
-      qty: Math.abs(qty),
-      // Stock is an asset: Tally writes its value as a debit, negative.
-      valuePaise: Math.abs(debitPaise(tag(s.body, 'OPENINGVALUE'))),
-    };
-  }).filter((s) => s.name);
-
-  return { groups, ledgers, stockItems };
-}
+export type { TallyLedger, TallyStockItem, TallyMasters } from '../../tally/xml';
+export { parseTallyMastersXml };
 
 /** A company the connector has mirrored, at the end of the period it last read. */
 export async function connectedCompanyMasters(ex: Executor, orgId: number, companyId: number): Promise<TallyMasters> {
@@ -167,6 +55,7 @@ export async function connectedCompanyMasters(ex: Executor, orgId: number, compa
       name: s.name, unit: s.unit, hsn: s.hsn, gstRatePct: null,
       qty: Math.abs(Number(s.closing_qty)), valuePaise: Math.abs(Number(s.closing_value_paise)),
     })),
+    voucherTypes: new Map(),
   };
 }
 
@@ -248,7 +137,7 @@ const addDays = (iso: string, n: number) => {
  * Bring a Tally company in: masters first, then openings, in one transaction
  * of the caller's. Returns one outcome per part.
  */
-export async function importTally(trx: Trx, ctx: ImportContext, masters: TallyMasters): Promise<ImportOutcome[]> {
+export async function importTally(trx: Trx, ctx: ImportContext, masters: TallyMasters, source = 'Tally'): Promise<ImportOutcome[]> {
   const start = (await booksStartDate(trx, ctx.orgId)).date;
   const lastDay = dayBefore(start);
   const notes: string[] = [];
@@ -329,17 +218,20 @@ export async function importTally(trx: Trx, ctx: ImportContext, masters: TallyMa
     }
     if (!code) {
       code = freshCode(p.type);
-      accountRows.push({ code, name: l.name, type: p.type, subtype: p.subtype ?? null, description: `From Tally, under ${l.parent}` });
+      accountRows.push({ code, name: l.name, type: p.type, subtype: p.subtype ?? null, description: l.note ?? `From ${source}, under ${l.parent}` });
       byName.set(l.name.toLowerCase(), code);
     }
     if (l.balancePaise) ledgerOpenings.set(code, (ledgerOpenings.get(code) ?? 0) + l.balancePaise);
   }
 
   const items: Row[] = masters.stockItems.map((s) => ({
-    name: s.name, kind: 'goods', hsn_sac: s.hsn && /^\d{4,8}$/.test(s.hsn) ? s.hsn : null,
+    name: s.name, kind: s.kind ?? 'goods', hsn_sac: s.hsn && /^\d{4,8}$/.test(s.hsn) ? s.hsn : null,
     unit: s.unit ? (UNITS[s.unit.toLowerCase().replace(/[^a-z]/g, '')] ?? 'OTH') : 'NOS',
-    gst_rate: s.gstRatePct, track_stock: 'yes',
-    opening_qty: s.qty || null, opening_rate: s.qty ? (s.valuePaise / s.qty / 100).toFixed(4) : null,
+    gst_rate: s.gstRatePct, track_stock: s.kind === 'service' ? 'no' : 'yes',
+    sale_price: s.salePricePaise ? (s.salePricePaise / 100).toFixed(2) : null,
+    purchase_price: s.purchasePricePaise ? (s.purchasePricePaise / 100).toFixed(2) : null,
+    opening_qty: s.kind === 'service' ? null : s.qty || null,
+    opening_rate: s.kind !== 'service' && s.qty ? (s.valuePaise / s.qty / 100).toFixed(4) : null,
   }));
 
   const outcomes: ImportOutcome[] = [];
@@ -348,7 +240,7 @@ export async function importTally(trx: Trx, ctx: ImportContext, masters: TallyMa
   outcomes.push(await runImport(trx, ctx, 'items', items));
 
   // Bank and cash accounts carry their own opening, set on the account.
-  const bankOut: ImportOutcome = { kind: 'accounts', rows: banks.length, created: 0, skipped: 0, errors: [], notes: [] };
+  const bankOut: ImportOutcome = { kind: 'accounts', label: 'Bank and cash accounts', rows: banks.length, created: 0, skipped: 0, errors: [], notes: [] };
   const known = new Set((await trx.selectFrom('bank_accounts').select('name').where('org_id', '=', ctx.orgId).execute()).map((b) => b.name.toLowerCase()));
   for (const b of banks) {
     if (known.has(b.name.toLowerCase())) { bankOut.skipped++; continue; }
@@ -389,76 +281,58 @@ export async function importTally(trx: Trx, ctx: ImportContext, masters: TallyMa
 // ledgers, but not the GST returns, which are filed from documents raised in
 // this book. Bring vouchers across for periods whose returns Tally filed.
 
-export async function importTallyVouchers(
-  trx: Trx, ctx: ImportContext, companyId: number, range: { from?: string | null; to?: string | null } = {},
+/** Where a Tally ledger's lines go here: an account, and the customer or vendor for a party. */
+type Resolved = { accountId: number; contactId: number | null };
+/** One voucher, in the shape both sources give: lines debit-positive, in paise. */
+interface PostableVoucher {
+  guid: string; voucherType: string; baseType: string; number: string | null; date: string; narration: string | null;
+  lines: { ledger: string; debitPaise: number; creditPaise: number }[];
+}
+
+/** A file is not a connected company: its vouchers are kept apart from any connector's under this id. */
+export const FILE_COMPANY_ID = 0;
+/** QuickBooks files: their transactions are kept apart from Tally's under this id (the table predates QuickBooks). */
+export const QUICKBOOKS_COMPANY_ID = -1;
+
+const SALES_SIDE = /^(Sales|Credit Note|Receipt)$/;
+const PURCHASE_SIDE = /^(Purchase|Debit Note|Payment)$/;
+
+/** What this book already holds, to name a Tally ledger's account from. */
+async function bookIndex(trx: Trx, orgId: number) {
+  const [accounts, contacts, banks] = await Promise.all([
+    trx.selectFrom('accounts').select(['id', 'code', 'name']).where('org_id', '=', orgId).execute(),
+    trx.selectFrom('contacts').select(['id', 'display_name', 'kind']).where('org_id', '=', orgId).execute(),
+    trx.selectFrom('bank_accounts').select(['name', 'ledger_account_id']).where('org_id', '=', orgId).execute(),
+  ]);
+  return {
+    byCode: new Map(accounts.map((a) => [a.code, a.id])),
+    byName: new Map(accounts.map((a) => [a.name.toLowerCase(), a.id])),
+    contactBy: new Map(contacts.map((c) => [c.display_name.toLowerCase(), { id: c.id, kind: c.kind }])),
+    bankBy: new Map(banks.map((b) => [b.name.toLowerCase(), b.ledger_account_id])),
+  };
+}
+
+/**
+ * Post vouchers as journal entries, each once. A voucher with a ledger that
+ * names no account here is left out and named, never guessed at; one dated
+ * before the books start is in the opening balances already.
+ */
+async function postVouchers(
+  trx: Trx, ctx: ImportContext, companyId: number, start: string, vouchers: PostableVoucher[],
+  resolve: (ledger: string, v: PostableVoucher, line: PostableVoucher['lines'][number]) => Resolved | null,
+  source = 'Tally',
 ): Promise<ImportOutcome> {
   const out: ImportOutcome = { kind: 'journals', rows: 0, created: 0, skipped: 0, errors: [], notes: [] };
-  const company = await trx.selectFrom('tally_companies').select(['id', 'name'])
-    .where('id', '=', companyId).where('org_id', '=', ctx.orgId).executeTakeFirst();
-  if (!company) throw new Error('That Tally company is not connected to this book.');
-
-  const start = (await booksStartDate(trx, ctx.orgId)).date;
-  const from = range.from && range.from > start ? range.from : start;
-
-  const [groups, ledgers, accounts, contacts, banks, done] = await Promise.all([
-    trx.selectFrom('tally_groups').select(['name', 'parent']).where('company_id', '=', companyId).execute(),
-    trx.selectFrom('tally_ledgers').select(['name', 'parent', 'closing_paise']).where('company_id', '=', companyId).execute(),
-    trx.selectFrom('accounts').select(['id', 'code', 'name']).where('org_id', '=', ctx.orgId).execute(),
-    trx.selectFrom('contacts').select(['id', 'display_name']).where('org_id', '=', ctx.orgId).execute(),
-    trx.selectFrom('bank_accounts').select(['name', 'ledger_account_id']).where('org_id', '=', ctx.orgId).execute(),
-    trx.selectFrom('tally_voucher_imports').select('guid').where('org_id', '=', ctx.orgId).where('company_id', '=', companyId).execute(),
-  ]);
-  const groupMap = new Map(groups.map((g) => [g.name, g.parent ?? '']));
-  const byCode = new Map(accounts.map((a) => [a.code, a.id]));
-  const byName = new Map(accounts.map((a) => [a.name.toLowerCase(), a.id]));
-  const contactBy = new Map(contacts.map((c) => [c.display_name.toLowerCase(), c.id]));
-  const bankBy = new Map(banks.map((b) => [b.name.toLowerCase(), b.ledger_account_id]));
+  const done = await trx.selectFrom('tally_voucher_imports').select('guid')
+    .where('org_id', '=', ctx.orgId).where('company_id', '=', companyId).execute();
   const imported = new Set(done.map((d) => d.guid));
-
-  // Each Tally ledger, resolved once.
-  const resolved = new Map<string, { accountId: number; contactId: number | null } | null>();
-  for (const l of ledgers) {
-    const key = l.name.toLowerCase();
-    const p = primaryOf(groupMap, l.parent);
-    let r: { accountId: number; contactId: number | null } | null = null;
-    if (p?.kind === 'debtor' || p?.kind === 'creditor') {
-      const contactId = contactBy.get(key) ?? null;
-      const accountId = byCode.get(p.kind === 'debtor' ? CODE.AR : CODE.AP) ?? null;
-      r = contactId && accountId ? { accountId, contactId } : null;
-    } else if (p?.kind === 'bank' || p?.kind === 'cash') {
-      const accountId = bankBy.get(key) ?? null;
-      r = accountId ? { accountId, contactId: null } : null;
-    } else if (p?.kind === 'tax') {
-      const code = taxCode(l.name, Number(l.closing_paise));
-      const accountId = (code && byCode.get(code)) || byName.get(key) || null;
-      r = accountId ? { accountId, contactId: null } : null;
-    } else {
-      const accountId = byName.get(key) ?? (key === 'profit & loss a/c' ? byCode.get(CODE.RETAINED) ?? null : null);
-      r = accountId ? { accountId, contactId: null } : null;
-    }
-    resolved.set(key, r);
-  }
-
-  const vouchers = await trx.selectFrom('tally_vouchers')
-    .select(['id', 'guid', 'voucher_type', 'number', 'date', 'narration'])
-    .where('company_id', '=', companyId).where('is_cancelled', '=', 0).where('is_optional', '=', 0)
-    .where('amount_paise', '>', 0).where('date', '>=', from)
-    .$if(!!range.to, (q) => q.where('date', '<=', range.to!))
-    .orderBy('date').orderBy('id').execute();
-  const entries = vouchers.length
-    ? await trx.selectFrom('tally_voucher_entries').select(['voucher_id', 'line_no', 'ledger', 'debit_paise', 'credit_paise'])
-      .where('voucher_id', 'in', vouchers.map((v) => v.id)).orderBy('voucher_id').orderBy('line_no').execute()
-    : [];
-  const linesOf = new Map<number, typeof entries>();
-  for (const e of entries) linesOf.set(e.voucher_id, [...(linesOf.get(e.voucher_id) ?? []), e]);
-
   const unresolved = new Set<string>();
   for (const [i, v] of vouchers.entries()) {
     out.rows++;
-    const label = `${v.voucher_type}${v.number ? ` ${v.number}` : ''} of ${String(v.date).slice(0, 10)}`;
+    const label = `${v.voucherType}${v.number ? ` ${v.number}` : ''} of ${v.date}`;
     if (imported.has(v.guid)) { out.skipped++; continue; }
-    const lines = linesOf.get(v.id) ?? [];
-    const missing = [...new Set(lines.map((l) => l.ledger).filter((name) => !resolved.get(name.toLowerCase())))];
+    const placed = v.lines.map((l) => ({ l, r: resolve(l.ledger, v, l) }));
+    const missing = [...new Set(placed.filter((p) => !p.r).map((p) => p.l.ledger))];
     if (missing.length) {
       missing.forEach((m) => unresolved.add(m));
       out.errors.push({ row: i + 1, message: `${label}: no account for ${missing.join(', ')}.` });
@@ -466,18 +340,16 @@ export async function importTallyVouchers(
     }
     try {
       const entry = await postEntry(trx, {
-        orgId: ctx.orgId, branchId: ctx.branchId, date: String(v.date).slice(0, 10), module: 'accountant',
+        orgId: ctx.orgId, branchId: ctx.branchId, date: v.date, module: 'accountant',
         sourceType: 'tally_import', userId: ctx.userId,
-        memo: `Tally ${v.voucher_type}${v.number ? ` ${v.number}` : ''}${v.narration ? ` — ${v.narration}` : ''}`.slice(0, 500),
-        lines: lines.map((l) => {
-          const r = resolved.get(l.ledger.toLowerCase())!;
-          return {
-            accountId: r.accountId, contactId: r.contactId, description: l.ledger,
-            debit: Number(l.debit_paise), credit: Number(l.credit_paise),
-          };
-        }),
+        memo: `${source} ${v.voucherType}${v.number ? ` ${v.number}` : ''}${v.narration ? ` — ${v.narration}` : ''}`.slice(0, 500),
+        lines: placed.map(({ l, r }) => ({
+          accountId: r!.accountId, contactId: r!.contactId, description: l.ledger,
+          debit: l.debitPaise, credit: l.creditPaise,
+        })),
       });
       await trx.insertInto('tally_voucher_imports').values({ org_id: ctx.orgId, company_id: companyId, guid: v.guid, journal_entry_id: entry.id }).execute();
+      imported.add(v.guid);
       out.created++;
     } catch (err) {
       out.errors.push({ row: i + 1, message: `${label}: ${(err as Error).message}` });
@@ -485,13 +357,147 @@ export async function importTallyVouchers(
   }
   if (unresolved.size) {
     out.notes.push(
-      `${unresolved.size} Tally ledger(s) have no account here yet: ${[...unresolved].slice(0, 8).join(', ')}${unresolved.size > 8 ? '…' : ''}. ` +
-        'Bring the masters across again, or add them to the chart of accounts with the same name.',
+      `${unresolved.size} ${source} ${source === 'Tally' ? 'ledger' : 'account'}(s) have no account here yet: ${[...unresolved].slice(0, 8).join(', ')}${unresolved.size > 8 ? '…' : ''}. ` +
+        (source === 'Tally'
+          ? 'Bring the masters across first (Export → Masters in TallyPrime), or add them to the chart of accounts with the same name.'
+          : 'Bring the chart of accounts, customer and vendor lists along, or add them here with the same names.'),
     );
   }
   out.notes.push(
-    `Vouchers from ${from}${range.to ? ` to ${range.to}` : ''}; anything earlier is in the opening balances. ` +
+    `Vouchers from ${start}; anything earlier is in the opening balances. ` +
       'They post as journal entries and are not part of the GST returns, which are filed from documents raised here.',
   );
   return out;
 }
+
+export async function importTallyVouchers(
+  trx: Trx, ctx: ImportContext, companyId: number, range: { from?: string | null; to?: string | null } = {},
+): Promise<ImportOutcome> {
+  const company = await trx.selectFrom('tally_companies').select(['id', 'name'])
+    .where('id', '=', companyId).where('org_id', '=', ctx.orgId).executeTakeFirst();
+  if (!company) throw new Error('That Tally company is not connected to this book.');
+
+  const start = (await booksStartDate(trx, ctx.orgId)).date;
+  const from = range.from && range.from > start ? range.from : start;
+
+  const [groups, ledgers, book] = await Promise.all([
+    trx.selectFrom('tally_groups').select(['name', 'parent']).where('company_id', '=', companyId).execute(),
+    trx.selectFrom('tally_ledgers').select(['name', 'parent', 'closing_paise']).where('company_id', '=', companyId).execute(),
+    bookIndex(trx, ctx.orgId),
+  ]);
+  const groupMap = new Map(groups.map((g) => [g.name, g.parent ?? '']));
+
+  // Each Tally ledger, resolved once, through its group.
+  const resolved = new Map<string, Resolved | null>();
+  for (const l of ledgers) {
+    const key = l.name.toLowerCase();
+    const p = primaryOf(groupMap, l.parent);
+    let r: Resolved | null = null;
+    if (p?.kind === 'debtor' || p?.kind === 'creditor') {
+      const contactId = book.contactBy.get(key)?.id ?? null;
+      const accountId = book.byCode.get(p.kind === 'debtor' ? CODE.AR : CODE.AP) ?? null;
+      r = contactId && accountId ? { accountId, contactId } : null;
+    } else if (p?.kind === 'bank' || p?.kind === 'cash') {
+      const accountId = book.bankBy.get(key) ?? null;
+      r = accountId ? { accountId, contactId: null } : null;
+    } else if (p?.kind === 'tax') {
+      const code = taxCode(l.name, Number(l.closing_paise));
+      const accountId = (code && book.byCode.get(code)) || book.byName.get(key) || null;
+      r = accountId ? { accountId, contactId: null } : null;
+    } else {
+      const accountId = book.byName.get(key) ?? (key === 'profit & loss a/c' ? book.byCode.get(CODE.RETAINED) ?? null : null);
+      r = accountId ? { accountId, contactId: null } : null;
+    }
+    resolved.set(key, r);
+  }
+
+  const rows = await trx.selectFrom('tally_vouchers')
+    .select(['id', 'guid', 'voucher_type', 'base_type', 'number', 'date', 'narration'])
+    .where('company_id', '=', companyId).where('is_cancelled', '=', 0).where('is_optional', '=', 0)
+    .where('amount_paise', '>', 0).where('date', '>=', from)
+    .$if(!!range.to, (q) => q.where('date', '<=', range.to!))
+    .orderBy('date').orderBy('id').execute();
+  const entries = rows.length
+    ? await trx.selectFrom('tally_voucher_entries').select(['voucher_id', 'line_no', 'ledger', 'debit_paise', 'credit_paise'])
+      .where('voucher_id', 'in', rows.map((v) => v.id)).orderBy('voucher_id').orderBy('line_no').execute()
+    : [];
+  const linesOf = new Map<number, typeof entries>();
+  for (const e of entries) linesOf.set(e.voucher_id, [...(linesOf.get(e.voucher_id) ?? []), e]);
+
+  const vouchers: PostableVoucher[] = rows.map((v) => ({
+    guid: v.guid, voucherType: v.voucher_type, baseType: v.base_type, number: v.number,
+    date: String(v.date).slice(0, 10), narration: v.narration,
+    lines: (linesOf.get(v.id) ?? []).map((l) => ({ ledger: l.ledger, debitPaise: Number(l.debit_paise), creditPaise: Number(l.credit_paise) })),
+  }));
+  const out = await postVouchers(trx, ctx, companyId, from, vouchers, (ledger) => resolved.get(ledger.toLowerCase()) ?? null);
+  if (range.to) out.notes[out.notes.length - 1] = out.notes[out.notes.length - 1].replace(`Vouchers from ${from};`, `Vouchers from ${from} to ${range.to};`);
+  return out;
+}
+
+/**
+ * Vouchers read from Tally files (Export → Transactions). Each ledger is named
+ * the way the masters were brought in: through its group, when the same upload
+ * carried the masters; otherwise by what this book already has under that name
+ * — a customer or vendor, a bank or cash account, a GST or TDS ledger, or an
+ * account. Run the same file again and only what is new comes across.
+ */
+export async function importTallyFileVouchers(
+  trx: Trx, ctx: ImportContext, fileVouchers: TallyFileVoucher[], masters?: TallyMasters,
+  from: { companyId: number; source: string } = { companyId: FILE_COMPANY_ID, source: 'Tally' },
+): Promise<ImportOutcome> {
+  const start = (await booksStartDate(trx, ctx.orgId)).date;
+  const book = await bookIndex(trx, ctx.orgId);
+  const groups = masters?.groups ?? new Map<string, string>();
+  const parentOf = new Map((masters?.ledgers ?? []).map((l) => [l.name.toLowerCase(), l.parent]));
+
+  const posting = fileVouchers.filter(postsToBooks);
+  const early = posting.filter((v) => v.date < start);
+  const vouchers = posting.filter((v) => v.date >= start);
+
+  const resolve = (ledger: string, v: PostableVoucher, line: PostableVoucher['lines'][number]): Resolved | null => {
+    const key = ledger.toLowerCase();
+    if (key === 'profit & loss a/c') return accountOnly(book.byCode.get(CODE.RETAINED));
+    const parent = parentOf.get(key);
+    const p = parent !== undefined ? primaryOf(groups, parent) : null;
+    const contact = book.contactBy.get(key);
+    // A party: by its group when the masters came along, else by the customer or vendor of that name.
+    if (p?.kind === 'debtor' || p?.kind === 'creditor' || (!p && contact)) {
+      if (!contact) return null;
+      const receivable = p ? p.kind === 'debtor'
+        : contact.kind === 'customer' ? true
+          : contact.kind === 'vendor' ? false
+            : !PURCHASE_SIDE.test(v.baseType);
+      const accountId = book.byCode.get(receivable ? CODE.AR : CODE.AP);
+      return accountId ? { accountId, contactId: contact.id } : null;
+    }
+    if (p?.kind === 'bank' || p?.kind === 'cash' || (!p && book.bankBy.has(key))) return accountOnly(book.bankBy.get(key));
+    const looksTax = p?.kind === 'tax' || (!p && /\b(c|s|ut|i)gst\b|cess|\btds\b|\btcs\b|integrated tax|central tax|state tax/i.test(ledger));
+    if (looksTax && /\btds\b|\btcs\b/i.test(ledger)) {
+      // Tax deducted or collected: a debit is owed to us (receivable), a credit is ours to deposit (payable).
+      const code = taxCode(ledger, line.debitPaise > 0 ? 1 : -1);
+      return accountOnly((code && book.byCode.get(code)) || book.byName.get(key));
+    }
+    if (looksTax) {
+      // A single "CGST" ledger in Tally serves both ways: which side of the books it is, the voucher says.
+      const input = /input|itc/i.test(ledger) ? true : /output/i.test(ledger) ? false
+        : PURCHASE_SIDE.test(v.baseType) && v.baseType !== 'Payment' ? true
+          : SALES_SIDE.test(v.baseType) && v.baseType !== 'Receipt' ? false
+            : line.debitPaise > 0;
+      const code = taxCode(input ? `input ${ledger}` : ledger.replace(/input|itc/gi, ''), input ? 1 : -1);
+      return accountOnly((code && book.byCode.get(code)) || book.byName.get(key));
+    }
+    return accountOnly(book.byName.get(key));
+  };
+
+  const out = await postVouchers(trx, ctx, from.companyId, start, vouchers, resolve, from.source);
+  const left = fileVouchers.length - posting.length;
+  if (early.length) out.notes.unshift(`${early.length} voucher(s) are dated before the books start (${start}): they are in the opening balances, so they were left out.`);
+  if (left) out.notes.unshift(`${left} voucher(s) in the file post nothing to the books (cancelled, optional, orders, stock or memo vouchers, or entries that do not balance), so they were left out.`);
+  out.rows += early.length;
+  out.skipped += early.length;
+  return out;
+}
+
+const accountOnly = (accountId: number | null | undefined): Resolved | null => (accountId ? { accountId, contactId: null } : null);
+
+export { NON_ACCOUNTING_TYPES };

@@ -106,7 +106,9 @@ export function route(handler: Handler, options: RouteOptions = {}) {
       if (!options.public) {
         user = await currentUser();
         // Other software signs in with an API key instead of a session cookie.
-        if (!user && req.headers.get('authorization')?.startsWith('Bearer rk_')) {
+        const authz = req.headers.get('authorization') ?? '';
+        // A Basic header (key as the password) only on reads of the BI feeds: see basicKeyAllowed.
+        if (!user && (authz.startsWith('Bearer rk_') || (authz.startsWith('Basic ') && req.method === 'GET' && /^\/api\/(odata|bi)(\/|$)/.test(path)))) {
           const keys = await import('./auth/api-keys');
           const byKey = await keys.apiKeyUser(req);
           if (byKey) {

@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card } from '@/components/ui/card';
+import { tileColors } from '@/components/shared/stat-tile';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -253,10 +254,10 @@ export default function BankingPage() {
             <>
               <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                 {totals.map((t) => (
-                  <Card key={t.label} className="p-4">
+                  <Card key={t.label} className={`p-4 ${tileColors(t.label).card}`}>
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
-                        <p className="micro-label">{t.label}</p>
+                        <p className={`text-[10px] font-semibold uppercase tracking-[0.11em] ${tileColors(t.label).label}`}>{t.label}</p>
                         <p className="mt-1.5 tabular text-2xl font-semibold">
                           {formatINRCompact(t.value)}
                         </p>
@@ -264,7 +265,7 @@ export default function BankingPage() {
                           {t.count} account{t.count === 1 ? '' : 's'} · {t.hint}
                         </p>
                       </div>
-                      <t.icon className="size-4 shrink-0 text-muted-foreground" />
+                      <span className={`grid size-8 shrink-0 place-items-center rounded-lg ${tileColors(t.label).chip}`}><t.icon className="size-4" /></span>
                     </div>
                   </Card>
                 ))}

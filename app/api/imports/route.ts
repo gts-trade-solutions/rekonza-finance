@@ -5,7 +5,9 @@ import { hasPermission } from '@/lib/rbac';
 import { logAudit, auditMeta } from '@/lib/server/audit';
 import { IMPORT_KINDS, MAX_IMPORT_ROWS, TEMPLATES, type ImportKind } from '@/lib/imports/templates';
 import { clean, runImport, type ImportOutcome } from '@/lib/server/imports/run';
-import { connectedCompanyMasters, importTally, importTallyVouchers, parseTallyMastersXml } from '@/lib/server/imports/tally';
+import { connectedCompanyMasters, importTally, importTallyFileVouchers, importTallyVouchers, QUICKBOOKS_COMPANY_ID } from '@/lib/server/imports/tally';
+import { parseQuickBooks, toImportShapes } from '@/lib/quickbooks/parse';
+import { parseTallyFiles } from '@/lib/tally/xml';
 
 // Imports. A check runs the whole import and throws it away; a real run keeps
 // it only if every row went in. Either way the answer is the same shape: what
@@ -27,14 +29,26 @@ const Input = z.discriminatedUnion('source', [
     dryRun: z.boolean().default(true),
     onDuplicate: z.enum(['skip', 'error']).default('skip'),
   }),
+  // Files exported from Tally: masters, vouchers, or both, one file or several.
   z.object({
     source: z.literal('tally-xml'),
-    xml: z.string().min(1).max(50 * 1024 * 1024),
+    xml: z.string().min(1).max(50 * 1024 * 1024).optional(),
+    files: z.array(z.string().min(1).max(50 * 1024 * 1024)).max(12, 'Up to 12 files at a time.').optional(),
     dryRun: z.boolean().default(true),
   }),
   z.object({
     source: z.literal('tally-company'),
     companyId: z.union([z.string(), z.number()]),
+    dryRun: z.boolean().default(true),
+  }),
+  // QuickBooks: Desktop's IIF files and Online's lists and Journal report, each read by the browser into rows.
+  z.object({
+    source: z.literal('quickbooks'),
+    files: z.array(z.object({
+      name: z.string().max(255),
+      rows: z.array(z.array(z.string().max(4000)).max(300)).max(200_000, 'Up to 200,000 rows a file.'),
+    })).min(1, 'Choose the files QuickBooks exported.').max(12, 'Up to 12 files at a time.'),
+    dateOrder: z.enum(['auto', 'dmy', 'mdy']).default('auto'),
     dryRun: z.boolean().default(true),
   }),
   // The company's vouchers, after its masters: posted as journal entries.
@@ -70,19 +84,40 @@ export const POST = route(async ({ orgId, user, role, branchId, req }) => {
         out = [await runImport(trx, ctx, input.kind, input.rows)];
       } else if (input.source === 'tally-vouchers') {
         out = [await importTallyVouchers(trx, ctx, Number(input.companyId), { from: input.from, to: input.to })];
+      } else if (input.source === 'quickbooks') {
+        const data = parseQuickBooks(input.files, input.dateOrder);
+        const { masters, vouchers } = toImportShapes(data);
+        const hasMasters = masters.ledgers.length > 0 || masters.stockItems.length > 0;
+        if (!hasMasters && !vouchers.length) {
+          throw badRequest('Nothing QuickBooks wrote was found: export an IIF file, or the Account List, Customers, Vendors, Products and Services or the Journal report.');
+        }
+        out = hasMasters ? await importTally(trx, ctx, masters, 'QuickBooks') : [];
+        if (vouchers.length) {
+          out.push(await importTallyFileVouchers(trx, ctx, vouchers, masters, { companyId: QUICKBOOKS_COMPANY_ID, source: 'QuickBooks' }));
+        }
+        if (data.warnings.length) (out[0] ?? out[out.length - 1])?.notes.push(...data.warnings);
+      } else if (input.source === 'tally-xml') {
+        const files = [...(input.files ?? []), ...(input.xml ? [input.xml] : [])];
+        if (!files.length) throw badRequest('Choose the XML file Tally exported.');
+        const file = parseTallyFiles(files);
+        const hasMasters = file.masters.ledgers.length > 0 || file.masters.stockItems.length > 0;
+        if (!hasMasters && !file.vouchers.length) {
+          throw badRequest('No ledgers, stock items or vouchers were found. In TallyPrime use Export → Masters, or Export → Transactions, format XML.');
+        }
+        // Masters first, so the vouchers find the customers, vendors and accounts they name.
+        out = hasMasters ? await importTally(trx, ctx, file.masters) : [];
+        if (file.vouchers.length) out.push(await importTallyFileVouchers(trx, ctx, file.vouchers, hasMasters ? file.masters : undefined));
       } else {
-        const masters = input.source === 'tally-xml'
-          ? parseTallyMastersXml(input.xml)
-          : await connectedCompanyMasters(trx, orgId, Number(input.companyId));
+        const masters = await connectedCompanyMasters(trx, orgId, Number(input.companyId));
         if (!masters.ledgers.length && !masters.stockItems.length) {
-          throw badRequest('No ledgers or stock items were found. In TallyPrime use Export → Masters, format XML.');
+          throw badRequest('No ledgers or stock items were found in that company.');
         }
         out = await importTally(trx, ctx, masters);
       }
       if (input.dryRun || !clean(out)) throw new Discard(out);
       await logAudit({
         trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'import',
-        targetType: input.source === 'rows' ? input.kind : 'tally',
+        targetType: input.source === 'rows' ? input.kind : input.source === 'quickbooks' ? 'quickbooks' : 'tally',
         detail: out.map((o) => `${o.kind}: ${o.created} created, ${o.skipped} skipped`).join('; '),
         ...auditMeta(req),
       });

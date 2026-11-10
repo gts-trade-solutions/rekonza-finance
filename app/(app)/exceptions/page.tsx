@@ -11,6 +11,7 @@ import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
+import { tileColors } from '@/components/shared/stat-tile';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
@@ -121,8 +122,8 @@ export default function ExceptionsPage() {
                 ['High', d.summary.high, d.summary.high ? 'text-orange-700 dark:text-orange-400' : ''],
                 ['Closed', d.summary.closed, ''],
               ].map(([label, n, tone]) => (
-                <Card key={label as string} className="p-4">
-                  <p className="text-xs uppercase tracking-wide text-muted-foreground">{label}</p>
+                <Card key={label as string} className={`p-4 ${tileColors(label as string, label === 'Critical' ? 'danger' : label === 'High' ? 'warning' : label === 'Closed' ? 'positive' : 'default').card}`}>
+                  <p className={`text-xs font-medium uppercase tracking-wide ${tileColors(label as string, label === 'Critical' ? 'danger' : label === 'High' ? 'warning' : label === 'Closed' ? 'positive' : 'default').label}`}>{label}</p>
                   <p className={cn('text-2xl font-semibold', tone as string)}>{n}</p>
                 </Card>
               ))}

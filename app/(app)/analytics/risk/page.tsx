@@ -8,6 +8,7 @@ import Link from 'next/link';
 import { ArrowUpRight, ShieldAlert } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Card } from '@/components/ui/card';
+import { tileColors } from '@/components/shared/stat-tile';
 import { PageHeader } from '@/components/shared/page-header';
 import { AsyncPage } from '@/components/shared/async-state';
 import { DataTable, type Column } from '@/components/shared/data-table';
@@ -67,8 +68,8 @@ export default function RiskPage() {
               <h2 className="text-sm font-semibold">Collections expected, by each customer&apos;s own lateness</h2>
               <div className="grid gap-3 sm:grid-cols-4">
                 {([['Next 30 days', d.expected.next30], ['31–60 days', d.expected.next60], ['61–90 days', d.expected.next90], ['Later or at risk', d.expected.later]] as const).map(([label, v]) => (
-                  <Card key={label} className="p-4">
-                    <p className="text-xs uppercase tracking-wide text-muted-foreground">{label}</p>
+                  <Card key={label} className={`p-4 ${tileColors(label, label.startsWith('Later') ? 'warning' : 'default').card}`}>
+                    <p className={`text-xs font-medium uppercase tracking-wide ${tileColors(label, label.startsWith('Later') ? 'warning' : 'default').label}`}>{label}</p>
                     <p className="text-xl font-semibold"><Money value={v} whole /></p>
                   </Card>
                 ))}

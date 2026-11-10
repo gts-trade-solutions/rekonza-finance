@@ -2762,6 +2762,7 @@ export const approvals = {
 
 export interface ImportOutcome {
   kind: string;
+  label?: string;
   rows: number;
   created: number;
   skipped: number;
@@ -2775,6 +2776,11 @@ export const imports = {
   rows: (kind: string, rows: Record<string, unknown>[], opts: { dryRun: boolean; onDuplicate?: 'skip' | 'error' }) =>
     api.post<ImportResponse>('/api/imports', { source: 'rows', kind, rows, ...opts }),
   tallyXml: (xml: string, dryRun: boolean) => api.post<ImportResponse>('/api/imports', { source: 'tally-xml', xml, dryRun }),
+  /** QuickBooks' lists and transactions, each file read into rows by the browser. */
+  quickBooks: (files: { name: string; rows: string[][] }[], dateOrder: 'auto' | 'dmy' | 'mdy', dryRun: boolean) =>
+    api.post<ImportResponse>('/api/imports', { source: 'quickbooks', files, dateOrder, dryRun }),
+  /** Masters, vouchers, or both, from one or more files Tally exported. */
+  tallyFiles: (files: string[], dryRun: boolean) => api.post<ImportResponse>('/api/imports', { source: 'tally-xml', files, dryRun }),
   tallyCompany: (companyId: string, dryRun: boolean) =>
     api.post<ImportResponse>('/api/imports', { source: 'tally-company', companyId, dryRun }),
   /** A connected company's vouchers, posted as journal entries. */

@@ -244,7 +244,7 @@ export function DataTable<T>({
       <div className="overflow-x-auto rounded-lg border thin-scroll">
         <Table>
           <TableHeader>
-            <TableRow className="bg-muted/50 hover:bg-muted/50">
+            <TableRow className="bg-table-head hover:bg-table-head">
               {selectable && (
                 <TableHead className="w-10">
                   <Checkbox

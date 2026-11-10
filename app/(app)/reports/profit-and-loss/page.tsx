@@ -19,6 +19,7 @@ import { Suspense, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { TrendingDown, TrendingUp } from 'lucide-react';
 import { Card } from '@/components/ui/card';
+import { tileColors } from '@/components/shared/stat-tile';
 import { Money } from '@/components/shared/money';
 import { BasisSelect, CompareSelect, downloadCsv, ReportShell, useReportRange, type ReportBasis } from '@/components/shared/report-shell';
 import { AsyncPage, LoadingRows } from '@/components/shared/async-state';
@@ -103,10 +104,10 @@ function ProfitAndLoss() {
                     before: prev ? Math.abs(prev.netProfitPaise) : undefined,
                   },
                 ].map((t) => (
-                  <Card key={t.label} className="p-4">
+                  <Card key={t.label} className={`p-4 ${tileColors(t.label, t.tone === 'good' ? 'positive' : t.tone === 'bad' ? 'danger' : 'default').card}`}>
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
-                        <p className="micro-label">{t.label}</p>
+                        <p className={`text-[10px] font-semibold uppercase tracking-[0.11em] ${tileColors(t.label, t.tone === 'good' ? 'positive' : t.tone === 'bad' ? 'danger' : 'default').label}`}>{t.label}</p>
                         <p className={`mt-1.5 tabular text-2xl font-semibold ${t.tone === 'good' ? 'text-emerald-600 dark:text-emerald-400' : t.tone === 'bad' ? 'text-destructive' : ''}`}>
                           <Money value={t.value} />
                         </p>

@@ -44,7 +44,9 @@
   --color-success: var(--success);
   --color-warning: var(--warning);
   --color-info: var(--info);
-  --radius-sm: 1px;
+  --color-table-head: var(--table-head);
+  --color-table-head-foreground: var(--table-head-foreground);
+  --radius-sm: calc(var(--radius) - 2px);
   --radius-md: var(--radius);
   --radius-lg: calc(var(--radius) + 2px);
   --radius-xl: calc(var(--radius) + 4px);
@@ -53,55 +55,59 @@
 }
 
 /*
-  ── Nordic Slate ───────────────────────────────────────────────────────────
-  A cool blue-grey workspace with near-square corners and monospaced figures.
-  The look is engineered rather than decorated: structure comes from precise
-  2px geometry, thin accent bars and uppercase micro-labels, not from colour
-  washes or rounded cards.
+  ── Ledger Blue ────────────────────────────────────────────────────────────
+  The look of an accounting app: a deep navy navigation rail with a colour
+  for each part of the books, a vivid blue for what can be pressed, white
+  sheets lifted off a soft blue-grey canvas, and tinted table headings so a
+  long register reads in rows rather than as a white page.
 
   Semantic colour is held apart from the brand accent, so a negative figure
   never reads as "branded" and a primary button never reads as "positive".
 */
 :root {
-  --radius: 0.125rem;                    /* 2px — near-square */
+  --radius: 0.375rem;                    /* 6px */
 
-  --background: oklch(0.945 0.007 240);  /* cool slate canvas */
+  --background: oklch(0.955 0.013 256);  /* soft blue-grey canvas */
   --surface: oklch(1 0 0);
-  --foreground: oklch(0.24 0.017 250);   /* cool near-black   */
+  --foreground: oklch(0.25 0.03 262);    /* navy near-black */
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.24 0.017 250);
+  --card-foreground: oklch(0.25 0.03 262);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.24 0.017 250);
+  --popover-foreground: oklch(0.25 0.03 262);
+  --card-shadow: 0 1px 2px oklch(0.3 0.04 262 / 0.06), 0 2px 6px oklch(0.3 0.04 262 / 0.05);
 
-  --primary: oklch(0.48 0.15 249);       /* precise cobalt */
+  --primary: oklch(0.55 0.19 260);       /* vivid ledger blue */
   --primary-foreground: oklch(1 0 0);
 
-  --secondary: oklch(0.955 0.008 240);
-  --secondary-foreground: oklch(0.32 0.018 250);
-  --muted: oklch(0.958 0.007 240);
-  --muted-foreground: oklch(0.5 0.016 248);
-  --accent: oklch(0.935 0.014 244);
-  --accent-foreground: oklch(0.29 0.03 250);
+  --secondary: oklch(0.95 0.016 256);
+  --secondary-foreground: oklch(0.32 0.04 262);
+  --muted: oklch(0.955 0.014 256);
+  --muted-foreground: oklch(0.5 0.025 258);
+  --accent: oklch(0.94 0.03 258);
+  --accent-foreground: oklch(0.3 0.07 262);
 
-  --destructive: oklch(0.53 0.19 26);
+  --destructive: oklch(0.55 0.2 25);
   --destructive-foreground: oklch(1 0 0);
-  --success: oklch(0.5 0.12 160);
-  --warning: oklch(0.66 0.13 65);
-  --info: oklch(0.5 0.13 240);
+  --success: oklch(0.52 0.13 155);
+  --warning: oklch(0.66 0.14 62);
+  --info: oklch(0.55 0.15 245);
 
-  --border: oklch(0.885 0.01 242);
-  --input: oklch(0.855 0.012 242);
-  --ring: oklch(0.48 0.15 249);
+  --border: oklch(0.9 0.014 256);
+  --input: oklch(0.86 0.018 256);
+  --ring: oklch(0.55 0.19 260);
 
-  --field-label: oklch(0.45 0.016 248);
-  --required: oklch(0.53 0.19 26);
+  --field-label: oklch(0.45 0.03 260);
+  --required: oklch(0.55 0.2 25);
 
-  /* Charts: cool, technical, evenly spaced in hue. */
-  --chart-1: oklch(0.48 0.15 249);
-  --chart-2: oklch(0.58 0.11 205);
-  --chart-3: oklch(0.6 0.1 165);
-  --chart-4: oklch(0.66 0.12 62);
-  --chart-5: oklch(0.53 0.16 300);
+  /* Register headings: a pale blue band with navy text. */
+  --table-head: oklch(0.94 0.025 258);
+  --table-head-foreground: oklch(0.34 0.05 262);
+
+  --chart-1: oklch(0.55 0.19 260);
+  --chart-2: oklch(0.65 0.14 200);
+  --chart-3: oklch(0.62 0.15 155);
+  --chart-4: oklch(0.72 0.15 65);
+  --chart-5: oklch(0.58 0.2 305);
 
   /* Analytics. Eight categorical hues in a fixed, validated order — lightness
      band, chroma floor, colour-blind separation between neighbours and the
@@ -130,56 +136,60 @@
   --viz-div-neg: #e34948;
   --viz-div-mid: #e6e8eb;
 
-  /* Chrome: the same slate family, one step cooler than the canvas. */
+  /* Chrome: a white top bar over a deep navy rail. */
   --topbar: oklch(1 0 0);
-  --topbar-foreground: oklch(0.28 0.018 250);
-  --sidebar: oklch(0.972 0.006 240);
-  --sidebar-foreground: oklch(0.42 0.016 248);
-  --sidebar-primary: oklch(0.48 0.15 249);
+  --topbar-foreground: oklch(0.28 0.03 262);
+  --sidebar: oklch(0.255 0.045 266);
+  --sidebar-foreground: oklch(0.84 0.02 260);
+  --sidebar-primary: oklch(0.58 0.19 258);
   --sidebar-primary-foreground: oklch(1 0 0);
-  --sidebar-accent: oklch(0.925 0.014 244);
-  --sidebar-accent-foreground: oklch(0.25 0.028 250);
-  --sidebar-border: oklch(0.88 0.01 242);
-  --sidebar-ring: oklch(0.48 0.15 249);
+  --sidebar-accent: oklch(0.315 0.05 266);
+  --sidebar-accent-foreground: oklch(1 0 0);
+  --sidebar-border: oklch(0.33 0.045 266);
+  --sidebar-ring: oklch(0.65 0.17 258);
 }
 
 .dark {
-  --background: oklch(0.17 0.015 250);
-  --surface: oklch(0.208 0.016 250);
-  --foreground: oklch(0.93 0.007 240);
-  --card: oklch(0.208 0.016 250);
-  --card-foreground: oklch(0.93 0.007 240);
-  --popover: oklch(0.218 0.016 250);
-  --popover-foreground: oklch(0.93 0.007 240);
+  --background: oklch(0.17 0.02 262);
+  --surface: oklch(0.21 0.022 262);
+  --foreground: oklch(0.93 0.008 256);
+  --card: oklch(0.21 0.022 262);
+  --card-foreground: oklch(0.93 0.008 256);
+  --popover: oklch(0.225 0.022 262);
+  --popover-foreground: oklch(0.93 0.008 256);
+  --card-shadow: 0 1px 2px oklch(0 0 0 / 0.3);
 
-  --primary: oklch(0.63 0.15 249);
+  --primary: oklch(0.64 0.17 258);
   --primary-foreground: oklch(1 0 0);
 
-  --secondary: oklch(0.26 0.018 250);
-  --secondary-foreground: oklch(0.93 0.007 240);
-  --muted: oklch(0.25 0.016 250);
-  --muted-foreground: oklch(0.67 0.014 244);
-  --accent: oklch(0.29 0.026 250);
-  --accent-foreground: oklch(0.94 0.007 240);
+  --secondary: oklch(0.26 0.024 262);
+  --secondary-foreground: oklch(0.93 0.008 256);
+  --muted: oklch(0.25 0.022 262);
+  --muted-foreground: oklch(0.68 0.02 256);
+  --accent: oklch(0.29 0.035 262);
+  --accent-foreground: oklch(0.95 0.008 256);
 
-  --destructive: oklch(0.64 0.18 26);
+  --destructive: oklch(0.64 0.18 25);
   --destructive-foreground: oklch(1 0 0);
-  --success: oklch(0.66 0.13 160);
-  --warning: oklch(0.75 0.13 65);
-  --info: oklch(0.65 0.13 240);
+  --success: oklch(0.68 0.14 155);
+  --warning: oklch(0.76 0.14 62);
+  --info: oklch(0.68 0.14 245);
 
-  --border: oklch(0.3 0.018 250);
-  --input: oklch(0.33 0.018 250);
-  --ring: oklch(0.63 0.15 249);
+  --border: oklch(0.3 0.024 262);
+  --input: oklch(0.33 0.024 262);
+  --ring: oklch(0.64 0.17 258);
 
-  --field-label: oklch(0.7 0.014 244);
-  --required: oklch(0.66 0.17 26);
+  --field-label: oklch(0.72 0.018 256);
+  --required: oklch(0.67 0.17 25);
 
-  --chart-1: oklch(0.63 0.15 249);
-  --chart-2: oklch(0.68 0.11 205);
-  --chart-3: oklch(0.7 0.1 165);
-  --chart-4: oklch(0.75 0.12 62);
-  --chart-5: oklch(0.65 0.15 300);
+  --table-head: oklch(0.25 0.03 262);
+  --table-head-foreground: oklch(0.85 0.03 256);
+
+  --chart-1: oklch(0.64 0.17 258);
+  --chart-2: oklch(0.7 0.12 200);
+  --chart-3: oklch(0.7 0.13 155);
+  --chart-4: oklch(0.77 0.13 65);
+  --chart-5: oklch(0.67 0.17 305);
 
   /* Analytics, dark: the same eight hues stepped for the dark card (#12181f)
      and validated as a set there — all clear 3:1. Selected, not inverted. */
@@ -205,16 +215,16 @@
   --viz-div-neg: #e66767;
   --viz-div-mid: #2a323b;
 
-  --topbar: oklch(0.208 0.016 250);
-  --topbar-foreground: oklch(0.91 0.008 240);
-  --sidebar: oklch(0.185 0.015 250);
-  --sidebar-foreground: oklch(0.71 0.014 244);
-  --sidebar-primary: oklch(0.63 0.15 249);
+  --topbar: oklch(0.21 0.022 262);
+  --topbar-foreground: oklch(0.92 0.008 256);
+  --sidebar: oklch(0.19 0.035 266);
+  --sidebar-foreground: oklch(0.8 0.02 258);
+  --sidebar-primary: oklch(0.58 0.18 258);
   --sidebar-primary-foreground: oklch(1 0 0);
-  --sidebar-accent: oklch(0.26 0.02 250);
-  --sidebar-accent-foreground: oklch(0.94 0.007 240);
-  --sidebar-border: oklch(0.29 0.018 250);
-  --sidebar-ring: oklch(0.63 0.15 249);
+  --sidebar-accent: oklch(0.26 0.04 266);
+  --sidebar-accent-foreground: oklch(1 0 0);
+  --sidebar-border: oklch(0.28 0.035 266);
+  --sidebar-ring: oklch(0.65 0.17 258);
 }
 
 @layer base {
@@ -264,10 +274,11 @@
   }
   .thin-scroll::-webkit-scrollbar-track { background: transparent; }
 
-  /* Cards are flat planes with a hairline; depth is not the language here. */
+  /* Cards are white sheets lifted a little off the blue-grey canvas. */
   .surface-card {
     background: var(--surface);
     border: 1px solid var(--border);
+    box-shadow: var(--card-shadow);
   }
   .surface-raised {
     box-shadow:

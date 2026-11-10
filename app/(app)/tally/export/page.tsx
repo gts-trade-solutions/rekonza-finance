@@ -10,7 +10,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import Link from 'next/link';
-import { MonitorDown } from 'lucide-react';
+import { Download, MonitorDown } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { PageHeader } from '@/components/shared/page-header';
 import { ExportPanel } from '@/components/tally/export-panel';
@@ -22,11 +22,16 @@ export default function TallyExportPage() {
         title="Export to Tally"
         description="Everything posted here, as TallyPrime vouchers your accountant imports. Nothing is changed in this book, and importing the same period twice does not enter it twice."
         actions={
-          <Button variant="outline" size="sm" asChild>
-            <Link href="/tally">
-              <MonitorDown className="size-3.5" /> Tally books
-            </Link>
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm" asChild>
+              <Link href="/tally/import"><Download className="size-3.5" /> Import from Tally</Link>
+            </Button>
+            <Button variant="outline" size="sm" asChild>
+              <Link href="/tally">
+                <MonitorDown className="size-3.5" /> Tally
+              </Link>
+            </Button>
+          </div>
         }
       />
       <ExportPanel />

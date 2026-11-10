@@ -10,6 +10,13 @@ const nextConfig: NextConfig = {
   // `next dev` keeps a lock on .next, so a production build run at the same time
   // fails with EPERM. Set NEXT_BUILD_DIR to build into a separate folder.
   distDir: process.env.NEXT_BUILD_DIR || '.next',
+  // Every /api request passes the middleware (the demo playback), and Next
+  // buffers a body there only up to 10 MB by default, cutting the rest off: a
+  // year of Tally vouchers, or a big spreadsheet import, would arrive broken.
+  // 25 MB is what the server's nginx lets through.
+  experimental: {
+    middlewareClientMaxBodySize: '25mb',
+  },
   // The go-live check counts the migrations against the database, so they ship with it.
   outputFileTracingIncludes: {
     '/api/settings/golive': ['./db/migrations/*.sql'],

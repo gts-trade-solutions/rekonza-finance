@@ -20,7 +20,6 @@ import {
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { PageHeader } from '@/components/shared/page-header';
 import { ChecklistBoard } from '@/components/dashboard/checklist-board';
 import { DateRangePicker } from '@/components/shared/date-range-picker';
 import { StatTile } from '@/components/shared/stat-tile';
@@ -103,21 +102,24 @@ export default function DashboardPage() {
 
   return (
     <>
-      <PageHeader
-        title={`Good day, ${firstName}`}
-        description={`${session.org?.name} · figures as at ${new Date(today()).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })}`}
-        actions={
-          <>
-            <Refreshing active={state.refreshing} />
-            <Button variant="outline" size="sm" asChild>
-              <Link href="/reports">View reports</Link>
-            </Button>
-            <Button size="sm" asChild>
-              <Link href="/sales/invoices/new">New invoice</Link>
-            </Button>
-          </>
-        }
-      />
+      {/* The greeting as a banner in the brand's navy and blue: the first thing on the screen has colour. */}
+      <div data-slot="dashboard-banner" className="flex flex-col gap-4 rounded-xl bg-gradient-to-r from-[oklch(0.27_0.06_266)] via-[oklch(0.36_0.13_262)] to-[oklch(0.5_0.17_256)] px-6 py-6 text-white shadow-md sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
+          <h1 className="display-xl">{`Good day, ${firstName}`}</h1>
+          <p className="mt-2 text-[13px] text-white/80">
+            {`${session.org?.name} · figures as at ${new Date(today()).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })}`}
+          </p>
+        </div>
+        <div className="flex shrink-0 flex-wrap items-center gap-2 text-white/80 no-print">
+          <Refreshing active={state.refreshing} />
+          <Button variant="outline" size="sm" asChild className="border-white/30 bg-white/10 text-white hover:bg-white/20 hover:text-white">
+            <Link href="/reports">View reports</Link>
+          </Button>
+          <Button size="sm" asChild className="bg-white text-blue-700 hover:bg-white/90">
+            <Link href="/sales/invoices/new">New invoice</Link>
+          </Button>
+        </div>
+      </div>
 
       <ChecklistBoard />
 

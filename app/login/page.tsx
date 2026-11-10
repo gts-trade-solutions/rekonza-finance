@@ -12,7 +12,7 @@
 import { Suspense, useState } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
-import { AlertCircle, ArrowLeft, ArrowRight, Eye, EyeOff, KeyRound, Loader2, LogIn, ShieldCheck } from 'lucide-react';
+import { AlertCircle, ArrowLeft, ArrowRight, BookOpen, Eye, EyeOff, KeyRound, Loader2, LogIn, ReceiptIndianRupee, ShieldCheck, UserCog } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -22,10 +22,10 @@ import { BRAND, Logo } from '@/components/brand/logo';
 
 /** The four seeded roles. Each one sees a materially different app. */
 const DEMO_ROLES = [
-  { role: 'admin' as const, label: 'Admin', blurb: 'Everything, including settings and period locks' },
-  { role: 'accountant' as const, label: 'Accountant', blurb: 'Books, banking, GST and journals' },
-  { role: 'sales' as const, label: 'Sales', blurb: 'Quotes and invoices; costs stay hidden' },
-  { role: 'viewer' as const, label: 'Viewer', blurb: 'Read-only, for auditors' },
+  { role: 'admin' as const, label: 'Admin', blurb: 'Everything, including settings and period locks', icon: UserCog, chip: 'bg-blue-600 text-white' },
+  { role: 'accountant' as const, label: 'Accountant', blurb: 'Books, banking, GST and journals', icon: BookOpen, chip: 'bg-violet-600 text-white' },
+  { role: 'sales' as const, label: 'Sales', blurb: 'Quotes and invoices; costs stay hidden', icon: ReceiptIndianRupee, chip: 'bg-emerald-600 text-white' },
+  { role: 'viewer' as const, label: 'Viewer', blurb: 'Read-only, for auditors', icon: Eye, chip: 'bg-amber-500 text-white' },
 ];
 
 function LoginInner() {
@@ -100,20 +100,23 @@ function LoginInner() {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-muted/40 p-4">
+    <div className="relative min-h-screen bg-background">
+      {/* A navy band across the top, as an accounting app greets you; the cards sit over its edge. */}
+      <div aria-hidden className="absolute inset-x-0 top-0 h-[360px] bg-gradient-to-br from-[oklch(0.24_0.05_266)] via-[oklch(0.3_0.1_262)] to-[oklch(0.46_0.16_256)]" />
+      <div className="relative flex min-h-screen items-center justify-center p-4">
       <div className="w-full max-w-4xl">
         <div className="mb-8 flex flex-col items-center text-center">
           <Link href="/" className="mb-4" aria-label={`${BRAND.display} home`}>
-            <Logo width={200} priority />
+            <Logo width={200} priority onDark />
           </Link>
-          <p className="max-w-lg text-sm text-muted-foreground">
+          <p className="max-w-lg text-sm text-white/80">
             {BRAND.tagline} Double-entry accounting, GST compliance and banking for Indian
             business.
           </p>
         </div>
 
         <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-          <Card className="p-6">
+          <Card className="border-t-4 border-t-primary p-6 shadow-lg">
             <h2 className="text-lg font-semibold">Sign in</h2>
             <p className="mt-1 text-sm text-muted-foreground">
               Use the email and password your administrator set up.
@@ -218,7 +221,7 @@ function LoginInner() {
             </p>
           </Card>
 
-          <Card className="p-6">
+          <Card className="border-t-4 border-t-emerald-500 p-6 shadow-lg">
             <h2 className="text-lg font-semibold">Try the demo book</h2>
             <p className="mt-1 text-sm text-muted-foreground">
               A worked set of books for a fictional auto-parts business — five months of
@@ -237,8 +240,9 @@ function LoginInner() {
                       data-role={r.role}
                       disabled={demoBusy !== null}
                       onClick={() => void openDemo(r.role)}
-                      className="flex w-full items-center gap-3 rounded-[3px] border p-3 text-left transition-colors hover:border-primary/40 hover:bg-accent/50 disabled:opacity-60"
+                      className="flex w-full items-center gap-3 rounded-md border p-3 text-left transition-colors hover:border-primary/40 hover:bg-accent/50 disabled:opacity-60"
                     >
+                      <span className={`grid size-9 shrink-0 place-items-center rounded-lg ${r.chip}`}><r.icon className="size-4" /></span>
                       <div className="min-w-0 flex-1">
                         <p className="text-sm font-medium">{r.label}</p>
                         <p className="mt-0.5 text-xs text-muted-foreground">{r.blurb}</p>
@@ -277,6 +281,7 @@ function LoginInner() {
           </Card>
         </div>
       </div>
+      </div>
     </div>
   );
 }
@@ -285,7 +290,7 @@ export default function LoginPage() {
   // useSearchParams needs a Suspense boundary, or the whole route opts out of
   // static rendering and the sign-in page waits on the server for no reason.
   return (
-    <Suspense fallback={<div className="min-h-screen bg-muted/40" />}>
+    <Suspense fallback={<div className="min-h-screen bg-background" />}>
       <LoginInner />
     </Suspense>
   );

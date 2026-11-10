@@ -76,9 +76,31 @@ export function overLimit(keyId: number, now = Date.now()): boolean {
 }
 
 /** The user an API key acts as, or null when the request carries none (or a bad one). */
-export async function apiKeyUser(req: Request, ex: Executor = db): Promise<(SessionUser & { apiKeyId: number }) | null> {
+/**
+ * Where a key may come as a password instead of a Bearer header: reading the BI
+ * feeds, because Tableau's and Excel's OData connectors only know a username
+ * and password. Reads only — a browser that remembered the password could
+ * otherwise be made to send it with a change somewhere else.
+ */
+export function basicKeyAllowed(req: Request): boolean {
+  return req.method === 'GET' && /^\/api\/(odata|bi)(\/|$)/.test(new URL(req.url).pathname);
+}
+
+/** The key a request carries: a Bearer header, or the password of a Basic one where that is allowed. */
+export function keyFrom(req: Request): string {
   const auth = req.headers.get('authorization') ?? '';
-  const token = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
+  if (auth.startsWith('Bearer ')) return auth.slice(7).trim();
+  if (auth.startsWith('Basic ') && basicKeyAllowed(req)) {
+    try {
+      const decoded = Buffer.from(auth.slice(6).trim(), 'base64').toString('utf8');
+      return decoded.slice(decoded.indexOf(':') + 1).trim();
+    } catch { return ''; }
+  }
+  return '';
+}
+
+export async function apiKeyUser(req: Request, ex: Executor = db): Promise<(SessionUser & { apiKeyId: number }) | null> {
+  const token = keyFrom(req);
   if (!token.startsWith(PREFIX)) return null;
   const k = await ex.selectFrom('api_keys as k').innerJoin('users as u', 'u.id', 'k.created_by_user_id')
     .leftJoin('custom_roles as r', 'r.id', 'k.custom_role_id')

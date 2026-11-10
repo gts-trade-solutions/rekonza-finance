@@ -14,6 +14,7 @@ import { Download, FileText, Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card } from '@/components/ui/card';
+import { tileColors } from '@/components/shared/stat-tile';
 import { PageHeader } from '@/components/shared/page-header';
 import { DataTable, type Column } from '@/components/shared/data-table';
 import { BulkPrintButton } from '@/components/shared/document-menu';
@@ -185,8 +186,8 @@ export default function BillsPage() {
                   { label: 'Outstanding', value: formatINRCompact(data.summary.duePaise), warn: data.summary.duePaise > 0 },
                   { label: 'Overdue', value: formatINRCompact(overdue), danger: overdue > 0 },
                 ].map((t) => (
-                  <Card key={t.label} className="p-4">
-                    <p className="text-xs text-muted-foreground">{t.label}</p>
+                  <Card key={t.label} className={`p-4 ${tileColors(t.label, t.danger ? 'danger' : t.warn ? 'warning' : 'default').card}`}>
+                    <p className={`text-xs font-medium ${tileColors(t.label, t.danger ? 'danger' : t.warn ? 'warning' : 'default').label}`}>{t.label}</p>
                     <p
                       className={`mt-1.5 tabular text-2xl font-semibold ${
                         t.danger ? 'text-destructive' : t.warn ? 'text-warning' : ''

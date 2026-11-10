@@ -30,7 +30,7 @@ export const BRAND = {
 } as const;
 
 /** The glyph alone, for a chrome slot where the name is set in text beside it. */
-export function LogoMark({ className, size = 30 }: { className?: string; size?: number }) {
+export function LogoMark({ className, size = 30, onDark = false }: { className?: string; size?: number; onDark?: boolean }) {
   // Decorative in every place it is used: the name is always set in text
   // beside it, or carried by an aria-label on the link around it.
   //
@@ -45,6 +45,8 @@ export function LogoMark({ className, size = 30 }: { className?: string; size?: 
     priority: true,
     style: { width: size, height: size },
   } as const;
+  // A slot that is dark in either theme (the navy sidebar) always takes the light artwork.
+  if (onDark) return <Image {...common} alt="" src="/mark-dark.png" className={cn('shrink-0', className)} />;
   return (
     <>
       <Image {...common} alt="" src="/mark.png" className={cn('shrink-0 dark:hidden', className)} />
@@ -58,10 +60,13 @@ export function Logo({
   className,
   width = 190,
   priority = false,
+  onDark = false,
 }: {
   className?: string;
   width?: number;
   priority?: boolean;
+  /** On a ground that is dark in either theme: always the light lockup. */
+  onDark?: boolean;
 }) {
   const common = {
     width,
@@ -69,6 +74,7 @@ export function Logo({
     priority,
     style: { width, height: 'auto' } as const,
   };
+  if (onDark) return <Image {...common} src="/wordmark-dark.png" alt={BRAND.display} className={cn('h-auto w-auto', className)} />;
   return (
     <>
       {/* Only one of the two is ever visible, so only one carries the name —

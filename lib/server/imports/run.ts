@@ -31,6 +31,8 @@ export type Row = Record<string, unknown>;
 
 export interface ImportOutcome {
   kind: ImportKind;
+  /** What the screen calls this part, when its kind alone would not tell it apart (bank accounts beside accounts). */
+  label?: string;
   rows: number;
   created: number;
   skipped: number;

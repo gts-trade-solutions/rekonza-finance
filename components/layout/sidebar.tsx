@@ -1,8 +1,8 @@
 'use client';
 
-// Navigation as an engineered rail: a cool slate column, a hairline seam, and
-// a 2px cobalt bar marking the active row. No filled blocks — the bar plus a
-// weight change is enough, and it keeps a long nav list quiet.
+// Navigation as an accounting app has it: a deep navy rail, each part of the
+// books with an icon in its own colour so Sales, Purchases and GST are told
+// apart at a glance, and the screen you are on filled in blue.
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
@@ -17,6 +17,29 @@ import { BOTTOM_LEVEL, NAV_GROUPS, TOP_LEVEL, type FeatureKey, type NavItem } fr
 import { api } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
 import { useSession } from './session-provider';
+
+/** Each part of the books in its own colour, keyed by its label. Light shades: they sit on navy. */
+const TINT: Record<string, string> = {
+  Dashboard: 'text-sky-400',
+  Alerts: 'text-rose-400',
+  Sales: 'text-emerald-400',
+  Purchases: 'text-orange-400',
+  'Time Tracking': 'text-cyan-400',
+  Banking: 'text-teal-300',
+  Accountant: 'text-indigo-300',
+  Payroll: 'text-pink-400',
+  'GST & Taxes': 'text-amber-400',
+  Inventory: 'text-lime-400',
+  Reports: 'text-blue-400',
+  'Software Checklist': 'text-green-400',
+  Tally: 'text-yellow-300',
+  'Import & Export': 'text-emerald-300',
+  Analytics: 'text-fuchsia-400',
+  'AI Assistant': 'text-violet-400',
+  Settings: 'text-slate-300',
+  'Web Tabs': 'text-cyan-300',
+  Help: 'text-sky-300',
+};
 
 /** Where the "+" on a nav row should go, when that module has a create form. */
 const CREATE_HREF: Record<string, string> = {
@@ -62,29 +85,26 @@ function useBadgeCounts(): NavCounts {
 
 function NavRow({ item, count, nested }: { item: NavItem; count?: number; nested?: boolean }) {
   const pathname = usePathname();
-  const active = pathname === item.href || pathname.startsWith(item.href + '/');
+  const active = pathname === item.href || (!item.exact && pathname.startsWith(item.href + '/'));
   const createHref = CREATE_HREF[item.href];
 
   return (
     <div className="group/row relative">
-      {/* Gilt marker instead of a filled active block */}
-      {active && (
-        <span className="absolute left-0 top-1/2 h-5 w-[2px] -translate-y-1/2 bg-primary" />
-      )}
       <Link
         href={item.href}
+        data-active={active ? '1' : undefined}
         className={cn(
           'flex h-9 items-center gap-2.5 rounded-md pr-2 text-[13.5px] transition-colors',
-          nested ? 'pl-9' : 'pl-3',
+          nested ? 'h-8 pl-10 text-[13px]' : 'pl-3',
           active
-            ? 'bg-sidebar-accent font-medium text-sidebar-accent-foreground'
-            : 'text-sidebar-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground',
+            ? 'bg-sidebar-primary font-medium text-sidebar-primary-foreground shadow-sm'
+            : 'text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
         )}
       >
-        {!nested && <item.icon className={cn('size-[17px] shrink-0', active ? 'opacity-90' : 'opacity-70')} />}
+        {!nested && <item.icon className={cn('size-[17px] shrink-0', active ? 'text-white' : TINT[item.label] ?? 'opacity-80')} />}
         <span className="min-w-0 flex-1 truncate">{item.label}</span>
         {count != null && count > 0 && (
-          <span className="shrink-0 rounded-full bg-foreground/8 px-1.5 py-px text-[10px] font-semibold tabular text-muted-foreground">
+          <span className="shrink-0 rounded-full bg-amber-400 px-1.5 py-px text-[10px] font-semibold tabular text-amber-950">
             {count}
           </span>
         )}
@@ -94,7 +114,7 @@ function NavRow({ item, count, nested }: { item: NavItem; count?: number; nested
           href={createHref}
           aria-label={`New ${item.label}`}
           onClick={(e) => e.stopPropagation()}
-          className="absolute right-1.5 top-1/2 grid size-5 -translate-y-1/2 place-items-center rounded-full bg-primary text-primary-foreground opacity-0 transition-opacity group-hover/row:opacity-100 focus-visible:opacity-100"
+          className="absolute right-1.5 top-1/2 grid size-5 -translate-y-1/2 place-items-center rounded-full bg-white text-sidebar opacity-0 transition-opacity group-hover/row:opacity-100 focus-visible:opacity-100"
         >
           <Plus className="size-3" />
         </Link>
@@ -128,21 +148,21 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const forBook = (i: NavItem) => !i.registration || i.registration === registration;
 
   return (
-    <div className="flex h-full flex-col border-r bg-sidebar" onClick={onNavigate}>
+    <div className="flex h-full flex-col border-r border-sidebar-border bg-sidebar" onClick={onNavigate}>
       {/* Wordmark. The glyph rather than the full lockup: the rail is narrow,
           and it inverts cleanly when the sidebar goes dark, which a navy
           wordmark on a navy ground would not. */}
-      <Link href="/dashboard" className="flex h-16 shrink-0 items-center gap-2.5 border-b px-5">
-        <LogoMark size={26} />
+      <Link href="/dashboard" className="flex h-16 shrink-0 items-center gap-2.5 border-b border-sidebar-border px-5">
+        <LogoMark size={26} onDark />
         <span className="min-w-0">
-          <span className="block text-[16px] font-semibold leading-none tracking-[-0.02em] text-foreground">
+          <span className="block text-[16px] font-semibold leading-none tracking-[-0.02em] text-white">
             {BRAND.display}
           </span>
-          <span className="micro-label mt-1 block">{org?.fiscalYearLabel ?? 'Books'}</span>
+          <span className="mt-1 block text-[10px] font-semibold uppercase tracking-[0.11em] text-sidebar-foreground/70">{org?.fiscalYearLabel ?? 'Books'}</span>
         </span>
       </Link>
 
-      <nav className="thin-scroll flex-1 space-y-0.5 overflow-y-auto px-3 pb-4">
+      <nav className="thin-scroll flex-1 space-y-0.5 overflow-y-auto px-3 pb-4 pt-3">
         {TOP_LEVEL.filter((i) => visible(i.module, i.feature)).map((item) => (
           <NavRow key={item.href} item={item} count={item.badge ? counts[item.badge] : undefined} />
         ))}
@@ -171,18 +191,20 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
                 className={cn(
                   'flex h-9 w-full items-center gap-2.5 rounded-md px-3 text-[13.5px] transition-colors',
                   groupActive && !isOpen
-                    ? 'bg-sidebar-accent text-sidebar-accent-foreground'
-                    : 'text-sidebar-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground',
+                    ? 'bg-sidebar-accent font-medium text-sidebar-accent-foreground'
+                    : isOpen
+                      ? 'font-medium text-white hover:bg-sidebar-accent'
+                      : 'text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
                 )}
               >
-                <group.icon className="size-[17px] shrink-0 opacity-70" />
+                <group.icon className={cn('size-[17px] shrink-0', TINT[group.label] ?? 'opacity-80')} />
                 <span className="min-w-0 flex-1 truncate text-left">{group.label}</span>
                 <ChevronRight
                   className={cn('size-3.5 shrink-0 opacity-50 transition-transform', isOpen && 'rotate-90')}
                 />
               </button>
               {isOpen && (
-                <div className="mt-0.5 space-y-0.5">
+                <div className="my-1 space-y-0.5 rounded-md bg-black/15 py-1">
                   {group.items.filter((i) => visible(i.module, i.feature) && forBook(i)).map((item) => (
                     <NavRow
                       key={item.href}
@@ -197,7 +219,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
           );
         })}
 
-        <div className="!mt-4 space-y-0.5 border-t pt-4">
+        <div className="!mt-4 space-y-0.5 border-t border-sidebar-border pt-4">
           {BOTTOM_LEVEL.filter((i) => visible(i.module, i.feature)).map((item) => (
             <NavRow key={item.href} item={item} />
           ))}

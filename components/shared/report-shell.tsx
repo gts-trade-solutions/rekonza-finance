@@ -17,6 +17,7 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { downloadWorkbook } from '@/lib/xlsx';
+import { toDelimited } from '@/lib/delimited';
 import { allowOutput, printPage } from '@/lib/output-guard';
 
 export type { DateRange } from '@/lib/date-range';
@@ -68,13 +69,19 @@ export function BasisSelect({ value, onChange }: { value: ReportBasis; onChange:
  * downloadCsv; the Export menu sets this first, so choosing Excel gets the same
  * rows as a workbook without thirty reports each learning a second format.
  */
-let nextExport: { as: 'xlsx'; title: string } | null = null;
+let nextExport: { as: 'xlsx'; title: string } | { as: 'text'; delimiter: string } | null = null;
 
 const NUMBER = /^-?\d+(\.\d+)?$/;
 
 /** Download any table as CSV — or Excel, when chosen from the Export menu. */
 export function downloadCsv(filename: string, rows: (string | number)[][]) {
   if (!allowOutput('export', filename)) return;
+  if (nextExport?.as === 'text') {
+    const { delimiter } = nextExport;
+    nextExport = null;
+    downloadDelimited(filename.replace(/\.csv$/i, '.txt'), rows, delimiter);
+    return;
+  }
   if (nextExport) {
     const { title } = nextExport;
     nextExport = null;
@@ -96,6 +103,18 @@ export function downloadCsv(filename: string, rows: (string | number)[][]) {
   a.download = filename;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+/** Any table as delimited text: tab-separated, pipe, semicolon — whichever the other system reads. */
+export function downloadDelimited(filename: string, rows: (string | number | null)[][], delimiter: string) {
+  if (!allowOutput('export', filename)) return;
+  const blob = new Blob([`\uFEFF${toDelimited(rows, delimiter)}`], { type: delimiter === ',' ? 'text/csv;charset=utf-8;' : 'text/plain;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 /** A file to upload somewhere else, such as the GST portal. */
@@ -182,6 +201,12 @@ export function ReportShell({
                     Excel (.xlsx)
                   </DropdownMenuItem>
                   <DropdownMenuItem onClick={() => { nextExport = null; onExport(); }}>CSV</DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => { nextExport = { as: 'text', delimiter: '\t' }; try { onExport(); } finally { nextExport = null; } }}>
+                    Text, tab-separated (.txt)
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => { nextExport = { as: 'text', delimiter: '|' }; try { onExport(); } finally { nextExport = null; } }}>
+                    Text, pipe-separated (.txt)
+                  </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
             )}

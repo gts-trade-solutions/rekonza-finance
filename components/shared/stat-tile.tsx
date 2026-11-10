@@ -41,7 +41,7 @@ export function StatTile({
     warning: 'text-amber-600 dark:text-amber-400 bg-amber-500/10',
     danger: 'text-red-600 dark:text-red-400 bg-red-500/10',
   }[tone];
-  const own = color ? TILE_COLORS[color] : null;
+  const own = TILE_COLORS[color ?? autoColor(label, tone)];
 
   const body = (
     <Card
@@ -73,6 +73,26 @@ export function StatTile({
   );
 
   return href ? <Link href={href}>{body}</Link> : body;
+}
+
+/**
+ * The same colours for a figure tile a page lays out itself: its card (a
+ * coloured edge and wash) and its label. Fixed by the label, like StatTile's.
+ */
+export function tileColors(label: string, tone: 'default' | 'positive' | 'warning' | 'danger' = 'default') {
+  const c = TILE_COLORS[autoColor(label, tone)];
+  return { card: `border-l-4 ${c.card}`, label: c.label, chip: c.chip };
+}
+
+/** The tone's colour where it has one; otherwise one of the cool hues, fixed by the label. */
+function autoColor(label: string, tone: 'default' | 'positive' | 'warning' | 'danger'): TileColor {
+  if (tone === 'positive') return 'emerald';
+  if (tone === 'warning') return 'amber';
+  if (tone === 'danger') return 'red';
+  const cool: TileColor[] = ['blue', 'violet', 'teal', 'indigo', 'sky', 'cyan'];
+  let h = 0;
+  for (const ch of label) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return cool[h % cool.length];
 }
 
 export type TileColor = 'red' | 'blue' | 'orange' | 'emerald' | 'violet' | 'sky' | 'amber' | 'teal' | 'indigo' | 'rose' | 'fuchsia' | 'cyan' | 'lime';
