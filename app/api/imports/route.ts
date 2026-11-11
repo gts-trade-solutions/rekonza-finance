@@ -8,6 +8,26 @@ import { clean, runImport, type ImportOutcome } from '@/lib/server/imports/run';
 import { connectedCompanyMasters, importTally, importTallyFileVouchers, importTallyVouchers, QUICKBOOKS_COMPANY_ID } from '@/lib/server/imports/tally';
 import { parseQuickBooks, toImportShapes } from '@/lib/quickbooks/parse';
 import { parseTallyFiles } from '@/lib/tally/xml';
+import { importPdfInvoices } from '@/lib/server/imports/pdf-invoices';
+
+/** An invoice read from a PDF and checked on the screen (lib/imports/pdf-invoices.ts). */
+const PdfDoc = z.object({
+  file: z.string().max(255),
+  direction: z.enum(['sale', 'purchase']),
+  partyName: z.string().trim().min(1, 'Every invoice needs the other company\'s name.').max(200),
+  partyGstin: z.string().trim().toUpperCase().max(15).nullish().transform((v) => v || null),
+  partyState: z.string().trim().max(60).nullish().transform((v) => v || null),
+  number: z.string().trim().min(1, 'Every invoice needs its number.').max(50),
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Every invoice needs its date.'),
+  dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullish().transform((v) => v || null),
+  lines: z.array(z.object({
+    description: z.string().max(500),
+    hsnSac: z.string().max(8).nullish().transform((v) => v || null),
+    qty: z.number().positive().max(1e9),
+    ratePaise: z.number().int().min(0).max(1e13),
+    gstRatePct: z.number().min(0).max(40),
+  })).min(1, 'Every invoice needs at least one line.').max(500),
+});
 
 // Imports. A check runs the whole import and throws it away; a real run keeps
 // it only if every row went in. Either way the answer is the same shape: what
@@ -51,6 +71,12 @@ const Input = z.discriminatedUnion('source', [
     dateOrder: z.enum(['auto', 'dmy', 'mdy']).default('auto'),
     dryRun: z.boolean().default(true),
   }),
+  // Invoices read from PDFs: our own as sales invoices, other companies' as bills, with any new parties.
+  z.object({
+    source: z.literal('pdf-invoices'),
+    docs: z.array(PdfDoc).min(1, 'Choose the invoices to bring in.').max(200, 'Up to 200 invoices at a time.'),
+    dryRun: z.boolean().default(true),
+  }),
   // The company's vouchers, after its masters: posted as journal entries.
   z.object({
     source: z.literal('tally-vouchers'),
@@ -72,6 +98,11 @@ export const POST = route(async ({ orgId, user, role, branchId, req }) => {
   if (input.source === 'rows') {
     if (!hasPermission(role, MODULE[input.kind], 'create')) throw forbidden(`Your role cannot import ${TEMPLATES[input.kind].title.toLowerCase()}.`);
     if (!input.rows.length) throw badRequest('The file has no rows under its headings.');
+  } else if (input.source === 'pdf-invoices') {
+    if (!hasPermission(role, 'sales', 'create')) throw forbidden('Your role cannot add customers or sales invoices.');
+    if (input.docs.some((d) => d.direction === 'purchase') && !hasPermission(role, 'purchases', 'create')) {
+      throw forbidden('Your role cannot add supplier bills: leave those out, or ask an accountant.');
+    }
   } else if (!hasPermission(role, 'accountant', 'create') || !hasPermission(role, 'sales', 'create')) {
     throw forbidden('Bringing a company across from Tally needs an accountant or an admin.');
   }
@@ -82,6 +113,8 @@ export const POST = route(async ({ orgId, user, role, branchId, req }) => {
       let out: ImportOutcome[];
       if (input.source === 'rows') {
         out = [await runImport(trx, ctx, input.kind, input.rows)];
+      } else if (input.source === 'pdf-invoices') {
+        out = await importPdfInvoices(trx, ctx, input.docs);
       } else if (input.source === 'tally-vouchers') {
         out = [await importTallyVouchers(trx, ctx, Number(input.companyId), { from: input.from, to: input.to })];
       } else if (input.source === 'quickbooks') {
@@ -117,7 +150,7 @@ export const POST = route(async ({ orgId, user, role, branchId, req }) => {
       if (input.dryRun || !clean(out)) throw new Discard(out);
       await logAudit({
         trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'import',
-        targetType: input.source === 'rows' ? input.kind : input.source === 'quickbooks' ? 'quickbooks' : 'tally',
+        targetType: input.source === 'rows' ? input.kind : input.source === 'quickbooks' ? 'quickbooks' : input.source === 'pdf-invoices' ? 'pdf_invoices' : 'tally',
         detail: out.map((o) => `${o.kind}: ${o.created} created, ${o.skipped} skipped`).join('; '),
         ...auditMeta(req),
       });

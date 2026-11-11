@@ -12,6 +12,7 @@
 
 import { enqueue, OFFLINE_PATHS } from '../offline/outbox';
 import type { Gstr3bHeads, Gstr3bRowKey } from '../gst/gstr3b-layout';
+import type { InvoiceReading, PdfImportDoc } from '../imports/pdf-invoices';
 import { toastWarnings } from './warnings';
 
 export class ApiError extends Error {
@@ -2779,6 +2780,14 @@ export const imports = {
   /** QuickBooks' lists and transactions, each file read into rows by the browser. */
   quickBooks: (files: { name: string; rows: string[][] }[], dateOrder: 'auto' | 'dmy' | 'mdy', dryRun: boolean) =>
     api.post<ImportResponse>('/api/imports', { source: 'quickbooks', files, dateOrder, dryRun }),
+  /** One invoice read from a PDF or a photo by the AI; nothing is saved. */
+  readPdfInvoice: (file: File) => {
+    const form = new FormData();
+    form.append('file', file);
+    return api.post<InvoiceReading>('/api/imports/pdf', form);
+  },
+  /** The checked invoices: new parties, sales invoices and supplier bills, all or nothing. */
+  pdfInvoices: (docs: PdfImportDoc[], dryRun: boolean) => api.post<ImportResponse>('/api/imports', { source: 'pdf-invoices', docs, dryRun }),
   /** Masters, vouchers, or both, from one or more files Tally exported. */
   tallyFiles: (files: string[], dryRun: boolean) => api.post<ImportResponse>('/api/imports', { source: 'tally-xml', files, dryRun }),
   tallyCompany: (companyId: string, dryRun: boolean) =>

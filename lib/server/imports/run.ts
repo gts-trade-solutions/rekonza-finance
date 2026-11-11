@@ -239,8 +239,20 @@ const openingBills: Handler = async (trx, ctx, l, r) => {
   if (type !== 'receivable' && type !== 'payable') fail(`Type "${str(r.type)}" should be receivable or payable.`);
   const contactId = party(l, r.party, type === 'receivable' ? 'customer' : 'vendor', 'Party');
   const amount = paise(r.amount, 'Amount') ?? fail('Amount is missing.');
+  const refNo = str(r.bill_no) || fail('Bill number is missing.');
+  // A party's bill number is entered once (withdrawn ones included): the same
+  // file brought in again, or a later Tally export, finds it already there.
+  const there = await trx.selectFrom('opening_documents').select('status')
+    .where('org_id', '=', ctx.orgId).where('contact_id', '=', contactId)
+    .where('kind', '=', type as 'receivable').where('ref_no', '=', refNo.trim()).executeTakeFirst();
+  if (there) {
+    if (ctx.onDuplicate === 'skip') return 'skipped';
+    fail(there.status === 'void'
+      ? `${refNo} was entered for ${str(r.party)} before and withdrawn. Give it another bill number to enter it again.`
+      : `${refNo} is already an opening bill for ${str(r.party)}.`);
+  }
   await addOpeningDocument(trx, ctx.orgId, ctx.userId, {
-    branchId: ctx.branchId, contactId, kind: type as 'receivable', refNo: str(r.bill_no) || fail('Bill number is missing.'),
+    branchId: ctx.branchId, contactId, kind: type as 'receivable', refNo,
     docDate: date(r.bill_date, 'Bill date'), dueDate: date(r.due_date, 'Due date'), amountPaise: amount,
   });
   return 'created';

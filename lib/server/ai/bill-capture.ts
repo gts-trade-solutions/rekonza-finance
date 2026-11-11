@@ -73,12 +73,44 @@ const PROMPT =
 /** A capture costs at least this, in millicredits, however small the image. */
 export const CAPTURE_MIN_MC = 5 * MIN_CHARGE_MC;
 
-const paise = (rupees: number | null | undefined) => (typeof rupees === 'number' && Number.isFinite(rupees) ? Math.round(rupees * 100) : null);
-const date = (s: string | null) => (s && /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null);
+/** What a reading asks the model for: its JSON shape and the instruction. Bills here; invoices either way in invoice-capture.ts. */
+export interface CaptureSpec { name: string; schema: object; prompt: string; what: string }
+const BILL_SPEC: CaptureSpec = { name: 'purchase_bill', schema: SCHEMA, prompt: PROMPT, what: 'bill' };
+
+export const paise = (rupees: number | null | undefined) => (typeof rupees === 'number' && Number.isFinite(rupees) ? Math.round(rupees * 100) : null);
+export const isoDate = (s: unknown) => (typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null);
+const date = (s: string | null) => isoDate(s);
+
+const GST_RATES = [0, 0.1, 0.25, 1, 1.5, 3, 5, 6, 7.5, 12, 18, 28, 40];
+
+/** The model's lines, tidied: a bad HSN dropped, an unknown rate taken as 18%, a quantity of at least one. */
+export function capturedLines(raw: unknown): CapturedLine[] {
+  const lines = Array.isArray(raw) ? raw as Record<string, unknown>[] : [];
+  return lines.map((l) => ({
+    description: String(l.description ?? '').trim().slice(0, 500),
+    hsnSac: typeof l.hsn_sac === 'string' && /^\d{4,8}$/.test(l.hsn_sac.trim()) ? l.hsn_sac.trim() : null,
+    qty: Number(l.quantity) > 0 ? Number(l.quantity) : 1,
+    ratePaise: paise(Number(l.unit_rate)) ?? 0,
+    gstRatePct: GST_RATES.includes(Number(l.gst_rate_pct)) ? Number(l.gst_rate_pct) : 18,
+  })).filter((l) => l.description || l.ratePaise);
+}
+
+/** The lines' sums against the document's own, said rather than fixed. */
+export function sumNotes(lines: CapturedLine[], taxablePaise: number | null, totalPaise: number | null, what = 'bill'): string[] {
+  const notes: string[] = [];
+  const taxable = lines.reduce((t, l) => t + Math.round(l.ratePaise * l.qty), 0);
+  if (taxablePaise !== null && Math.abs(taxable - taxablePaise) > 100) {
+    notes.push(`The lines add up to ₹${(taxable / 100).toFixed(2)} before tax, but the ${what} says ₹${(taxablePaise / 100).toFixed(2)}.`);
+  }
+  const tax = lines.reduce((t, l) => t + Math.round((Math.round(l.ratePaise * l.qty) * l.gstRatePct) / 100), 0);
+  if (totalPaise !== null && Math.abs(taxable + tax - totalPaise) > 200) {
+    notes.push(`Lines and tax come to ₹${((taxable + tax) / 100).toFixed(2)}; the ${what}'s total is ₹${(totalPaise / 100).toFixed(2)}. Check rates, discounts, cess or round-off.`);
+  }
+  return notes;
+}
 
 /** The model's JSON as a draft bill. Exported for the tests. */
 export function toCaptured(raw: Record<string, unknown>): CapturedBill {
-  const lines = Array.isArray(raw.lines) ? raw.lines as Record<string, unknown>[] : [];
   const gstin = typeof raw.vendor_gstin === 'string' ? raw.vendor_gstin.replace(/\s/g, '').toUpperCase() : null;
   return {
     vendorName: typeof raw.vendor_name === 'string' ? raw.vendor_name.trim() || null : null,
@@ -86,13 +118,7 @@ export function toCaptured(raw: Record<string, unknown>): CapturedBill {
     invoiceNumber: typeof raw.invoice_number === 'string' ? raw.invoice_number.trim().slice(0, 50) || null : null,
     invoiceDate: date(raw.invoice_date as string | null),
     dueDate: date(raw.due_date as string | null),
-    lines: lines.map((l) => ({
-      description: String(l.description ?? '').trim().slice(0, 500),
-      hsnSac: typeof l.hsn_sac === 'string' && /^\d{4,8}$/.test(l.hsn_sac.trim()) ? l.hsn_sac.trim() : null,
-      qty: Number(l.quantity) > 0 ? Number(l.quantity) : 1,
-      ratePaise: paise(Number(l.unit_rate)) ?? 0,
-      gstRatePct: [0, 0.1, 0.25, 1, 1.5, 3, 5, 6, 7.5, 12, 18, 28, 40].includes(Number(l.gst_rate_pct)) ? Number(l.gst_rate_pct) : 18,
-    })).filter((l) => l.description || l.ratePaise),
+    lines: capturedLines(raw.lines),
     taxablePaise: paise(raw.taxable_total as number | null),
     taxPaise: paise(raw.tax_total as number | null),
     totalPaise: paise(raw.grand_total as number | null),
@@ -106,14 +132,7 @@ export function reviewNotes(bill: CapturedBill): string[] {
   if (!bill.invoiceNumber) notes.push('No bill number was found.');
   if (!bill.invoiceDate) notes.push('No bill date was found.');
   if (!bill.lines.length) notes.push('No lines were found; add them by hand.');
-  const taxable = bill.lines.reduce((t, l) => t + Math.round(l.ratePaise * l.qty), 0);
-  if (bill.taxablePaise !== null && Math.abs(taxable - bill.taxablePaise) > 100) {
-    notes.push(`The lines add up to ₹${(taxable / 100).toFixed(2)} before tax, but the bill says ₹${(bill.taxablePaise / 100).toFixed(2)}.`);
-  }
-  const tax = bill.lines.reduce((t, l) => t + Math.round((Math.round(l.ratePaise * l.qty) * l.gstRatePct) / 100), 0);
-  if (bill.totalPaise !== null && Math.abs(taxable + tax - bill.totalPaise) > 200) {
-    notes.push(`Lines and tax come to ₹${((taxable + tax) / 100).toFixed(2)}; the bill's total is ₹${(bill.totalPaise / 100).toFixed(2)}. Check rates, discounts, cess or round-off.`);
-  }
+  notes.push(...sumNotes(bill.lines, bill.taxablePaise, bill.totalPaise));
   return notes;
 }
 
@@ -131,12 +150,13 @@ export async function matchVendor(ex: Executor, orgId: number, bill: CapturedBil
   return null;
 }
 
-type Reader = (file: { bytes: Buffer; contentType: string; filename: string }) => Promise<{ raw: Record<string, unknown>; inputTokens: number; outputTokens: number; model: string }>;
+export type CaptureFile = { bytes: Buffer; contentType: string; filename: string };
+export type Reader = (file: CaptureFile, spec?: CaptureSpec) => Promise<{ raw: Record<string, unknown>; inputTokens: number; outputTokens: number; model: string }>;
 
-/** Ask the configured provider to read the bill. */
-const readWithOpenAi: Reader = async (file) => {
+/** Ask the configured provider to read the document. */
+export const readWithOpenAi: Reader = async (file, spec = BILL_SPEC) => {
   const cfg = openAiSettings();
-  if (!cfg) throw new ApiError(503, 'Reading bills needs an AI provider: set OPENAI_API_KEY on the server.', 'ai_unconfigured');
+  if (!cfg) throw new ApiError(503, `Reading ${spec.what}s needs an AI provider: set OPENAI_API_KEY on the server.`, 'ai_unconfigured');
   const model = process.env.BILL_CAPTURE_MODEL?.trim() || cfg.model;
   const data = `data:${file.contentType};base64,${file.bytes.toString('base64')}`;
   const part = file.contentType === 'application/pdf'
@@ -152,49 +172,57 @@ const readWithOpenAi: Reader = async (file) => {
     },
     body: JSON.stringify({
       model,
-      messages: [{ role: 'user', content: [{ type: 'text', text: PROMPT }, part] }],
-      response_format: { type: 'json_schema', json_schema: { name: 'purchase_bill', strict: true, schema: SCHEMA } },
+      messages: [{ role: 'user', content: [{ type: 'text', text: spec.prompt }, part] }],
+      response_format: { type: 'json_schema', json_schema: { name: spec.name, strict: true, schema: spec.schema } },
     }),
   });
   const body = await res.json().catch(() => null) as { choices?: { message?: { content?: string; refusal?: string } }[]; usage?: { prompt_tokens?: number; completion_tokens?: number }; error?: { message?: string } } | null;
-  if (!res.ok) throw new ApiError(502, `The AI provider could not read the bill: ${body?.error?.message ?? res.status}`, 'ai_failed');
+  if (!res.ok) throw new ApiError(502, `The AI provider could not read the ${spec.what}: ${body?.error?.message ?? res.status}`, 'ai_failed');
   const content = body?.choices?.[0]?.message?.content;
-  if (!content) throw new ApiError(502, body?.choices?.[0]?.message?.refusal ?? 'The AI provider returned nothing for this bill.', 'ai_failed');
+  if (!content) throw new ApiError(502, body?.choices?.[0]?.message?.refusal ?? `The AI provider returned nothing for this ${spec.what}.`, 'ai_failed');
   return { raw: JSON.parse(content), inputTokens: body?.usage?.prompt_tokens ?? 0, outputTokens: body?.usage?.completion_tokens ?? 0, model };
 };
 
+export interface CaptureDeps { ex?: Executor; inTrx?: <T>(fn: (trx: Trx) => Promise<T>) => Promise<T>; reader?: Reader }
+
 /**
- * Read a bill: check the AI is on and there are credits, read it, charge for it,
- * and hand back a draft with the supplier matched and notes for review.
+ * Have the AI read a document and charge for it: the assistant must be on, the
+ * file a PDF or photo, and the wallet able to cover the minimum, all before
+ * anything is sent. Returns the model's JSON and what it cost.
  */
-export async function captureBill(
-  orgId: number, userId: number, file: { bytes: Buffer; contentType: string; filename: string },
-  deps: { ex?: Executor; inTrx?: <T>(fn: (trx: Trx) => Promise<T>) => Promise<T>; reader?: Reader } = {},
-) {
+export async function chargedRead(orgId: number, userId: number, file: CaptureFile, spec: CaptureSpec, provider: string, deps: CaptureDeps = {}) {
   const ex = deps.ex ?? db;
   const inTrx = deps.inTrx ?? transaction;
   const reader = deps.reader ?? readWithOpenAi;
   if (!['application/pdf', 'image/png', 'image/jpeg', 'image/webp'].includes(file.contentType)) {
-    throw badRequest('Send the bill as a PDF or a photo (PNG, JPEG or WebP).');
+    throw badRequest(`Send the ${spec.what} as a PDF or a photo (PNG, JPEG or WebP).`);
   }
   if (file.bytes.length > 8 * 1024 * 1024) throw badRequest('Keep the file under 8 MB.');
   const settings = await aiSettingsFor(ex, orgId);
-  if (!settings.enabled) throw new ApiError(403, 'Turn on the AI assistant in Settings to read bills with it.', 'ai_disabled');
-  if (aiMode() === 'unconfigured' && reader === readWithOpenAi) throw new ApiError(503, 'Reading bills needs an AI provider: set OPENAI_API_KEY on the server.', 'ai_unconfigured');
+  if (!settings.enabled) throw new ApiError(403, `Turn on the AI assistant in Settings to read ${spec.what}s with it.`, 'ai_disabled');
+  if (aiMode() !== 'openai' && reader === readWithOpenAi) throw new ApiError(503, `Reading ${spec.what}s needs an AI provider: set OPENAI_API_KEY on the server.`, 'ai_unconfigured');
 
   // The wallet is checked before anything is sent: no credits, no call. A
   // short transaction first, for any credits due today (the demo's daily ones).
   await inTrx((trx) => prepareWallet(trx, orgId, new Date(), { isDemo: settings.isDemo }));
   if ((await walletView(ex, orgId)).availableMc < CAPTURE_MIN_MC) {
-    throw new ApiError(402, 'Not enough AI credits to read a bill. Top up in Settings → Billing.', 'out_of_credits');
+    throw new ApiError(402, `Not enough AI credits to read ${spec.what === 'invoice' ? 'an' : 'a'} ${spec.what}. Top up in Settings → Billing.`, 'out_of_credits');
   }
-  const read = await reader(file);
+  const read = await reader(file, spec);
   const cost = costMicroUsd({ inputTokens: read.inputTokens, cachedTokens: 0, outputTokens: read.outputTokens }, priceFor(read.model).price);
   const mc = Math.max(CAPTURE_MIN_MC, millicreditsFor(cost, creditCostUsd()));
   const spent = await inTrx((trx) => spendCredits(trx, orgId, userId, mc, {
-    provider: 'bill-capture', model: read.model, note: `Read a bill: ${file.filename}`.slice(0, 200), monthlyCapMc: settings.userMonthlyCapMc,
+    provider, model: read.model, note: `Read ${spec.what === 'invoice' ? 'an' : 'a'} ${spec.what}: ${file.filename}`.slice(0, 200), monthlyCapMc: settings.userMonthlyCapMc,
   }));
+  return { raw: read.raw, chargedMc: spent.chargedMc };
+}
 
+/**
+ * Read a bill: check the AI is on and there are credits, read it, charge for it,
+ * and hand back a draft with the supplier matched and notes for review.
+ */
+export async function captureBill(orgId: number, userId: number, file: CaptureFile, deps: CaptureDeps = {}) {
+  const read = await chargedRead(orgId, userId, file, BILL_SPEC, 'bill-capture', deps);
   const bill = toCaptured(read.raw);
-  return { bill, vendor: await matchVendor(ex, orgId, bill), notes: reviewNotes(bill), chargedMc: spent.chargedMc };
+  return { bill, vendor: await matchVendor(deps.ex ?? db, orgId, bill), notes: reviewNotes(bill), chargedMc: read.chargedMc };
 }

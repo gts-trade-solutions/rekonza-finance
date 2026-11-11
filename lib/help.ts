@@ -206,7 +206,8 @@ export const HELP: HelpTopic[] = [
     steps: [
       'In TallyPrime, Alt+E Export → Masters → All Masters, format XML (Data Interchange): the ledgers, groups and stock items, with their opening balances and unpaid bills.',
       'Open the Day Book, set the period with F2, then Alt+E Export → Current, format XML: the vouchers.',
-      'Tally → Import from Tally: choose the files (one or several). What they hold shows first; Check runs the whole import without saving; Bring it in saves it. The same voucher never comes in twice.',
+      'Tally → Import from Tally: choose the files (one or several, or a .zip of them). What they hold shows first; Check runs the whole import without saving; Bring it in saves it. The same voucher never comes in twice.',
+      "Tally's own data folder (Company.900, TranMgr.900, TSTATE.TSF…) is Tally's private database, not an export: only TallyPrime opens it. Choose those files and the screen says what to do: open the company in TallyPrime (F3), then connect the PC or export the XML.",
       'Tally → Export to Tally: these books as a Tally XML file, masters and vouchers, named as your Tally company names them, for TallyPrime to import.',
       'Or pair the connector on the PC that runs Tally, and its companies stay in step here.',
     ],
@@ -217,10 +218,11 @@ export const HELP: HelpTopic[] = [
     ],
   },
   {
-    id: 'import-export', area: 'Connecting', title: 'Import and export: CSV, text, Excel, QuickBooks',
-    summary: 'Bring data in from any spreadsheet, CSV or delimited text file, or from QuickBooks; take it out the same ways.',
+    id: 'import-export', area: 'Connecting', title: 'Import and export: CSV, text, Excel, PDF invoices, QuickBooks',
+    summary: 'Bring data in from any spreadsheet, CSV or delimited text file, invoices from PDF, or from QuickBooks; take it out the same ways.',
     steps: [
       'Import & Export → Import Excel, CSV, Text: pick what you are bringing in (customers, items, accounts, opening balances, invoices, bills, journals…), download its template if you like, and choose the file: Excel, CSV, text (.txt, .tsv) or any delimited file (.dsv, pipe, semicolon). The separator is found by itself, or choose it.',
+      'Import & Export → Import invoices from PDF: choose PDFs (or photos) of tax invoices, your own and other companies\' mixed. The AI reads each: whose it is (your GSTIN as seller: a sales invoice; as buyer: a bill), the other company, number, date and year, and the lines. Put anything right in the list, then Check and Bring it in; new customers and suppliers are added on the way. Each reading uses AI credits; the two sample PDFs there are free.',
       'Import & Export → Import from QuickBooks: QuickBooks Desktop’s IIF files (File → Utilities → Export → Lists to IIF Files), and QuickBooks Online’s Account List, Customers, Vendors, Products and Services, and the Journal report (as Excel or CSV). Accounts, parties, items and every transaction come across.',
       'Every import shows what the file holds first; Check runs it without saving; Bring it in keeps it all or none of it. The same QuickBooks or Tally transaction never comes in twice.',
       'Import & Export → Export CSV, Text, Excel: any part of the books as CSV, tab-separated text, delimited text with the separator you choose, Excel or JSON — or everything at once as a zip of CSV or text files.',
@@ -228,6 +230,7 @@ export const HELP: HelpTopic[] = [
     ],
     links: [
       { label: 'Import Excel, CSV, Text', href: '/settings/import' },
+      { label: 'Import invoices from PDF', href: '/settings/import?tab=pdf' },
       { label: 'Import from QuickBooks', href: '/settings/import/quickbooks' },
       { label: 'Export CSV, Text, Excel', href: '/settings/export' },
     ],

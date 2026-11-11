@@ -9,7 +9,7 @@
 // keeps everything or nothing.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import Papa from 'papaparse';
 import { ArrowLeft, Download, FileSpreadsheet, Loader2, Upload } from 'lucide-react';
@@ -29,30 +29,46 @@ import { TallyFileImport } from '@/components/tally/file-import';
 import { jsonGrid, templateJson } from '@/lib/imports/json';
 import { DELIMITERS, delimiterName, guessDelimiter, readTextFile, TEXT_FILE_TYPES } from '@/lib/delimited';
 import { QuickBooksImport } from '@/components/quickbooks/file-import';
+import { PdfInvoiceImport } from '@/components/imports/pdf-invoice-import';
+
+const TABS = ['sheet', 'pdf', 'tally', 'quickbooks'] as const;
+type Tab = (typeof TABS)[number];
+/** A PDF or a photo of an invoice: read on the PDF tab, not as a sheet. */
+const isPdfOrPhoto = (f: File) => /\.(pdf|png|jpe?g|webp)$/i.test(f.name) || /^(application\/pdf|image\/)/.test(f.type);
 
 /** A cell as text the server reads: dates as yyyy-mm-dd. */
 const cellText = (v: unknown) =>
   v instanceof Date ? v.toISOString().slice(0, 10) : v === null || v === undefined ? '' : String(v);
 
 export default function ImportPage() {
+  const [tab, setTab] = useState<Tab>('sheet');
+  // PDFs chosen on the spreadsheet tab, handed to the PDF tab.
+  const [pdfs, setPdfs] = useState<File[] | null>(null);
+  // ?tab=pdf (or tally, quickbooks) opens that tab, as the sidebar's links do.
+  useEffect(() => {
+    const want = new URLSearchParams(window.location.search).get('tab');
+    if (want && (TABS as readonly string[]).includes(want)) setTab(want as Tab);
+  }, []);
   return (
     <>
       <PageHeader
         title="Import"
-        description="Bring masters, opening balances and vouchers in from Excel, CSV, text (tab, pipe or any separator) or JSON — or a whole company from Tally or QuickBooks."
+        description="Bring masters, opening balances and vouchers in from Excel, CSV, text (tab, pipe or any separator) or JSON, invoices from PDF, or a whole company from Tally or QuickBooks."
         actions={
           <Button variant="outline" size="sm" asChild>
             <Link href="/settings"><ArrowLeft className="mr-1.5 size-3.5" /> Settings</Link>
           </Button>
         }
       />
-      <Tabs defaultValue="sheet">
-        <TabsList>
+      <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)}>
+        <TabsList className="max-w-full flex-wrap group-data-[orientation=horizontal]/tabs:h-auto">
           <TabsTrigger value="sheet">Excel, CSV, text or JSON</TabsTrigger>
+          <TabsTrigger value="pdf" data-slot="import-tab-pdf">Invoices from PDF</TabsTrigger>
           <TabsTrigger value="tally">From Tally</TabsTrigger>
           <TabsTrigger value="quickbooks">From QuickBooks</TabsTrigger>
         </TabsList>
-        <TabsContent value="sheet" className="mt-4"><SheetImport /></TabsContent>
+        <TabsContent value="sheet" className="mt-4"><SheetImport onPdf={(files) => { setPdfs(files); setTab('pdf'); }} /></TabsContent>
+        <TabsContent value="pdf" className="mt-4" keepMounted><PdfInvoiceImport incoming={pdfs} /></TabsContent>
         <TabsContent value="quickbooks" className="mt-4"><QuickBooksImport /></TabsContent>
         <TabsContent value="tally" className="mt-4 space-y-6"><TallyFileImport /><TallyImport /></TabsContent>
       </Tabs>
@@ -60,7 +76,7 @@ export default function ImportPage() {
   );
 }
 
-function SheetImport() {
+function SheetImport({ onPdf }: { onPdf: (files: File[]) => void }) {
   const [kind, setKind] = useState<ImportKind>('contacts');
   const [rows, setRows] = useState<Record<string, string>[]>([]);
   const [headings, setHeadings] = useState<{ heading: string; key: string | null }[]>([]);
@@ -188,9 +204,15 @@ function SheetImport() {
             ))}
           </div>
           <div className="flex flex-wrap items-center gap-3">
-            <input ref={input} type="file" accept={`${TEXT_FILE_TYPES},.xlsx,.json,application/json`} className="hidden" data-slot="sheet-file-input" onChange={(e) => void load(e.target.files?.[0])} />
+            <input ref={input} type="file" accept={`${TEXT_FILE_TYPES},.xlsx,.json,application/json,.pdf,application/pdf`} multiple className="hidden" data-slot="sheet-file-input"
+              onChange={(e) => {
+                const files = [...(e.target.files ?? [])];
+                // Invoices as PDFs (or photos) are read on their own tab, by the AI.
+                if (files.length && files.every(isPdfOrPhoto)) { e.target.value = ''; onPdf(files); return; }
+                void load(files.find((f) => !isPdfOrPhoto(f)));
+              }} />
             <Button size="sm" className="gap-1.5" onClick={() => input.current?.click()}>
-              <Upload className="size-3.5" /> Choose an Excel, CSV, text or JSON file
+              <Upload className="size-3.5" /> Choose an Excel, CSV, text, JSON or PDF file
             </Button>
             {fileName && <span className="text-xs text-muted-foreground" data-slot="sheet-file-read"><FileSpreadsheet className="mr-1 inline size-3.5" />{fileName}: {rows.length} row(s){readWith ? `, separated by ${delimiterName(readWith).toLowerCase()}` : ''}</span>}
             {['contacts', 'items', 'accounts'].includes(kind) && (

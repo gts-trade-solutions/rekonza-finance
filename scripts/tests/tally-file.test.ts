@@ -13,6 +13,10 @@ import { setBooksStartDate } from '../../lib/server/services/opening-balances';
 import { importTally, importTallyFileVouchers } from '../../lib/server/imports/tally';
 import { debitPaise, parseTallyFiles, readTallyFile, summariseTallyFile } from '../../lib/tally/xml';
 import { tallySampleXml } from '../../lib/tally/sample';
+import { deflateRawSync } from 'node:zlib';
+import { zipText } from '../../lib/xlsx';
+import { isTallyDataFile, sortTallyPicks, unzipEntry, zipEntries } from '../../lib/tally/data-files';
+import { outstandingBeyondDocuments } from '../../lib/server/services/party-outstanding';
 
 interface Fixture { trx: Trx; orgId: number; branchId: number; acc: Record<string, number> }
 
@@ -108,6 +112,82 @@ test('masters and vouchers in one upload: the company comes across, every vouche
   });
 });
 
+test("masters again, or a later Tally export: the unpaid bills are found, not entered twice", async () => {
+  await withFixture(async (f) => {
+    const ledger = (name: string, parent: string, ref: string, amount: string) =>
+      `<TALLYMESSAGE><LEDGER NAME="${name}" ACTION="Create"><PARENT>${parent}</PARENT><OPENINGBALANCE>${amount}</OPENINGBALANCE>` +
+      `<BILLALLOCATIONS.LIST><BILLDATE>20260315</BILLDATE><NAME>${ref}</NAME><OPENINGBALANCE>${amount}</OPENINGBALANCE></BILLALLOCATIONS.LIST></LEDGER></TALLYMESSAGE>`;
+    const xml = `<ENVELOPE><BODY><IMPORTDATA><REQUESTDATA>${
+      ledger('Kaveri Motors', 'Sundry Debtors', 'OB/25-26/455', '-30000.00') + ledger('Lakshmi Auto Components', 'Sundry Creditors', 'LAC/25-26/990', '60000.00')
+    }</REQUESTDATA></IMPORTDATA></BODY></ENVELOPE>`;
+    const file = parseTallyFiles([xml]);
+    const bills = (o: Awaited<ReturnType<typeof importTally>>) => o.find((x) => x.kind === 'opening-bills')!;
+
+    const first = await importTally(f.trx, ctx(f), file.masters);
+    assert.deepEqual(first.flatMap((o) => o.errors), []);
+    assert.equal(bills(first).created, 2);
+
+    const again = await importTally(f.trx, ctx(f), file.masters);
+    assert.deepEqual(again.flatMap((o) => o.errors), [], 'the same bill numbers again are not "already used"');
+    assert.equal(bills(again).created, 0);
+    assert.equal(bills(again).skipped, 2);
+    const owed = await sql<{ ar: string; ap: string }>`
+      SELECT COALESCE(SUM(CASE WHEN account_id = ${f.acc[CODE.AR]} THEN debit - credit END), 0) AS ar,
+             COALESCE(SUM(CASE WHEN account_id = ${f.acc[CODE.AP]} THEN credit - debit END), 0) AS ap
+        FROM journal_lines WHERE org_id = ${f.orgId}`.execute(f.trx);
+    assert.equal(Number(owed.rows[0].ar), 30_000);
+    assert.equal(Number(owed.rows[0].ap), 60_000);
+
+    // Asked to stop at a copy rather than pass over it, it says which bill.
+    const strict = await importTally(f.trx, { ...ctx(f), onDuplicate: 'error' }, file.masters);
+    assert.match(bills(strict).errors.map((e) => e.message).join(' '), /OB\/25-26\/455 is already an opening bill for Kaveri Motors/);
+  });
+});
+
+test("a Tally party's page owes what their statement says: opening bills and vouchers, not only invoices", async () => {
+  await withFixture(async (f) => {
+    const ledger = (name: string, parent: string, body = '') =>
+      `<TALLYMESSAGE><LEDGER NAME="${name}" ACTION="Create"><PARENT>${parent}</PARENT>${body}</LEDGER></TALLYMESSAGE>`;
+    const bill = (ref: string, amount: string) =>
+      `<OPENINGBALANCE>${amount}</OPENINGBALANCE><BILLALLOCATIONS.LIST><BILLDATE>20260315</BILLDATE><NAME>${ref}</NAME><OPENINGBALANCE>${amount}</OPENINGBALANCE></BILLALLOCATIONS.LIST>`;
+    // Tally writes a debit as a negative amount.
+    const v = (guid: string, type: string, lines: [string, number][]) =>
+      `<TALLYMESSAGE><VOUCHER VCHTYPE="${type}"><GUID>${guid}</GUID><DATE>20260601</DATE><VOUCHERTYPENAME>${type}</VOUCHERTYPENAME><VOUCHERNUMBER>${guid}</VOUCHERNUMBER>` +
+      lines.map(([l, r]) => `<ALLLEDGERENTRIES.LIST><LEDGERNAME>${l}</LEDGERNAME><AMOUNT>${(-r).toFixed(2)}</AMOUNT></ALLLEDGERENTRIES.LIST>`).join('') +
+      '</VOUCHER></TALLYMESSAGE>';
+    const xml = `<ENVELOPE><BODY><IMPORTDATA><REQUESTDATA>${[
+      ledger('Kaveri Motors', 'Sundry Debtors', bill('OB/25-26/455', '-30000.00')),
+      ledger('Lakshmi Auto Components', 'Sundry Creditors', bill('LAC/25-26/990', '60000.00')),
+      ledger('Sales - Spare Parts', 'Sales Accounts'),
+      ledger('HDFC Current', 'Bank Accounts'),
+      v('s1', 'Sales', [['Kaveri Motors', 11_800], ['Sales - Spare Parts', -11_800]]),
+      v('r1', 'Receipt', [['HDFC Current', 5_000], ['Kaveri Motors', -5_000]]),
+      v('p1', 'Payment', [['Lakshmi Auto Components', 20_000], ['HDFC Current', -20_000]]),
+    ].join('')}</REQUESTDATA></IMPORTDATA></BODY></ENVELOPE>`;
+    const file = parseTallyFiles([xml]);
+    assert.deepEqual((await importTally(f.trx, ctx(f), file.masters)).flatMap((o) => o.errors), []);
+    const out = await importTallyFileVouchers(f.trx, ctx(f), file.vouchers, file.masters);
+    assert.deepEqual(out.errors, []);
+    assert.equal(out.created, 3);
+
+    const idOf = async (name: string) => (await f.trx.selectFrom('contacts').select('id').where('org_id', '=', f.orgId).where('display_name', '=', name).executeTakeFirstOrThrow()).id;
+    const kaveri = await idOf('Kaveri Motors');
+    const lakshmi = await idOf('Lakshmi Auto Components');
+    const beyond = await outstandingBeyondDocuments(f.trx, f.orgId, [kaveri, lakshmi]);
+    // No invoice or bill here, yet Kaveri owes 30,000 + 11,800 − 5,000 and we owe Lakshmi 60,000 − 20,000.
+    assert.deepEqual(beyond.get(kaveri), { receivablePaise: 36_800_00, payablePaise: 0 });
+    assert.deepEqual(beyond.get(lakshmi), { receivablePaise: 0, payablePaise: 40_000_00 });
+
+    // The same figure the statement reads from the ledger.
+    const ledgerSays = await sql<{ ar: string; ap: string }>`
+      SELECT COALESCE(SUM(CASE WHEN account_id = ${f.acc[CODE.AR]} AND contact_id = ${kaveri} THEN debit - credit END), 0) AS ar,
+             COALESCE(SUM(CASE WHEN account_id = ${f.acc[CODE.AP]} AND contact_id = ${lakshmi} THEN credit - debit END), 0) AS ap
+        FROM journal_lines WHERE org_id = ${f.orgId}`.execute(f.trx);
+    assert.equal(Number(ledgerSays.rows[0].ar), 36_800);
+    assert.equal(Number(ledgerSays.rows[0].ap), 40_000);
+  });
+});
+
 test('vouchers alone, against masters already here: each ledger found by its name', async () => {
   await withFixture(async (f) => {
     await f.trx.insertInto('contacts').values([
@@ -142,6 +222,50 @@ test('vouchers alone, against masters already here: each ledger found by its nam
     assert.equal(await net(f, f.acc[CODE.AP]), 10_000);
     assert.ok((await verifyLedgerBalances(f.trx, f.orgId)).balanced);
   });
+});
+
+/** One deflated file in a zip, the way Windows' "Send to → Compressed folder" packs it. */
+function deflatedZip(name: string, text: string): Uint8Array {
+  const raw = Buffer.from(text, 'utf8');
+  const data = deflateRawSync(raw);
+  const n = Buffer.from(name, 'utf8');
+  const local = Buffer.alloc(30);
+  local.writeUInt32LE(0x04034b50, 0); local.writeUInt16LE(20, 4); local.writeUInt16LE(8, 8);
+  local.writeUInt32LE(data.length, 18); local.writeUInt32LE(raw.length, 22); local.writeUInt16LE(n.length, 26);
+  const cd = Buffer.alloc(46);
+  cd.writeUInt32LE(0x02014b50, 0); cd.writeUInt16LE(20, 4); cd.writeUInt16LE(20, 6); cd.writeUInt16LE(8, 10);
+  cd.writeUInt32LE(data.length, 20); cd.writeUInt32LE(raw.length, 24); cd.writeUInt16LE(n.length, 28); cd.writeUInt32LE(0, 42);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0); end.writeUInt16LE(1, 8); end.writeUInt16LE(1, 10);
+  end.writeUInt32LE(46 + n.length, 12); end.writeUInt32LE(30 + n.length + data.length, 16);
+  return new Uint8Array(Buffer.concat([local, n, data, cd, n, end]));
+}
+
+test("Tally's own data folder is told apart from the files Tally exports", () => {
+  for (const n of ['Company.900', 'TranMgr.900', 'TSTATE.TSF', 'TAccess.tsf', 'Company.1800', 'TBK900.001', '100000/LinkMgr.900', 'C:\\data\\100000\\SumTran.900']) {
+    assert.ok(isTallyDataFile(n), n);
+  }
+  for (const n of ['DayBook.xml', 'Master.xml', 'report.900.xml', 'books.zip', 'TBK.001x']) assert.ok(!isTallyDataFile(n), n);
+  assert.deepEqual(sortTallyPicks(['Company.900', 'DayBook.xml', 'data.zip', 'notes.pdf']), {
+    exports: ['DayBook.xml'], dataFiles: ['Company.900'], zips: ['data.zip'], other: ['notes.pdf'],
+  });
+});
+
+test('a zip: its files listed, and the Tally XML inside opened, stored or deflated', async () => {
+  const xml = tallySampleXml('2026-11-10');
+  const stored = new Blob([zipText([['100000/Company.900', 'not text'], ['exports/DayBook.xml', xml]]) as BlobPart]);
+  const entries = await zipEntries(stored);
+  assert.deepEqual(entries.map((e) => e.name), ['100000/Company.900', 'exports/DayBook.xml']);
+  assert.equal(new TextDecoder().decode(await unzipEntry(stored, entries[1])), xml);
+
+  const deflated = new Blob([deflatedZip('Master.xml', xml) as BlobPart]);
+  const [entry] = await zipEntries(deflated);
+  assert.equal(entry.method, 8);
+  const text = await readTallyFile(new Blob([(await unzipEntry(deflated, entry)) as BlobPart]));
+  assert.equal(text, xml);
+  assert.ok(summariseTallyFile(parseTallyFiles([text])).ledgers > 0);
+
+  await assert.rejects(zipEntries(new Blob(['not a zip at all'])), /not a zip/);
 });
 
 test.after(async () => {

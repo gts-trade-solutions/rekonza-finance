@@ -6,6 +6,7 @@ import { toPaiseFromSql } from '@/lib/server/money-sql';
 import { bankNumberFor } from '@/lib/server/bank-mask';
 import { parseSections } from '@/lib/tax/tds';
 import { vendorFyTaxable } from '@/lib/server/services/purchases';
+import { outstandingBeyondDocuments } from '@/lib/server/services/party-outstanding';
 
 /**
  * One party, with the running story of its account.
@@ -38,7 +39,7 @@ export const GET = route(
       // Year-to-date taxable billing drives TDS, and the threshold is annual —
       // so the figure a form needs is the running total, not this bill alone.
       const today = new Date().toISOString().slice(0, 10);
-      const [ar, ap, fyTaxable] = await Promise.all([
+      const [ar, ap, fyTaxable, beyond] = await Promise.all([
         db.selectFrom('invoices')
           .select(sql<string>`COALESCE(SUM(total - amount_paid), 0)`.as('v'))
           .where('org_id', '=', orgId).where('customer_id', '=', id)
@@ -48,6 +49,8 @@ export const GET = route(
           .where('org_id', '=', orgId).where('vendor_id', '=', id)
           .where('status', 'not in', ['draft', 'void']).executeTakeFirst(),
         db.transaction().execute((trx) => vendorFyTaxable(trx, orgId, id, today)),
+        // Opening bills and journals (a Tally import's vouchers among them) owe too.
+        outstandingBeyondDocuments(db, orgId, [id]).then((m) => m.get(id)),
       ]);
 
       return {
@@ -63,14 +66,14 @@ export const GET = route(
           paymentTerms: c.payment_terms,
         },
         summary: {
-          receivablePaise: seeSales ? toPaiseFromSql(ar?.v ?? '0') : 0,
-          payablePaise: seePurchases ? toPaiseFromSql(ap?.v ?? '0') : 0,
+          receivablePaise: seeSales ? toPaiseFromSql(ar?.v ?? '0') + (beyond?.receivablePaise ?? 0) : 0,
+          payablePaise: seePurchases ? toPaiseFromSql(ap?.v ?? '0') + (beyond?.payablePaise ?? 0) : 0,
           fyTaxablePaise: seePurchases ? fyTaxable : 0,
         },
       };
     }
 
-    const [invoices, bills, allPayments] = await Promise.all([
+    const [invoices, bills, allPayments, beyond] = await Promise.all([
       !seeSales ? [] : db
         .selectFrom('invoices')
         .select([
@@ -109,6 +112,7 @@ export const GET = route(
         .orderBy('payments.id', 'desc')
         .limit(200)
         .execute(),
+      outstandingBeyondDocuments(db, orgId, [id]).then((m) => m.get(id)),
     ]);
     const payments = allPayments.filter((p) => (p.kind === 'received' ? seeSales : seePurchases));
 
@@ -203,8 +207,9 @@ export const GET = route(
           .reduce((t, i) => t + toPaiseFromSql(i.total), 0),
         billedPaise: bills.filter((b) => b.status !== 'void')
           .reduce((t, b) => t + toPaiseFromSql(b.total), 0),
-        receivablePaise: sumBalance(invoices),
-        payablePaise: sumBalance(bills),
+        // Opening bills and journals posted to their account owe as much as an invoice.
+        receivablePaise: seeSales ? sumBalance(invoices) + (beyond?.receivablePaise ?? 0) : 0,
+        payablePaise: seePurchases ? sumBalance(bills) + (beyond?.payablePaise ?? 0) : 0,
         // Cash actually collected includes the tax the customer withheld: they
         // paid it, just to the government rather than to us.
         receivedPaise: payments

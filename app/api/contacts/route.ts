@@ -9,6 +9,7 @@ import { joinSections, parseSections } from '@/lib/tax/tds';
 import { assertFresh } from '@/lib/server/concurrency';
 import { logAudit, auditMeta, snapshot, changesBetween, describeChanges } from '@/lib/server/audit';
 import { isValidGstin } from '@/lib/tax/gst';
+import { outstandingBeyondDocuments } from '@/lib/server/services/party-outstanding';
 
 const ListQuery = z.object({
   kind: z.enum(['customer', 'vendor', 'both', 'all']).optional(),
@@ -100,6 +101,8 @@ export const GET = route(
 
     const arBy = new Map(receivable.map((r) => [r.id, r]));
     const apBy = new Map(payable.map((r) => [r.id, r]));
+    // Opening bills and journals (a Tally import's vouchers among them) owe too.
+    const beyond = await outstandingBeyondDocuments(db, orgId, ids);
 
     return {
       contacts: rows.map((c) => ({
@@ -144,8 +147,8 @@ export const GET = route(
         shippingAddress: c.shipping_address,
         notes: c.notes,
         isArchived: !!c.is_archived,
-        receivablePaise: toPaiseFromSql(arBy.get(c.id)?.due ?? '0'),
-        payablePaise: toPaiseFromSql(apBy.get(c.id)?.due ?? '0'),
+        receivablePaise: toPaiseFromSql(arBy.get(c.id)?.due ?? '0') + (beyond.get(c.id)?.receivablePaise ?? 0),
+        payablePaise: toPaiseFromSql(apBy.get(c.id)?.due ?? '0') + (beyond.get(c.id)?.payablePaise ?? 0),
         invoiceCount: Number(arBy.get(c.id)?.n ?? 0),
         billCount: Number(apBy.get(c.id)?.n ?? 0),
       })),

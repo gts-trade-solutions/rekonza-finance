@@ -183,6 +183,7 @@ export const NAV_GROUPS: NavGroup[] = [
     module: 'accountant',
     items: [
       { label: 'Import Excel, CSV, Text', href: '/settings/import', icon: FileUp, module: 'accountant', exact: true },
+      { label: 'Import invoices from PDF', href: '/settings/import?tab=pdf', icon: FileUp, module: 'accountant' },
       { label: 'Import from QuickBooks', href: '/settings/import/quickbooks', icon: FileUp, module: 'accountant' },
       { label: 'Import from Tally', href: '/tally/import', icon: Download, module: 'tally', feature: 'tally' },
       { label: 'Export CSV, Text, Excel', href: '/settings/export', icon: FileDown, module: 'accountant' },
