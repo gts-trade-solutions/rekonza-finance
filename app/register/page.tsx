@@ -27,7 +27,7 @@ import { auth, ApiError } from '@/lib/api/client';
 import { BRAND, Logo } from '@/components/brand/logo';
 import { GST_STATES, isValidGstin } from '@/lib/tax/gst';
 import { cn } from '@/lib/utils';
-import { GstinLookupButton } from '@/components/gst/gstn-portal';
+import { GstinLookupButton, GstinNumberOnlyNote, type GstinDetails } from '@/components/gst/gstn-portal';
 
 const STATE_OPTIONS = Object.entries(GST_STATES)
   .filter(([code]) => code !== '96')
@@ -47,6 +47,7 @@ export default function RegisterPage() {
   const [businessName, setBusinessName] = useState('');
   const [stateCode, setStateCode] = useState('');
   const [gstin, setGstin] = useState('');
+  const [lookup, setLookup] = useState<GstinDetails | null>(null);
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
@@ -176,10 +177,12 @@ export default function RegisterPage() {
                       />
                       {/* The registered name and state, filled in as soon as the GSTIN is typed. */}
                       <GstinLookupButton gstin={gstin} endpoint="/api/auth/gstin" onFound={(d) => {
+                        setLookup(d);
                         if (!businessName.trim() && (d.legalName || d.tradeName)) setBusinessName(d.legalName || d.tradeName || '');
                         if (d.address?.stateCode) setStateCode(d.address.stateCode);
                       }} />
                     </div>
+                    <GstinNumberOnlyNote details={lookup} gstin={gstin} publicPage />
                     {gstinNote ? (
                       <p
                         className={cn(

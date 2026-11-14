@@ -22,7 +22,7 @@ import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { MultiCombobox } from '@/components/ui/multi-combobox';
 import { Field } from '@/components/shared/form-bits';
-import { CinLookupButton, GstinLookupButton } from '@/components/gst/gstn-portal';
+import { CinLookupButton, GstinLookupButton, GstinNumberOnlyNote, type GstinDetails } from '@/components/gst/gstn-portal';
 import { BUSINESS_NATURES, COMPANY_TYPES, companyTypeFrom } from '@/lib/company-profile';
 import { api } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
@@ -44,6 +44,7 @@ export function CompanyRegistration({ value, onChange, canEdit, gstin, registrat
   registrationType: string;
 }) {
   const set = (patch: Partial<Registration>) => onChange({ ...value, ...patch });
+  const [lookup, setLookup] = useState<GstinDetails | null>(null);
   return (
     <Card className="space-y-4 p-5" data-slot="company-registration">
       <div>
@@ -55,15 +56,16 @@ export function CompanyRegistration({ value, onChange, canEdit, gstin, registrat
           <div className="flex gap-2">
             <Input value={gstin ?? ''} readOnly className="bg-muted/40 font-mono" placeholder="Not registered" />
             {gstin && canEdit && (
-              <GstinLookupButton gstin={gstin} auto={false} onFound={(d) => set({
+              <GstinLookupButton gstin={gstin} auto={false} onFound={(d) => { setLookup(d); set({
                 legalName: d.legalName ?? value.legalName,
                 pan: d.pan ?? value.pan,
                 constitution: companyTypeFrom(d.constitution) ?? value.constitution,
                 gstRegisteredOn: d.registeredOn ?? value.gstRegisteredOn,
                 address: d.address?.line ? [d.address.line, d.address.city, d.address.pincode].filter(Boolean).join(', ') : value.address,
-              })} />
+              }); }} />
             )}
           </div>
+          <GstinNumberOnlyNote details={lookup} gstin={gstin ?? ''} />
         </Field>
         <Field label="GST registered on" hint="The date on the GST registration certificate">
           <Input type="date" value={value.gstRegisteredOn} onChange={(e) => set({ gstRegisteredOn: e.target.value })} disabled={!canEdit} />

@@ -24,7 +24,7 @@ import { Money } from '@/components/shared/money';
 import { EmptyState } from '@/components/shared/empty-state';
 import { AsyncPage } from '@/components/shared/async-state';
 import { Field } from '@/components/shared/form-bits';
-import { CinLookupButton, GstinLookupButton, gstinTreatment } from '@/components/gst/gstn-portal';
+import { CinLookupButton, GstinLookupButton, GstinNumberOnlyNote, gstinTreatment, type GstinDetails } from '@/components/gst/gstn-portal';
 import { MultiCombobox } from '@/components/ui/multi-combobox';
 import { KindOfBusinessSelect } from '@/components/shared/kind-of-business';
 import { companyTypeFrom } from '@/lib/company-profile';
@@ -122,6 +122,7 @@ export default function VendorsPage() {
   const state = useApi<{ contacts: ContactRow[] }>(() => contacts.list({ kind: 'vendor' }), []);
   const [open, setOpen] = useState(false);
   const [f, setF] = useState(BLANK);
+  const [lookup, setLookup] = useState<GstinDetails | null>(null);
   const router = useRouter();
 
   // The organisation's own registration, used as the default state for a new
@@ -201,7 +202,7 @@ export default function VendorsPage() {
                         className="font-mono"
                         maxLength={15}
                       />
-                      <GstinLookupButton gstin={f.gstin} onFound={(d) => setF({
+                      <GstinLookupButton gstin={f.gstin} onFound={(d) => { setLookup(d); setF({
                         ...f,
                         name: f.name.trim() ? f.name : d.tradeName || d.legalName || '',
                         legalName: d.legalName ?? f.legalName,
@@ -212,8 +213,9 @@ export default function VendorsPage() {
                         gstStatus: d.status ?? f.gstStatus,
                         gstRegisteredOn: d.registeredOn ?? f.gstRegisteredOn,
                         treatment: d.fromPortal ? gstinTreatment(d) : f.treatment,
-                      })} />
+                      }); }} />
                     </div>
+                    <GstinNumberOnlyNote details={lookup} gstin={f.gstin} />
                   </Field>
                   <Field label="PAN" hint="Without PAN, TDS is deducted at 20%" error={create.fieldErrors.pan}>
                     <Input

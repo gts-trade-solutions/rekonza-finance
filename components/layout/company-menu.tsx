@@ -19,7 +19,7 @@ import { Field } from '@/components/shared/form-bits';
 import { api } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
 import { GST_STATES } from '@/lib/tax/gst';
-import { GstinLookupButton } from '@/components/gst/gstn-portal';
+import { GstinLookupButton, GstinNumberOnlyNote, type GstinDetails } from '@/components/gst/gstn-portal';
 
 interface Company { orgId: string; name: string; isDemo: boolean; role: string; needsCode: boolean }
 
@@ -31,6 +31,7 @@ export function CompanyMenu({ org, branch }: {
   const list = useApi(() => api.get<{ current: string; companies: Company[] }>('/api/companies'), []);
   const [adding, setAdding] = useState(false);
   const [f, setF] = useState({ name: '', stateCode: '33', gstin: '' });
+  const [lookup, setLookup] = useState<GstinDetails | null>(null);
   const [busy, setBusy] = useState(false);
 
   const move = async (c: Company) => {
@@ -118,12 +119,13 @@ export function CompanyMenu({ org, branch }: {
               <Field label="GSTIN" hint="Fills the name and state; leave empty if it is not registered">
                 <div className="flex gap-2">
                   <Input value={f.gstin} onChange={(e) => setF({ ...f, gstin: e.target.value.toUpperCase() })} className="font-mono" maxLength={15} />
-                  <GstinLookupButton gstin={f.gstin} onFound={(d) => setF({
+                  <GstinLookupButton gstin={f.gstin} onFound={(d) => { setLookup(d); setF({
                     ...f,
                     name: f.name.trim() ? f.name : d.legalName || d.tradeName || f.name,
                     stateCode: d.address?.stateCode ?? f.stateCode,
-                  })} />
+                  }); }} />
                 </div>
+                <GstinNumberOnlyNote details={lookup} gstin={f.gstin} />
               </Field>
             </div>
           </div>

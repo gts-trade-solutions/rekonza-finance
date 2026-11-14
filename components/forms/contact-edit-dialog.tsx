@@ -26,7 +26,7 @@ import { useApi } from '@/lib/api/use-api';
 import { useAppStore } from '@/lib/store';
 import { stateOptions } from '@/lib/options';
 import { TDS_SECTIONS } from '@/lib/tax/tds';
-import { CinLookupButton, GstinLookupButton, gstinTreatment } from '@/components/gst/gstn-portal';
+import { CinLookupButton, GstinLookupButton, GstinNumberOnlyNote, gstinTreatment, type GstinDetails } from '@/components/gst/gstn-portal';
 import { MultiCombobox } from '@/components/ui/multi-combobox';
 import { KindOfBusinessSelect } from '@/components/shared/kind-of-business';
 import { companyTypeFrom } from '@/lib/company-profile';
@@ -60,6 +60,7 @@ export function ContactEditDialog({ contact, onClose, onSaved }: {
   onSaved: () => void;
 }) {
   const [f, setF] = useState<Editable | null>(contact);
+  const [lookup, setLookup] = useState<GstinDetails | null>(null);
   const [busy, setBusy] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
   useEffect(() => { setF(contact); setErrors({}); }, [contact]);
@@ -152,7 +153,7 @@ export function ContactEditDialog({ contact, onClose, onSaved }: {
             <Field label="GSTIN" error={errors.gstin}>
               <div className="flex gap-2">
                 <Input value={s(f.gstin)} onChange={(e) => set('gstin', e.target.value.toUpperCase())} className="font-mono" maxLength={15} />
-                <GstinLookupButton gstin={s(f.gstin)} auto={s(f.gstin) !== s(contact?.gstin ?? null)} onFound={(d) => setF({
+                <GstinLookupButton gstin={s(f.gstin)} auto={s(f.gstin) !== s(contact?.gstin ?? null)} onFound={(d) => { setLookup(d); setF({
                   ...f,
                   legalName: d.legalName ?? f.legalName,
                   gstTreatment: d.fromPortal ? gstinTreatment(d) as Editable['gstTreatment'] : f.gstTreatment,
@@ -162,8 +163,9 @@ export function ContactEditDialog({ contact, onClose, onSaved }: {
                   gstStatus: d.status ?? f.gstStatus,
                   gstRegisteredOn: d.registeredOn ?? f.gstRegisteredOn,
                   billingAddress: d.address?.line ? [d.address.line, d.address.city, d.address.pincode].filter(Boolean).join(', ') : f.billingAddress,
-                })} />
+                }); }} />
               </div>
+              <GstinNumberOnlyNote details={lookup} gstin={s(f.gstin)} />
             </Field>
             <Field label="PAN" error={errors.pan}><Input value={s(f.pan)} onChange={(e) => set('pan', e.target.value.toUpperCase())} className="font-mono" maxLength={10} /></Field>
             <Field label="Kind of business"><KindOfBusinessSelect value={f.constitution} onChange={(v) => set('constitution', v)} /></Field>

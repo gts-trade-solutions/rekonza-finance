@@ -7,7 +7,7 @@
 // listed in Settings (GstnConnections).
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { CheckCircle2, CloudUpload, KeyRound, Loader2, Plug, RefreshCw, ShieldCheck, TriangleAlert, Unplug } from 'lucide-react';
+import { CheckCircle2, CloudUpload, Info, KeyRound, Loader2, Plug, RefreshCw, ShieldCheck, TriangleAlert, Unplug } from 'lucide-react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -415,8 +415,35 @@ export interface CompanyDetails {
   incorporatedOn: string | null; name: string | null; status: string | null; source: 'number' | 'lookup-service';
 }
 
-// Said once a page: the number alone gave the state and PAN, and fetching the rest needs a service.
-let toldNumberOnly = false;
+/**
+ * Said under the GSTIN box when a lookup could only read the number itself.
+ * The state and PAN are written in the GSTIN; the registered name, address and
+ * registration date are the GST system's record, and need a GSP or a GSTIN
+ * lookup service to fetch. A toast once a page used to say this and was
+ * missed: the owner typed a GSTIN, saw only the state fill and took the fetch
+ * to be broken (2026-11-14). So it stays beside the box for as long as that
+ * number is in it, every time.
+ */
+export function GstinNumberOnlyNote({ details, gstin, publicPage = false }: {
+  /** The last lookup's answer, as onFound handed it over. */
+  details: GstinDetails | null;
+  /** What is in the box now: the note goes as soon as the number changes. */
+  gstin: string;
+  /** The sign-up page: a visitor has no settings to change, only a name to type. */
+  publicPage?: boolean;
+}) {
+  if (!details || details.fromPortal || details.gstin !== gstin.trim().toUpperCase()) return null;
+  return (
+    <p className="mt-1.5 flex items-start gap-1.5 text-xs text-warning" data-slot="gstin-number-only">
+      <Info className="mt-px size-3.5 shrink-0" />
+      <span>
+        {publicPage
+          ? 'Only the state and PAN could be read from the GSTIN. Type the business name yourself.'
+          : 'Only the state and PAN were filled. The name and address need a GSTIN lookup service: see Settings → System health.'}
+      </span>
+    </p>
+  );
+}
 
 /** The GST treatment a registration's taxpayer type means. */
 export function gstinTreatment(d: GstinDetails): string {
@@ -457,12 +484,8 @@ export function GstinLookupButton({ gstin, onFound, className, auto = true, endp
       const d = await api.get<GstinDetails>(endpoint, { gstin: number });
       setDone(number);
       if (d.status && !/active/i.test(d.status)) toast.warning(`This registration is ${d.status}`, { description: d.cancelledOn ? `Cancelled on ${d.cancelledOn}.` : 'Check before invoicing it as registered.' });
-      if (!d.fromPortal) {
-        if (!toldNumberOnly) {
-          toldNumberOnly = true;
-          toast.info('Filled the state and PAN from the GSTIN', { description: 'The registered name, address and registration date come from the GST system: set up a GSP or a GSTIN lookup service (Settings → System health shows how).' });
-        }
-      } else {
+      // A number-only answer is said under the box by GstinNumberOnlyNote, every time.
+      if (d.fromPortal) {
         toast.success(`Found ${d.legalName ?? d.gstin}`, { description: [d.taxpayerType, d.status, d.registeredOn ? `registered ${d.registeredOn}` : null].filter(Boolean).join(' · ') });
       }
       found.current(d);

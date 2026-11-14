@@ -44,7 +44,7 @@ import { GST_RATES, isValidGstin, stateName } from '@/lib/tax/gst';
 import { TDS_SECTIONS } from '@/lib/tax/tds';
 import type { Contact, GstTreatment, Item, TaxPref } from '@/lib/types';
 import { cn } from '@/lib/utils';
-import { GstinLookupButton, gstinTreatment, type GstinDetails } from '@/components/gst/gstn-portal';
+import { GstinLookupButton, GstinNumberOnlyNote, gstinTreatment, type GstinDetails } from '@/components/gst/gstn-portal';
 import { MultiCombobox } from '@/components/ui/multi-combobox';
 import { companyTypeFrom } from '@/lib/company-profile';
 
@@ -269,6 +269,7 @@ export function QuickContactDialog({
                     if (d.address?.stateCode) setStateCode(d.address.stateCode);
                   }} />
                 </div>
+                <GstinNumberOnlyNote details={found} gstin={gstin} />
               </Field>
             ) : (
               <Field label="Phone">

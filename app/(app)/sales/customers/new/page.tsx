@@ -16,7 +16,7 @@ import { Combobox } from '@/components/ui/combobox';
 import { stateOptions } from '@/lib/options';
 import { TDS_SECTIONS } from '@/lib/tax/tds';
 import { useAppStore } from '@/lib/store';
-import { CinLookupButton, GstinLookupButton, gstinTreatment } from '@/components/gst/gstn-portal';
+import { CinLookupButton, GstinLookupButton, GstinNumberOnlyNote, gstinTreatment, type GstinDetails } from '@/components/gst/gstn-portal';
 import { MultiCombobox } from '@/components/ui/multi-combobox';
 import { SupplyKindPicker } from '@/components/forms/supply-kind-picker';
 import { countryCurrency, countryOptions, currencyOptions } from '@/lib/countries';
@@ -30,6 +30,8 @@ export default function NewCustomerPage() {
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [gstin, setGstin] = useState('');
+  // The last GSTIN lookup's answer: says under the box when only the number could be read.
+  const [lookup, setLookup] = useState<GstinDetails | null>(null);
   const [treatment, setTreatment] = useState('registered');
   // Defaults to the state this business is registered in, not a fixed one.
   // Most customers are local, and a wrong default here is not cosmetic: state
@@ -220,6 +222,7 @@ export default function NewCustomerPage() {
                 </div>
                 <GstinLookupButton gstin={gstin} onFound={(d) => {
                   // Zoho's prefill: the registered name and address, the state and the kind of registration.
+                  setLookup(d);
                   if (!name.trim()) setName(d.tradeName || d.legalName || '');
                   if (d.legalName) setLegalName(d.legalName);
                   setPan(d.pan);
@@ -235,6 +238,7 @@ export default function NewCustomerPage() {
                   }
                 }} />
                 </div>
+                <GstinNumberOnlyNote details={lookup} gstin={gstin} />
                 {legalName && <p className="mt-1 text-xs text-muted-foreground">Registered as {legalName}</p>}
               </Field>
               <Field label="State" required hint="Decides intra-state vs inter-state tax" className="sm:col-span-2">
