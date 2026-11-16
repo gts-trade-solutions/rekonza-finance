@@ -124,7 +124,7 @@ export default function ExceptionsPage() {
               ].map(([label, n, tone]) => (
                 <Card key={label as string} className={`p-4 ${tileColors(label as string, label === 'Critical' ? 'danger' : label === 'High' ? 'warning' : label === 'Closed' ? 'positive' : 'default').card}`}>
                   <p className={`text-xs font-medium uppercase tracking-wide ${tileColors(label as string, label === 'Critical' ? 'danger' : label === 'High' ? 'warning' : label === 'Closed' ? 'positive' : 'default').label}`}>{label}</p>
-                  <p className={cn('text-2xl font-semibold', tone as string)}>{n}</p>
+                  <p className={cn('text-[18px] font-medium', tone as string)}>{n}</p>
                 </Card>
               ))}
             </div>

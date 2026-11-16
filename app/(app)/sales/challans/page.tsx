@@ -92,7 +92,7 @@ export default function ChallansPage() {
   return (
     <>
       <PageHeader
-        title="Delivery challans"
+        title="Delivery Challans"
         description="Goods moving before or without a sale — job work, supply on approval, or delivery ahead of the invoice. No GST is charged and nothing posts until the goods are invoiced."
         actions={
           canCreate && (

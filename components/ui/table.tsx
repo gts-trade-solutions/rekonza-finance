@@ -12,7 +12,7 @@ function Table({ className, ...props }: React.ComponentProps<"table">) {
     >
       <table
         data-slot="table"
-        className={cn("w-full caption-bottom text-sm", className)}
+        className={cn("w-full caption-bottom text-[13px]", className)}
         {...props}
       />
     </div>
@@ -44,7 +44,7 @@ function TableFooter({ className, ...props }: React.ComponentProps<"tfoot">) {
     <tfoot
       data-slot="table-footer"
       className={cn(
-        "border-t bg-muted/50 font-medium [&>tr]:last:border-b-0",
+        "border-t bg-table-head font-medium [&>tr]:last:border-b-0",
         className
       )}
       {...props}
@@ -57,7 +57,8 @@ function TableRow({ className, ...props }: React.ComponentProps<"tr">) {
     <tr
       data-slot="table-row"
       className={cn(
-        "border-b transition-colors hover:bg-muted/50 has-aria-expanded:bg-muted/50 data-[state=selected]:bg-muted",
+        // Zoho's rows: a #ebeaf2 hairline, #f1f1fa under the pointer.
+        "border-b transition-colors hover:bg-row-hover has-aria-expanded:bg-row-hover data-[state=selected]:bg-row-hover",
         className
       )}
       {...props}
@@ -70,7 +71,8 @@ function TableHead({ className, ...props }: React.ComponentProps<"th">) {
     <th
       data-slot="table-head"
       className={cn(
-        "h-10 px-2 text-left align-middle font-semibold whitespace-nowrap text-table-head-foreground [&:has([role=checkbox])]:pr-0",
+        // Zoho's headings: 11px semibold uppercase grey, 12px above and 8px below.
+        "h-[39px] px-[15px] pb-2 pt-3 text-left align-middle text-[11px] font-semibold uppercase whitespace-nowrap text-table-head-foreground first:pl-5 [&:has([role=checkbox])]:pr-0",
         className
       )}
       {...props}
@@ -83,7 +85,7 @@ function TableCell({ className, ...props }: React.ComponentProps<"td">) {
     <td
       data-slot="table-cell"
       className={cn(
-        "p-2 align-middle whitespace-nowrap [&:has([role=checkbox])]:pr-0",
+        "px-[15px] py-3 align-middle whitespace-nowrap first:pl-5 [&:has([role=checkbox])]:pr-0",
         className
       )}
       {...props}

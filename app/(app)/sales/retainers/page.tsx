@@ -152,7 +152,7 @@ export default function RetainersPage() {
   return (
     <>
       <PageHeader
-        title="Service invoices"
+        title="Service Invoices"
         description="Advances collected before work is done."
         actions={
           canCreate && (

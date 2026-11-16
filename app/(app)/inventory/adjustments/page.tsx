@@ -146,7 +146,7 @@ export default function StockAdjustmentsPage() {
   return (
     <>
       <PageHeader
-        title="Stock adjustments"
+        title="Inventory Adjustments"
         description="Breakage, theft, stocktake corrections — the movements no document explains."
         actions={
           canEdit && (

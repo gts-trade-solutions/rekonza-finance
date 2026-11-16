@@ -4,7 +4,7 @@ import { useRouter } from 'next/navigation';
 import {
   CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList,
 } from '@/components/ui/command';
-import { NAV_GROUPS, BOTTOM_LEVEL, TOP_LEVEL } from './nav-config';
+import { ALL_NAV_ITEMS } from './nav-config';
 import {
   Banknote, FileText, Receipt, Wallet, CreditCard, Users, Building2, Split, BookOpen,
 } from 'lucide-react';
@@ -40,11 +40,7 @@ export function QuickCreate({
     router.push(href);
   };
 
-  const allPages = [
-    ...TOP_LEVEL,
-    ...NAV_GROUPS.flatMap((g) => g.items.map((i) => ({ ...i, label: `${g.label} › ${i.label}` }))),
-    ...BOTTOM_LEVEL,
-  ];
+  const allPages = ALL_NAV_ITEMS.map((i) => (i.group ? { ...i, label: `${i.group} › ${i.label}` } : i));
 
   return (
     <CommandDialog open={open} onOpenChange={onOpenChange}>

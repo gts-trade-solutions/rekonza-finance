@@ -58,7 +58,7 @@ export default function ForeignCurrencyPage() {
 
   return (
     <>
-      <PageHeader title="Foreign currency" description="Exchange rates, and open invoices and bills in other currencies restated at a period end." />
+      <PageHeader title="Currency Adjustments" description="Exchange rates, and open invoices and bills in other currencies restated at a period end." />
       <AsyncPage state={state} loading={<LoadingRows rows={8} />}>
         {(d) => {
           const net = d.exposure.reduce((t, r) => t + (r.kind === 'invoice' ? (r.differencePaise ?? 0) : -(r.differencePaise ?? 0)), 0);

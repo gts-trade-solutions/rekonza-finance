@@ -16,7 +16,8 @@ function Card({
       data-slot="card"
       data-size={size}
       className={cn(
-        "group/card flex flex-col gap-(--card-spacing) overflow-hidden rounded-xl bg-card py-(--card-spacing) text-sm text-card-foreground shadow-(--card-shadow) ring-1 ring-foreground/8 [--card-spacing:--spacing(4)] has-data-[slot=card-footer]:pb-0 has-[>img:first-child]:pt-0 data-[size=sm]:[--card-spacing:--spacing(3)] data-[size=sm]:has-data-[slot=card-footer]:pb-0 *:[img:first-child]:rounded-t-xl *:[img:last-child]:rounded-b-xl",
+        // Zoho's box: white, a #e9eaf5 hairline, the faintest shadow, 12px corners.
+        "group/card flex flex-col gap-(--card-spacing) overflow-hidden rounded-[var(--radius-card)] border border-card-border bg-card py-(--card-spacing) text-[13px] text-card-foreground shadow-(--card-shadow) [--card-spacing:--spacing(4)] has-data-[slot=card-footer]:pb-0 has-[>img:first-child]:pt-0 data-[size=sm]:[--card-spacing:--spacing(3)] data-[size=sm]:has-data-[slot=card-footer]:pb-0 *:[img:first-child]:rounded-t-xl *:[img:last-child]:rounded-b-xl",
         row && "flex-row",
         className
       )}

@@ -113,7 +113,7 @@ export function PaymentsList({ kind }: { kind: 'received' | 'made' }) {
   return (
     <>
       <PageHeader
-        title={isReceipt ? 'Payments received' : 'Payments made'}
+        title={isReceipt ? 'Payments Received' : 'Payments Made'}
         description={
           isReceipt
             ? 'One receipt can settle several invoices. TDS the customer withheld still settles the invoice, even though it never reaches the bank.'

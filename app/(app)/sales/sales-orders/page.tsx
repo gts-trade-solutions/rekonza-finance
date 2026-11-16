@@ -159,7 +159,7 @@ export default function SalesOrdersPage() {
   return (
     <>
       <PageHeader
-        title="Sales orders"
+        title="Sales Orders"
         description="Confirmed orders on their way to the invoice: send a proforma, mark the work in process, and Ready for delivery raises the tax invoice and the challan by itself."
         actions={
           canCreate && (

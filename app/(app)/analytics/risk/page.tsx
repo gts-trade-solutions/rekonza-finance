@@ -70,7 +70,7 @@ export default function RiskPage() {
                 {([['Next 30 days', d.expected.next30], ['31–60 days', d.expected.next60], ['61–90 days', d.expected.next90], ['Later or at risk', d.expected.later]] as const).map(([label, v]) => (
                   <Card key={label} className={`p-4 ${tileColors(label, label.startsWith('Later') ? 'warning' : 'default').card}`}>
                     <p className={`text-xs font-medium uppercase tracking-wide ${tileColors(label, label.startsWith('Later') ? 'warning' : 'default').label}`}>{label}</p>
-                    <p className="text-xl font-semibold"><Money value={v} whole /></p>
+                    <p className="mt-1 text-[18px] font-medium"><Money value={v} whole /></p>
                   </Card>
                 ))}
               </div>

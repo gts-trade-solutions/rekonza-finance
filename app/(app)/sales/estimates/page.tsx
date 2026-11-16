@@ -119,7 +119,7 @@ export default function EstimatesPage() {
   return (
     <>
       <PageHeader
-        title="Estimates & quotes"
+        title="Quotes"
         description="A quote is a promise, not a sale — nothing touches the ledger until it becomes an invoice."
         actions={
           canCreate && (

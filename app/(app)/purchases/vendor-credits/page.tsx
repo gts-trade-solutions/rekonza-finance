@@ -162,7 +162,7 @@ export default function VendorCreditsPage() {
   return (
     <>
       <PageHeader
-        title="Vendor credits"
+        title="Vendor Credits"
         description="Money a supplier owes you back — returns, shortfalls, or over-billing."
         actions={
           canCreate && (

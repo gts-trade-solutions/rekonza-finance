@@ -118,7 +118,7 @@ export default function ChartOfAccountsPage() {
   return (
     <>
       <PageHeader
-        title="Chart of accounts"
+        title="Chart of Accounts"
         description="The list of buckets every rupee gets sorted into. Everything in the app ultimately lands in one of these."
         actions={
           canCreate && (

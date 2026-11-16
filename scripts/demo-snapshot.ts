@@ -148,6 +148,23 @@ async function visit(page: Page, route: string) {
       /* a tab that cannot be clicked has nothing to record */
     }
   }
+  // A list's views (Zoho's title menu, "All Invoices ▾"): each one asks the
+  // server for its own rows (?status=paid…), so each is chosen in turn.
+  const picker = page.locator('[data-slot="view-picker"]');
+  if (await picker.count().catch(() => 0)) {
+    try {
+      await picker.first().click({ timeout: 3_000 });
+      const views = await page.locator('[data-slot="table-tab"]').evaluateAll((els) => els.map((e) => e.getAttribute('data-tab') || ''));
+      await page.keyboard.press('Escape');
+      for (const v of views.slice(1)) {
+        await picker.first().click({ timeout: 3_000 });
+        await page.locator(`[data-slot="table-tab"][data-tab="${v}"]`).click({ timeout: 3_000 });
+        await settle(page);
+      }
+    } catch {
+      /* a menu that cannot be opened has nothing more to record */
+    }
+  }
   // A statement's cash basis (Zoho's "Report basis"): the same screen once more, counted when paid.
   const basis = page.locator('[data-slot="report-basis"]');
   if (await basis.count().catch(() => 0)) {
@@ -182,7 +199,11 @@ async function main() {
   });
   if (opened !== 200) throw new Error(`The demo book did not open (${opened}). Is it seeded? npm run db:seed`);
 
-  const queue = [...fixed];
+  // Screens reached by an address with a query, not by a tab button: Zoho's
+  // settings open one setting per ?tab=, and Home's Software Checklist tab
+  // loads the board only when it is open.
+  const SETTINGS_TABS = ['org', 'statutory', 'users', 'numbering', 'custom-fields', 'workflows', 'tags', 'integrations', 'backups', 'policies', 'controls', 'health', 'sign-ins', 'privacy', 'developer'];
+  const queue = [...fixed, '/dashboard?tab=checklist', ...SETTINGS_TABS.map((t) => `/settings?tab=${t}`)];
   const queued = new Set(queue);
   const perKind = new Map<string, number>();
   const enqueue = (p: string) => {

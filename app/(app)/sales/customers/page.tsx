@@ -5,9 +5,15 @@
 // The balance is aggregated in SQL rather than added up here. A book with ten
 // thousand invoices should not ship all of them to the browser so it can total
 // the ones belonging to each row.
+//
+// Laid out as Zoho Books' customer list: the views "Active Customers",
+// "Inactive Customers" and "All Customers" in the title, and Zoho's columns —
+// Name, Company Name, Email, Work Phone, Receivables. GSTIN, state, terms and
+// credit limit are a click away under Customize Columns.
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { useMemo, useState } from 'react';
 import { Plus, Users } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -32,17 +38,26 @@ const TERMS: Record<string, string> = {
 const columns: Column<ContactRow>[] = [
   {
     key: 'name',
-    header: 'Customer',
+    header: 'Name',
     sortValue: (r) => r.displayName,
     cell: (r) => (
-      <div>
-        <p className="font-medium">{r.displayName}</p>
-        <p className="text-xs text-muted-foreground">{r.email ?? r.phone ?? ''}</p>
-      </div>
+      <span className="font-medium">
+        {r.displayName}
+        {r.isArchived && <span className="ml-2 text-[11px] font-medium uppercase text-void">Inactive</span>}
+      </span>
     ),
   },
   {
+    key: 'company',
+    header: 'Company Name',
+    sortValue: (r) => r.legalName ?? '',
+    cell: (r) => <span>{r.legalName ?? ''}</span>,
+  },
+  { key: 'email', header: 'Email', sortValue: (r) => r.email ?? '', cell: (r) => <span>{r.email ?? ''}</span> },
+  { key: 'phone', header: 'Work Phone', sortValue: (r) => r.phone ?? '', cell: (r) => <span>{r.phone ?? ''}</span> },
+  {
     key: 'gstin',
+    defaultHidden: true,
     header: 'GSTIN / Treatment',
     sortValue: (r) => r.gstin ?? r.gstTreatment,
     cell: (r) =>
@@ -56,6 +71,7 @@ const columns: Column<ContactRow>[] = [
   },
   {
     key: 'state',
+    defaultHidden: true,
     header: 'State',
     sortValue: (r) => stateName(r.stateCode),
     cell: (r) => (
@@ -67,12 +83,14 @@ const columns: Column<ContactRow>[] = [
   },
   {
     key: 'terms',
+    defaultHidden: true,
     header: 'Terms',
     sortValue: (r) => r.paymentTerms ?? '',
     cell: (r) => <span className="text-sm">{TERMS[r.paymentTerms ?? ''] ?? r.paymentTerms ?? '—'}</span>,
   },
   {
     key: 'limit',
+    defaultHidden: true,
     header: 'Credit limit',
     align: 'right',
     sortValue: (r) => r.creditLimitPaise,
@@ -80,7 +98,7 @@ const columns: Column<ContactRow>[] = [
   },
   {
     key: 'outstanding',
-    header: 'Outstanding',
+    header: 'Receivables',
     align: 'right',
     sortValue: (r) => r.receivablePaise,
     cell: (r) => {
@@ -102,7 +120,16 @@ const columns: Column<ContactRow>[] = [
 export default function CustomersPage() {
   const router = useRouter();
   const canCreate = usePermission('sales', 'create');
-  const state = useApi<{ contacts: ContactRow[] }>(() => contacts.list({ kind: 'customer' }), []);
+  // Every customer, archived ones too, so the views can switch without a reload.
+  const state = useApi<{ contacts: ContactRow[] }>(() => contacts.list({ kind: 'customer', archived: true }), []);
+  const [view, setView] = useState('active');
+  const all = useMemo(() => state.data?.contacts ?? [], [state.data]);
+  const tabs = useMemo(() => [
+    { value: 'active', label: 'Active', count: all.filter((c) => !c.isArchived).length },
+    { value: 'inactive', label: 'Inactive', count: all.filter((c) => c.isArchived).length },
+    { value: 'all', label: 'All', count: all.length },
+  ], [all]);
+  const rows = view === 'all' ? all : all.filter((c) => (view === 'inactive' ? c.isArchived : !c.isArchived));
 
   return (
     <>
@@ -125,11 +152,14 @@ export default function CustomersPage() {
             <EmptyState icon={Users} title="No customers yet" description="Add your first customer to start invoicing." />
           ) : (
             <DataTable
-              rows={d.contacts}
+              rows={rows}
               columns={columns}
               getRowId={(r) => r.id}
               onRowClick={(r) => router.push(`/sales/customers/${r.id}`)}
               searchPlaceholder="Search name, GSTIN or state…"
+              tabs={tabs}
+              activeTab={view}
+              onTabChange={setView}
             />
           )
         }

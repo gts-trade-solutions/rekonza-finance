@@ -290,8 +290,13 @@ await page.waitForTimeout(400);
 // ── 8f. List tabs, bulk select, and the invoice actions menu
 await page.goto(`${BASE}/sales/invoices`, { waitUntil: 'networkidle' });
 await page.waitForTimeout(700);
-check('Invoice list shows status tabs with counts',
-  (await page.getByRole('button', { name: /^All\s*\d+$/ }).count()) > 0);
+// Zoho's view menu: the status views sit in the title ("All Invoices" and its caret).
+await page.locator('[data-slot="view-picker"]').first().click();
+await page.waitForTimeout(400);
+check('Invoice list shows status views with counts',
+  (await page.locator('[data-slot="table-tab"]', { hasText: /^All\s*\d+$/ }).count()) > 0);
+await page.keyboard.press('Escape');
+await page.waitForTimeout(300);
 
 await page.locator('thead input[type="checkbox"], thead [role="checkbox"]').first().click();
 await page.waitForTimeout(500);
@@ -323,20 +328,20 @@ check('Invoice actions menu opens',
 // ── 8g. Reports catalogue: search and favourites
 await page.goto(`${BASE}/reports`, { waitUntil: 'networkidle' });
 await page.waitForTimeout(700);
-const groups = await page.locator('h2').count();
-check("Reports index shows Zoho's categories", groups >= 9, `${groups} groups`);
+const groups = await page.locator('[data-slot="report-category"]').count();
+check("Reports Center shows Zoho's categories", groups >= 9, `${groups} groups`);
 
 await page.getByPlaceholder('Search reports').fill('ageing');
 await page.waitForTimeout(600);
 check('Report search filters the catalogue',
-  (await page.getByText(/result.* for/).count()) > 0);
+  (await page.getByText(/Results for/i).count()) > 0);
 await page.getByPlaceholder('Search reports').fill('');
 await page.waitForTimeout(500);
 
 await page.locator('button[aria-label="Add to favourites"]').first().click();
 await page.waitForTimeout(500);
-check('Starring a report pins it to Favourites',
-  (await page.getByText('Favourites').count()) > 0);
+check('Starring a report pins it to Favorites',
+  (await page.locator('[data-slot="report-category"]', { hasText: /Favorites\s*\d+/ }).count()) > 0);
 
 // ── 8h. New accountant tools
 await page.goto(`${BASE}/accountant/recurring-journals`, { waitUntil: 'networkidle' });
@@ -563,7 +568,10 @@ check('Every visible row falls inside the chosen month',
   julyDates.slice(0, 4).join(', '));
 
 // Status tab counts must describe the same period the table is showing.
+await page.locator('[data-slot="view-picker"]').first().click().catch(() => {});
+await page.waitForTimeout(300);
 const tabText = await page.locator('[role="tab"], [data-slot="table-tab"]').allInnerTexts().catch(() => []);
+await page.keyboard.press('Escape');
 const allTab = tabText.find((t) => /^All/i.test(t)) ?? '';
 check('Status tab counts respect the chosen period',
   allTab.includes(String(julyRows)) || julyRows === allInvoices,

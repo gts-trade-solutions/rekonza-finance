@@ -4,6 +4,9 @@
 // Unpaid, and nothing else. Being overdue is not a fourth status but a fact
 // about an unpaid balance, so it is a tag beside it: "Overdue 12 days". A draft
 // and a cancelled invoice are not payable at all, and say so plainly.
+//
+// Drawn as Zoho draws status: capitals, 12px, in Zoho's colours, with no pill.
+// The overdue tag reads as Zoho's "OVERDUE BY 12 DAYS", in Zoho's orange.
 
 import { cn } from '@/lib/utils';
 
@@ -18,12 +21,12 @@ export function paymentStatusOf(status: string): PaymentStatus {
   return 'unpaid';
 }
 
-const LOOK: Record<PaymentStatus, { label: string; dot: string; text: string }> = {
-  paid: { label: 'Paid', dot: 'bg-success', text: 'text-emerald-700 dark:text-emerald-400' },
-  partially_paid: { label: 'Partially paid', dot: 'bg-warning', text: 'text-amber-700 dark:text-amber-400' },
-  unpaid: { label: 'Unpaid', dot: 'bg-destructive', text: 'text-red-700 dark:text-red-400' },
-  draft: { label: 'Draft', dot: 'bg-muted-foreground/45', text: 'text-muted-foreground' },
-  cancelled: { label: 'Cancelled', dot: 'bg-muted-foreground/30', text: 'text-muted-foreground line-through decoration-1' },
+const LOOK: Record<PaymentStatus, { label: string; text: string }> = {
+  paid: { label: 'Paid', text: 'text-success' },
+  partially_paid: { label: 'Partially paid', text: 'text-success' },
+  unpaid: { label: 'Unpaid', text: 'text-info' },
+  draft: { label: 'Draft', text: 'text-draft' },
+  cancelled: { label: 'Cancelled', text: 'text-void' },
 };
 
 /** Days past the due date, or 0 when it is not yet due (or there is no balance). */
@@ -44,12 +47,11 @@ export function InvoiceStatus({ status, dueDate, balancePaise, className }: {
   const look = LOOK[s];
   const late = s === 'unpaid' || s === 'partially_paid' ? daysOverdue(dueDate, balancePaise) : 0;
   return (
-    <span className={cn('inline-flex flex-wrap items-center gap-1.5 whitespace-nowrap text-[12.5px]', className)} data-slot="invoice-status" data-status={s}>
-      <span className={cn('size-1.5 shrink-0 rounded-full', look.dot)} />
-      <span className={cn('font-medium', look.text)}>{look.label}</span>
+    <span className={cn('inline-flex flex-wrap items-center gap-x-1.5 whitespace-nowrap text-[12px] font-medium uppercase', className)} data-slot="invoice-status" data-status={s}>
+      <span className={look.text}>{look.label}</span>
       {late > 0 && (
-        <span className="rounded border border-red-500/40 bg-red-500/10 px-1 py-px text-[10px] font-medium text-red-700 dark:text-red-400" data-slot="overdue-tag">
-          Overdue {late} day{late === 1 ? '' : 's'}
+        <span className="text-overdue" data-slot="overdue-tag">
+          Overdue by {late} day{late === 1 ? '' : 's'}
         </span>
       )}
     </span>

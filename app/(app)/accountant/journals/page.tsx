@@ -242,7 +242,7 @@ export default function JournalsPage() {
   return (
     <>
       <PageHeader
-        title="Manual journals"
+        title="Manual Journals"
         description="The raw primitive underneath every other screen. Nothing posts unless debits equal credits exactly."
         actions={
           canCreate && (

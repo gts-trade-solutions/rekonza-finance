@@ -52,7 +52,7 @@ export default function PriceListsPage() {
 
   return (
     <>
-      <PageHeader title="Price lists" description="Dealer, wholesale or contract prices. Put a customer on a list from their record; their invoices are priced from it."
+      <PageHeader title="Price Lists" description="Dealer, wholesale or contract prices. Put a customer on a list from their record; their invoices are priced from it."
         actions={canEdit && <Button size="sm" className="gap-1.5" onClick={() => setEditing('new')}><Plus className="size-4" /> New price list</Button>} />
       <AsyncPage state={state} loading={<LoadingRows rows={5} />}>
         {(d) => (

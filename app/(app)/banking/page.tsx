@@ -15,13 +15,16 @@
 import Link from 'next/link';
 import { useMemo, useState } from 'react';
 import {
-  ArrowLeftRight, ArrowRight, Banknote, CreditCard, FileClock, FileSpreadsheet,
+  ArrowLeftRight, ArrowRight, Banknote, ChevronDown, CreditCard, FileClock, FileSpreadsheet,
   Landmark, ListChecks, Plus, ScrollText, Wallet,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card } from '@/components/ui/card';
-import { tileColors } from '@/components/shared/stat-tile';
-import { Badge } from '@/components/ui/badge';
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import { useForceNavCollapsed } from '@/components/layout/nav-state';
+import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Combobox } from '@/components/ui/combobox';
@@ -35,7 +38,7 @@ import { AsyncPage, LoadingRows, Refreshing } from '@/components/shared/async-st
 import { Field, MoneyInput } from '@/components/shared/form-bits';
 import { usePermission } from '@/lib/store/hooks';
 import { today } from '@/lib/selectors';
-import { formatINRCompact } from '@/lib/money';
+import { formatINR } from '@/lib/money';
 import { api } from '@/lib/api/client';
 import { useApi, useApiAction } from '@/lib/api/use-api';
 
@@ -142,14 +145,39 @@ export default function BankingPage() {
     await accounts.refetch();
   };
 
+  // Zoho folds the sidebar to its rail on the Banking Overview.
+  useForceNavCollapsed(true);
+
   return (
     <>
       <PageHeader
-        title="Banking"
+        title="Banking Overview"
         description="Balances are what the books say, not a stored figure — every one is the sum of what has been posted to that account."
         actions={
           <>
             <Refreshing active={accounts.refreshing} />
+            <Button variant="outline" size="sm" asChild><Link href="/banking/imports">Import Statement</Link></Button>
+            <Button variant="outline" size="sm" asChild><Link href="/banking/rules">Manage Transaction Rules</Link></Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm" className="gap-1" data-slot="banking-more">
+                  More <ChevronDown className="size-3.5" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-80">
+                {SHORTCUTS.map((sc) => (
+                  <DropdownMenuItem key={sc.href} asChild>
+                    <Link href={sc.href} className="items-start gap-2.5 py-2">
+                      <sc.icon className="mt-0.5 size-4 shrink-0" />
+                      <span className="min-w-0">
+                        <span className="block">{sc.label}</span>
+                        <span className="block text-[11px] opacity-75">{sc.hint}</span>
+                      </span>
+                    </Link>
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
             {canCreate && (
               <Dialog open={open} onOpenChange={setOpen}>
                 <DialogTrigger asChild>
@@ -252,85 +280,97 @@ export default function BankingPage() {
             />
           ) : (
             <>
-              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                {totals.map((t) => (
-                  <Card key={t.label} className={`p-4 ${tileColors(t.label).card}`}>
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className={`text-[10px] font-semibold uppercase tracking-[0.11em] ${tileColors(t.label).label}`}>{t.label}</p>
-                        <p className="mt-1.5 tabular text-2xl font-semibold">
-                          {formatINRCompact(t.value)}
-                        </p>
-                        <p className="mt-0.5 text-xs text-muted-foreground">
-                          {t.count} account{t.count === 1 ? '' : 's'} · {t.hint}
-                        </p>
-                      </div>
-                      <span className={`grid size-8 shrink-0 place-items-center rounded-lg ${tileColors(t.label).chip}`}><t.icon className="size-4" /></span>
+              {/* Zoho's overview box: the four balances with their icons, and how
+                  many statement lines still wait to be categorised. */}
+              <Card className="gap-0 py-0" data-slot="banking-overview">
+                <div className="flex items-center justify-between gap-3 border-b px-5 py-4">
+                  <h2 className="text-[18px] font-medium">All Accounts</h2>
+                  <span className="text-[13px] text-muted-foreground">{data.accounts.length} account{data.accounts.length === 1 ? '' : 's'}</span>
+                </div>
+                <div className="flex flex-wrap items-center gap-x-10 gap-y-4 px-5 py-5">
+                  {totals.map((t, i) => (
+                    <div key={t.label} className="flex items-center gap-3" data-slot="banking-total" title={`${t.count} account${t.count === 1 ? '' : 's'} · ${t.hint}`}>
+                      <span className={`grid size-11 shrink-0 place-items-center rounded-lg ${['bg-[#d9f4e8] text-[#13865a]', 'bg-[#eee6fa] text-[#713dbf]', 'bg-[#eeeef3] text-[#4c526c]', 'bg-[#e1ebfc] text-[#1c5bd9]'][i % 4]}`}>
+                        <t.icon className="size-5" strokeWidth={1.6} />
+                      </span>
+                      <span>
+                        <span className="block text-[13px]">{t.label}</span>
+                        <span className="block text-[15px] font-medium tabular">{formatINR(t.value)}</span>
+                      </span>
                     </div>
-                  </Card>
-                ))}
-              </div>
-
-              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                {SHORTCUTS.map((sc) => (
-                  <Link key={sc.href} href={sc.href}>
-                    <Card className="flex h-full items-start gap-3 p-4 transition-colors hover:border-primary/40 hover:bg-accent/40">
-                      <sc.icon className="mt-0.5 size-4 shrink-0 text-primary" />
-                      <div className="min-w-0">
-                        <p className="text-sm font-medium">{sc.label}</p>
-                        <p className="mt-0.5 text-xs text-muted-foreground">{sc.hint}</p>
-                      </div>
-                    </Card>
-                  </Link>
-                ))}
-              </div>
-
-              <section className="space-y-3">
-                <h2 className="micro-label">Accounts</h2>
-                <div className="grid gap-3 lg:grid-cols-2">
-                  {data.accounts.map((a) => (
-                    <Card key={a.id} className="accent-bar p-4">
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <p className="font-medium">{a.name}</p>
-                            {a.isPrimary && <Badge variant="secondary" className="text-[9px]">Primary</Badge>}
-                            <Badge variant="outline" className="text-[9px] capitalize">{a.kind}</Badge>
-                          </div>
-                          <p className="mt-1 text-xs text-muted-foreground">
-                            {a.bankName ?? 'Held in house'}
-                            {a.accountLast4 && ` · ••••${a.accountLast4}`}
-                            {a.ifsc && ` · ${a.ifsc}`}
-                          </p>
-                        </div>
-                        <div className="shrink-0 text-right">
-                          <Money value={a.balancePaise} className="text-lg font-semibold" />
-                          <p className="mt-0.5 text-[11px] text-muted-foreground">
-                            {a.kind === 'card' ? 'owed' : 'available'}
-                          </p>
-                        </div>
-                      </div>
-
-                      <div className="mt-3 flex items-center justify-between gap-3 border-t pt-3">
-                        <span className="text-xs text-muted-foreground">
-                          {a.unmatchedCount > 0
-                            ? `${a.unmatchedCount} statement line${a.unmatchedCount === 1 ? '' : 's'} to reconcile`
-                            : 'Nothing waiting to be reconciled'}
-                        </span>
-                        <Button variant="ghost" size="xs" asChild>
-                          <Link href={`/banking/reconcile?account=${a.id}`}>
-                            Reconcile <ArrowRight className="ml-1 size-3" />
-                          </Link>
-                        </Button>
-                      </div>
-                    </Card>
                   ))}
+                  <div className="ml-auto flex items-center gap-3">
+                    <span className={cn('grid h-11 min-w-11 place-items-center rounded-lg px-2 text-[20px] font-medium tabular', (unmatched.data?.summary.unmatched ?? 0) > 0 ? 'bg-[#fde3e4] text-[#d6141d]' : 'bg-[#d9f4e8] text-[#13865a]')}>
+                      {unmatched.data?.summary.unmatched ?? 0}
+                    </span>
+                    <span>
+                      <span className="block text-[14px]">Uncategorized Transactions</span>
+                      <Link href="/banking/reconcile" className="text-[13px] text-link hover:underline">Categorize now ›</Link>
+                    </span>
+                  </div>
+                </div>
+              </Card>
+
+              {/* Zoho's "Active Accounts" table. */}
+              <section className="space-y-2" data-slot="banking-accounts">
+                <h2 className="flex items-center gap-1.5 text-[18px] font-medium">Active Accounts</h2>
+                <div className="overflow-x-auto rounded-md border thin-scroll">
+                  <table className="w-full text-[13px]">
+                    <thead>
+                      <tr className="border-b bg-table-head text-left text-[11px] font-semibold uppercase text-table-head-foreground">
+                        <th className="px-5 pb-2 pt-3 font-semibold">Account Details</th>
+                        <th className="px-4 pb-2 pt-3 font-semibold">Type</th>
+                        <th className="px-4 pb-2 pt-3 font-semibold">Uncategorized</th>
+                        <th className="px-4 pb-2 pt-3 text-right font-semibold">Amount in Books</th>
+                        <th className="px-5 pb-2 pt-3" />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {data.accounts.map((a) => (
+                        <tr key={a.id} className="border-b last:border-0 hover:bg-row-hover" data-slot="bank-account-row">
+                          <td className="px-5 py-3">
+                            <span className="flex items-center gap-3">
+                              <span className="grid size-8 shrink-0 place-items-center rounded-full border text-muted-foreground"><Landmark className="size-4" strokeWidth={1.6} /></span>
+                              <span className="min-w-0">
+                                <Link href={`/banking/reconcile?account=${a.id}`} className="font-medium text-link hover:underline">{a.name}</Link>
+                                {a.isPrimary && <span className="ml-2 text-[11px] font-medium uppercase text-success">Primary</span>}
+                                <span className="block text-[12px] text-muted-foreground">
+                                  {a.bankName ?? 'Held in house'}
+                                  {a.accountLast4 && ` · ••••${a.accountLast4}`}
+                                  {a.ifsc && ` · ${a.ifsc}`}
+                                </span>
+                              </span>
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 capitalize">{a.kind}</td>
+                          <td className="px-4 py-3">
+                            {a.unmatchedCount > 0 ? (
+                              <Link href={`/banking/reconcile?account=${a.id}`} className="text-[#d6141d] hover:underline">
+                                {a.unmatchedCount} transaction{a.unmatchedCount === 1 ? '' : 's'}
+                              </Link>
+                            ) : (
+                              <span className="text-muted-foreground">None</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3 text-right">
+                            <Money value={a.balancePaise} className="font-medium" />
+                            <span className="block text-[11px] text-muted-foreground">{a.kind === 'card' ? 'owed' : 'available'}</span>
+                          </td>
+                          <td className="px-5 py-3 text-right">
+                            <Link href={`/banking/reconcile?account=${a.id}`} className="inline-flex items-center gap-1 text-[13px] text-link hover:underline">
+                              Reconcile <ArrowRight className="size-3" />
+                            </Link>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               </section>
 
               <section className="space-y-3">
                 <div className="flex items-center justify-between gap-3">
-                  <h2 className="micro-label">Waiting to be categorised</h2>
+                  <h2 className="text-[16px] font-medium">Waiting to be categorised</h2>
                   <Button variant="ghost" size="sm" asChild>
                     <Link href="/banking/reconcile">
                       Reconcile all <ArrowRight className="ml-1 size-3.5" />
@@ -364,7 +404,7 @@ export default function BankingPage() {
                 )}
               </section>
 
-              <Card className="flex items-start gap-3 border-primary/30 bg-primary/5 p-4">
+              <Card className="flex-row items-start gap-3 bg-table-head p-4">
                 <Landmark className="mt-0.5 size-4 shrink-0 text-primary" />
                 <p className="text-xs leading-relaxed text-muted-foreground">
                   Automatic bank feeds need a licensed Account Aggregator, and registering as a Financial

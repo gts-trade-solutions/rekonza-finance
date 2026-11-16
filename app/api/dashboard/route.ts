@@ -8,6 +8,7 @@ import {
   billedVsCollected, cashPosition, einvoicePending, goodsVsServices, grossMargin,
   monthlySeries, msmeRisk, previousWindow, salesPerformance, topCustomers, topParties, workingCapitalDays,
 } from '@/lib/server/reports/analytics';
+import { homeFigures } from '@/lib/server/reports/home';
 
 const Q = z.object({
   from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
@@ -38,7 +39,7 @@ async function dashboard(orgId: number, q: z.infer<typeof Q>) {
 
     const [
       perf, perfPrev, margin, mix, bvc, series,
-      debtors, creditors, arAgeing, pl, tb, cash, msme, irn, wc, customers, plPeriod,
+      debtors, creditors, arAgeing, pl, tb, cash, msme, irn, wc, customers, plPeriod, home,
     ] = await Promise.all([
       salesPerformance(db, orgId, win),
       salesPerformance(db, orgId, prev),
@@ -58,6 +59,8 @@ async function dashboard(orgId: number, q: z.infer<typeof Q>) {
       topCustomers(db, orgId, win),
       // The period's own profit and loss, for the net margin beside the gross.
       profitAndLoss(db, orgId, q.from, q.to),
+      // Zoho's Home cards: receivables and payables, cash flow, income and expense.
+      homeFigures(db, orgId, q.fyStart, q.to),
     ]);
 
     // Receivables and payables straight off the control accounts, so the tiles
@@ -86,6 +89,7 @@ async function dashboard(orgId: number, q: z.infer<typeof Q>) {
 
     return {
       period: { ...win, previous: prev },
+      home,
       workingCapital: wc,
       sales: perf,
       salesPrevious: perfPrev,

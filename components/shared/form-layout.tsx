@@ -5,6 +5,11 @@
 // section rules. Labels sit beside their field rather than above it, which is
 // what makes a 15-field invoice header readable in one glance instead of
 // scrolling — the pattern the client asked us to match.
+//
+// Sizes are Zoho's own (measured from its "New Invoice"): labels 13px in a
+// 180px column, left-aligned, required ones in Zoho's red (#d6141d) with a
+// star; fields 34px tall; the title band 65px with a hairline under it; the
+// action bar fixed at the foot with Save as Draft, Save and Send, Cancel.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { ReactNode } from 'react';
@@ -40,13 +45,13 @@ export function FormRow({
   } as const;
 
   return (
-    <div className={cn('flex flex-col gap-1 sm:flex-row sm:items-start sm:gap-4', className)}>
+    <div className={cn('flex flex-col gap-1 sm:flex-row sm:items-start sm:gap-0', className)}>
       {label !== undefined && (
         <label
           htmlFor={htmlFor}
           className={cn(
-            'shrink-0 pt-2 text-[13px] leading-tight sm:w-[150px] sm:text-right',
-            required ? 'font-medium text-required' : 'text-field-label',
+            'shrink-0 pt-[7px] text-[13px] leading-snug sm:w-[180px] sm:pr-4',
+            required ? 'text-required' : 'text-field-label',
           )}
         >
           {label}
@@ -73,9 +78,8 @@ export function FormRowPair({ children, className }: { children: ReactNode; clas
 export function FormSectionRule({ label }: { label?: string }) {
   return (
     <div className="flex items-center gap-3 py-1">
-      <div className="h-px flex-1 bg-border" />
       {label && (
-        <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+        <span className="text-[14px] font-semibold text-foreground">
           {label}
         </span>
       )}
@@ -107,28 +111,28 @@ export function DocumentForm({
   headerExtra?: ReactNode;
 }) {
   return (
-    <div className="-mx-5 -mt-5 flex min-h-[calc(100vh-4rem)] flex-col sm:-mx-8 sm:-mt-8">
-      {/* Title band */}
-      <div className="sticky top-0 z-20 flex items-center gap-3 border-b bg-surface px-5 py-4 sm:px-8">
-        {icon}
-        <h1 className="display-lg flex-1">{title}</h1>
+    <div className="-mx-6 -mb-6 -mt-5 flex min-h-[calc(100vh-3rem)] flex-col" data-slot="document-form">
+      {/* Title band: Zoho's 65px band, its document icon and a 22px title. */}
+      <div className="sticky top-0 z-20 flex h-[65px] shrink-0 items-center gap-3 border-b bg-surface px-5">
+        <span className="text-foreground [&_svg]:size-6">{icon}</span>
+        <h1 className="flex-1 truncate text-[22px] font-normal leading-tight">{title}</h1>
         {headerExtra}
         <Link
           href={backHref}
           aria-label="Close"
-          className="grid size-7 place-items-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          className="grid size-8 place-items-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
         >
-          <X className="size-4" />
+          <X className="size-5" strokeWidth={1.6} />
         </Link>
       </div>
 
       {/* Body */}
-      <div className="flex-1 bg-surface px-5 py-8 sm:px-8">
-        <div className="mx-auto max-w-5xl space-y-8">{children}</div>
+      <div className="flex-1 bg-surface px-5 py-7">
+        <div className="max-w-[1050px] space-y-7">{children}</div>
       </div>
 
       {/* Sticky actions */}
-      <div className="footer-bar sticky bottom-0 z-20 flex flex-wrap items-center gap-3 border-t bg-surface px-5 py-3.5 sm:px-8">
+      <div className="footer-bar sticky bottom-0 z-20 flex flex-wrap items-center gap-3 border-t bg-surface px-4 py-2.5 shadow-[0_-2px_6px_rgba(33,38,60,0.05)]">
         <div className="flex flex-wrap items-center gap-2">{footer}</div>
         {footerSummary && <div className="ml-auto text-right">{footerSummary}</div>}
       </div>

@@ -167,11 +167,11 @@ export function Combobox({
         disabled={disabled}
         nativeButton
         className={cn(
-          'flex h-9 w-full items-center gap-2 rounded-md border bg-surface px-2.5 text-left text-sm transition-colors',
-          'hover:border-primary/50 focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/25 focus-visible:outline-none',
+          'flex h-[34px] w-full items-center gap-2 rounded-md border bg-surface px-2 text-left text-[13px] transition-colors',
+          'focus-visible:border-ring focus-visible:outline-none',
           'disabled:cursor-not-allowed disabled:opacity-60',
           invalid ? 'border-destructive' : 'border-input',
-          open && 'border-ring ring-2 ring-ring/25',
+          open && 'border-ring',
           className,
         )}
       >
@@ -212,7 +212,7 @@ export function Combobox({
         <PopoverPrimitive.Positioner side="bottom" align="start" sideOffset={4} className="isolate z-50">
           <PopoverPrimitive.Popup
             className={cn(
-              'z-50 w-(--anchor-width) min-w-[300px] overflow-hidden rounded-md border bg-popover text-sm shadow-lg outline-none',
+              'z-50 w-(--anchor-width) min-w-[300px] overflow-hidden text-[13px] outline-none rounded-md border border-border bg-popover text-popover-foreground shadow-[0_7px_12px_0_rgba(215,213,226,0.9)] dark:shadow-lg',
               'data-open:animate-in data-open:fade-in-0 data-open:zoom-in-98 data-closed:animate-out data-closed:fade-out-0',
               contentClassName,
             )}
@@ -260,7 +260,7 @@ export function Combobox({
                           onMouseEnter={() => setActive(idx)}
                           onClick={() => commit(o)}
                           className={cn(
-                            'flex cursor-pointer items-center gap-2.5 px-3 py-1.5',
+                            'mx-1 flex min-h-[34px] cursor-pointer items-center gap-2.5 rounded-md px-2.5 py-1.5',
                             isActive && 'bg-primary text-primary-foreground',
                             o.disabled && 'cursor-not-allowed opacity-50',
                           )}

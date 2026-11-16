@@ -43,8 +43,8 @@ export function NotificationsBell() {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger aria-label={unread ? `Notifications, ${unread} unread` : 'Notifications'}
-        className="relative grid size-9 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground">
-        <Bell className="size-4" />
+        className="relative grid size-8 place-items-center rounded-lg text-topbar-foreground transition-colors hover:bg-white/10">
+        <Bell className="size-4" strokeWidth={1.8} />
         {unread > 0 && (
           <span className="absolute right-1 top-1 grid min-w-4 place-items-center rounded-full bg-destructive px-1 text-[9px] font-semibold leading-4 text-white">
             {unread > 9 ? '9+' : unread}

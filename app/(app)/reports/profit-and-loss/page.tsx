@@ -108,7 +108,7 @@ function ProfitAndLoss() {
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
                         <p className={`text-[10px] font-semibold uppercase tracking-[0.11em] ${tileColors(t.label, t.tone === 'good' ? 'positive' : t.tone === 'bad' ? 'danger' : 'default').label}`}>{t.label}</p>
-                        <p className={`mt-1.5 tabular text-2xl font-semibold ${t.tone === 'good' ? 'text-emerald-600 dark:text-emerald-400' : t.tone === 'bad' ? 'text-destructive' : ''}`}>
+                        <p className={`mt-1 tabular text-[18px] font-medium ${t.tone === 'good' ? 'text-emerald-600 dark:text-emerald-400' : t.tone === 'bad' ? 'text-destructive' : ''}`}>
                           <Money value={t.value} />
                         </p>
                         {t.hint && <p className="mt-0.5 text-xs text-muted-foreground">{t.hint}</p>}

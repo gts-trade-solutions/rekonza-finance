@@ -159,7 +159,7 @@ export default function RecurringPage() {
   return (
     <>
       <PageHeader
-        title="Recurring & reminders"
+        title="Recurring Invoices"
         description="Invoices that raise themselves, and reminders that chase payment without you having to."
         actions={
           canCreate && (

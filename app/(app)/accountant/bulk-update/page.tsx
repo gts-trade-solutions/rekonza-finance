@@ -76,7 +76,7 @@ export default function BulkUpdatePage() {
   return (
     <>
       <PageHeader
-        title="Bulk update"
+        title="Bulk Update"
         description="Move many lines from one account to another at once — expenses booked to the wrong head all year, say. One reclassification journal does it; nothing posted is rewritten."
       />
 

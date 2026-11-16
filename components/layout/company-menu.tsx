@@ -62,10 +62,11 @@ export function CompanyMenu({ org, branch }: {
   return (
     <>
       <DropdownMenu>
-        <DropdownMenuTrigger className="flex h-9 items-center gap-1.5 rounded-md px-2.5 text-[13px] text-foreground/80 transition-colors hover:bg-accent">
-          <Building2 className="size-4 shrink-0 opacity-70" />
-          <span className="hidden max-w-[170px] truncate sm:inline">{org?.name ?? 'Organisation'}</span>
-          <ChevronDown className="size-3 shrink-0" />
+        {/* Zoho's organisation name on the dark band: 14px, light, with a caret. */}
+        <DropdownMenuTrigger className="flex h-9 items-center gap-1.5 rounded-md px-2 text-[14px] text-topbar-foreground transition-colors hover:bg-white/10" data-slot="org-switcher">
+          <span className="hidden max-w-[200px] truncate sm:inline">{org?.name ?? 'Organisation'}</span>
+          <Building2 className="size-4 shrink-0 opacity-80 sm:hidden" />
+          <ChevronDown className="size-3.5 shrink-0 opacity-80" />
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-80">
           <DropdownMenuLabel>Company</DropdownMenuLabel>

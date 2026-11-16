@@ -8,10 +8,10 @@
 
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
-import { Search, Star } from 'lucide-react';
+import { Folder, House, Search, Star } from 'lucide-react';
 import { Card } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
+import { useForceNavCollapsed } from '@/components/layout/nav-state';
 import { PageHeader } from '@/components/shared/page-header';
 import { journal, type JournalResponse } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
@@ -191,6 +191,7 @@ const needs = (href: string) =>
     : href.startsWith('/reports/stock-') || href.startsWith('/inventory/') ? 'inventory'
     : href.startsWith('/payroll/') ? 'payroll'
     : href.startsWith('/reports/') ? reportModule(href.slice('/reports/'.length)) : href.startsWith('/gst/') ? 'gst' : 'accountant';
+const VISIT_KEY = 'rekonza.reports.visited';
 const FAV_KEY = 'rekonza-report-favourites';
 
 export default function ReportsPage() {
@@ -242,92 +243,134 @@ export default function ReportsPage() {
 
   const favReports = ALL.filter((r) => favourites.includes(r.href));
 
-  const ReportCard = ({ r }: { r: ReportDef & { group?: string } }) => (
-    <Card className="group relative h-full p-4 transition-colors hover:border-primary/40">
-      <button
-        type="button"
-        aria-label={favourites.includes(r.href) ? 'Remove from favourites' : 'Add to favourites'}
-        onClick={(e) => {
-          e.preventDefault();
-          toggleFav(r.href);
-        }}
-        className="absolute right-3 top-3 z-10 text-muted-foreground/50 transition-colors hover:text-warning"
-      >
-        <Star className={cn('size-3.5', favourites.includes(r.href) && 'fill-warning text-warning')} />
-      </button>
-      <Link href={r.href} className="block pr-6">
-        <p className="text-sm font-medium">{r.title}</p>
-        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{r.description}</p>
-        {r.group && query && (
-          <Badge variant="secondary" className="mt-2 text-[9px]">{r.group}</Badge>
-        )}
-      </Link>
-    </Card>
+  // Zoho's Reports Center: the sidebar folds to its rail, a panel of
+  // categories on the left, and every report in one table on the right with
+  // its star, its category, who made it and when it was last opened.
+  useForceNavCollapsed(true);
+  const [view, setView] = useState<string>('home');
+  const [visits, setVisits] = useState<Record<string, string>>({});
+  useEffect(() => {
+    try { setVisits(JSON.parse(localStorage.getItem(VISIT_KEY) ?? '{}')); } catch { /* optional */ }
+  }, []);
+  const visited = (href: string) => {
+    const next = { ...visits, [href]: new Date().toISOString() };
+    setVisits(next);
+    try { localStorage.setItem(VISIT_KEY, JSON.stringify(next)); } catch { /* optional */ }
+  };
+
+  const listed = matches
+    ?? (view === 'home' ? ALL : view === 'favourites' ? favReports : ALL.filter((r) => r.group === view));
+  const heading = matches ? `Results for “${query}”` : view === 'home' ? 'All Reports' : view === 'favourites' ? 'Favorites' : view;
+
+  const NavButton = ({ value, icon: Icon, label, count }: { value: string; icon: typeof Folder; label: string; count?: number }) => (
+    <button
+      type="button"
+      onClick={() => { setView(value); setQuery(''); }}
+      data-slot="report-category"
+      data-active={view === value && !matches ? '1' : undefined}
+      className={cn(
+        'flex h-[34px] w-full items-center gap-2.5 rounded-md px-2.5 text-left text-[13px] transition-colors',
+        view === value && !matches ? 'bg-sidebar-accent text-foreground' : 'hover:bg-row-hover',
+      )}
+    >
+      <Icon className={cn('size-4 shrink-0', value === 'home' ? 'text-primary' : 'text-muted-foreground')} strokeWidth={1.6} />
+      <span className="min-w-0 flex-1 truncate">{label}</span>
+      {count != null && <span className="text-[11px] tabular text-muted-foreground">{count}</span>}
+    </button>
   );
 
   return (
     <>
       <PageHeader
-        title="Reports"
+        title="Reports Center"
         description={
           entryCount
-            ? `No report data is stored anywhere. Every figure below is calculated live from ${entryCount} journal entries, which is why they can never disagree with each other.`
-            : 'No report data is stored anywhere. Every figure below is calculated live from the journal, which is why they can never disagree with each other.'
+            ? `No report data is stored anywhere. Every figure is calculated live from ${entryCount} journal entries, which is why they can never disagree with each other.`
+            : 'No report data is stored anywhere. Every figure is calculated live from the journal, which is why they can never disagree with each other.'
         }
         actions={
-          <div className="relative w-full max-w-xs">
-            <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+          <div className="relative w-[300px] max-w-full">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-primary" />
             <Input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Search reports"
-              className="pl-8"
+              className="border-transparent bg-[#f1f1fa] pl-8 dark:bg-muted"
+              data-slot="report-search"
             />
           </div>
         }
       />
 
-      {matches ? (
-        <section className="space-y-3">
-          <h2 className="micro-label">
-            {matches.length} result{matches.length === 1 ? '' : 's'} for “{query}”
-          </h2>
-          {matches.length === 0 ? (
-            <Card className="p-10 text-center text-sm text-muted-foreground">
-              No report matches that. Try a category name like “payables” or “tax”.
-            </Card>
+      <div className="grid items-start gap-5 lg:grid-cols-[250px_1fr]" data-slot="reports-center">
+        <Card className="gap-0 p-3">
+          <NavButton value="home" icon={House} label="Home" />
+          <NavButton value="favourites" icon={Star} label="Favorites" count={favReports.length || undefined} />
+          <p className="px-2.5 pb-1.5 pt-5 text-[12px] font-medium uppercase text-muted-foreground">Report Category</p>
+          {catalogue.map((g) => <NavButton key={g.group} value={g.group} icon={Folder} label={g.group} />)}
+        </Card>
+
+        <Card className="gap-0 py-0">
+          <div className="flex items-center gap-2 border-b px-4 py-3.5">
+            <h2 className="text-[16px] font-medium">{heading}</h2>
+            <span className="rounded-full bg-[#e1ebfc] px-2 text-[12px] font-medium leading-5 text-[#1c5bd9] tabular">{listed.length}</span>
+            {view !== 'home' && view !== 'favourites' && !matches && (
+              <p className="ml-3 hidden truncate text-[12px] text-muted-foreground md:block">{catalogue.find((g) => g.group === view)?.blurb}</p>
+            )}
+          </div>
+          {listed.length === 0 ? (
+            <p className="px-4 py-10 text-center text-[13px] text-muted-foreground">
+              {matches ? 'No report matches that. Try a category name like “payables” or “tax”.' : view === 'favourites' ? 'Star a report to keep it here.' : 'Nothing here.'}
+            </p>
           ) : (
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-              {matches.map((r) => <ReportCard key={r.href} r={r} />)}
+            <div className="overflow-x-auto thin-scroll">
+              <table className="w-full text-[13px]" data-slot="reports-table">
+                <thead>
+                  <tr className="border-b bg-table-head text-left text-[11px] font-semibold uppercase text-table-head-foreground">
+                    <th className="px-4 pb-2 pt-3 font-semibold">Report Name</th>
+                    <th className="px-4 pb-2 pt-3 font-semibold">Report Category</th>
+                    <th className="px-4 pb-2 pt-3 font-semibold">Created By</th>
+                    <th className="px-4 pb-2 pt-3 font-semibold">Last Visited</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {listed.map((r) => {
+                    const fav = favourites.includes(r.href);
+                    return (
+                      <tr key={r.href} className="border-b last:border-0 hover:bg-row-hover" data-slot="report-row">
+                        <td className="px-4 py-3">
+                          <span className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              aria-label={fav ? 'Remove from favourites' : 'Add to favourites'}
+                              onClick={() => toggleFav(r.href)}
+                              className="shrink-0"
+                            >
+                              <Star className={cn('size-4', fav ? 'fill-[#ff7a1a] text-[#ff7a1a]' : 'text-[#b8bccb] hover:text-[#ff7a1a]')} strokeWidth={1.6} />
+                            </button>
+                            {r.soon ? (
+                              <span className="text-muted-foreground" title={r.description}>{r.title}</span>
+                            ) : (
+                              <Link href={r.href} onClick={() => visited(r.href)} title={r.description} className="font-medium text-link hover:underline">
+                                {r.title}
+                              </Link>
+                            )}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3">{r.group}</td>
+                        <td className="px-4 py-3">System Generated</td>
+                        <td className="px-4 py-3 text-muted-foreground">
+                          {visits[r.href] ? new Date(visits[r.href]).toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
           )}
-        </section>
-      ) : (
-        <>
-          {favReports.length > 0 && (
-            <section className="space-y-3">
-              <h2 className="micro-label flex items-center gap-1.5">
-                <Star className="size-3 fill-warning text-warning" /> Favourites
-              </h2>
-              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                {favReports.map((r) => <ReportCard key={r.href} r={r} />)}
-              </div>
-            </section>
-          )}
-
-          {catalogue.map((g) => (
-            <section key={g.group} className="space-y-3">
-              <div>
-                <h2 className="micro-label">{g.group}</h2>
-                <p className="mt-1 text-xs text-muted-foreground">{g.blurb}</p>
-              </div>
-              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                {g.reports.map((r) => <ReportCard key={r.href} r={r} />)}
-              </div>
-            </section>
-          ))}
-        </>
-      )}
+        </Card>
+      </div>
     </>
   );
 }

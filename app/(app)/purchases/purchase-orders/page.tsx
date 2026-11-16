@@ -148,7 +148,7 @@ export default function PurchaseOrdersPage() {
   return (
     <>
       <PageHeader
-        title="Purchase orders"
+        title="Purchase Orders"
         description="Commitments to buy. Nothing hits the ledger until the goods arrive and the bill is recorded."
         actions={
           canCreate && (

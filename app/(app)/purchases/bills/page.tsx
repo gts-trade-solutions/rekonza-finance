@@ -13,8 +13,7 @@ import { useMemo, useState } from 'react';
 import { Download, FileText, Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Card } from '@/components/ui/card';
-import { tileColors } from '@/components/shared/stat-tile';
+import { PaymentSummary } from '@/components/shared/payment-summary';
 import { PageHeader } from '@/components/shared/page-header';
 import { DataTable, type Column } from '@/components/shared/data-table';
 import { BulkPrintButton } from '@/components/shared/document-menu';
@@ -49,6 +48,8 @@ export default function BillsPage() {
   const [filter, setFilter] = useState<string>('all');
   const [range, setRange] = useState<RangeValue>(() => ({ ...ALL_TIME, mode: 'all' }));
 
+  // Zoho's payment summary covers every open bill, whatever the view.
+  const openBills = useApi(() => billApi.list({ open: true, limit: 500 }), []);
   const state = useApi<BillListResponse>(
     () =>
       billApi.list({
@@ -163,7 +164,6 @@ export default function BillsPage() {
 
       <AsyncPage state={state} loading={<LoadingRows rows={8} />}>
         {(data) => {
-          const overdue = data.bills.filter(isOverdue).reduce((t, b) => t + b.balancePaise, 0);
           const tds = data.bills.reduce((t, b) => t + b.tdsPaise, 0);
 
           return data.summary.count === 0 && range.mode === 'all' && filter === 'all' ? (
@@ -179,25 +179,11 @@ export default function BillsPage() {
             />
           ) : (
             <>
-              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                {[
-                  { label: 'Bills', value: String(data.summary.count) },
-                  { label: 'Total billed', value: formatINRCompact(data.summary.totalPaise) },
-                  { label: 'Outstanding', value: formatINRCompact(data.summary.duePaise), warn: data.summary.duePaise > 0 },
-                  { label: 'Overdue', value: formatINRCompact(overdue), danger: overdue > 0 },
-                ].map((t) => (
-                  <Card key={t.label} className={`p-4 ${tileColors(t.label, t.danger ? 'danger' : t.warn ? 'warning' : 'default').card}`}>
-                    <p className={`text-xs font-medium ${tileColors(t.label, t.danger ? 'danger' : t.warn ? 'warning' : 'default').label}`}>{t.label}</p>
-                    <p
-                      className={`mt-1.5 tabular text-2xl font-semibold ${
-                        t.danger ? 'text-destructive' : t.warn ? 'text-warning' : ''
-                      }`}
-                    >
-                      {t.value}
-                    </p>
-                  </Card>
-                ))}
-              </div>
+              <PaymentSummary
+                side="payables"
+                docs={openBills.data?.bills ?? null}
+                extra={[{ label: 'Bills in view', value: `${data.summary.count} · ${formatINRCompact(data.summary.totalPaise)}` }]}
+              />
 
               {tds > 0 && (
                 <p className="text-xs text-muted-foreground">

@@ -3,29 +3,20 @@
 import { cn } from '@/lib/utils';
 
 /*
-  Status reads as a small dot plus quiet type, not a saturated pill. In a table
-  of thirty rows, thirty coloured pills become noise and the eye stops seeing
-  the one row that actually needs attention. The dot carries the colour; the
-  label stays ink.
+  Status as Zoho Books shows it: the word in capitals, 12px, in the status's
+  own colour and nothing else — no pill, no dot. Colours are Zoho's own:
+  draft grey-green (#879697), open blue (#408dfb), paid green (#22b378),
+  pending amber (#ec9500), overdue orange (#f76831), void grey (#777).
 */
 type Tone = 'neutral' | 'progress' | 'caution' | 'good' | 'bad' | 'muted';
 
-const DOT: Record<Tone, string> = {
-  neutral: 'bg-muted-foreground/45',
-  progress: 'bg-info',
-  caution: 'bg-warning',
-  good: 'bg-success',
-  bad: 'bg-destructive',
-  muted: 'bg-muted-foreground/30',
-};
-
 const TEXT: Record<Tone, string> = {
-  neutral: 'text-muted-foreground',
-  progress: 'text-foreground/75',
-  caution: 'text-foreground/75',
-  good: 'text-foreground/75',
-  bad: 'text-destructive',
-  muted: 'text-muted-foreground',
+  neutral: 'text-draft',
+  progress: 'text-info',
+  caution: 'text-warning',
+  good: 'text-success',
+  bad: 'text-overdue',
+  muted: 'text-void',
 };
 
 const TONES: Record<string, Tone> = {
@@ -76,12 +67,11 @@ const TONES: Record<string, Tone> = {
 };
 
 export function StatusBadge({ status, className }: { status: string; className?: string }) {
-  const label = status.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+  const label = status.replace(/_/g, ' ');
   const tone = TONES[status] ?? 'neutral';
   return (
-    <span className={cn('inline-flex items-center gap-1.5 whitespace-nowrap text-[12.5px]', className)}>
-      <span className={cn('size-1.5 shrink-0 rounded-full', DOT[tone])} />
-      <span className={cn(TEXT[tone], tone === 'muted' && 'line-through decoration-1')}>{label}</span>
+    <span className={cn('inline-flex items-center whitespace-nowrap text-[12px] font-medium uppercase', TEXT[tone], className)} data-slot="status" data-status={status}>
+      {label}
     </span>
   );
 }

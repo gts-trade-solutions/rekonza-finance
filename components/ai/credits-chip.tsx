@@ -44,18 +44,19 @@ export function CreditsChip() {
       <PopoverTrigger
         aria-label={`AI credits: ${formatCredits(wallet.availableMc)}`}
         className={cn(
-          'flex h-9 items-center gap-1.5 rounded-md border px-2.5 text-[13px] tabular-nums transition-colors hover:bg-accent',
+          // On Zoho's dark top bar: a quiet outlined chip in the band's light ink.
+          'flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-[13px] tabular-nums transition-colors hover:bg-white/10',
           empty
-            ? 'border-destructive/50 bg-destructive/5 text-destructive'
+            ? 'border-[#ff8a8f]/60 text-[#ff8a8f]'
             : low
-              ? 'border-warning/50 bg-warning/5 text-warning'
-              : 'text-foreground/80',
+              ? 'border-[#f2b33d]/60 text-[#f2b33d]'
+              : 'border-topbar-field-border text-topbar-foreground',
         )}
         data-slot="credits-chip"
       >
         <Sparkles className="size-3.5" />
         <span className="font-medium">{formatCredits(wallet.availableMc)}</span>
-        <span className="hidden text-muted-foreground md:inline">credits</span>
+        <span className="hidden opacity-70 md:inline">credits</span>
       </PopoverTrigger>
       <PopoverContent align="end" className="w-72 p-0" data-slot="credits-popover">
         <div className="space-y-1 border-b p-4">

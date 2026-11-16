@@ -1,5 +1,14 @@
 'use client';
 
+// A figure tile as Zoho Books draws its summary figures: a white box with a
+// lavender hairline and 12px corners, the label in 13px grey, the figure in
+// 18px dark type, and a soft round icon. No coloured edges or washes: Zoho
+// keeps colour for what needs attention, so only a bad figure (overdue, at
+// risk) takes Zoho's orange, and a warning its amber.
+//
+// The colour names (TileColor) stay in the API so callers need not change;
+// they now only tint the icon.
+
 import type { LucideIcon } from 'lucide-react';
 import { Minus, TrendingDown, TrendingUp } from 'lucide-react';
 import Link from 'next/link';
@@ -35,36 +44,27 @@ export function StatTile({
    */
   deltaGoodWhen?: 'up' | 'down';
 }) {
-  const toneRing = {
-    default: 'text-primary bg-primary/10',
-    positive: 'text-emerald-600 dark:text-emerald-400 bg-emerald-500/10',
-    warning: 'text-amber-600 dark:text-amber-400 bg-amber-500/10',
-    danger: 'text-red-600 dark:text-red-400 bg-red-500/10',
-  }[tone];
   const own = TILE_COLORS[color ?? autoColor(label, tone)];
+  const bad = tone === 'danger' || color === 'red';
 
   const body = (
     <Card
       data-slot="stat-tile"
       data-label={label}
       data-color={color}
-      className={cn(
-        'p-4 transition-colors',
-        own && cn('border-l-4', own.card),
-        href && (own ? 'hover:brightness-[0.98]' : 'hover:border-primary/40 hover:bg-accent/40'),
-      )}
+      className={cn('gap-0 px-5 py-4 transition-colors', href && 'hover:border-primary/40')}
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className={cn('text-xs font-medium uppercase tracking-wide', own ? own.label : 'text-muted-foreground')}>{label}</p>
-          <p data-slot="stat-value" className={cn('mt-1.5 text-2xl font-semibold tracking-tight tabular', own && (tone === 'danger' || color === 'red') && 'text-red-600 dark:text-red-400')}>
+          <p className="text-[13px] text-[#4a4d63] dark:text-muted-foreground">{label}</p>
+          <p data-slot="stat-value" className={cn('mt-1 text-[18px] font-medium leading-snug tabular text-[#222536] dark:text-foreground', bad && 'text-overdue dark:text-overdue', tone === 'warning' && 'text-warning dark:text-warning')}>
             {value}
           </p>
           {delta !== undefined && <Delta value={delta} label={deltaLabel} goodWhen={deltaGoodWhen} />}
-          {sub && <p className="mt-1 text-xs text-muted-foreground">{sub}</p>}
+          {sub && <p className="mt-1 text-[12px] text-muted-foreground">{sub}</p>}
         </div>
         {Icon && (
-          <div className={cn('rounded-lg p-2', own ? own.chip : toneRing)}>
+          <div className={cn('grid size-9 shrink-0 place-items-center rounded-full', own.chip)}>
             <Icon className="size-4" />
           </div>
         )}
@@ -76,12 +76,16 @@ export function StatTile({
 }
 
 /**
- * The same colours for a figure tile a page lays out itself: its card (a
- * coloured edge and wash) and its label. Fixed by the label, like StatTile's.
+ * The same look for a figure tile a page lays out itself. Zoho's: no card
+ * colour, the label in grey; the chip a soft tint fixed by the label.
  */
 export function tileColors(label: string, tone: 'default' | 'positive' | 'warning' | 'danger' = 'default') {
   const c = TILE_COLORS[autoColor(label, tone)];
-  return { card: `border-l-4 ${c.card}`, label: c.label, chip: c.chip };
+  return {
+    card: 'border-card-border',
+    label: cn('!text-[13px] !font-normal !normal-case !tracking-normal text-[#4a4d63] dark:text-muted-foreground', tone === 'danger' && '!text-overdue', tone === 'warning' && '!text-warning'),
+    chip: c.chip,
+  };
 }
 
 /** The tone's colour where it has one; otherwise one of the cool hues, fixed by the label. */
@@ -97,21 +101,21 @@ function autoColor(label: string, tone: 'default' | 'positive' | 'warning' | 'da
 
 export type TileColor = 'red' | 'blue' | 'orange' | 'emerald' | 'violet' | 'sky' | 'amber' | 'teal' | 'indigo' | 'rose' | 'fuchsia' | 'cyan' | 'lime';
 
-/** Whole class names, so Tailwind sees every one of them. */
-const TILE_COLORS: Record<TileColor, { card: string; label: string; chip: string }> = {
-  red: { card: 'border-l-red-600 bg-gradient-to-br from-red-500/10 to-transparent', label: 'text-red-700 dark:text-red-300', chip: 'bg-red-600 text-white' },
-  blue: { card: 'border-l-blue-500 bg-gradient-to-br from-blue-500/10 to-transparent', label: 'text-blue-700 dark:text-blue-300', chip: 'bg-blue-500 text-white' },
-  orange: { card: 'border-l-orange-500 bg-gradient-to-br from-orange-500/10 to-transparent', label: 'text-orange-700 dark:text-orange-300', chip: 'bg-orange-500 text-white' },
-  emerald: { card: 'border-l-emerald-500 bg-gradient-to-br from-emerald-500/10 to-transparent', label: 'text-emerald-700 dark:text-emerald-300', chip: 'bg-emerald-500 text-white' },
-  violet: { card: 'border-l-violet-500 bg-gradient-to-br from-violet-500/10 to-transparent', label: 'text-violet-700 dark:text-violet-300', chip: 'bg-violet-500 text-white' },
-  sky: { card: 'border-l-sky-500 bg-gradient-to-br from-sky-500/10 to-transparent', label: 'text-sky-700 dark:text-sky-300', chip: 'bg-sky-500 text-white' },
-  amber: { card: 'border-l-amber-500 bg-gradient-to-br from-amber-500/10 to-transparent', label: 'text-amber-700 dark:text-amber-300', chip: 'bg-amber-500 text-white' },
-  teal: { card: 'border-l-teal-500 bg-gradient-to-br from-teal-500/10 to-transparent', label: 'text-teal-700 dark:text-teal-300', chip: 'bg-teal-500 text-white' },
-  indigo: { card: 'border-l-indigo-500 bg-gradient-to-br from-indigo-500/10 to-transparent', label: 'text-indigo-700 dark:text-indigo-300', chip: 'bg-indigo-500 text-white' },
-  rose: { card: 'border-l-rose-500 bg-gradient-to-br from-rose-500/10 to-transparent', label: 'text-rose-700 dark:text-rose-300', chip: 'bg-rose-500 text-white' },
-  fuchsia: { card: 'border-l-fuchsia-500 bg-gradient-to-br from-fuchsia-500/10 to-transparent', label: 'text-fuchsia-700 dark:text-fuchsia-300', chip: 'bg-fuchsia-500 text-white' },
-  cyan: { card: 'border-l-cyan-500 bg-gradient-to-br from-cyan-500/10 to-transparent', label: 'text-cyan-700 dark:text-cyan-300', chip: 'bg-cyan-500 text-white' },
-  lime: { card: 'border-l-lime-500 bg-gradient-to-br from-lime-500/10 to-transparent', label: 'text-lime-700 dark:text-lime-300', chip: 'bg-lime-600 text-white' },
+/** Whole class names, so Tailwind sees every one of them. Soft round chips, as Zoho's summary icons. */
+const TILE_COLORS: Record<TileColor, { chip: string }> = {
+  red: { chip: 'bg-[#fde3d8] text-overdue' },
+  blue: { chip: 'bg-[#e1ebfc] text-[#1c5bd9]' },
+  orange: { chip: 'bg-[#fae6d5] text-[#c46614]' },
+  emerald: { chip: 'bg-[#d9f4e8] text-[#13865a]' },
+  violet: { chip: 'bg-[#eee6fa] text-[#713dbf]' },
+  sky: { chip: 'bg-[#dbeff9] text-[#0d789e]' },
+  amber: { chip: 'bg-[#fae9c8] text-[#9e6a03]' },
+  teal: { chip: 'bg-[#d8f2ef] text-[#0e7c72]' },
+  indigo: { chip: 'bg-[#e1e5fc] text-[#3f4bbd]' },
+  rose: { chip: 'bg-[#fbe2e7] text-[#c2244c]' },
+  fuchsia: { chip: 'bg-[#f8e1f6] text-[#a1259b]' },
+  cyan: { chip: 'bg-[#defcfc] text-[#068080]' },
+  lime: { chip: 'bg-[#eaf6d3] text-[#4d7a0b]' },
 };
 
 /** The "▲ 12.4% vs previous period" line under a figure. */

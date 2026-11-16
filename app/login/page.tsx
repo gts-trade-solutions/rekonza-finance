@@ -102,7 +102,7 @@ function LoginInner() {
   return (
     <div className="relative min-h-screen bg-background">
       {/* A navy band across the top, as an accounting app greets you; the cards sit over its edge. */}
-      <div aria-hidden className="absolute inset-x-0 top-0 h-[360px] bg-gradient-to-br from-[oklch(0.24_0.05_266)] via-[oklch(0.3_0.1_262)] to-[oklch(0.46_0.16_256)]" />
+      <div aria-hidden className="absolute inset-x-0 top-0 h-[360px] bg-topbar" />
       <div className="relative flex min-h-screen items-center justify-center p-4">
       <div className="w-full max-w-4xl">
         <div className="mb-8 flex flex-col items-center text-center">
@@ -116,7 +116,7 @@ function LoginInner() {
         </div>
 
         <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-          <Card className="border-t-4 border-t-primary p-6 shadow-lg">
+          <Card className="p-6 shadow-lg">
             <h2 className="text-lg font-semibold">Sign in</h2>
             <p className="mt-1 text-sm text-muted-foreground">
               Use the email and password your administrator set up.
@@ -221,7 +221,7 @@ function LoginInner() {
             </p>
           </Card>
 
-          <Card className="border-t-4 border-t-emerald-500 p-6 shadow-lg">
+          <Card className="p-6 shadow-lg">
             <h2 className="text-lg font-semibold">Try the demo book</h2>
             <p className="mt-1 text-sm text-muted-foreground">
               A worked set of books for a fictional auto-parts business — five months of

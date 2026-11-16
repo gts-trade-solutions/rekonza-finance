@@ -7,15 +7,17 @@
 // book ends up with two invoices sharing a number, which is a question at
 // assessment rather than a display problem. Its prefix and padding can be.
 
-import { useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { Building2, Plug, ShieldCheck, Sparkles } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Tabs, TabsContent } from '@/components/ui/tabs';
+import { AllSettings, SettingsNav, settingTitle } from '@/components/settings/all-settings';
 import { PageHeader } from '@/components/shared/page-header';
 import { Field } from '@/components/shared/form-bits';
 import { TradeProfileCard, type TradeForm } from '@/components/settings/trade-profile-card';
@@ -109,7 +111,13 @@ const MONTHS = [
   'July', 'August', 'September', 'October', 'November', 'December',
 ];
 
-export default function SettingsPage() {
+// Zoho's settings: the "All Settings" grid first, then the chosen setting with
+// the settings menu beside it (components/settings/all-settings.tsx).
+export default function SettingsRoute() {
+  return <Suspense><SettingsPage /></Suspense>;
+}
+
+function SettingsPage() {
   const canEdit = usePermission('settings', 'edit');
   const canBilling = usePermission('billing', 'view');
   const currentUserId = useAppStore((s) => s.session?.userId);
@@ -121,13 +129,13 @@ export default function SettingsPage() {
     tradeScope: 'domestic' as TradeForm['tradeScope'], supplies: 'both' as TradeForm['supplies'], lutDeclared: false, exportIgst: 'nil_lut' as TradeForm['exportIgst'],
   });
   const [editingBranch, setEditingBranch] = useState<EditableBranch | null>(null);
-  // Opened on a tab when linked to one — "Settings → Integrations" from the
-  // e-invoice checklist. Read once, from the address.
-  const [tab, setTab] = useState('org');
-  useEffect(() => {
-    const t = new URLSearchParams(window.location.search).get('tab');
-    if (t) setTab(t);
-  }, []);
+  // The setting open is the address's ?tab= — "Settings → Integrations" from
+  // the e-invoice checklist links straight to it. With none, the grid of every
+  // setting shows, as Zoho's "All Settings".
+  const params = useSearchParams();
+  const router = useRouter();
+  const tab = params.get('tab');
+  const setTab = (v: string) => router.replace(`/settings?tab=${v}`);
   const save = useApiAction((input: unknown) => api.patch<{ id: string }>('/api/settings', input));
 
   useEffect(() => {
@@ -200,33 +208,20 @@ export default function SettingsPage() {
     state.refetch();
   };
 
+  if (!tab) return <AllSettings />;
+
   return (
-    <>
+    <div className="-mx-6 -mb-6 -mt-5 flex min-h-[calc(100vh-75px)]" data-slot="settings-frame">
+      <SettingsNav tab={tab} />
+      <div className="settings-page min-w-0 flex-1 space-y-5 px-6 pb-6 pt-5">
       <PageHeader
-        title="Settings"
+        title={settingTitle(tab)}
         description="Organisation, users, numbering, and what is and is not connected."
       />
 
       <AsyncPage state={state}>
         {(d) => (
           <Tabs value={tab} onValueChange={(v) => setTab(String(v))}>
-            <TabsList className="flex-wrap">
-              <TabsTrigger value="org">Organisation</TabsTrigger>
-              <TabsTrigger value="statutory">Statutory</TabsTrigger>
-              <TabsTrigger value="users">Users &amp; roles</TabsTrigger>
-              <TabsTrigger value="numbering">Numbering</TabsTrigger>
-              <TabsTrigger value="custom-fields">Custom fields</TabsTrigger>
-              <TabsTrigger value="workflows">Workflow rules</TabsTrigger>
-              <TabsTrigger value="tags">Reporting tags</TabsTrigger>
-              <TabsTrigger value="integrations">Integrations</TabsTrigger>
-              <TabsTrigger value="backups">Backups</TabsTrigger>
-              <TabsTrigger value="policies">Policies</TabsTrigger>
-              <TabsTrigger value="controls">Controls</TabsTrigger>
-              {canEdit && <TabsTrigger value="health">System health</TabsTrigger>}
-              <TabsTrigger value="sign-ins">Sign-ins</TabsTrigger>
-              <TabsTrigger value="privacy">Privacy</TabsTrigger>
-              {canEdit && <TabsTrigger value="developer">Developer</TabsTrigger>}
-            </TabsList>
 
             {/* Organisation */}
             <TabsContent value="org" className="mt-4 space-y-4">
@@ -615,6 +610,7 @@ export default function SettingsPage() {
           setEditingBranch(null);
         }}
       />
-    </>
+      </div>
+    </div>
   );
 }

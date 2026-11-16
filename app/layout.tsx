@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from 'next';
-import { IBM_Plex_Sans, IBM_Plex_Mono } from 'next/font/google';
+import { Inter, IBM_Plex_Mono } from 'next/font/google';
 import './globals.css';
 import { Toaster } from '@/components/ui/sonner';
 import { OfflineBanner, ServiceWorker } from '@/components/layout/pwa';
@@ -7,21 +7,19 @@ import { BRAND } from '@/components/brand/logo';
 import { SITE_URL } from '@/lib/seo';
 
 /**
- * Plex Sans is drawn on an engineering grid — even stroke, open counters, no
- * decorative flourish. It sets the precise, technical tone the interface wants.
+ * Inter, the typeface Zoho Books sets its whole app in (13px body). The client
+ * asked for Zoho's look exactly, type and sizes included. Figures use Inter's
+ * tabular numerals (see .num / .tabular in globals.css), so columns of amounts
+ * still line up digit under digit without a monospaced face.
  */
-const plexSans = IBM_Plex_Sans({
+const inter = Inter({
   variable: '--font-sans-src',
   subsets: ['latin'],
   weight: ['400', '500', '600', '700'],
   display: 'swap',
 });
 
-/**
- * Every figure in the app is set in Plex Mono. Monospaced numerals column up
- * exactly, which is what makes a ledger scannable — you compare digit
- * positions, not word shapes.
- */
+/** Kept for code: JSON, API keys and file layouts, where a fixed width helps. */
 const plexMono = IBM_Plex_Mono({
   variable: '--font-mono-src',
   subsets: ['latin'],
@@ -84,26 +82,25 @@ export const metadata: Metadata = {
   formatDetection: { telephone: false },
 };
 
-/** Matches the navy chrome, so mobile browsers tint their bar to suit. */
+/** Matches the dark top bar, so mobile browsers tint their bar to suit. */
 export const viewport: Viewport = {
-  themeColor: [
-    { media: '(prefers-color-scheme: light)', color: '#ffffff' },
-    { media: '(prefers-color-scheme: dark)', color: '#002F6E' },
-  ],
+  themeColor: '#21263c',
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
-        {/* Apply saved theme before paint to avoid a flash */}
+        {/* Apply a saved dark theme before paint to avoid a flash. Light is the
+            default whatever the computer prefers, as in Zoho Books: dark is
+            something a person chooses (account menu → Dark mode). */}
         <script
           dangerouslySetInnerHTML={{
-            __html: `try{var t=localStorage.getItem('rekonza-theme');if(t==='dark'||(!t&&window.matchMedia('(prefers-color-scheme: dark)').matches)){document.documentElement.classList.add('dark')}}catch(e){}`,
+            __html: `try{if(localStorage.getItem('rekonza-theme')==='dark'){document.documentElement.classList.add('dark')}}catch(e){}`,
           }}
         />
       </head>
-      <body className={`${plexSans.variable} ${plexMono.variable} font-sans antialiased`}>
+      <body className={`${inter.variable} ${plexMono.variable} font-sans antialiased`}>
         <OfflineBanner />
         <ServiceWorker />
         {children}

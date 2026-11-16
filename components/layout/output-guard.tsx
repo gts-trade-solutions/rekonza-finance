@@ -13,12 +13,10 @@ import { hasPermission } from '@/lib/rbac';
 import { useAppStore } from '@/lib/store';
 import { setOutputGuard, type OutputAction } from '@/lib/output-guard';
 import { api } from '@/lib/api/client';
-import { BOTTOM_LEVEL, NAV_GROUPS, TOP_LEVEL } from './nav-config';
+import { menuModuleForPath } from './nav-config';
 import { isPrintKind, PRINT_SIDE } from '@/lib/print-doc';
 
-const ITEMS = [...TOP_LEVEL, ...BOTTOM_LEVEL, ...NAV_GROUPS.flatMap((g) => g.items)];
-
-/** The module a page belongs to: the menu item whose link is the longest start of its path. */
+/** The module a page belongs to: its printed document's side, or the menu entry it sits under. */
 export function moduleForPath(path: string, search = ''): string | null {
   // A printed document (/print/estimate/12, /print/bulk?kind=bill&ids=…) is its kind's.
   if (path.startsWith('/print/')) {
@@ -26,11 +24,7 @@ export function moduleForPath(path: string, search = ''): string | null {
     if (kind === 'invoice') return 'sales';
     return isPrintKind(kind) ? (PRINT_SIDE[kind] === 'customer' ? 'sales' : 'purchases') : null;
   }
-  let best: { len: number; module: string } | null = null;
-  for (const i of ITEMS) {
-    if ((path === i.href || path.startsWith(`${i.href}/`)) && (!best || i.href.length > best.len)) best = { len: i.href.length, module: i.module };
-  }
-  return best?.module ?? null;
+  return menuModuleForPath(path);
 }
 
 export function OutputGuard() {

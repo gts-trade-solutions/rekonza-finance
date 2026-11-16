@@ -116,7 +116,7 @@ export default function BudgetsPage() {
   return (
     <>
       <PageHeader
-        title="Budgets vs actual"
+        title="Budgets"
         description="Set a spending plan per account for the year, then watch how reality tracks against it. Actuals come straight from the ledger."
         actions={
           canEdit && (

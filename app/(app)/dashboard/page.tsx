@@ -8,7 +8,7 @@
 // never disagree.
 
 import Link from 'next/link';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle, ArrowRight, Banknote, CheckCircle2, Clock, FileCheck2, Landmark,
   Lock, Package, Receipt, Repeat, TrendingDown, TrendingUp, Wallet, Wrench, XCircle,
@@ -29,6 +29,10 @@ import { ShareDonut } from '@/components/charts/share-donut';
 import { RankedBars } from '@/components/charts/ranked-bars';
 import { AsyncPage, LoadingRows, Refreshing } from '@/components/shared/async-state';
 import { DashboardExtras } from '@/components/dashboard/watchlist';
+import {
+  GettingStarted, HOME_TABS, HomeHeader, RecentUpdates, ZohoHomeCards, type HomeFigures, type HomeTab,
+} from '@/components/dashboard/zoho-home';
+import { useAppStore } from '@/lib/store';
 import { useCanSeeCosts } from '@/lib/store/hooks';
 import { useSession } from '@/components/layout/session-provider';
 import { today } from '@/lib/selectors';
@@ -46,6 +50,8 @@ const trend = (now: number | null, before: number | null, window: number) =>
       : `${before} days, ${window} days ago`;
 
 interface DashboardData {
+  /** Zoho's Home cards (lib/server/reports/home.ts). */
+  home: HomeFigures;
   workingCapital: {
     windowDays: number; receivableDays: number | null; payableDays: number | null; inventoryDays: number | null;
     cashCycleDays: number | null;
@@ -98,33 +104,59 @@ export default function DashboardPage() {
   );
 
   const periodLabel = describeRange(range).toLowerCase();
-  const firstName = session.user.name.split(' ')[0];
+  const storeOrg = useAppStore((s) => s.org);
+  const contacts = useAppStore((s) => s.contacts);
+  const items = useAppStore((s) => s.items);
+  const users = useAppStore((s) => s.users);
+  const branches = useAppStore((s) => s.branches);
+
+  // Zoho's Home tabs. ?tab= opens one directly (the sidebar's Software
+  // Checklist and the reviewer's links), and choosing one keeps the address in step.
+  const [tab, setTab] = useState<HomeTab>('dashboard');
+  useEffect(() => {
+    const t = new URLSearchParams(window.location.search).get('tab');
+    if (t && HOME_TABS.some((x) => x.value === t)) setTab(t as HomeTab);
+  }, []);
+  const changeTab = (t: HomeTab) => {
+    setTab(t);
+    const u = new URL(window.location.href);
+    if (t === 'dashboard') u.searchParams.delete('tab'); else u.searchParams.set('tab', t);
+    window.history.replaceState(null, '', u);
+  };
 
   return (
     <>
-      {/* The greeting as a banner in the brand's navy and blue: the first thing on the screen has colour. */}
-      <div data-slot="dashboard-banner" className="flex flex-col gap-4 rounded-xl bg-gradient-to-r from-[oklch(0.27_0.06_266)] via-[oklch(0.36_0.13_262)] to-[oklch(0.5_0.17_256)] px-6 py-6 text-white shadow-md sm:flex-row sm:items-center sm:justify-between">
-        <div className="min-w-0">
-          <h1 className="display-xl">{`Good day, ${firstName}`}</h1>
-          <p className="mt-2 text-[13px] text-white/80">
-            {`${session.org?.name} · figures as at ${new Date(today()).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })}`}
-          </p>
-        </div>
-        <div className="flex shrink-0 flex-wrap items-center gap-2 text-white/80 no-print">
-          <Refreshing active={state.refreshing} />
-          <Button variant="outline" size="sm" asChild className="border-white/30 bg-white/10 text-white hover:bg-white/20 hover:text-white">
-            <Link href="/reports">View reports</Link>
-          </Button>
-          <Button size="sm" asChild className="bg-white text-blue-700 hover:bg-white/90">
-            <Link href="/sales/invoices/new">New invoice</Link>
-          </Button>
-        </div>
-      </div>
+      <HomeHeader
+        name={session.user.name}
+        org={session.org?.name ?? ''}
+        fyLabel={storeOrg?.fiscalYearLabel}
+        asOf={today()}
+        tab={tab}
+        onTab={changeTab}
+      />
 
-      <ChecklistBoard />
+      {tab === 'checklist' && <ChecklistBoard />}
 
+      {tab !== 'checklist' && (
       <AsyncPage state={state} loading={<LoadingRows rows={6} />}>
         {(d) => {
+          if (tab === 'getting-started') {
+            return (
+              <GettingStarted
+                steps={[
+                  { label: 'Set up your organisation', detail: 'Name, address, GSTIN, PAN and financial year', href: '/settings', done: branches.some((b) => !!b.gstin) },
+                  { label: 'Add your customers', detail: 'Type a GSTIN and the rest fills itself', href: '/sales/customers/new', done: contacts.some((c) => c.kind !== 'vendor') },
+                  { label: 'Add your items', detail: 'Goods with HSN codes, services with SAC codes', href: '/sales/items', done: items.length > 0 },
+                  { label: 'Create your first invoice', detail: 'GST is worked out from the place of supply', href: '/sales/invoices/new', done: d.recentInvoices.length > 0 },
+                  { label: 'Add your bank accounts', detail: 'Import statements and reconcile them', href: '/banking', done: d.cash.length > 0 },
+                  { label: 'Record a bill or an expense', detail: 'Input credit and TDS are worked out for you', href: '/purchases/bills/new', done: d.position.payablePaise !== 0 || d.topCreditors.length > 0 },
+                  { label: 'Invite your team', detail: 'Give each person a role: what they may see and do', href: '/settings?tab=users', done: users.length > 1 },
+                  { label: 'Set up GST, e-invoicing and e-way bills', detail: 'Registrations, IRP and portal access', href: '/settings?tab=statutory', done: branches.length > 0 && branches.every((b) => !!b.gstin) },
+                ]}
+              />
+            );
+          }
+          if (tab === 'updates') return <RecentUpdates invoices={d.recentInvoices} />;
           const statusTotal = d.sales.paid + d.sales.partial + d.sales.unpaid;
           const share = (n: number) => (statusTotal ? ((n / statusTotal) * 100).toFixed(0) : '0');
           const expenseMix = d.profitAndLoss.expenseRows.map((r) => ({
@@ -134,6 +166,16 @@ export default function DashboardPage() {
 
           return (
             <>
+              <ZohoHomeCards
+                home={d.home}
+                receivableBuckets={d.receivableBuckets}
+                expenseRows={d.profitAndLoss.expenseRows}
+                cash={d.cash}
+              />
+              <div className="flex items-center justify-end gap-2 no-print">
+                <Refreshing active={state.refreshing} />
+              </div>
+
               {/* Compliance first — the India-specific value */}
               {(d.einvoicePending > 0 || d.msme.length > 0) && (
                 <div className="grid gap-3 sm:grid-cols-2">
@@ -677,6 +719,7 @@ export default function DashboardPage() {
           );
         }}
       </AsyncPage>
+      )}
     </>
   );
 }

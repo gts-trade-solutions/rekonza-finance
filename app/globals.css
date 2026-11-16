@@ -46,68 +46,104 @@
   --color-info: var(--info);
   --color-table-head: var(--table-head);
   --color-table-head-foreground: var(--table-head-foreground);
+  --color-row-hover: var(--row-hover);
+  --color-link: var(--link);
+  --color-overdue: var(--overdue);
+  --color-draft: var(--draft);
+  --color-void: var(--void);
+  --color-card-border: var(--card-border);
+  --color-secondary-border: var(--secondary-border);
+  --color-topbar-field: var(--topbar-field);
+  --color-topbar-field-border: var(--topbar-field-border);
+  --color-topbar-divider: var(--topbar-divider);
+  /* Zoho's body size is 13px, not the usual 14px: text-sm is 13px here, so
+     every screen built on text-sm reads at Zoho's size without a rewrite. */
+  --text-sm: 0.8125rem;
+  --text-sm--line-height: 1.6;
   --radius-sm: calc(var(--radius) - 2px);
   --radius-md: var(--radius);
   --radius-lg: calc(var(--radius) + 2px);
   --radius-xl: calc(var(--radius) + 4px);
   --font-sans: var(--font-sans-src), ui-sans-serif, system-ui, sans-serif;
-  --font-mono: var(--font-mono-src), ui-monospace, "Cascadia Code", monospace;
+  /* Zoho sets GSTINs, IRNs and document numbers in its body face, not a
+     monospace: font-mono is Inter with tabular figures here. Real code
+     (pre, code, kbd) keeps a fixed width (base layer below). */
+  --font-mono: var(--font-sans-src), ui-sans-serif, system-ui, sans-serif;
+  --font-code: var(--font-mono-src), ui-monospace, "Cascadia Code", monospace;
 }
 
 /*
-  ── Ledger Blue ────────────────────────────────────────────────────────────
-  The look of an accounting app: a deep navy navigation rail with a colour
-  for each part of the books, a vivid blue for what can be pressed, white
-  sheets lifted off a soft blue-grey canvas, and tinted table headings so a
-  long register reads in rows rather than as a white page.
+  ── Zoho Books ─────────────────────────────────────────────────────────────
+  The client asked for Zoho Books' look exactly: its colours, type and sizes.
+  Every value below was measured from Zoho's own India demo
+  (zoho.com/in/books/accounting-software-demo) on 2026-11-16, in its normal
+  look (the demo also has an accessibility mode that underlines links; that is
+  not the default and is not copied).
 
-  Semantic colour is held apart from the brand accent, so a negative figure
-  never reads as "branded" and a primary button never reads as "positive".
+  - Inter 13px everywhere, line-height 1.6.
+  - A dark navy top bar (#21263c) over a pale lavender sidebar (#f7f7fe).
+  - One blue (#408dfb) for what can be pressed and for the selected row.
+  - White pages, hairlines in #ebeaf2, table headings 11px uppercase grey on
+    #f9f9fb, hover rows in #f1f1fa.
+
+  Semantic colour stays apart from the blue, so a negative figure never reads
+  as "branded" and a primary button never reads as "positive".
 */
 :root {
-  --radius: 0.375rem;                    /* 6px */
+  --radius: 0.375rem;                    /* 6px: Zoho's inputs, menus and boxes */
+  --radius-button: 4.875px;              /* Zoho's buttons */
+  --radius-card: 12px;                   /* Zoho's dashboard cards */
 
-  --background: oklch(0.955 0.013 256);  /* soft blue-grey canvas */
-  --surface: oklch(1 0 0);
-  --foreground: oklch(0.25 0.03 262);    /* navy near-black */
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.25 0.03 262);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.25 0.03 262);
-  --card-shadow: 0 1px 2px oklch(0.3 0.04 262 / 0.06), 0 2px 6px oklch(0.3 0.04 262 / 0.05);
+  --background: #ffffff;
+  --surface: #ffffff;
+  --foreground: #21263c;
+  --card: #ffffff;
+  --card-foreground: #21263c;
+  --popover: #ffffff;
+  --popover-foreground: #21263c;
+  --card-shadow: 0 2px 10px 0 rgba(23, 26, 36, 0.04);
+  --card-border: #e9eaf5;
 
-  --primary: oklch(0.55 0.19 260);       /* vivid ledger blue */
-  --primary-foreground: oklch(1 0 0);
+  --primary: #408dfb;
+  --primary-foreground: #ffffff;
+  --link: #1c5bd9;
 
-  --secondary: oklch(0.95 0.016 256);
-  --secondary-foreground: oklch(0.32 0.04 262);
-  --muted: oklch(0.955 0.014 256);
-  --muted-foreground: oklch(0.5 0.025 258);
-  --accent: oklch(0.94 0.03 258);
-  --accent-foreground: oklch(0.3 0.07 262);
+  /* Zoho's grey button: #f5f5f5 with a #dddddd edge and black text. */
+  --secondary: #f5f5f5;
+  --secondary-foreground: #000000;
+  --secondary-border: #dddddd;
+  --muted: #f9f9fb;
+  --muted-foreground: #6c718a;
+  --accent: #f1f1fa;
+  --accent-foreground: #21263c;
 
-  --destructive: oklch(0.55 0.2 25);
-  --destructive-foreground: oklch(1 0 0);
-  --success: oklch(0.52 0.13 155);
-  --warning: oklch(0.66 0.14 62);
-  --info: oklch(0.55 0.15 245);
+  --destructive: #d6141d;
+  --destructive-foreground: #ffffff;
+  --success: #22b378;
+  --warning: #ec9500;
+  --info: #408dfb;
+  --overdue: #f76831;
+  --draft: #879697;
+  --void: #777777;
 
-  --border: oklch(0.9 0.014 256);
-  --input: oklch(0.86 0.018 256);
-  --ring: oklch(0.55 0.19 260);
+  --border: #ebeaf2;
+  --input: #d7d5e2;
+  --ring: #408dfb;
 
-  --field-label: oklch(0.45 0.03 260);
-  --required: oklch(0.55 0.2 25);
+  --field-label: #000000;
+  --required: #d6141d;
 
-  /* Register headings: a pale blue band with navy text. */
-  --table-head: oklch(0.94 0.025 258);
-  --table-head-foreground: oklch(0.34 0.05 262);
+  /* Register headings: 11px uppercase grey on Zoho's #f9f9fb band. */
+  --table-head: #f9f9fb;
+  --table-head-foreground: #6c718a;
+  --row-hover: #f1f1fa;
 
-  --chart-1: oklch(0.55 0.19 260);
-  --chart-2: oklch(0.65 0.14 200);
-  --chart-3: oklch(0.62 0.15 155);
-  --chart-4: oklch(0.72 0.15 65);
-  --chart-5: oklch(0.58 0.2 305);
+  /* Zoho's dashboard colours: the receivables bar and the cash-flow line. */
+  --chart-1: #408dfb;
+  --chart-2: #ff7a1a;
+  --chart-3: #22b378;
+  --chart-4: #ec9500;
+  --chart-5: #8d5bd9;
 
   /* Analytics. Eight categorical hues in a fixed, validated order — lightness
      band, chroma floor, colour-blind separation between neighbours and the
@@ -136,60 +172,72 @@
   --viz-div-neg: #e34948;
   --viz-div-mid: #e6e8eb;
 
-  /* Chrome: a white top bar over a deep navy rail. */
-  --topbar: oklch(1 0 0);
-  --topbar-foreground: oklch(0.28 0.03 262);
-  --sidebar: oklch(0.255 0.045 266);
-  --sidebar-foreground: oklch(0.84 0.02 260);
-  --sidebar-primary: oklch(0.58 0.19 258);
-  --sidebar-primary-foreground: oklch(1 0 0);
-  --sidebar-accent: oklch(0.315 0.05 266);
-  --sidebar-accent-foreground: oklch(1 0 0);
-  --sidebar-border: oklch(0.33 0.045 266);
-  --sidebar-ring: oklch(0.65 0.17 258);
+  /* Chrome: Zoho's dark top bar over its pale sidebar. */
+  --topbar: #21263c;
+  --topbar-foreground: #f0f0f0;
+  --topbar-field: #333850;
+  --topbar-field-border: #6c718a;
+  --topbar-divider: #181c2e;
+  --sidebar: #f7f7fe;
+  --sidebar-foreground: #21263c;
+  --sidebar-primary: #408dfb;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #eaeafb;
+  --sidebar-accent-foreground: #21263c;
+  --sidebar-border: #eaeafb;
+  --sidebar-ring: #408dfb;
 }
 
+/* Dark mode, chosen in the account menu: Zoho's night theme keeps the same
+   blue and layout on charcoal. */
 .dark {
-  --background: oklch(0.17 0.02 262);
-  --surface: oklch(0.21 0.022 262);
-  --foreground: oklch(0.93 0.008 256);
-  --card: oklch(0.21 0.022 262);
-  --card-foreground: oklch(0.93 0.008 256);
-  --popover: oklch(0.225 0.022 262);
-  --popover-foreground: oklch(0.93 0.008 256);
-  --card-shadow: 0 1px 2px oklch(0 0 0 / 0.3);
+  --background: #191b24;
+  --surface: #20222d;
+  --foreground: #e8e9f0;
+  --card: #20222d;
+  --card-foreground: #e8e9f0;
+  --popover: #262935;
+  --popover-foreground: #e8e9f0;
+  --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --card-border: #30333f;
 
-  --primary: oklch(0.64 0.17 258);
-  --primary-foreground: oklch(1 0 0);
+  --primary: #408dfb;
+  --primary-foreground: #ffffff;
+  --link: #6ea8ff;
 
-  --secondary: oklch(0.26 0.024 262);
-  --secondary-foreground: oklch(0.93 0.008 256);
-  --muted: oklch(0.25 0.022 262);
-  --muted-foreground: oklch(0.68 0.02 256);
-  --accent: oklch(0.29 0.035 262);
-  --accent-foreground: oklch(0.95 0.008 256);
+  --secondary: #2b2e3a;
+  --secondary-foreground: #e8e9f0;
+  --secondary-border: #3a3d4a;
+  --muted: #232632;
+  --muted-foreground: #9a9fb5;
+  --accent: #2a2d3a;
+  --accent-foreground: #f0f0f5;
 
-  --destructive: oklch(0.64 0.18 25);
-  --destructive-foreground: oklch(1 0 0);
-  --success: oklch(0.68 0.14 155);
-  --warning: oklch(0.76 0.14 62);
-  --info: oklch(0.68 0.14 245);
+  --destructive: #f05a60;
+  --destructive-foreground: #ffffff;
+  --success: #3cc78e;
+  --warning: #f2a93b;
+  --info: #5ea0ff;
+  --overdue: #ff8a5c;
+  --draft: #9aa7a8;
+  --void: #8d8d8d;
 
-  --border: oklch(0.3 0.024 262);
-  --input: oklch(0.33 0.024 262);
-  --ring: oklch(0.64 0.17 258);
+  --border: #30333f;
+  --input: #3a3d4a;
+  --ring: #408dfb;
 
-  --field-label: oklch(0.72 0.018 256);
-  --required: oklch(0.67 0.17 25);
+  --field-label: #d5d7e0;
+  --required: #f05a60;
 
-  --table-head: oklch(0.25 0.03 262);
-  --table-head-foreground: oklch(0.85 0.03 256);
+  --table-head: #232632;
+  --table-head-foreground: #9a9fb5;
+  --row-hover: #2a2d3a;
 
-  --chart-1: oklch(0.64 0.17 258);
-  --chart-2: oklch(0.7 0.12 200);
-  --chart-3: oklch(0.7 0.13 155);
-  --chart-4: oklch(0.77 0.13 65);
-  --chart-5: oklch(0.67 0.17 305);
+  --chart-1: #5ea0ff;
+  --chart-2: #ff8f3d;
+  --chart-3: #3cc78e;
+  --chart-4: #f2a93b;
+  --chart-5: #a57ee6;
 
   /* Analytics, dark: the same eight hues stepped for the dark card (#12181f)
      and validated as a set there — all clear 3:1. Selected, not inverted. */
@@ -215,50 +263,69 @@
   --viz-div-neg: #e66767;
   --viz-div-mid: #2a323b;
 
-  --topbar: oklch(0.21 0.022 262);
-  --topbar-foreground: oklch(0.92 0.008 256);
-  --sidebar: oklch(0.19 0.035 266);
-  --sidebar-foreground: oklch(0.8 0.02 258);
-  --sidebar-primary: oklch(0.58 0.18 258);
-  --sidebar-primary-foreground: oklch(1 0 0);
-  --sidebar-accent: oklch(0.26 0.04 266);
-  --sidebar-accent-foreground: oklch(1 0 0);
-  --sidebar-border: oklch(0.28 0.035 266);
-  --sidebar-ring: oklch(0.65 0.17 258);
+  --topbar: #13151c;
+  --topbar-foreground: #e8e9f0;
+  --topbar-field: #262935;
+  --topbar-field-border: #4a4e60;
+  --topbar-divider: #0b0c10;
+  --sidebar: #1c1e28;
+  --sidebar-foreground: #d5d7e0;
+  --sidebar-primary: #408dfb;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #2a2d3a;
+  --sidebar-accent-foreground: #f0f0f5;
+  --sidebar-border: #2a2d3a;
+  --sidebar-ring: #408dfb;
 }
 
 @layer base {
   * {
     @apply border-border outline-ring/50;
   }
+  html {
+    /* Zoho's body text: Inter 13px on a 1.6 line. */
+    font-size: 16px;
+  }
   body {
     @apply bg-background text-foreground;
+    font-size: 13px;
+    line-height: 1.6;
     -webkit-font-smoothing: antialiased;
   }
-  /* Figures are monospaced everywhere — that is what makes columns compare. */
+  /* Figures use Inter's tabular numerals, as Zoho's do: proportional type,
+     but every digit the same width, so amounts still line up in a column. */
   .tabular {
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     font-variant-numeric: tabular-nums;
-    letter-spacing: -0.01em;
   }
+  pre, code, kbd, samp { font-family: var(--font-code); }
+  .font-mono { font-variant-numeric: tabular-nums; }
+  /* Zoho's links: blue, unlined until hovered. */
+  .zlink {
+    color: var(--link);
+    font-weight: 500;
+  }
+  .zlink:hover { text-decoration: underline; }
 }
 
 @layer utilities {
   .num {
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     font-variant-numeric: tabular-nums;
     text-align: right;
   }
 
-  /* Uppercase micro-label — the engineered counterpart to a heading. */
+  /* Zoho's small uppercase heading ("PAYMENT SUMMARY", table headings). */
   .micro-label {
-    @apply text-[10px] font-semibold uppercase tracking-[0.11em] text-muted-foreground;
+    @apply text-[11px] font-semibold uppercase text-muted-foreground;
   }
+  /* Zoho's page title: 18px semibold. */
   .display-xl {
-    @apply text-[26px] font-semibold leading-tight tracking-[-0.02em];
+    @apply text-[18px] font-semibold leading-snug;
   }
+  /* A section or record title: 16px medium, as Zoho's card titles. */
   .display-lg {
-    @apply text-[18px] font-semibold leading-tight tracking-[-0.015em];
+    @apply text-[16px] font-medium leading-snug;
   }
 
   /* Thin scrollbars for dense data screens */
@@ -274,10 +341,10 @@
   }
   .thin-scroll::-webkit-scrollbar-track { background: transparent; }
 
-  /* Cards are white sheets lifted a little off the blue-grey canvas. */
+  /* Zoho's boxes: white, a lavender hairline and the faintest shadow. */
   .surface-card {
     background: var(--surface);
-    border: 1px solid var(--border);
+    border: 1px solid var(--card-border);
     box-shadow: var(--card-shadow);
   }
   .surface-raised {
@@ -302,6 +369,78 @@
     width: 2px;
     background: var(--bar, var(--primary));
   }
+}
+
+/* ── Zoho list pages ────────────────────────────────────────────────────────
+   A page's header band runs the full width under the top bar, with its
+   hairline from the sidebar to the window's edge, and the page's own list
+   (one not inside a card, tab or dialog) runs edge to edge under it, as in
+   Zoho. Done here rather than in the components so a header that is not the
+   page's first element, or a list inside a card, keeps its normal place. */
+@media screen {
+  .app-page > [data-slot='page-header']:first-child,
+  .app-page > div:first-child > [data-slot='page-header']:first-child,
+  .settings-page > [data-slot='page-header']:first-child {
+    margin: -1.25rem -1.5rem 0;
+    padding-inline: 1.5rem;
+  }
+  [data-slot='data-table'][data-bleed] > [data-slot='data-table-grid'] {
+    margin-inline: -1.5rem;
+    border-radius: 0;
+    border-inline: 0;
+  }
+  .app-page > [data-slot='page-header']:first-child + [data-slot='data-table'][data-bleed],
+  .app-page > div:first-child > [data-slot='page-header']:first-child + [data-slot='data-table'][data-bleed] {
+    margin-top: 0;
+  }
+  .app-page > [data-slot='page-header']:first-child + [data-slot='data-table'][data-bleed] > [data-slot='data-table-grid']:first-child,
+  .app-page > div:first-child > [data-slot='page-header']:first-child + [data-slot='data-table'][data-bleed] > [data-slot='data-table-grid']:first-child {
+    border-top: 0;
+  }
+}
+
+/* ── Split view (components/shared/record-split.tsx) ───────────────────────
+   The record's header as Zoho draws it beside the list: a 65px title band,
+   then a grey action bar (#f7f8fc) with the buttons laid flat and divided by
+   hairlines. The frame fills the window under the top bar exactly, so the page
+   itself never scrolls; the list and the record scroll on their own. */
+@media screen {
+  .app-page:has(> [data-slot='record-split']) { padding-bottom: 0 !important; }
+  .split-page > [data-slot='page-header']:first-child {
+    display: block;
+    margin: -1.25rem -1.5rem 0;
+    padding: 0;
+    min-height: 0;
+  }
+  .split-page > [data-slot='page-header']:first-child > [data-slot='page-title'] {
+    min-height: 65px;
+    padding: 0.75rem 3.75rem 0.75rem 1.5rem;
+  }
+  .split-page > [data-slot='page-header']:first-child > [data-slot='page-actions'] {
+    display: flex;
+    width: 100%;
+    flex-wrap: wrap;
+    align-items: stretch;
+    gap: 0;
+    min-height: 40px;
+    padding: 0 0.5rem;
+    background: #f7f8fc;
+    border-top: 1px solid var(--border);
+    box-shadow: 0 2px 4px 0 rgba(33, 38, 60, 0.03);
+  }
+  .dark .split-page > [data-slot='page-header']:first-child > [data-slot='page-actions'] { background: var(--muted); }
+  .split-page > [data-slot='page-header']:first-child > [data-slot='page-actions'] :is(a, button) {
+    height: 40px;
+    border-radius: 0;
+    border: 0;
+    border-right: 1px solid #e3e4ef;
+    background: transparent;
+    color: var(--foreground);
+    padding-inline: 0.875rem;
+  }
+  .dark .split-page > [data-slot='page-header']:first-child > [data-slot='page-actions'] :is(a, button) { border-right-color: var(--border); }
+  .split-page > [data-slot='page-header']:first-child > [data-slot='page-actions'] :is(a, button):hover { background: rgba(64, 141, 251, 0.08); }
+  .split-page > [data-slot='page-header']:first-child > [data-slot='page-actions'] :is(a, button):where(.grid) { width: auto; min-width: 40px; }
 }
 
 /* ── The assistant's corner button ─────────────────────────────────────────
@@ -364,3 +503,7 @@
   .print-root .analytics-tile { grid-column: span var(--span) / span var(--span); }
 }
 .print-only { display: none; }
+
+/* Zoho's list title is its view menu: when the list puts "All Invoices" and
+   its caret in the header, the plain title steps aside. */
+[data-slot='page-title']:has([data-slot='view-picker']) > h1 { display: none; }

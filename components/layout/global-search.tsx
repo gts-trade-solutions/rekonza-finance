@@ -38,9 +38,12 @@ interface Hit {
 export function GlobalSearch({
   open,
   onOpenChange,
+  initialQuery = '',
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** What was already typed in the top bar's box before the search opened. */
+  initialQuery?: string;
 }) {
   const router = useRouter();
   // Selected individually: returning an object from a Zustand selector builds a
@@ -57,11 +60,12 @@ export function GlobalSearch({
 
   useEffect(() => {
     if (open) {
-      setQuery('');
+      setQuery(initialQuery);
       setActive(0);
       setDocs(null);
       setTimeout(() => inputRef.current?.focus(), 30);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   // ── Local: contacts and items, straight from the store ───────────────────

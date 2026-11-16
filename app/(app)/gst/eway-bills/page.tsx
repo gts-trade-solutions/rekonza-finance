@@ -269,7 +269,7 @@ export default function EwayBillsPage() {
   return (
     <>
       <PageHeader
-        title="E-way bills"
+        title="e-Way Bills"
         description={
           'Goods over ₹50,000 cannot move without one — and some states set a higher limit inside their ' +
           'own borders. Delivery challans are listed too: sending material out for job work is not a sale, ' +

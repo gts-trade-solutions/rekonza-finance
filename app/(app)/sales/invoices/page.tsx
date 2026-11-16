@@ -15,8 +15,7 @@ import { useMemo, useState } from 'react';
 import { Download, FileCheck2, Mail, Plus, Receipt, Send } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
-import { Card } from '@/components/ui/card';
-import { tileColors } from '@/components/shared/stat-tile';
+import { PaymentSummary } from '@/components/shared/payment-summary';
 import { PageHeader } from '@/components/shared/page-header';
 import { DataTable, type Column } from '@/components/shared/data-table';
 import { BulkPrintButton } from '@/components/shared/document-menu';
@@ -74,6 +73,10 @@ export default function InvoicesPage() {
       }),
     [filter, range.from, range.to, range.mode],
   );
+
+  // Zoho's payment summary describes everything still owed, whatever view the
+  // list is showing, so it reads every open invoice on its own.
+  const open = useApi(() => invoiceApi.list({ open: true, limit: 500 }), []);
 
   const send = useApiAction(invoiceApi.send);
   const mail = useApi(() => api.get<{ configured: boolean }>('/api/email'), []);
@@ -180,21 +183,14 @@ export default function InvoicesPage() {
             />
           ) : (
             <>
-              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                {[
-                  { label: 'Invoices', value: String(data.summary.count) },
-                  { label: 'Total invoiced', value: formatINRCompact(data.summary.totalPaise) },
-                  { label: 'Outstanding', value: formatINRCompact(data.summary.duePaise), warn: data.summary.duePaise > 0 },
-                  { label: 'Awaiting IRN', value: String(awaitingIrn) },
-                ].map((t) => (
-                  <Card key={t.label} className={`p-4 ${tileColors(t.label, t.warn ? 'warning' : 'default').card}`}>
-                    <p className={`text-xs font-medium ${tileColors(t.label, t.warn ? 'warning' : 'default').label}`}>{t.label}</p>
-                    <p className={`mt-1.5 tabular text-2xl font-semibold ${t.warn ? 'text-warning' : ''}`}>
-                      {t.value}
-                    </p>
-                  </Card>
-                ))}
-              </div>
+              <PaymentSummary
+                side="receivables"
+                docs={open.data?.invoices ?? null}
+                extra={[
+                  { label: 'Invoices in view', value: `${data.summary.count} · ${formatINRCompact(data.summary.totalPaise)}` },
+                  { label: 'Awaiting IRN', value: String(awaitingIrn), tone: awaitingIrn > 0 ? 'warning' : undefined },
+                ]}
+              />
 
               <DataTable
                 rows={data.invoices}

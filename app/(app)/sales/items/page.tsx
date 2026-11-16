@@ -292,7 +292,7 @@ export default function ItemsPage() {
   return (
     <>
       <PageHeader
-        title="Items & services"
+        title="Items"
         description={
           canSeeCosts
             ? 'HSN/SAC codes and GST rates flow automatically onto every invoice and bill. Click an item to edit it.'
