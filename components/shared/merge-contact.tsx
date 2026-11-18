@@ -35,9 +35,16 @@ const words = (table: string, n: number) => {
   return `${n} ${n === 1 ? one : many}`;
 };
 
-export function MergeContactButton({ contactId, name, side }: { contactId: string; name: string; side: 'customer' | 'vendor' }) {
+export function MergeContactButton({ contactId, name, side, open: openProp, onOpenChange }: {
+  contactId: string; name: string; side: 'customer' | 'vendor';
+  /** Opened from elsewhere (a record's More menu): then it shows no button of its own. */
+  open?: boolean; onOpenChange?: (o: boolean) => void;
+}) {
   const router = useRouter();
-  const [open, setOpen] = useState(false);
+  const [ownOpen, setOwnOpen] = useState(false);
+  const controlled = openProp !== undefined;
+  const open = controlled ? openProp : ownOpen;
+  const setOpen = (o: boolean) => (controlled ? onOpenChange?.(o) : setOwnOpen(o));
   const [into, setInto] = useState('');
   const [busy, setBusy] = useState(false);
   const preview = useApi<Preview | null>(
@@ -64,9 +71,9 @@ export function MergeContactButton({ contactId, name, side }: { contactId: strin
 
   return (
     <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) setInto(''); }}>
-      <DialogTrigger asChild>
+      {!controlled && <DialogTrigger asChild>
         <Button variant="outline" size="sm" className="gap-1.5" data-slot="merge-contact"><GitMerge className="size-3.5" /> Merge</Button>
-      </DialogTrigger>
+      </DialogTrigger>}
       <DialogContent className="max-w-lg">
         <DialogHeader>
           <DialogTitle>Merge {name} into another {side}</DialogTitle>

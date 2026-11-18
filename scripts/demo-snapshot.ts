@@ -58,6 +58,13 @@ const kinds = routes
 const DIALOGS = [
   { list: '/api/exceptions?view=active', detail: '/api/exceptions/[id]' },
   { list: '/api/exceptions?view=closed', detail: '/api/exceptions/[id]' },
+  // A customer's record: the Income chart's other periods and basis, the
+  // attachments behind the paperclip, and More → Configure Customer Portal.
+  ...['months=12&basis=accrual', 'months=6&basis=cash', 'months=12&basis=cash'].map((q) => ({
+    list: '/api/contacts?kind=customer&limit=500', detail: `/api/contacts/[id]/activity?view=income&side=customer&${q}`,
+  })),
+  { list: '/api/contacts?kind=customer&limit=500', detail: '/api/files?targetType=contact&targetId=[id]' },
+  { list: '/api/contacts?kind=customer&limit=500', detail: '/api/portal-access?contactId=[id]&side=customer' },
 ];
 
 /**
@@ -78,6 +85,7 @@ const ON_DEMAND = [
   '/api/items/hsn-history',
   '/api/hsn-codes?activeOnly=true',
   '/api/saved-views?list=items',
+  '/api/saved-views?list=customers',
 ];
 
 /** Lists whose records open from a row, and the screen each record opens on. */

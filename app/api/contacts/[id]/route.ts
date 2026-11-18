@@ -7,6 +7,7 @@ import { bankNumberFor } from '@/lib/server/bank-mask';
 import { parseSections } from '@/lib/tax/tds';
 import { vendorFyTaxable } from '@/lib/server/services/purchases';
 import { outstandingBeyondDocuments } from '@/lib/server/services/party-outstanding';
+import { zohoFields } from '@/lib/server/services/contact-fields';
 
 /**
  * One party, with the running story of its account.
@@ -72,6 +73,22 @@ export const GET = route(
         },
       };
     }
+
+    // Zoho's "Unused Credits" (advances and open credit notes or vendor credits) and the portal's state.
+    const [unused, portal] = await Promise.all([
+      Promise.all([
+        db.selectFrom('payments').select(['kind', sql<string>`COALESCE(SUM(unapplied_amount), 0)`.as('amt')])
+          .where('org_id', '=', orgId).where('contact_id', '=', id).where('status', '<>', 'void').groupBy('kind').execute(),
+        db.selectFrom('credit_notes').select(sql<string>`COALESCE(SUM(total - applied_amount), 0)`.as('amt'))
+          .where('org_id', '=', orgId).where('customer_id', '=', id).where('status', '=', 'open').executeTakeFirst(),
+        db.selectFrom('vendor_credits').select(sql<string>`COALESCE(SUM(total - applied_amount), 0)`.as('amt'))
+          .where('org_id', '=', orgId).where('vendor_id', '=', id).where('status', '=', 'open').executeTakeFirst(),
+      ]),
+      db.selectFrom('portal_access').select('id').where('org_id', '=', orgId).where('contact_id', '=', id)
+        .where('revoked_at', 'is', null).where('expires_at', '>', new Date()).executeTakeFirst(),
+    ]);
+    const [unusedPay, unusedCn, unusedVc] = unused;
+    const payUnused = (kind: string) => toPaiseFromSql(unusedPay.find((r) => r.kind === kind)?.amt ?? '0');
 
     const [invoices, bills, allPayments, beyond] = await Promise.all([
       !seeSales ? [] : db
@@ -163,6 +180,12 @@ export const GET = route(
         isArchived: !!c.is_archived,
         // Merged into another contact (services/contact-merge.ts): where everything went.
         mergedIntoId: c.merged_into_id ? asId(c.merged_into_id) : null,
+        createdAt: new Date(c.created_at).toISOString(),
+        openingBalancePaise: toPaiseFromSql(c.opening_balance),
+        ownerUserId: c.owner_user_id ? asId(c.owner_user_id) : null,
+        billWise: !!c.bill_wise,
+        portalEnabled: !!portal,
+        ...zohoFields(c),
       },
       invoices: invoices.map((i) => ({
         id: asId(i.id),
@@ -218,6 +241,8 @@ export const GET = route(
         paidPaise: payments
           .filter((p) => p.kind === 'made' && p.status !== 'void')
           .reduce((t, p) => t + toPaiseFromSql(p.amount), 0),
+        unusedCreditsPaise: seeSales ? payUnused('received') + toPaiseFromSql(unusedCn?.amt ?? '0') : 0,
+        vendorUnusedCreditsPaise: seePurchases ? payUnused('made') + toPaiseFromSql(unusedVc?.amt ?? '0') : 0,
       },
     };
   },

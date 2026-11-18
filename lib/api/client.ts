@@ -651,6 +651,46 @@ export interface ContactRow {
   payablePaise: number;
   invoiceCount: number;
   billCount: number;
+  // Zoho's columns and views (the contacts list).
+  unusedCreditsPaise?: number;
+  vendorUnusedCreditsPaise?: number;
+  overdue?: boolean;
+  vendorOverdue?: boolean;
+  portalEnabled?: boolean;
+  duplicate?: boolean;
+  createdAt?: string;
+  openingBalancePaise?: number;
+  // Zoho's customer and vendor fields (migration 112).
+  contactType?: 'business' | 'individual' | null;
+  salutation?: string | null;
+  firstName?: string | null;
+  lastName?: string | null;
+  mobile?: string | null;
+  language?: string | null;
+  website?: string | null;
+  twitter?: string | null;
+  facebook?: string | null;
+  skype?: string | null;
+  department?: string | null;
+  designation?: string | null;
+  taxPreference?: 'taxable' | 'exempt' | null;
+  taxExemptionReason?: string | null;
+  billingAttention?: string | null;
+  billingStreet2?: string | null;
+  billingCity?: string | null;
+  billingState?: string | null;
+  billingPincode?: string | null;
+  billingCountry?: string | null;
+  billingPhone?: string | null;
+  billingFax?: string | null;
+  shippingAttention?: string | null;
+  shippingStreet2?: string | null;
+  shippingCity?: string | null;
+  shippingState?: string | null;
+  shippingPincode?: string | null;
+  shippingCountry?: string | null;
+  shippingPhone?: string | null;
+  shippingFax?: string | null;
 }
 
 export interface ItemRow {
@@ -761,6 +801,8 @@ export interface ContactDetail {
     payablePaise: number;
     receivedPaise: number;
     paidPaise: number;
+    unusedCreditsPaise?: number;
+    vendorUnusedCreditsPaise?: number;
   };
 }
 
@@ -794,6 +836,8 @@ export const contacts = {
   create: (input: unknown) => api.post<{ id: string; displayName: string; warnings?: string[] }>('/api/contacts', input).then((r) => (toastWarnings(r), r)),
   update: (input: unknown) => api.patch<{ id: string; warnings?: string[] }>('/api/contacts', input).then((r) => (toastWarnings(r), r)),
   archive: (id: string) => api.patch<{ id: string }>('/api/contacts', { id, isArchived: true }),
+  /** Deletes a contact never used; one that was is refused, to be marked inactive instead. */
+  remove: (id: string) => api.delete<{ id: string }>(`/api/contacts?id=${encodeURIComponent(id)}`),
 };
 
 /** One item's page (Zoho's item overview): the master, with its stock when it is kept in stock. */
@@ -1964,7 +2008,26 @@ export const customFields = {
 export interface ContactPerson {
   id: string | null; salutation: string | null; name: string; email: string | null; phone: string | null;
   designation: string | null; department: string | null; isPrimary: boolean; receivesDocuments: boolean;
+  /** Zoho's first and last name and mobile; `name` is the whole of it. */
+  firstName?: string | null; lastName?: string | null; mobile?: string | null;
 }
+
+export type ContactTxKind =
+  | 'invoice' | 'payment_received' | 'estimate' | 'sales_order' | 'challan' | 'credit_note' | 'recurring_invoice' | 'project'
+  | 'bill' | 'payment_made' | 'purchase_order' | 'vendor_credit' | 'expense';
+export interface ContactTxRow {
+  kind: ContactTxKind; id: string; date: string | null; number: string; ref: string | null;
+  amountPaise: number; balancePaise: number | null; status: string;
+}
+/** A customer's or vendor's record beyond the master: Transactions, the Income chart, Mails. */
+export const contactActivity = {
+  transactions: (id: string, side: 'customer' | 'vendor') =>
+    api.get<{ rows: ContactTxRow[] }>(`/api/contacts/${encodeURIComponent(id)}/activity`, { view: 'transactions', side }),
+  income: (id: string, side: 'customer' | 'vendor', months: 6 | 12, basis: 'accrual' | 'cash') =>
+    api.get<{ months: { month: string; amountPaise: number }[] }>(`/api/contacts/${encodeURIComponent(id)}/activity`, { view: 'income', side, months, basis }),
+  mails: (id: string) =>
+    api.get<{ mails: { id: string; at: string; to: string; subject: string; status: string; docType: string | null; docId: string | null }[] }>(`/api/contacts/${encodeURIComponent(id)}/activity`, { view: 'mails' }),
+};
 export const contactPersons = {
   list: (contactId: string) => api.get<{ persons: ContactPerson[] }>(`/api/contacts/${contactId}/persons`),
   save: (contactId: string, persons: ContactPerson[]) => api.put<{ ok: true }>(`/api/contacts/${contactId}/persons`, { persons }),

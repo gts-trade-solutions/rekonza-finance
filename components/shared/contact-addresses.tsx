@@ -7,6 +7,7 @@
 import { useState } from 'react';
 import { MapPin, Pencil, Plus, Star, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
+import { cn } from '@/lib/utils';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -25,7 +26,8 @@ export interface ContactAddress {
 const states = Object.entries(GST_STATES).map(([code, name]) => ({ value: code, label: name, sublabel: code }));
 const blank = { id: null as string | null, label: '', name: '', address: '', city: '', pincode: '', stateCode: '', gstin: '', phone: '', isDefault: false };
 
-export function ContactAddresses({ contactId, canEdit }: { contactId: string; canEdit: boolean }) {
+/** `compact`: as Zoho's record shows it, in the Overview's narrow left column. */
+export function ContactAddresses({ contactId, canEdit, compact = false }: { contactId: string; canEdit: boolean; compact?: boolean }) {
   const state = useApi(() => api.get<{ addresses: ContactAddress[] }>(`/api/contacts/${contactId}/addresses`), [contactId]);
   const [form, setForm] = useState<typeof blank | null>(null);
   const [busy, setBusy] = useState(false);
@@ -46,8 +48,15 @@ export function ContactAddresses({ contactId, canEdit }: { contactId: string; ca
   };
   const set = (k: keyof typeof blank) => (e: React.ChangeEvent<HTMLInputElement>) => form && setForm({ ...form, [k]: e.target.value });
 
+  const Box = compact ? 'div' : Card;
   return (
-    <Card className="space-y-3 p-5" data-slot="contact-addresses">
+    <Box className={compact ? 'space-y-2' : 'space-y-3 p-5'} data-slot="contact-addresses">
+      {compact ? (
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-[12px] text-muted-foreground">Other Addresses</p>
+          {canEdit && !form && <button type="button" className="text-[12px] text-link hover:underline" onClick={() => setForm({ ...blank, isDefault: !list.length })}>+ Add</button>}
+        </div>
+      ) : (
       <div className="flex items-start justify-between gap-2">
         <div className="flex items-start gap-3">
           <MapPin className="mt-0.5 size-5 text-muted-foreground" />
@@ -58,9 +67,10 @@ export function ContactAddresses({ contactId, canEdit }: { contactId: string; ca
         </div>
         {canEdit && !form && <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setForm({ ...blank, isDefault: !list.length })}><Plus className="size-3.5" /> Add address</Button>}
       </div>
+      )}
 
       {list.map((a) => (
-        <div key={a.id} className="flex items-start justify-between gap-3 rounded-md border p-3 text-sm">
+        <div key={a.id} className={compact ? 'flex items-start justify-between gap-2 text-[13px]' : 'flex items-start justify-between gap-3 rounded-md border p-3 text-sm'}>
           <div className="min-w-0">
             <p className="flex items-center gap-2 font-medium">{a.label}{a.isDefault && <Badge variant="outline" className="gap-1 text-[10px]"><Star className="size-2.5" /> Default ship-to</Badge>}</p>
             <p className="whitespace-pre-line text-muted-foreground">{[a.name, a.address, [a.city, a.pincode].filter(Boolean).join(' '), GST_STATES[a.stateCode]].filter(Boolean).join('\n')}</p>
@@ -75,13 +85,14 @@ export function ContactAddresses({ contactId, canEdit }: { contactId: string; ca
           )}
         </div>
       ))}
-      {!list.length && !form && <p className="text-xs text-muted-foreground">None yet: invoices go to the contact&apos;s own address unless another is typed in.</p>}
+      {!list.length && !form && !compact && <p className="text-xs text-muted-foreground">None yet: invoices go to the contact&apos;s own address unless another is typed in.</p>}
+      {!list.length && !form && compact && <p className="text-[13px] text-muted-foreground">No other addresses.</p>}
 
       {form && (
-        <div className="grid gap-2 rounded-md border p-3 sm:grid-cols-2" data-slot="address-form">
+        <div className={cn('grid gap-2 rounded-md border p-3', !compact && 'sm:grid-cols-2')} data-slot="address-form">
           <Input aria-label="Address name" placeholder="Name it, e.g. Hosur godown" value={form.label} onChange={set('label')} maxLength={80} />
           <Input aria-label="Name at the address" placeholder="Name at the address" value={form.name} onChange={set('name')} maxLength={150} />
-          <Input aria-label="Address" placeholder="Address" value={form.address} onChange={set('address')} maxLength={500} className="sm:col-span-2" />
+          <Input aria-label="Address" placeholder="Address" value={form.address} onChange={set('address')} maxLength={500} className={compact ? '' : 'sm:col-span-2'} />
           <Input aria-label="City" placeholder="City" value={form.city} onChange={set('city')} maxLength={60} />
           <Input aria-label="PIN code" placeholder="PIN code" value={form.pincode} onChange={(e) => setForm({ ...form, pincode: e.target.value.replace(/\D/g, '').slice(0, 6) })} />
           <Combobox options={states} value={form.stateCode} onChange={(v) => setForm({ ...form, stateCode: v })} placeholder="State" showAvatar={false} />
@@ -90,13 +101,13 @@ export function ContactAddresses({ contactId, canEdit }: { contactId: string; ca
           <label className="flex items-center gap-2 text-sm">
             <Checkbox checked={form.isDefault} onCheckedChange={(v) => setForm({ ...form, isDefault: !!v })} /> Default ship-to
           </label>
-          <div className="flex gap-2 sm:col-span-2">
+          <div className={cn('flex gap-2', !compact && 'sm:col-span-2')}>
             <Button size="sm" disabled={busy || !form.label.trim() || !form.address.trim() || !form.stateCode}
               onClick={() => post({ action: 'save', ...form, id: form.id }, form.id ? 'Address changed' : 'Address added')}>{busy ? 'Saving…' : 'Save address'}</Button>
             <Button size="sm" variant="ghost" onClick={() => setForm(null)}>Cancel</Button>
           </div>
         </div>
       )}
-    </Card>
+    </Box>
   );
 }

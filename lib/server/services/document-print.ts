@@ -62,15 +62,18 @@ async function sellerOf(ex: Executor, orgId: number, branchId: number, date: str
 
 async function partyOf(ex: Executor, orgId: number, contactId: number, label: string) {
   const c = await ex.selectFrom('contacts')
-    .select(['id', 'display_name', 'legal_name', 'gstin', 'billing_address', 'billing_city', 'billing_pincode', 'state_code', 'email', 'phone',
-      'shipping_address', 'shipping_city', 'shipping_pincode'])
+    .select(['id', 'display_name', 'legal_name', 'gstin', 'billing_address', 'billing_street2', 'billing_city', 'billing_pincode', 'state_code', 'email', 'phone',
+      'shipping_address', 'shipping_street2', 'shipping_city', 'shipping_pincode'])
     .where('id', '=', contactId).where('org_id', '=', orgId).executeTakeFirstOrThrow();
+  // Zoho's Street 1 and Street 2, printed as one line.
+  const lines = (a: string | null, b: string | null) => [a, b].map((x) => x?.trim()).filter(Boolean).join(', ') || null;
+  const billing = lines(c.billing_address, c.billing_street2);
   const party: PrintParty = {
-    label, name: c.legal_name || c.display_name, address: c.billing_address, city: c.billing_city, pincode: c.billing_pincode,
+    label, name: c.legal_name || c.display_name, address: billing, city: c.billing_city, pincode: c.billing_pincode,
     stateCode: c.state_code, gstin: c.gstin, email: c.email, phone: c.phone,
   };
-  const ship = c.shipping_address?.trim() ?? '';
-  const shipTo: PrintParty | null = ship && ship.toLowerCase() !== (c.billing_address ?? '').trim().toLowerCase()
+  const ship = lines(c.shipping_address, c.shipping_street2) ?? '';
+  const shipTo: PrintParty | null = ship && ship.toLowerCase() !== (billing ?? '').toLowerCase()
     ? { label: 'Ship to', name: c.display_name, address: ship, city: c.shipping_city, pincode: c.shipping_pincode, stateCode: null }
     : null;
   return { party, shipTo };

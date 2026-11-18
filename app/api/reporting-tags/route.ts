@@ -8,7 +8,7 @@ import { listTags, profitByTag, saveTag, setTags, tagsFor, TAGGABLE, type Taggab
 // Reporting tags (services/reporting-tags.ts): the tags, a document's tags,
 // and the profit and loss cut by a tag.
 
-const MODULE: Record<Taggable, string> = { invoice: 'sales', bill: 'purchases', expense: 'purchases', journal_entry: 'accountant', item: 'sales' };
+const MODULE: Record<Taggable, string> = { invoice: 'sales', bill: 'purchases', expense: 'purchases', journal_entry: 'accountant', item: 'sales', contact: 'sales' };
 const DATE = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 
 export const GET = route(async ({ orgId, role, req }) => {

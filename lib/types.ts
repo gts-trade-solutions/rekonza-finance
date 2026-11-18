@@ -182,6 +182,17 @@ export interface Contact {
   openingBalance: Paise; // +ve: they owe us / we owe them per kind
   portalEnabled?: boolean;
   isArchived: boolean;
+  // Zoho's customer details (migration 112): the primary contact, the mobile,
+  // the website, the remarks, the people at the business.
+  salutation?: string;
+  firstName?: string;
+  lastName?: string;
+  mobile?: string;
+  website?: string;
+  remarks?: string;
+  /** The billing address's country, by name, as Zoho's Country/Region holds it. */
+  countryName?: string;
+  persons?: { salutation?: string; firstName: string; lastName?: string; email?: string; phone?: string; mobile?: string; designation?: string }[];
 }
 
 export type TaxPref = 'taxable' | 'exempt' | 'nil' | 'non_gst';

@@ -64,7 +64,7 @@ const vend = (
   ...o,
 });
 
-export const SEED_CUSTOMERS: Contact[] = [
+const BASE_CUSTOMERS: Contact[] = [
   cust('c_sharma', 'Sharma Traders', '33', {
     gstin: '33ABCDE1234F1Z7',
     billingAddress: addr('12 Mount Road', 'Chennai', '33', '600002'),
@@ -142,6 +142,88 @@ export const SEED_CUSTOMERS: Contact[] = [
     billingAddress: addr('11 Big Bazaar St', 'Trichy', '33', '620008'),
   }),
 ];
+
+/**
+ * Who the shop deals with at each customer, as Zoho's customer page shows
+ * them: the primary contact, a mobile, the website, the remarks kept for the
+ * team, and the other people there.
+ */
+const CUSTOMER_PEOPLE: Record<string, Partial<Contact>> = {
+  c_sharma: {
+    salutation: 'Mr.', firstName: 'Rajesh', lastName: 'Sharma', mobile: '+91 94440 12345', website: 'www.sharmatraders.in',
+    remarks: 'Pays by NEFT on the 10th. Wants invoices by email, not by courier.',
+    persons: [{ salutation: 'Ms.', firstName: 'Kavita', lastName: 'Iyer', email: 'kavita@sharma.in', phone: '044 2852 1100', designation: 'Accounts' }],
+  },
+  c_apex: {
+    salutation: 'Mr.', firstName: 'Karthik', lastName: 'Rao', mobile: '+91 98450 22113', website: 'www.apexmotors.in',
+    remarks: 'Deducts TDS on our invoices: chase the Form 16A every quarter.',
+    shippingAddress: { label: 'Shipping', line1: 'Plot 22, Bommasandra Industrial Area', city: 'Bengaluru', stateCode: '29', pincode: '560099' },
+    persons: [
+      { salutation: 'Ms.', firstName: 'Divya', lastName: 'Menon', email: 'divya@apex.in', mobile: '+91 98860 44120', designation: 'Purchase Manager' },
+      { salutation: 'Mr.', firstName: 'Suresh', lastName: 'Babu', email: 'suresh@apex.in', phone: '080 4110 2200', designation: 'Accounts' },
+    ],
+  },
+  c_velocity: {
+    salutation: 'Mr.', firstName: 'Amit', lastName: 'Kulkarni', mobile: '+91 98220 33114',
+    remarks: 'A workshop chain: orders every Monday for the week.',
+    shippingAddress: { label: 'Shipping', line1: 'Unit 4, Bhosari MIDC', city: 'Pune', stateCode: '27', pincode: '411026' },
+    persons: [{ salutation: 'Mr.', firstName: 'Rohan', lastName: 'Joshi', email: 'rohan@velocity.in', mobile: '+91 98230 11220', designation: 'Stores In-charge' }],
+  },
+  c_speedwell: {
+    salutation: 'Mr.', firstName: 'Senthil', lastName: 'Kumar', mobile: '+91 94442 55116',
+    remarks: 'Collect cheques on Fridays.',
+    persons: [{ salutation: 'Ms.', firstName: 'Priya', lastName: 'Natarajan', email: 'priya@speedwell.in', designation: 'Accounts' }],
+  },
+  c_national: {
+    salutation: 'Mr.', firstName: 'Vikas', lastName: 'Gupta', mobile: '+91 98110 66117', website: 'www.nationalspares.co.in',
+    remarks: 'Goods go by road freight; send the LR copy with each invoice.',
+    persons: [{ salutation: 'Mr.', firstName: 'Anil', lastName: 'Bansal', email: 'anil@national.in', mobile: '+91 98111 22330', designation: 'Purchase' }],
+  },
+  c_marina: {
+    salutation: 'Ms.', firstName: 'Lakshmi', lastName: 'Narayanan', mobile: '+91 98400 77118',
+    remarks: '15-day terms agreed in June 2026.',
+    persons: [{ salutation: 'Mr.', firstName: 'Arjun', lastName: 'Pillai', email: 'arjun@marina.in', designation: 'Service Manager' }],
+  },
+  c_hosur: {
+    salutation: 'Mr.', firstName: 'Murugan', lastName: 'Selvam', mobile: '+91 94431 88119',
+    persons: [{ salutation: 'Ms.', firstName: 'Deepa', lastName: 'Raman', email: 'deepa@hosur.in', designation: 'Accounts' }],
+  },
+  c_deccan: {
+    salutation: 'Mr.', firstName: 'Srinivas', lastName: 'Reddy', mobile: '+91 98490 99120',
+    persons: [{ salutation: 'Mr.', firstName: 'Imran', lastName: 'Khan', email: 'imran@deccan.in', mobile: '+91 98491 00330', designation: 'Purchase' }],
+  },
+  c_kochi: {
+    salutation: 'Mr.', firstName: 'Thomas', lastName: 'Varghese', mobile: '+91 98470 10121',
+    persons: [{ salutation: 'Ms.', firstName: 'Anju', lastName: 'Mathew', email: 'anju@kochi.in', designation: 'Accounts' }],
+  },
+  c_ridez: { remarks: 'Counter sales to walk-in buyers, billed as B2C.' },
+  c_sez: {
+    salutation: 'Mr.', firstName: 'Ganesh', lastName: 'Iyer', mobile: '+91 98410 21122',
+    remarks: 'An SEZ unit: supplies go zero-rated under our LUT. Quote their SEZ authorisation on each invoice.',
+    persons: [{ salutation: 'Ms.', firstName: 'Revathi', lastName: 'Subramanian', email: 'revathi@sez.in', designation: 'Logistics' }],
+  },
+  c_lanka: {
+    salutation: 'Mr.', firstName: 'Nuwan', lastName: 'Perera', mobile: '+94 77 123 4567', countryName: 'Sri Lanka',
+    remarks: 'Ships through Chennai port. Invoiced in US dollars.',
+    persons: [{ salutation: 'Ms.', firstName: 'Dilani', lastName: 'Fernando', email: 'dilani@lanka.in', designation: 'Imports' }],
+  },
+  c_gulf: {
+    salutation: 'Mr.', firstName: 'Omar', lastName: 'Al Farsi', mobile: '+971 50 123 4567', countryName: 'United Arab Emirates', website: 'www.gulffleet.ae',
+    remarks: 'Buys workshop training and advice; pays by SWIFT transfer.',
+  },
+  c_orbit: {
+    salutation: 'Mr.', firstName: 'Naveen', lastName: 'Hegde', mobile: '+91 98450 31123',
+    remarks: 'Deducts TDS on our invoices.',
+    persons: [{ salutation: 'Ms.', firstName: 'Shruti', lastName: 'Bhat', email: 'shruti@orbit.in', mobile: '+91 98451 40220', designation: 'Fleet Manager' }],
+  },
+  c_bluehill: {
+    salutation: 'Mr.', firstName: 'Joseph', lastName: "D'Souza", mobile: '+91 94430 41124',
+    remarks: 'A fleet of twelve vehicles, serviced every month.',
+  },
+  c_trichy: { salutation: 'Mr.', firstName: 'Balaji', lastName: 'Krishnan', mobile: '+91 94433 51125' },
+};
+
+export const SEED_CUSTOMERS: Contact[] = BASE_CUSTOMERS.map((c) => ({ ...c, ...CUSTOMER_PEOPLE[c.id] }));
 
 export const SEED_VENDORS: Contact[] = [
   vend('v_bosch', 'Bosch Automotive Distributors', '29', {

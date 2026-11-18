@@ -222,7 +222,12 @@ for (const [list, re, label] of [
   // Zoho folds the sidebar beside a transaction (invoice, bill) and keeps it open beside a customer or vendor.
   const folds = label === 'Invoices' || label === 'Bills';
   check(`${label}: the sidebar ${folds ? 'folds to the rail' : 'stays open, as Zoho keeps it'} while it is open`, Math.round((await box('aside'))?.width ?? 0) === (folds ? 72 : 220));
-  check(`${label}: the record's actions sit on Zoho's grey bar`, (await css('.split-page > [data-slot=page-header] > [data-slot=page-actions]', 'backgroundColor')) === 'rgb(247, 248, 252)');
+  if (label === 'Customers') {
+    // Zoho's customer page has no grey bar: the name, Edit, the paperclip and More sit on white.
+    check(`${label}: the record's own header, on white as Zoho's`, (await page.locator('[data-slot=contact-header]').count()) === 1 && (await css('.split-page > [data-slot=page-header] > [data-slot=page-actions]', 'backgroundColor')) === null);
+  } else {
+    check(`${label}: the record's actions sit on Zoho's grey bar`, (await css('.split-page > [data-slot=page-header] > [data-slot=page-actions]', 'backgroundColor')) === 'rgb(247, 248, 252)');
+  }
   check(`${label}: the top bar searches the list beside it`, (await page.locator('[data-slot=topbar-search-input]').getAttribute('placeholder')) === `Search in ${label} ( / )`);
   // The list stays loaded when moving to another record.
   await page.locator('[data-slot=split-list]').evaluate((el) => { el.dataset.marker = 'kept'; });
@@ -252,11 +257,85 @@ check('Customers open on "Active Customers"', (await page.locator('[data-slot=vi
 const heads = (await page.locator('thead th').allInnerTexts()).map((t) => t.trim().toUpperCase()).filter(Boolean);
 check("Customers show Zoho's columns", ['NAME', 'COMPANY NAME', 'EMAIL', 'WORK PHONE', 'RECEIVABLES'].every((h) => heads.includes(h)), heads.join(', '));
 check('GSTIN waits under Customize Columns', !heads.some((h) => h.startsWith('GSTIN')));
+check('…and Unused Credits', heads.includes('UNUSED CREDITS'));
 await page.locator('[data-slot=view-picker]').click();
 await page.waitForTimeout(400);
-const views = (await page.locator('[data-slot=table-tab]').allInnerTexts()).map((t) => t.trim().split(/\s/)[0]);
-check('Active, Inactive and All are offered', views.join(',') === 'Active,Inactive,All', views.join(','));
+const views = (await page.locator('[data-slot=table-tab]').allInnerTexts()).map((t) => t.trim().replace(/\s+\d+$/, ''));
+check("Zoho's customer views", views.join(',') === 'All Customers,Active Customers,Duplicate Customers,Inactive Customers,Client Portal Enabled,Client Portal Disabled,Overdue Customers,Unpaid Customers', views.join(','));
 await page.keyboard.press('Escape');
+await page.locator('[data-slot=contacts-more]').click();
+await page.waitForTimeout(400);
+const custMore = await page.locator('[role=menu]').last().innerText().catch(() => '');
+check('The ⋯ menu: Sort by, Import, Export, Preferences, Refresh List, Reset Column Width', ['Sort by', 'Import', 'Export', 'Preferences', 'Refresh List', 'Reset Column Width'].every((x) => custMore.includes(x)), custMore.replace(/\n/g, ' | '));
+await page.keyboard.press('Escape');
+await page.waitForTimeout(300);
+await page.locator('tbody tr').first().locator('[data-slot=checkbox]').click();
+await page.locator('tbody tr').nth(1).locator('[data-slot=checkbox]').click();
+await page.waitForTimeout(400);
+const custBulk = await page.locator('[data-slot=contacts-bulk]').innerText().catch(() => '');
+check("Ticked customers: Zoho's bulk actions", ['Print Customer Statements', 'Mark as Active', 'Mark as Inactive', 'Merge', 'Request GST Information', 'More Actions'].every((x) => custBulk.includes(x)), custBulk.replace(/\n/g, ' | '));
+await page.keyboard.press('Escape');
+
+// ── E1. A customer, as Zoho opens one ──────────────────────────────────────
+const custList = (await api('/api/contacts?kind=customer')).contacts;
+const cust = custList.find((c) => c.invoiceCount > 0) ?? custList[0];
+await open(`/sales/customers/${cust.id}`);
+await page.waitForSelector('[data-slot=contact-overview]', { timeout: 60000 });
+await page.waitForSelector('[data-slot=income-total]', { timeout: 60000 }).catch(() => {});
+check("The customer's name is the title", (await page.locator('[data-slot=contact-title]').innerText()).trim() === cust.displayName, cust.displayName);
+check('Edit, attachments and More in the header', (await page.locator('[data-slot=contact-edit]').count()) === 1 && (await page.locator('[data-slot=contact-attachments]').count()) === 1 && (await page.locator('[data-slot=contact-more]').count()) === 1);
+const custTabs = (await page.locator('[data-slot=contact-tabs] [role=tab]').allInnerTexts()).map((x) => x.trim());
+check("Zoho's tabs: Overview, Comments, Transactions, Mails, Statement", custTabs.join(',') === 'Overview,Comments,Transactions,Mails,Statement', custTabs.join(','));
+const leftCol = (await page.locator('[data-slot=contact-overview] aside').innerText()).toUpperCase();
+check("The Overview's sections, in Zoho's order", ['REMARKS', 'ADDRESS', 'OTHER DETAILS', 'CONTACT PERSONS', 'BANK ACCOUNT DETAILS', 'ASSOCIATE TAGS', 'RECORD INFO']
+  .map((s) => leftCol.indexOf(s)).every((x, i, a) => x >= 0 && (i === 0 || x > a[i - 1])), leftCol.slice(0, 160).replace(/\n/g, ' | '));
+const paise = (s) => Math.round(Number(String(s).replace(/[^0-9.-]/g, '')) * 100);
+check('Receivables: outstanding and unused credits, as the list says', paise(await page.locator('[data-slot=contact-owed]').innerText()) === cust.receivablePaise
+  && paise(await page.locator('[data-slot=contact-unused]').innerText()) === (cust.unusedCreditsPaise ?? 0));
+check('The income chart and its total', /Total Income \( Last 6 Months \)/.test(await page.locator('[data-slot=contact-income]').innerText()));
+await page.locator('[data-slot=contact-more]').click();
+await page.waitForTimeout(400);
+const custMoreMenu = await page.locator('[role=menu]').last().innerText().catch(() => '');
+check("More: Zoho's actions", ['Configure Customer Portal', 'Add Bank Account', 'Clone', 'Merge Customers', 'Mark as Inactive', 'Delete'].every((x) => custMoreMenu.includes(x)), custMoreMenu.replace(/\n/g, ' | '));
+await page.keyboard.press('Escape');
+await page.getByRole('tab', { name: 'Transactions' }).click();
+await page.waitForSelector('[data-slot=contact-tx-section]', { timeout: 60000 });
+const custTxKinds = await page.locator('[data-slot=contact-tx-section]').evaluateAll((els) => els.map((e) => e.dataset.kind));
+check('Transactions: a section for each kind', custTxKinds.join(',') === 'invoice,payment_received,estimate,sales_order,challan,credit_note,recurring_invoice,project', custTxKinds.join(','));
+const invRows = await page.locator('[data-slot=contact-tx-section][data-kind=invoice] [data-slot=contact-tx-row]').count();
+// Zoho lists a void invoice here too, which the list's count leaves out.
+const invWanted = (await api(`/api/contacts/${cust.id}/activity?view=transactions&side=customer`)).rows.filter((r) => r.kind === 'invoice');
+check("…the customer's invoices listed, a void one too", invRows === invWanted.length && invWanted.filter((r) => r.status !== 'void').length >= cust.invoiceCount, `${invRows} of ${invWanted.length}`);
+await page.locator('[data-slot=tx-goto]').click();
+await page.waitForTimeout(300);
+check('Go to transactions lists the sections', (await page.locator('[role=menu]').last().innerText()).includes('Customer Payments'));
+await page.keyboard.press('Escape');
+await page.getByRole('tab', { name: 'Mails' }).click();
+await page.waitForSelector('[data-slot=contact-mails] table, [data-slot=mails-empty]', { timeout: 60000 });
+check('Mails: the system mails, or none', (await page.locator('[data-slot=contact-mails]').count()) === 1);
+await page.getByRole('tab', { name: 'Statement' }).click();
+await page.waitForFunction(() => /Balance due/i.test(document.querySelector('[data-slot=contact-statement]')?.textContent ?? ''), null, { timeout: 60000 }).catch(() => {});
+const stText = await page.locator('[data-slot=contact-statement]').innerText();
+check('Statement: the statement itself, ready to print', /Customer Statement for/.test(stText) && /Balance due/i.test(stText));
+
+// ── E1b. New and Edit Customer, Zoho's form ────────────────────────────────
+await open('/sales/customers/new');
+await page.waitForSelector('[data-slot=contact-top]', { timeout: 60000 });
+check('New Customer: the prefill band', (await page.locator('[data-slot=contact-prefill]').innerText()).includes('Prefill Customer details from the GST portal'));
+const topLabels = (await page.locator('[data-slot=contact-top] label').allInnerTexts()).map((x) => x.replace(/\*/g, '').trim()).filter((x) => x && !/^(Business|Individual)$/.test(x));
+check("…Zoho's fields at the top", topLabels.join(',') === 'Customer Type,Primary Contact,Company Name,Display Name,Email Address,Phone,Customer Language', topLabels.join(','));
+const formTabs = (await page.locator('[data-slot=contact-form-tabs] [role=tab]').allInnerTexts()).map((x) => x.trim());
+check("…and Zoho's tabs", formTabs.join(',') === 'Other Details,Address,Contact Persons,Custom Fields,Reporting Tags,Remarks', formTabs.join(','));
+const otherLabels = await page.locator('[data-slot=contact-other-details]').innerText();
+check('Other Details: treatment, place of supply, PAN, tax preference, currency, opening balance, terms, price list, portal, documents',
+  ['GST Treatment', 'Place of Supply', 'PAN', 'Tax Preference', 'Currency', 'Opening Balance', 'Payment Terms', 'Price List', 'Enable Portal?', 'Documents', 'Add more details'].every((x) => otherLabels.includes(x)));
+await page.getByRole('tab', { name: 'Address' }).click();
+check('Address: billing and shipping, and Copy billing address', (await page.locator('[data-slot=address-billing]').count()) === 1 && (await page.locator('[data-slot=copy-billing]').count()) === 1);
+await page.getByRole('tab', { name: 'Contact Persons' }).click();
+check('Contact Persons: a table with an empty row', (await page.locator('[data-slot=contact-person-row]').count()) === 1);
+await open(`/sales/customers/${cust.id}/edit`);
+await page.waitForSelector('[data-slot=contact-top]', { timeout: 60000 });
+check('Edit Customer: the form comes filled', (await page.locator('[data-slot=contact-display-name]').innerText()).includes(cust.displayName));
 
 // ── E2. Items, as Zoho's item page ─────────────────────────────────────────
 await open('/sales/items');

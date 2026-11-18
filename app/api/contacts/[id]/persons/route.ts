@@ -14,7 +14,8 @@ export const GET = route(async ({ orgId, role, params }) => {
     .orderBy('is_primary', 'desc').orderBy('name').execute();
   return {
     persons: rows.map((p) => ({
-      id: asId(p.id), salutation: p.salutation, name: p.name, email: p.email, phone: p.phone, designation: p.designation,
+      id: asId(p.id), salutation: p.salutation, name: p.name, firstName: p.first_name, lastName: p.last_name, mobile: p.mobile,
+      email: p.email, phone: p.phone, designation: p.designation,
       department: p.department, isPrimary: !!p.is_primary, receivesDocuments: !!p.receives_documents,
     })),
   };
@@ -23,7 +24,11 @@ export const GET = route(async ({ orgId, role, params }) => {
 const Person = z.object({
   id: z.union([z.string(), z.number()]).nullish(),
   salutation: z.string().trim().max(10).nullish(),
-  name: z.string().trim().min(1, 'Give the person a name.').max(150),
+  // Zoho's first and last name; `name` is the whole of it, made from them when they come.
+  firstName: z.string().trim().max(100).nullish(),
+  lastName: z.string().trim().max(100).nullish(),
+  name: z.string().trim().max(150).optional(),
+  mobile: z.string().trim().max(30).nullish(),
   email: z.string().trim().email('That email address does not look right.').max(190).nullish().or(z.literal('')),
   phone: z.string().trim().max(30).nullish(),
   designation: z.string().trim().max(100).nullish(),
@@ -38,6 +43,8 @@ export const PUT = route(async ({ orgId, user, role, params, req }) => {
   const contactId = idParam(params);
   const { persons } = await body(req, z.object({ persons: z.array(Person).max(50) }));
   if (persons.filter((p) => p.isPrimary).length > 1) throw badRequest('Only one person can be the primary contact.');
+  const nameOf = (p: z.infer<typeof Person>) => [p.firstName, p.lastName].filter(Boolean).join(' ').trim() || (p.name ?? '').trim();
+  if (persons.some((p) => !nameOf(p))) throw badRequest('Give each person a name.');
   const contact = await db.selectFrom('contacts').select(['id', 'display_name']).where('id', '=', contactId).where('org_id', '=', orgId).executeTakeFirst();
   if (!contact) throw notFound('That contact does not exist.');
   await transaction(async (trx) => {
@@ -47,7 +54,8 @@ export const PUT = route(async ({ orgId, user, role, params, req }) => {
     await del.execute();
     for (const p of persons) {
       const row = {
-        salutation: p.salutation || null, name: p.name, email: p.email || null, phone: p.phone || null, designation: p.designation || null,
+        salutation: p.salutation || null, name: nameOf(p), first_name: p.firstName || null, last_name: p.lastName || null, mobile: p.mobile || null,
+        email: p.email || null, phone: p.phone || null, designation: p.designation || null,
         department: p.department || null, is_primary: p.isPrimary ? 1 : 0, receives_documents: p.receivesDocuments === false ? 0 : 1,
       };
       if (p.id) await trx.updateTable('contact_persons').set(row).where('id', '=', Number(p.id)).where('contact_id', '=', contactId).execute();
@@ -55,7 +63,7 @@ export const PUT = route(async ({ orgId, user, role, params, req }) => {
     }
     await logAudit({
       trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'update', targetType: 'contact', targetId: contactId,
-      targetLabel: contact.display_name, detail: `Contact persons: ${persons.map((p) => p.name).join(', ') || 'none'}`, ...auditMeta(req),
+      targetLabel: contact.display_name, detail: `Contact persons: ${persons.map(nameOf).join(', ') || 'none'}`, ...auditMeta(req),
     });
   });
   return { ok: true };

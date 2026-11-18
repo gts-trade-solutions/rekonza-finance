@@ -1,7 +1,8 @@
 import { z } from 'zod';
 import { sql } from 'kysely';
-import { db } from '@/lib/server/db';
-import { route, body, query, asId, badRequest, conflict } from '@/lib/server/http';
+import { db, transaction } from '@/lib/server/db';
+import { route, body, query, asId, badRequest, conflict, forbidden } from '@/lib/server/http';
+import { hasPermission } from '@/lib/rbac';
 import { toPaiseFromSql } from '@/lib/server/money-sql';
 import { seal } from '@/lib/server/crypto/fields';
 import { bankNumberFor, isMasked } from '@/lib/server/bank-mask';
@@ -9,7 +10,9 @@ import { joinSections, parseSections } from '@/lib/tax/tds';
 import { assertFresh } from '@/lib/server/concurrency';
 import { logAudit, auditMeta, snapshot, changesBetween, describeChanges } from '@/lib/server/audit';
 import { isValidGstin } from '@/lib/tax/gst';
+import { ZOHO_COLUMNS, zohoFields } from '@/lib/server/services/contact-fields';
 import { outstandingBeyondDocuments } from '@/lib/server/services/party-outstanding';
+import { addOpeningDocument, booksStartDate } from '@/lib/server/services/opening-balances';
 
 const ListQuery = z.object({
   kind: z.enum(['customer', 'vendor', 'both', 'all']).optional(),
@@ -60,6 +63,10 @@ export const GET = route(
         'msme_category', 'msme_activity', 'msme_agreement_days', 'bank_account_name', 'bank_account_no', 'bank_ifsc', 'bank_name', 'currency', 'price_list_id',
         'tds_applicable', 'tds_section', 'billing_address', 'shipping_address', 'notes', 'is_archived', 'updated_at', 'bill_wise',
         'constitution', 'gst_status', 'gst_registered_on', 'cin', 'incorporated_on', 'country', 'supplies',
+        'contact_type', 'salutation', 'first_name', 'last_name', 'mobile', 'language', 'website', 'twitter', 'facebook', 'skype',
+        'department', 'designation', 'tax_preference', 'tax_exemption_reason', 'created_at', 'opening_balance',
+        'billing_attention', 'billing_street2', 'billing_city', 'billing_state', 'billing_pincode', 'billing_country', 'billing_phone', 'billing_fax',
+        'shipping_attention', 'shipping_street2', 'shipping_city', 'shipping_state', 'shipping_pincode', 'shipping_country', 'shipping_phone', 'shipping_fax',
       ])
       .orderBy('display_name')
       .limit(q.limit)
@@ -101,6 +108,44 @@ export const GET = route(
 
     const arBy = new Map(receivable.map((r) => [r.id, r]));
     const apBy = new Map(payable.map((r) => [r.id, r]));
+
+    // Zoho's "Unused Credits": money a party has paid or been credited that no
+    // document has taken yet (an advance, a credit note or vendor credit still
+    // open). Overdue: an issued invoice or bill past its due date and unpaid.
+    // Portal: a customer's portal link that is neither revoked nor expired.
+    const today = new Date().toISOString().slice(0, 10);
+    const [unusedPay, unusedCn, unusedVc, overdueAr, overdueAp, portal] = ids.length
+      ? await Promise.all([
+          db.selectFrom('payments').select(['contact_id as id', 'kind', sql<string>`COALESCE(SUM(unapplied_amount), 0)`.as('amt')])
+            .where('org_id', '=', orgId).where('contact_id', 'in', ids).where('status', '<>', 'void').groupBy(['contact_id', 'kind']).execute(),
+          db.selectFrom('credit_notes').select(['customer_id as id', sql<string>`COALESCE(SUM(total - applied_amount), 0)`.as('amt')])
+            .where('org_id', '=', orgId).where('customer_id', 'in', ids).where('status', '=', 'open').groupBy('customer_id').execute(),
+          db.selectFrom('vendor_credits').select(['vendor_id as id', sql<string>`COALESCE(SUM(total - applied_amount), 0)`.as('amt')])
+            .where('org_id', '=', orgId).where('vendor_id', 'in', ids).where('status', '=', 'open').groupBy('vendor_id').execute(),
+          db.selectFrom('invoices').select('customer_id as id').distinct()
+            .where('org_id', '=', orgId).where('customer_id', 'in', ids).where('status', 'not in', ['draft', 'void'])
+            .where('due_date', '<', today).where(sql<boolean>`total > amount_paid`).execute(),
+          db.selectFrom('bills').select('vendor_id as id').distinct()
+            .where('org_id', '=', orgId).where('vendor_id', 'in', ids).where('status', 'not in', ['draft', 'void'])
+            .where('due_date', '<', today).where(sql<boolean>`total > amount_paid`).execute(),
+          db.selectFrom('portal_access').select('contact_id as id').distinct()
+            .where('org_id', '=', orgId).where('contact_id', 'in', ids).where('side', '=', 'customer')
+            .where('revoked_at', 'is', null).where('expires_at', '>', new Date()).execute(),
+        ])
+      : [[], [], [], [], [], []];
+    const payUnused = new Map(unusedPay.map((r) => [`${r.id}:${r.kind}`, toPaiseFromSql(r.amt)]));
+    const cnUnused = new Map(unusedCn.map((r) => [r.id, toPaiseFromSql(r.amt)]));
+    const vcUnused = new Map(unusedVc.map((r) => [r.id, toPaiseFromSql(r.amt)]));
+    const overdueC = new Set(overdueAr.map((r) => r.id));
+    const overdueV = new Set(overdueAp.map((r) => r.id));
+    const portalOn = new Set(portal.map((r) => r.id));
+    // Zoho's "Duplicate Customers": the same GSTIN, the same PAN, or the same name in letters and digits.
+    const key = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const count = (vals: (string | null)[]) => vals.reduce((m, v) => (v ? m.set(v, (m.get(v) ?? 0) + 1) : m), new Map<string, number>());
+    const byGstin = count(rows.map((r) => r.gstin));
+    const byPan = count(rows.map((r) => r.pan));
+    const byName = count(rows.map((r) => key(r.display_name)));
+    const duplicate = (r: (typeof rows)[number]) => (r.gstin && byGstin.get(r.gstin)! > 1) || (r.pan && byPan.get(r.pan)! > 1) || byName.get(key(r.display_name))! > 1;
     // Opening bills and journals (a Tally import's vouchers among them) owe too.
     const beyond = await outstandingBeyondDocuments(db, orgId, ids);
 
@@ -151,6 +196,15 @@ export const GET = route(
         payablePaise: toPaiseFromSql(apBy.get(c.id)?.due ?? '0') + (beyond.get(c.id)?.payablePaise ?? 0),
         invoiceCount: Number(arBy.get(c.id)?.n ?? 0),
         billCount: Number(apBy.get(c.id)?.n ?? 0),
+        unusedCreditsPaise: (payUnused.get(`${c.id}:received`) ?? 0) + (cnUnused.get(c.id) ?? 0),
+        vendorUnusedCreditsPaise: (payUnused.get(`${c.id}:made`) ?? 0) + (vcUnused.get(c.id) ?? 0),
+        overdue: overdueC.has(c.id),
+        vendorOverdue: overdueV.has(c.id),
+        portalEnabled: portalOn.has(c.id),
+        duplicate: duplicate(c),
+        createdAt: new Date(c.created_at).toISOString(),
+        openingBalancePaise: toPaiseFromSql(c.opening_balance),
+        ...zohoFields(c),
       })),
     };
   },
@@ -216,9 +270,55 @@ const ContactInput = z.object({
   notes: z.string().trim().max(1000).nullish(),
   /** Who chases this customer's overdue invoices (services/exceptions.ts). */
   ownerUserId: z.coerce.number().int().positive().nullish(),
+  // ── Zoho's customer and vendor fields (migration 112) ──
+  contactType: z.enum(['business', 'individual']).optional(),
+  salutation: z.string().trim().max(20).nullish(),
+  firstName: z.string().trim().max(100).nullish(),
+  lastName: z.string().trim().max(100).nullish(),
+  mobile: z.string().trim().max(30).nullish(),
+  language: z.string().trim().max(40).optional(),
+  website: z.string().trim().max(255).nullish(),
+  twitter: z.string().trim().max(100).nullish(),
+  facebook: z.string().trim().max(100).nullish(),
+  skype: z.string().trim().max(100).nullish(),
+  department: z.string().trim().max(100).nullish(),
+  designation: z.string().trim().max(100).nullish(),
+  taxPreference: z.enum(['taxable', 'exempt']).optional(),
+  taxExemptionReason: z.string().trim().max(200).nullish(),
+  billingAttention: z.string().trim().max(150).nullish(),
+  billingStreet2: z.string().trim().max(255).nullish(),
+  billingCity: z.string().trim().max(100).nullish(),
+  billingState: z.string().trim().max(80).nullish(),
+  billingPincode: z.string().trim().max(20).nullish(),
+  billingCountry: z.string().trim().max(80).nullish(),
+  billingPhone: z.string().trim().max(30).nullish(),
+  billingFax: z.string().trim().max(30).nullish(),
+  shippingAttention: z.string().trim().max(150).nullish(),
+  shippingStreet2: z.string().trim().max(255).nullish(),
+  shippingCity: z.string().trim().max(100).nullish(),
+  shippingState: z.string().trim().max(80).nullish(),
+  shippingPincode: z.string().trim().max(20).nullish(),
+  shippingCountry: z.string().trim().max(80).nullish(),
+  shippingPhone: z.string().trim().max(30).nullish(),
+  shippingFax: z.string().trim().max(30).nullish(),
 });
 
-const CreateInput = ContactInput;
+
+const CreateInput = ContactInput.extend({
+  /**
+   * Zoho's "Opening Balance": what they owed (or were owed) before the books
+   * started. Kept as an opening bill dated the day before, as the Opening
+   * Balances page enters one.
+   */
+  openingBalancePaise: z.number().int().min(0).max(1e15).optional(),
+});
+
+/** The day before a yyyy-mm-dd date. */
+function dayBefore(d: string) {
+  const t = new Date(`${d}T00:00:00Z`);
+  t.setUTCDate(t.getUTCDate() - 1);
+  return t.toISOString().slice(0, 10);
+}
 const UpdateInput = ContactInput.partial().extend({
   id: z.string(),
   isArchived: z.boolean().optional(),
@@ -271,6 +371,10 @@ function toRow(input: z.infer<typeof ContactInput>) {
     shipping_address: input.shippingAddress ?? null,
     notes: input.notes ?? null,
     owner_user_id: input.ownerUserId ?? null,
+    ...Object.fromEntries(Object.entries(ZOHO_COLUMNS).map(([k, col]) => [col, (input as Record<string, unknown>)[k] ?? null])),
+    contact_type: input.contactType ?? 'business',
+    language: input.language ?? 'English',
+    tax_preference: input.taxPreference ?? 'taxable',
   };
 }
 
@@ -348,17 +452,26 @@ async function duplicates(orgId: number, input: { displayName?: string; gstin?: 
 }
 
 export const POST = route(
-  async ({ orgId, user, req }) => {
+  async ({ orgId, user, branchId, req }) => {
     const input = await body(req, CreateInput);
     checkGstin(input);
     const warnings = await duplicates(orgId, input);
 
-    const inserted = await db
-      .insertInto('contacts')
-      .values({ org_id: orgId, ...toRow(input) })
-      .executeTakeFirstOrThrow();
-
-    const id = Number(inserted.insertId);
+    const id = await transaction(async (trx) => {
+      const inserted = await trx
+        .insertInto('contacts')
+        .values({ org_id: orgId, ...toRow(input) })
+        .executeTakeFirstOrThrow();
+      const id = Number(inserted.insertId);
+      if (input.openingBalancePaise) {
+        const before = dayBefore((await booksStartDate(trx, orgId)).date);
+        await addOpeningDocument(trx, orgId, user.userId, {
+          branchId, contactId: id, kind: input.kind === 'vendor' ? 'payable' : 'receivable', refNo: 'Opening Balance',
+          docDate: before, dueDate: before, amountPaise: input.openingBalancePaise, notes: 'Entered with the contact',
+        });
+      }
+      return id;
+    });
     await logAudit({
       orgId,
       actorUserId: user.userId,
@@ -450,6 +563,7 @@ export const PATCH = route(
     set('notes', input.notes);
     set('owner_user_id', input.ownerUserId);
     set('is_archived', input.isArchived === undefined ? undefined : input.isArchived ? 1 : 0);
+    for (const [k, col] of Object.entries(ZOHO_COLUMNS)) set(col, (input as Record<string, unknown>)[k]);
 
     if (input.isArchived) {
       // Archiving a party with money outstanding hides a debt somebody still
@@ -495,4 +609,47 @@ export const PATCH = route(
     return { id: asId(id), warnings };
   },
   { permission: { module: 'sales', action: 'edit' } },
+);
+
+/**
+ * Delete a customer or vendor that was never used, as Zoho's "Delete" does.
+ * Its own contact persons, extra addresses and portal links go with it; any
+ * document, payment, journal line or other record that names it keeps it, and
+ * the answer says to mark it inactive instead.
+ */
+export const DELETE = route(
+  async ({ orgId, user, role, req }) => {
+    const { id: raw } = query(req, z.object({ id: z.string() }));
+    const id = Number(raw);
+    const existing = await db.selectFrom('contacts').select(['id', 'display_name', 'kind'])
+      .where('id', '=', id).where('org_id', '=', orgId).executeTakeFirst();
+    if (!existing) throw badRequest('That contact does not exist.');
+    const needs = existing.kind === 'both' ? ['sales', 'purchases'] : [existing.kind === 'vendor' ? 'purchases' : 'sales'];
+    if (!needs.every((m) => hasPermission(role, m, 'void'))) throw forbidden('You cannot delete this contact.');
+    const posted = await db.selectFrom('journal_lines').select(sql<string>`COUNT(*)`.as('n'))
+      .where('org_id', '=', orgId).where('contact_id', '=', id).executeTakeFirst();
+    if (Number(posted?.n ?? 0) > 0) {
+      throw conflict(`${existing.display_name} has entries in the books, so it cannot be deleted. Mark it as inactive instead.`);
+    }
+    try {
+      await transaction(async (trx) => {
+        await trx.deleteFrom('contact_persons').where('org_id', '=', orgId).where('contact_id', '=', id).execute();
+        await trx.deleteFrom('contact_addresses').where('org_id', '=', orgId).where('contact_id', '=', id).execute();
+        await trx.deleteFrom('portal_access').where('org_id', '=', orgId).where('contact_id', '=', id).execute();
+        await trx.deleteFrom('contacts').where('id', '=', id).where('org_id', '=', orgId).execute();
+        await logAudit({
+          trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'void', targetType: 'contact', targetId: id,
+          targetLabel: existing.display_name, detail: `Deleted unused ${existing.kind} ${existing.display_name}`, ...auditMeta(req),
+        });
+      });
+    } catch (e) {
+      // A document, payment or other record still names it (a foreign key refused the delete).
+      if ((e as { code?: string }).code === 'ER_ROW_IS_REFERENCED_2') {
+        throw conflict(`${existing.display_name} is still used on documents or other records, so it cannot be deleted. Mark it as inactive instead.`);
+      }
+      throw e;
+    }
+    return { id: asId(id) };
+  },
+  { permission: { module: 'sales', action: 'view' } },
 );

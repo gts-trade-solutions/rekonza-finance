@@ -19,6 +19,7 @@ import { postEntry, type DraftLine } from '../ledger/posting';
 import { hashPassword } from '../auth/password';
 import { SEED_ORG, SEED_BRANCHES, SEED_USERS } from '../../mock/seed/org';
 import { SEED_CUSTOMERS, SEED_VENDORS } from '../../mock/seed/contacts';
+import { GST_STATES } from '../../tax/gst';
 import { SEED_ITEMS } from '../../mock/seed/items';
 import { SEED_HSN_CODES } from '../../mock/seed/hsn';
 import { toSqlFromPaise } from '../money-sql';
@@ -251,15 +252,24 @@ export async function bootstrap(trx: Trx, options: BootstrapOptions = {}): Promi
         msme_udyam_no: c.udyamNo ?? null,
         email: c.email || null,
         phone: c.phone || null,
-        billing_address: formatAddress(c.billingAddress),
-        // The seed has always carried these inside the address object and
-        // `formatAddress` flattened them into one string, losing them. The GST
-        // portals want them back out again, so they are stored as they came.
+        // Zoho's address in its parts: the street, then the city, state, PIN
+        // and country each in a box of its own (migration 112).
+        billing_address: c.billingAddress.line1,
         billing_city: c.billingAddress?.city ?? null,
-        billing_pincode: c.billingAddress?.pincode ?? null,
-        shipping_address: c.shippingAddress ? formatAddress(c.shippingAddress) : null,
+        billing_state: c.stateCode === '96' ? null : GST_STATES[c.billingAddress.stateCode ?? c.stateCode] ?? null,
+        billing_pincode: realPin(c.billingAddress?.pincode),
+        billing_country: c.countryName ?? (c.stateCode === '96' ? null : 'India'),
+        shipping_address: c.shippingAddress ? c.shippingAddress.line1 : null,
         shipping_city: c.shippingAddress?.city ?? null,
-        shipping_pincode: c.shippingAddress?.pincode ?? null,
+        shipping_state: c.shippingAddress ? GST_STATES[c.shippingAddress.stateCode ?? c.stateCode] ?? null : null,
+        shipping_pincode: realPin(c.shippingAddress?.pincode),
+        shipping_country: c.shippingAddress ? c.countryName ?? 'India' : null,
+        salutation: c.salutation ?? null,
+        first_name: c.firstName ?? null,
+        last_name: c.lastName ?? null,
+        mobile: c.mobile ?? null,
+        website: c.website ?? null,
+        notes: c.remarks ?? null,
         payment_terms: c.paymentTermsDays ? `net_${c.paymentTermsDays}` : null,
         credit_limit: c.creditLimit != null ? toSqlFromPaise(c.creditLimit) : null,
         opening_balance: toSqlFromPaise(c.openingBalance ?? 0),
@@ -269,6 +279,14 @@ export async function bootstrap(trx: Trx, options: BootstrapOptions = {}): Promi
       })
       .executeTakeFirstOrThrow();
     contacts[c.id] = Number(row.insertId);
+    // The people there, the first the primary contact for documents.
+    for (const [i, p] of (c.persons ?? []).entries()) {
+      await trx.insertInto('contact_persons').values({
+        org_id: orgId, contact_id: contacts[c.id], salutation: p.salutation ?? null, first_name: p.firstName, last_name: p.lastName ?? null,
+        name: [p.firstName, p.lastName].filter(Boolean).join(' '), email: p.email ?? null, phone: p.phone ?? null, mobile: p.mobile ?? null,
+        designation: p.designation ?? null, is_primary: i === 0 ? 1 : 0, receives_documents: 1,
+      }).execute();
+    }
   }
 
   // ── Items ──────────────────────────────────────────────────────────────────
@@ -401,6 +419,7 @@ export async function bootstrap(trx: Trx, options: BootstrapOptions = {}): Promi
   return { orgId, branches, users, contacts, items, accounts, bankAccounts };
 }
 
-function formatAddress(a: { line1: string; city?: string; stateCode?: string; pincode?: string }): string {
-  return [a.line1, a.city, a.pincode].filter(Boolean).join(', ');
+/** A PIN as stored: the seed's dash for a foreign address has none. */
+function realPin(pin: string | undefined): string | null {
+  return pin && pin !== '—' ? pin : null;
 }

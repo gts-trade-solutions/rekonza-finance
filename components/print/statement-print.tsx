@@ -24,11 +24,11 @@ const amt = (paise: number) =>
 const bal = (paise: number) =>
   `${(Math.abs(paise) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}${paise < 0 ? ' Cr' : ''}`;
 
-export function StatementPrint({ s, backHref }: { s: PartyStatement; backHref: string }) {
+export function StatementPrint({ s, backHref, bare = false }: { s: PartyStatement; backHref: string; bare?: boolean }) {
   const w = statementWords(s.side);
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-2 no-print">
+    <div className={bare ? 'break-after-page' : 'space-y-4'}>
+      <div className={bare ? 'hidden' : 'flex flex-wrap items-center justify-between gap-2 no-print'}>
         <Button variant="outline" size="sm" asChild>
           <Link href={backHref}><ArrowLeft className="size-3.5" /> {s.party.name}</Link>
         </Button>

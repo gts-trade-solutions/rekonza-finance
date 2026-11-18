@@ -39,7 +39,7 @@ import { Money } from '@/components/shared/money';
 import { StatusBadge } from '@/components/shared/status-badge';
 import { InvoiceStatus } from '@/components/shared/invoice-status';
 import { usePermission } from '@/lib/store/hooks';
-import { bills, contacts, invoices, items, projects, type ItemRow } from '@/lib/api/client';
+import { bills, contacts, invoices, items, projects, type ContactRow, type ItemRow } from '@/lib/api/client';
 import { useForceNavCollapsed } from '@/components/layout/nav-state';
 import { claimListSearch, releaseListSearch } from '@/components/layout/page-context';
 
@@ -63,6 +63,89 @@ interface SplitSort { key: string; label: string; value: (r: SplitRow) => string
 
 /** A module's bulk actions on the ticked rows; `done` clears the ticks and reloads. */
 type BulkActions = ComponentType<{ picked: SplitRow[]; openId: string; done: (left?: boolean) => void }>;
+
+/** Zoho's customer and vendor bulk actions in the column: Mark as Active, Mark as Inactive, Delete (an unused one only). */
+function ContactBulk({ picked, openId, done }: { picked: SplitRow[]; openId: string; done: (left?: boolean) => void }) {
+  const vendor = (picked[0]?.raw as ContactRow | undefined)?.kind === 'vendor';
+  const canEdit = usePermission(vendor ? 'purchases' : 'sales', 'edit');
+  const canDelete = usePermission(vendor ? 'purchases' : 'sales', 'void');
+  const [busy, setBusy] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const rows = picked.map((p) => p.raw as ContactRow);
+  const run = async (what: string, todo: ContactRow[], act: (c: ContactRow) => Promise<unknown>) => {
+    setBusy(true);
+    const failed: string[] = [];
+    for (const c of todo) {
+      try { await act(c); } catch (e) { failed.push(`${c.displayName}: ${e instanceof Error ? e.message : String(e)}`); }
+    }
+    setBusy(false);
+    const n = todo.length - failed.length;
+    if (n) toast.success(`${n} ${what}`);
+    if (failed.length) toast.error(`${failed.length} not changed`, { description: failed.slice(0, 3).join(' · ') });
+    return failed;
+  };
+  if (!canEdit && !canDelete) return null;
+  return (
+    <>
+      <DropdownMenu>
+        <DropdownMenuTrigger data-slot="split-bulk" disabled={busy}
+          className="inline-flex h-8 items-center gap-1 rounded-[var(--radius-button)] border border-secondary-border bg-secondary px-2.5 text-[13px] outline-none hover:brightness-[0.98]">
+          Bulk Actions <ChevronDown className="size-3.5" strokeWidth={2.2} />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" className="min-w-44">
+          {canEdit && <DropdownMenuItem onClick={() => void run('marked as active', rows.filter((c) => c.isArchived), (c) => contacts.update({ id: c.id, isArchived: false, expectedUpdatedAt: c.updatedAt })).then(() => done())}>Mark as Active</DropdownMenuItem>}
+          {canEdit && <DropdownMenuItem onClick={() => void run('marked as inactive', rows.filter((c) => !c.isArchived), (c) => contacts.update({ id: c.id, isArchived: true, expectedUpdatedAt: c.updatedAt })).then(() => done())}>Mark as Inactive</DropdownMenuItem>}
+          {canDelete && <DropdownMenuItem onClick={() => setConfirming(true)}>Delete</DropdownMenuItem>}
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <Dialog open={confirming} onOpenChange={setConfirming}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Delete {rows.length}?</DialogTitle>
+            <DialogDescription>Only one never used is deleted. One on a document or a payment is kept: mark it as inactive instead.</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirming(false)}>Cancel</Button>
+            <Button variant="destructive" disabled={busy} onClick={async () => {
+              const failed = await run('deleted', rows, (c) => contacts.remove(c.id));
+              setConfirming(false);
+              done(rows.some((c) => c.id === openId) && !failed.some((f) => f.startsWith(`${rows.find((c) => c.id === openId)?.displayName}:`)));
+            }}>{busy ? 'Deleting…' : 'Delete'}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
+/** A contact column's views and sorts (Zoho's "All Customers ▾" and its ⋯ → Sort by). */
+function contactViews(noun: 'Customers' | 'Vendors'): SplitView[] {
+  const c = (r: SplitRow) => r.raw as ContactRow;
+  const owed = (r: SplitRow) => (noun === 'Customers' ? c(r).receivablePaise : c(r).payablePaise);
+  return [
+    { value: 'all', title: `All ${noun}`, keep: () => true },
+    { value: 'active', title: `Active ${noun}`, keep: (r) => !c(r).isArchived },
+    { value: 'duplicate', title: `Duplicate ${noun}`, keep: (r) => !!c(r).duplicate },
+    { value: 'inactive', title: `Inactive ${noun}`, keep: (r) => c(r).isArchived },
+    ...(noun === 'Customers' ? [
+      { value: 'portal_on', title: 'Client Portal Enabled', keep: (r: SplitRow) => !!c(r).portalEnabled },
+      { value: 'portal_off', title: 'Client Portal Disabled', keep: (r: SplitRow) => !c(r).portalEnabled },
+    ] : []),
+    { value: 'overdue', title: `Overdue ${noun}`, keep: (r) => !!(noun === 'Customers' ? c(r).overdue : c(r).vendorOverdue) },
+    { value: 'unpaid', title: `Unpaid ${noun}`, keep: (r) => owed(r) > 0 },
+  ];
+}
+function contactSorts(noun: 'Customers' | 'Vendors'): SplitSort[] {
+  const c = (r: SplitRow) => r.raw as ContactRow;
+  return [
+    { key: 'name', label: 'Name', value: (r) => r.title.toLowerCase() },
+    { key: 'company', label: 'Company Name', value: (r) => (c(r).legalName ?? '').toLowerCase() },
+    { key: 'balance', label: noun === 'Customers' ? 'Receivables' : 'Payables', value: (r) => r.amount ?? 0 },
+    { key: 'unused', label: 'Unused Credits', value: (r) => (noun === 'Customers' ? c(r).unusedCreditsPaise : c(r).vendorUnusedCreditsPaise) ?? 0 },
+    { key: 'created', label: 'Created Time', value: (r) => c(r).createdAt ?? '' },
+    { key: 'updated', label: 'Last Modified Time', value: (r) => c(r).updatedAt ?? '' },
+  ];
+}
 
 /** Zoho's item bulk actions: Mark as Active, Mark as Inactive, Delete (an unused item only). */
 function ItemBulk({ picked, openId, done }: { picked: SplitRow[]; openId: string; done: (left?: boolean) => void }) {
@@ -136,6 +219,8 @@ const CONFIG: Record<SplitKind, {
   sorts?: SplitSort[];
   /** Zoho keeps the sidebar open beside this module's records (items, customers, vendors). */
   keepNav?: boolean;
+  /** Zoho's contact rows: the name, then the amount with the status beside it. */
+  amountBelow?: boolean;
 }> = {
   invoice: {
     label: 'Invoices',
@@ -171,13 +256,19 @@ const CONFIG: Record<SplitKind, {
     newHref: '/sales/customers/new',
     module: 'sales',
     keepNav: true,
-    load: async () => (await contacts.list({ kind: 'customer' })).contacts.map((c) => ({
+    amountBelow: true,
+    load: async () => (await contacts.list({ kind: 'customer', archived: true })).contacts.map((c) => ({
       id: c.id,
       title: c.displayName,
       amount: c.receivablePaise,
-      sub: c.legalName && c.legalName !== c.displayName ? c.legalName : c.email ?? c.gstin ?? '',
+      sub: '',
+      status: c.isArchived ? <StatusBadge status="inactive" /> : undefined,
       search: `${c.displayName} ${c.legalName ?? ''} ${c.gstin ?? ''} ${c.email ?? ''}`.toLowerCase(),
+      raw: c,
     })),
+    Bulk: ContactBulk,
+    views: contactViews('Customers'),
+    sorts: contactSorts('Customers'),
   },
   vendor: {
     label: 'Vendors',
@@ -260,7 +351,8 @@ export function useSplitRecordRefresh(reload: () => void) {
 function recordIdFrom(pathname: string, base: string): string | null {
   if (!pathname.startsWith(base + '/')) return null;
   const rest = pathname.slice(base.length + 1).split('/');
-  if (rest.length !== 1 || !rest[0] || rest[0] === 'new' || rest[0] === 'timesheet') return null;
+  // The list's own pages beneath it (the form, the timesheet, statements printed in bulk) are not records.
+  if (rest.length !== 1 || !rest[0] || ['new', 'timesheet', 'statements'].includes(rest[0])) return null;
   return decodeURIComponent(rest[0]);
 }
 
@@ -428,7 +520,15 @@ function SplitFrame({ kind, id, children }: { kind: SplitKind; id: string; child
           ) : (
             shown.map((r) => {
               const active = r.id === id;
-              const body = (
+              const body = cfg.amountBelow ? (
+                <>
+                  <span className="block min-w-0 truncate text-[14px] font-medium">{r.title}</span>
+                  <div className="mt-1 flex items-center justify-between gap-3">
+                    {r.amount != null && <Money value={r.amount} className="text-[13px] text-[#4c526c] dark:text-muted-foreground" />}
+                    {r.status && <span className="shrink-0">{r.status}</span>}
+                  </div>
+                </>
+              ) : (
                 <>
                   <div className="flex items-start justify-between gap-3">
                     <span className="min-w-0 truncate text-[14px] font-medium">{r.title}</span>

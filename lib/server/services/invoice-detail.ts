@@ -41,11 +41,12 @@ export async function invoiceDetail(orgId: number, id: number) {
       'invoices.currency', 'invoices.exchange_rate', 'invoices.fc_total', 'invoices.fc_amount_paid',
       sql<string | null>`(SELECT u.name FROM users u WHERE u.id = invoices.voided_by_user_id)`.as('voided_by_name'),
       'contacts.display_name as customer_name', 'contacts.gstin as customer_gstin', 'contacts.phone as customer_phone', 'contacts.email as customer_email',
-      'contacts.billing_address as customer_address',
+      // Zoho's Street 1 and Street 2, printed as one line.
+      sql<string | null>`NULLIF(CONCAT_WS(', ', NULLIF(contacts.billing_address, ''), NULLIF(contacts.billing_street2, '')), '')`.as('customer_address'),
       // The rest is what Rule 46 asks a tax invoice to carry.
       'contacts.legal_name as customer_legal_name', 'contacts.state_code as customer_state',
       'contacts.billing_city as customer_city', 'contacts.billing_pincode as customer_pincode',
-      'contacts.shipping_address as ship_address', 'contacts.shipping_city as ship_city',
+      sql<string | null>`NULLIF(CONCAT_WS(', ', NULLIF(contacts.shipping_address, ''), NULLIF(contacts.shipping_street2, '')), '')`.as('ship_address'), 'contacts.shipping_city as ship_city',
       'contacts.shipping_pincode as ship_pincode', 'contacts.gst_treatment as customer_treatment',
       'branches.name as branch_name', 'branches.gstin as branch_gstin',
       'branches.address as branch_address', 'branches.city as branch_city',

@@ -18,7 +18,7 @@ import { toPaiseFromSql } from '../money-sql';
 import { badRequest, conflict, notFound } from '../http';
 
 // An item's tags are Zoho's "Associate Tags" on the item itself.
-export const TAGGABLE = ['invoice', 'bill', 'expense', 'journal_entry', 'item'] as const;
+export const TAGGABLE = ['invoice', 'bill', 'expense', 'journal_entry', 'item', 'contact'] as const;
 export type Taggable = (typeof TAGGABLE)[number];
 
 export async function listTags(ex: Executor, orgId: number) {
@@ -58,7 +58,7 @@ export async function saveTag(trx: Trx, orgId: number, input: { id?: number | nu
   return id;
 }
 
-const TABLE: Record<Taggable, 'invoices' | 'bills' | 'expenses' | 'journal_entries' | 'items'> = { invoice: 'invoices', bill: 'bills', expense: 'expenses', journal_entry: 'journal_entries', item: 'items' };
+const TABLE: Record<Taggable, 'invoices' | 'bills' | 'expenses' | 'journal_entries' | 'items' | 'contacts'> = { invoice: 'invoices', bill: 'bills', expense: 'expenses', journal_entry: 'journal_entries', item: 'items', contact: 'contacts' };
 
 /** A document's tags as {tagId: optionId}; null clears that tag. */
 export async function setTags(trx: Trx, orgId: number, entity: Taggable, entityId: number, values: Record<string, string | null>) {
