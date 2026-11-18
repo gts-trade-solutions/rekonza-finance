@@ -222,7 +222,7 @@ for (const [list, re, label] of [
   // Zoho folds the sidebar beside a transaction (invoice, bill) and keeps it open beside a customer or vendor.
   const folds = label === 'Invoices' || label === 'Bills';
   check(`${label}: the sidebar ${folds ? 'folds to the rail' : 'stays open, as Zoho keeps it'} while it is open`, Math.round((await box('aside'))?.width ?? 0) === (folds ? 72 : 220));
-  if (label === 'Customers') {
+  if (label === 'Customers' || label === 'Vendors') {
     // Zoho's customer page has no grey bar: the name, Edit, the paperclip and More sit on white.
     check(`${label}: the record's own header, on white as Zoho's`, (await page.locator('[data-slot=contact-header]').count()) === 1 && (await css('.split-page > [data-slot=page-header] > [data-slot=page-actions]', 'backgroundColor')) === null);
   } else {
@@ -391,6 +391,61 @@ await page.keyboard.press('Escape');
 await open(`/sales/customers/${cust.id}/edit`);
 await page.waitForSelector('[data-slot=contact-top]', { timeout: 60000 });
 check('Edit Customer: the form comes filled', (await page.locator('[data-slot=contact-display-name]').innerText()).includes(cust.displayName));
+
+// ── E1c. Vendors, as Zoho's vendors ────────────────────────────────────────
+await open('/purchases/vendors');
+check('Vendors open on "Active Vendors"', (await page.locator('[data-slot=view-picker]').innerText()).trim() === 'Active Vendors');
+const vHeads = (await page.locator('thead th').allInnerTexts()).map((x) => x.trim().toUpperCase()).filter(Boolean);
+check("Vendors show Zoho's columns", vHeads.join(',') === 'NAME,COMPANY NAME,EMAIL,WORK PHONE,PAYABLES,UNUSED CREDITS', vHeads.join(','));
+await page.locator('[data-slot=view-picker]').click();
+await page.waitForTimeout(400);
+const vViews = (await page.locator('[data-slot=table-tab]').allInnerTexts()).map((x) => x.trim().replace(/\s+\d+$/, ''));
+check("Zoho's vendor views", vViews.join(',') === 'All Vendors,Active Vendors,Duplicate Vendors,Inactive Vendors,Vendors - Reorder Items', vViews.join(','));
+await page.keyboard.press('Escape');
+await page.locator('tbody tr').first().locator('[data-slot=checkbox]').click();
+await page.waitForTimeout(400);
+const vBulk = await page.locator('[data-slot=contacts-bulk]').innerText().catch(() => '');
+check("Ticked vendors: Zoho's bulk actions", ['Print Vendor Statements', 'Mark as Active', 'Mark as Inactive', 'Merge', 'Request GST Information', 'More Actions'].every((x) => vBulk.includes(x)), vBulk.replace(/\n/g, ' | '));
+await page.keyboard.press('Escape');
+const vList = (await api('/api/contacts?kind=vendor')).contacts;
+const vend = vList.find((c) => c.billCount > 0) ?? vList[0];
+await open(`/purchases/vendors/${vend.id}`);
+await page.waitForSelector('[data-slot=contact-overview]', { timeout: 60000 });
+await page.waitForSelector('[data-slot=income-total]', { timeout: 60000 }).catch(() => {});
+check("The vendor's name is the title", (await page.locator('[data-slot=contact-title]').innerText()).trim() === vend.displayName, vend.displayName);
+check('The column beside the vendor has its New button', (await page.locator('[data-slot=split-list] a[aria-label="New vendor"]').count()) === 1);
+const vOther = await page.locator('[data-slot=contact-other]').innerText();
+check('Vendor Other Details: Source of Supply, no type or tax preference rows', vOther.includes('Source of Supply') && !vOther.includes('Vendor Type') && !vOther.includes('Tax Preference'), vOther.slice(0, 160).replace(/\n/g, ' | '));
+check('Payables and the Expenses chart', (await page.locator('[data-slot=contact-receivables]').innerText()).includes('Payables') && /Total Expenses/.test(await page.locator('[data-slot=contact-income]').innerText()));
+check('Payables as the list says', paise(await page.locator('[data-slot=contact-owed]').innerText()) === vend.payablePaise);
+await page.locator('[data-slot=contact-more]').click();
+await page.waitForTimeout(400);
+const vMore = await page.locator('[role=menu]').last().innerText().catch(() => '');
+check("Vendor More: Zoho's actions", ['Configure Vendor Portal', 'Add Bank Account', 'Link to Customer', 'Clone', 'Merge Vendors', 'Mark as Inactive', 'Delete'].every((x) => vMore.includes(x)), vMore.replace(/\n/g, ' | '));
+await page.keyboard.press('Escape');
+await page.getByRole('tab', { name: 'Transactions' }).click();
+await page.waitForSelector('[data-slot=contact-tx-section]', { timeout: 60000 });
+const vKinds = await page.locator('[data-slot=contact-tx-section]').evaluateAll((els) => els.map((e) => e.dataset.kind));
+check("Vendor Transactions: Zoho's eight sections", vKinds.join(',') === 'bill,payment_made,expense,recurring_bill,recurring_expense,purchase_order,vendor_credit,journal', vKinds.join(','));
+const billHeads = (await page.locator('[data-slot=contact-tx-section][data-kind=bill] thead th').allInnerTexts()).map((x) => x.trim().toUpperCase());
+check("Bills: Zoho's columns", billHeads.length === 0 || billHeads.join(',') === 'DATE,BILL#,ORDER NUMBER,VENDOR NAME,AMOUNT,BALANCE DUE,STATUS', billHeads.join(','));
+await page.getByRole('tab', { name: 'Statement' }).click();
+await page.waitForFunction(() => /Statement For/.test(document.querySelector('[data-slot=contact-statement]')?.textContent ?? ''), null, { timeout: 60000 }).catch(() => {});
+check('Vendor Statement For…', /Vendor Statement For/.test(await page.locator('[data-slot=contact-statement]').innerText()));
+await open('/purchases/vendors/new');
+await page.waitForSelector('[data-slot=contact-top]', { timeout: 60000 });
+const vTop = (await page.locator('[data-slot=contact-top] label').allInnerTexts()).map((x) => x.replace(/\*/g, '').trim()).filter(Boolean);
+check("New Vendor: Zoho's fields at the top, no customer type", vTop.join(',') === 'Primary Contact,Company Name,Display Name,Email Address,Phone,Vendor Language', vTop.join(','));
+const vTabs = (await page.locator('[data-slot=contact-form-tabs] [role=tab]').allInnerTexts()).map((x) => x.trim());
+check("…and Zoho's tabs, Bank Details among them", vTabs.join(',') === 'Other Details,Address,Contact Persons,Bank Details,Custom Fields,Reporting Tags,Remarks', vTabs.join(','));
+await page.locator('[data-slot=contact-save]').click();
+await page.waitForSelector('[data-slot=form-errors]', { timeout: 10000 }).catch(() => {});
+const vErr = await page.locator('[data-slot=form-errors]').innerText().catch(() => '');
+check("Save with nothing filled: Zoho's vendor messages", ['Enter the Display Name of your vendor.', 'Please choose proper GST Treatment.', 'Please select a source of supply'].every((x) => vErr.includes(x)), vErr.replace(/\n/g, ' | '));
+await page.locator('[data-slot=gst-treatment] [data-slot=combobox-trigger]').click();
+await page.waitForTimeout(300);
+check('No Consumer treatment for a vendor', !(await page.locator('[role=option]').allInnerTexts()).some((x) => x.trim().startsWith('Consumer')));
+await page.keyboard.press('Escape');
 
 // ── E2. Items, as Zoho's item page ─────────────────────────────────────────
 await open('/sales/items');

@@ -656,6 +656,8 @@ export interface ContactRow {
   vendorUnusedCreditsPaise?: number;
   overdue?: boolean;
   vendorOverdue?: boolean;
+  /** Zoho's "Vendors - Reorder Items": the preferred vendor of an item at or below its reorder level. */
+  reorder?: boolean;
   portalEnabled?: boolean;
   duplicate?: boolean;
   createdAt?: string;
@@ -2028,7 +2030,7 @@ export interface ContactPerson {
 export type ContactTxKind =
   | 'invoice' | 'payment_received' | 'estimate' | 'retainer_invoice' | 'sales_order' | 'challan' | 'recurring_invoice'
   | 'expense' | 'recurring_expense' | 'project' | 'journal' | 'bill' | 'credit_note'
-  | 'payment_made' | 'purchase_order' | 'vendor_credit';
+  | 'payment_made' | 'purchase_order' | 'vendor_credit' | 'recurring_bill';
 export interface ContactTxRow {
   kind: ContactTxKind; id: string; date: string | null; number: string; ref: string | null;
   amountPaise: number; balancePaise: number | null; status: string;

@@ -131,8 +131,12 @@ function contactViews(noun: 'Customers' | 'Vendors'): SplitView[] {
       { value: 'portal_on', title: 'Client Portal Enabled', keep: (r: SplitRow) => !!c(r).portalEnabled },
       { value: 'portal_off', title: 'Client Portal Disabled', keep: (r: SplitRow) => !c(r).portalEnabled },
     ] : []),
-    { value: 'overdue', title: `Overdue ${noun}`, keep: (r) => !!(noun === 'Customers' ? c(r).overdue : c(r).vendorOverdue) },
-    { value: 'unpaid', title: `Unpaid ${noun}`, keep: (r) => owed(r) > 0 },
+    ...(noun === 'Customers' ? [
+      { value: 'overdue', title: `Overdue ${noun}`, keep: (r: SplitRow) => !!c(r).overdue },
+      { value: 'unpaid', title: `Unpaid ${noun}`, keep: (r: SplitRow) => owed(r) > 0 },
+    ] : [
+      { value: 'reorder', title: 'Vendors - Reorder Items', keep: (r: SplitRow) => !!c(r).reorder },
+    ]),
   ];
 }
 function contactSorts(noun: 'Customers' | 'Vendors'): SplitSort[] {
@@ -273,15 +277,22 @@ const CONFIG: Record<SplitKind, {
   vendor: {
     label: 'Vendors',
     base: '/purchases/vendors',
+    newHref: '/purchases/vendors/new',
     module: 'purchases',
     keepNav: true,
-    load: async () => (await contacts.list({ kind: 'vendor' })).contacts.map((c) => ({
+    amountBelow: true,
+    load: async () => (await contacts.list({ kind: 'vendor', archived: true })).contacts.map((c) => ({
       id: c.id,
       title: c.displayName,
-      amount: (c as { payablePaise?: number }).payablePaise ?? 0,
-      sub: c.legalName && c.legalName !== c.displayName ? c.legalName : c.email ?? c.gstin ?? '',
+      amount: c.payablePaise,
+      sub: '',
+      status: c.isArchived ? <StatusBadge status="inactive" /> : undefined,
       search: `${c.displayName} ${c.legalName ?? ''} ${c.gstin ?? ''} ${c.email ?? ''}`.toLowerCase(),
+      raw: c,
     })),
+    Bulk: ContactBulk,
+    views: contactViews('Vendors'),
+    sorts: contactSorts('Vendors'),
   },
   // Zoho's item column: the name and its rate, the SKU under them. Inactive
   // items are in it too, as Zoho's "All Items" has them.

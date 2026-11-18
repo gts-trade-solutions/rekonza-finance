@@ -225,7 +225,7 @@ const CUSTOMER_PEOPLE: Record<string, Partial<Contact>> = {
 
 export const SEED_CUSTOMERS: Contact[] = BASE_CUSTOMERS.map((c) => ({ ...c, ...CUSTOMER_PEOPLE[c.id] }));
 
-export const SEED_VENDORS: Contact[] = [
+const BASE_VENDORS: Contact[] = [
   vend('v_bosch', 'Bosch Automotive Distributors', '29', {
     gstin: '29AAACB2222N1ZQ',
     pan: 'AAACB2222N',
@@ -286,3 +286,43 @@ export const SEED_VENDORS: Contact[] = [
     billingAddress: addr('Guindy', 'Chennai', '33', '600032'),
   }),
 ];
+
+/** Who the shop deals with at each vendor, as Zoho's vendor page shows them. */
+const VENDOR_PEOPLE: Record<string, Partial<Contact>> = {
+  v_bosch: {
+    salutation: 'Mr.', firstName: 'Prakash', lastName: 'Nair', mobile: '+91 98450 61201', website: 'www.bosch-mobility.in',
+    remarks: 'Monthly credit of 45 days. Raise purchase orders before the 25th for month-end dispatch.',
+    persons: [{ salutation: 'Ms.', firstName: 'Meera', lastName: 'Joshi', email: 'meera@bosch.in', phone: '080 4012 3300', designation: 'Accounts Receivable' }],
+  },
+  v_lumax: {
+    salutation: 'Mr.', firstName: 'Rohit', lastName: 'Malhotra', mobile: '+91 98110 61202',
+    remarks: 'Headlamps and wiper blades. Free delivery above ₹50,000.',
+    persons: [{ salutation: 'Mr.', firstName: 'Ajay', lastName: 'Saxena', email: 'ajay@lumax.in', mobile: '+91 98111 70300', designation: 'Sales' }],
+  },
+  v_mrf: {
+    salutation: 'Mr.', firstName: 'Venkatesh', lastName: 'Iyer', mobile: '+91 94440 61203',
+    persons: [{ salutation: 'Ms.', firstName: 'Saranya', lastName: 'Murali', email: 'saranya@mrf.in', designation: 'Depot Accounts' }],
+  },
+  v_gabriel: {
+    salutation: 'Mr.', firstName: 'Nitin', lastName: 'Deshpande', mobile: '+91 98220 61204',
+    persons: [{ salutation: 'Mr.', firstName: 'Sameer', lastName: 'Patil', email: 'sameer@gabriel.in', designation: 'Regional Sales' }],
+  },
+  v_sundaram: {
+    salutation: 'Mr.', firstName: 'Ganesan', lastName: 'Pillai', mobile: '+91 94441 61205',
+    remarks: 'An MSME: pay within the agreed 30 days.',
+  },
+  v_swift: {
+    salutation: 'Mr.', firstName: 'Ravi', lastName: 'Shankar', mobile: '+91 94442 61206',
+    remarks: 'Transporter: TDS under 194C on each freight bill.',
+  },
+  v_menon: {
+    salutation: 'Mr.', firstName: 'Anand', lastName: 'Menon', mobile: '+91 94443 61207', website: 'www.menonassociates.in',
+    remarks: 'Our auditors. Professional fees: TDS under 194J.',
+    persons: [{ salutation: 'Ms.', firstName: 'Lakshmi', lastName: 'Ravi', email: 'lakshmi@menon.in', designation: 'Audit Manager' }],
+  },
+  v_kamal: { salutation: 'Mr.', firstName: 'Kamal', lastName: 'Hassan', mobile: '+91 94444 61208', remarks: 'On the composition scheme: no input credit on its bills.' },
+  v_cityprop: { salutation: 'Mrs.', firstName: 'Radha', lastName: 'Krishnan', mobile: '+91 94445 61209', remarks: 'Shop rent, due on the 5th. TDS under 194-I.' },
+  v_bharat: { remarks: 'Fuel card for the delivery vans, billed monthly.' },
+};
+
+export const SEED_VENDORS: Contact[] = BASE_VENDORS.map((c) => ({ ...c, ...VENDOR_PEOPLE[c.id] }));

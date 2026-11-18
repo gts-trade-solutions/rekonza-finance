@@ -15,7 +15,8 @@ import { createEstimate, createRetainer } from '../../lib/server/services/sales-
 import { postManualJournal } from '../../lib/server/services/journals';
 import { createExpense } from '../../lib/server/services/purchases';
 import { partyStatement } from '../../lib/server/reports/party-statement';
-import { receivePayment } from '../../lib/server/services/payments';
+import { makePayment, receivePayment } from '../../lib/server/services/payments';
+import { createPurchaseOrder, createVendorCredit } from '../../lib/server/services/purchase-documents';
 import { createBill } from '../../lib/server/services/purchases';
 import { contactIncome, contactMails, contactTransactions, incomeMonths } from '../../lib/server/services/contact-activity';
 import { ZOHO_COLUMNS, zohoFields } from '../../lib/server/services/contact-fields';
@@ -203,6 +204,44 @@ test("Statement, Filter By Outstanding: only what is still unpaid, and what is l
     assert.deepEqual(open.lines.map((l) => l.chargePaise), [590_00, 236_00 - 100_00], 'the paid invoice is left out; the part-paid one shows what is left');
     assert.equal(open.closingPaise, 590_00 + 136_00);
     assert.equal(open.closingPaise, all.closingPaise, 'and it adds up to what is owed');
+  });
+});
+
+
+test("A vendor's Transactions: Zoho's eight sections, with the vendor's name, the bank paid through and the customer billed", async () => {
+  await rolledBack(async (trx) => {
+    const { orgId, branchId, bankId, customer, vendor } = await book(trx);
+    const bill = await createBill(trx, orgId, null, { branchId, vendorId: vendor, vendorInvoiceNo: 'BW-9', date: '2026-01-03', dueDate: '2026-01-20', status: 'open', lines: [{ description: 'Pads', qty: 1, ratePaise: 1000_00, gstRatePct: 18 }] });
+    await makePayment(trx, orgId, null, { branchId, contactId: vendor, date: '2026-02-01', mode: 'rtgs', reference: 'UTR42', amountPaise: 500_00, bankAccountId: bankId, allocations: [{ targetType: 'bill', targetId: bill.id, amountPaise: 500_00 }] } as never);
+    const head = (await trx.selectFrom('accounts').select('id').where('org_id', '=', orgId).where('type', '=', 'expense').executeTakeFirstOrThrow()).id;
+    await createExpense(trx, orgId, null, { branchId, date: '2026-02-02', accountId: head, paidThroughBankAccountId: bankId, amountPaise: 300_00, vendorId: vendor, isBillable: true, billableCustomerId: customer });
+    await trx.insertInto('recurring_purchases').values({ org_id: orgId, branch_id: branchId, kind: 'bill', vendor_id: vendor, profile_name: 'Monthly pads', frequency: 'monthly', start_date: '2026-01-01', next_run: '2026-12-01', template: JSON.stringify([{ qty: 2, ratePaise: 100_00 }]) } as never).execute();
+    await createPurchaseOrder(trx, orgId, null, { branchId, vendorId: vendor, date: '2026-02-05', expectedDate: '2026-02-20', status: 'open', lines: [{ description: 'Pads', qty: 3, ratePaise: 900_00, gstRatePct: 18 }] });
+    await createVendorCredit(trx, orgId, null, { branchId, vendorId: vendor, date: '2026-02-06', reason: 'Two pads damaged', againstBillId: bill.id, amountPaise: 100_00, gstRatePct: 18 });
+
+    const rows = await contactTransactions(trx, orgId, vendor, { sales: false, purchases: true });
+    const kinds = [...new Set(rows.map((r) => r.kind))].sort();
+    assert.deepEqual(kinds, ['bill', 'expense', 'payment_made', 'purchase_order', 'recurring_bill', 'vendor_credit']);
+    const b = rows.find((r) => r.kind === 'bill')!;
+    assert.equal(b.number, 'BW-9', "the vendor's own bill number");
+    assert.equal(b.extra?.vendorName, 'Brake Works');
+    assert.deepEqual(b.filters.sort(), ['open', 'overdue', 'partially paid', 'unpaid'].filter((x) => b.filters.includes(x)).sort());
+    assert.ok(b.filters.includes('unpaid') && b.filters.includes('overdue'), 'part-paid and past its due date');
+    const pay = rows.find((r) => r.kind === 'payment_made')!;
+    assert.equal(pay.extra?.mode, 'rtgs');
+    const ex = rows.find((r) => r.kind === 'expense')!;
+    assert.equal(ex.extra?.paidThrough, 'Current');
+    assert.equal(ex.extra?.customerName, 'Speedwell Garages');
+    assert.deepEqual(ex.filters.sort(), ['billable', 'unbilled', 'without receipts']);
+    const rec = rows.find((r) => r.kind === 'recurring_bill')!;
+    assert.equal(rec.number, 'Monthly pads');
+    assert.deepEqual(rec.filters, ['active']);
+    assert.equal(rec.amountPaise, 200_00);
+    const po = rows.find((r) => r.kind === 'purchase_order')!;
+    assert.deepEqual(po.filters, ['issued'], "Zoho calls an open order Issued");
+    assert.equal(po.extra?.deliveryDate, '2026-02-20');
+    const vc = rows.find((r) => r.kind === 'vendor_credit')!;
+    assert.ok(vc.ref, 'the bill it is against');
   });
 });
 

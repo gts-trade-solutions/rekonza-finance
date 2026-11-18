@@ -330,11 +330,11 @@ export function ContactForm({ side, editing, clone, initialTab }: { side: Side; 
   const save = async () => {
     // Zoho's own messages, every one at once.
     const problems: Record<string, string> = {};
-    if (!f.displayName.trim()) problems.displayName = 'Please enter the Display Name.';
+    if (!f.displayName.trim()) problems.displayName = side === 'customer' ? 'Please enter the Display Name.' : 'Enter the Display Name of your vendor.';
     if (!f.gstTreatment) problems.gstTreatment = 'Please choose proper GST Treatment.';
     if (needsGstin && !f.gstin) problems.gstin = 'Please enter a valid GSTIN / UIN.';
     else if (f.gstin && gstinValid === false) problems.gstin = 'Please enter a valid GSTIN / UIN.';
-    if (!overseas && !f.stateCode) problems.stateCode = 'Please select a place of supply';
+    if (!overseas && !f.stateCode) problems.stateCode = side === 'customer' ? 'Please select a place of supply' : 'Please select a source of supply';
     if (!overseas && f.taxPreference === 'exempt' && !f.taxExemptionReason.trim()) problems.taxExemptionReason = 'Please enter the exemption reason.';
     if (f.isMsme && f.msmeAgreementDays && !(Number(f.msmeAgreementDays) >= 1 && Number(f.msmeAgreementDays) <= 45)) problems.msmeAgreementDays = 'The credit period agreed is between 1 and 45 days.';
     setErrors(problems);
@@ -351,7 +351,7 @@ export function ContactForm({ side, editing, clone, initialTab }: { side: Side; 
       contactType: f.contactType, salutation: n(f.salutation), firstName: n(f.firstName), lastName: n(f.lastName),
       legalName: n(f.legalName), displayName: f.displayName.trim(), email: n(f.email) ?? '', phone: n(f.phone), mobile: n(f.mobile), language: f.language,
       gstTreatment: f.gstTreatment, gstin: needsGstin ? f.gstin : '',
-      businessLegalName: needsGstin ? n(f.businessLegalName) : null, businessTradeName: needsGstin ? n(f.businessTradeName) : null,
+      businessLegalName: needsGstin && side === 'customer' ? n(f.businessLegalName) : null, businessTradeName: needsGstin && side === 'customer' ? n(f.businessTradeName) : null,
       stateCode: overseas ? '96' : f.stateCode, country: countryCode,
       pan: f.pan || (f.gstin.length === 15 ? f.gstin.slice(2, 12) : ''),
       taxPreference: overseas ? 'taxable' : f.taxPreference, taxExemptionReason: !overseas && f.taxPreference === 'exempt' ? n(f.taxExemptionReason) : null,
@@ -406,7 +406,7 @@ export function ContactForm({ side, editing, clone, initialTab }: { side: Side; 
       for (const file of pending) {
         try { await files.upload('contact', id, file); } catch (e) { after.push(`${file.name}: ${e instanceof Error ? e.message : String(e)}`); }
       }
-      if (f.portal && side === 'customer') {
+      if (f.portal) {
         try { await api.post('/api/portal-access', { action: 'create', contactId: id, side, emailTo: n(f.email) }); } catch (e) { after.push(`portal: ${e instanceof Error ? e.message : String(e)}`); }
       }
       if (after.length) toast.error(`The ${noun.toLowerCase()} is saved; some details were not`, { description: after.slice(0, 3).join(' · ') });
@@ -510,7 +510,7 @@ export function ContactForm({ side, editing, clone, initialTab }: { side: Side; 
           </div>
         </FormRow>
         <FormRow label="Company Name"><Input value={f.legalName} onChange={(e) => autoName({ legalName: e.target.value })} aria-label="Company Name" /></FormRow>
-        <FormRow label="Display Name" required error={errors.displayName} help={`This name will be displayed on all the transactions you create for this ${noun.toLowerCase()}.`}>
+        <FormRow label="Display Name" required error={errors.displayName} help={`This name will be displayed on all the transactions you create for this ${side === 'customer' ? 'customer' : 'Vendor'}.`}>
           <div data-slot="contact-display-name">
             <Combobox options={nameChoices} value={f.displayName} onChange={(v) => { setNameTouched(true); set({ displayName: v }); }}
               onCreate={(q) => { setNameTouched(true); set({ displayName: q.trim() }); }} createLabel="Use"
@@ -545,7 +545,7 @@ export function ContactForm({ side, editing, clone, initialTab }: { side: Side; 
           <div className="max-w-[760px] space-y-4" data-slot="contact-other-details">
             <FormRow label="GST Treatment" required error={errors.gstTreatment}>
               <div data-slot="gst-treatment">
-                <Combobox options={GST_TREATMENTS.filter((t) => !t.hidden || t.value === f.gstTreatment)} value={f.gstTreatment} onChange={(v) => treatmentChanged(v as Treatment)}
+                <Combobox options={GST_TREATMENTS.filter((t) => (!t.hidden || t.value === f.gstTreatment) && (side === 'customer' || t.value !== 'consumer' || f.gstTreatment === 'consumer'))} value={f.gstTreatment} onChange={(v) => treatmentChanged(v as Treatment)}
                   placeholder="Select a GST treatment" showAvatar={false} searchPlaceholder="Search" invalid={!!errors.gstTreatment} />
               </div>
             </FormRow>
@@ -562,8 +562,12 @@ export function ContactForm({ side, editing, clone, initialTab }: { side: Side; 
                   </div>
                   <GstinNumberOnlyNote details={lookup} gstin={f.gstin} />
                 </FormRow>
-                <FormRow label="Business Legal Name"><Input value={f.businessLegalName} onChange={(e) => set({ businessLegalName: e.target.value })} aria-label="Business Legal Name" /></FormRow>
-                <FormRow label="Business Trade Name"><Input value={f.businessTradeName} onChange={(e) => set({ businessTradeName: e.target.value })} aria-label="Business Trade Name" /></FormRow>
+                {side === 'customer' && (
+                  <>
+                    <FormRow label="Business Legal Name"><Input value={f.businessLegalName} onChange={(e) => set({ businessLegalName: e.target.value })} aria-label="Business Legal Name" /></FormRow>
+                    <FormRow label="Business Trade Name"><Input value={f.businessTradeName} onChange={(e) => set({ businessTradeName: e.target.value })} aria-label="Business Trade Name" /></FormRow>
+                  </>
+                )}
               </>
             )}
             {!overseas && (
@@ -607,11 +611,11 @@ export function ContactForm({ side, editing, clone, initialTab }: { side: Side; 
                 <Combobox options={priceChoices} value={f.priceListId} onChange={(v) => set({ priceListId: v })} placeholder="" showAvatar={false} clearable searchPlaceholder="Search" />
               </FormRow>
             )}
-            {side === 'customer' && !editing && (
-              <FormRow label="Enable Portal?" help="A link they open to see their invoices and statement and to pay; it is emailed to them.">
+            {!editing && (
+              <FormRow label="Enable Portal?" help={side === 'customer' ? 'A link they open to see their invoices and statement and to pay; it is emailed to them.' : 'A link they open to see their bills and payments; it is emailed to them.'}>
                 <label className="flex h-[34px] cursor-pointer items-center gap-2 text-[13px]">
                   <input type="checkbox" className="size-3.5 accent-primary" checked={f.portal} onChange={(e) => set({ portal: e.target.checked })} data-slot="contact-portal" />
-                  Allow portal access for this customer
+                  Allow portal access for this {side}
                 </label>
               </FormRow>
             )}

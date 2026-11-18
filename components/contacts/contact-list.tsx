@@ -88,8 +88,13 @@ export function ContactList({ side }: { side: Side }) {
       { value: 'portal_on', label: 'Client Portal Enabled', keep: (c: ContactRow) => !!c.portalEnabled },
       { value: 'portal_off', label: 'Client Portal Disabled', keep: (c: ContactRow) => !c.portalEnabled },
     ] : []),
-    { value: 'overdue', label: `Overdue ${nouns}`, keep: (c) => overdueOf(c) },
-    { value: 'unpaid', label: `Unpaid ${nouns}`, keep: (c) => balanceOf(c) > 0 },
+    // Zoho's customers have Overdue and Unpaid; its vendors have Reorder Items instead.
+    ...(customer ? [
+      { value: 'overdue', label: `Overdue ${nouns}`, keep: (c: ContactRow) => overdueOf(c) },
+      { value: 'unpaid', label: `Unpaid ${nouns}`, keep: (c: ContactRow) => balanceOf(c) > 0 },
+    ] : [
+      { value: 'reorder', label: 'Vendors - Reorder Items', keep: (c: ContactRow) => !!c.reorder },
+    ]),
   ];
   const current = VIEWS.find((v) => v.value === view) ?? VIEWS[1];
   const tabs = VIEWS.map((v) => ({ value: v.value, label: v.label, title: v.label, count: all.filter(v.keep).length }));
@@ -128,6 +133,12 @@ export function ContactList({ side }: { side: Side }) {
     { key: 'state', header: 'Place of Supply', defaultHidden: true, sortValue: (c) => stateName(c.stateCode), cell: (c) => stateName(c.stateCode) },
     { key: 'terms', header: 'Payment Terms', defaultHidden: true, sortValue: (c) => c.paymentTerms ?? '', cell: (c) => TERMS[c.paymentTerms ?? ''] ?? c.paymentTerms ?? '' },
     { key: 'credit', header: 'Credit Limit', align: 'right', defaultHidden: true, sortValue: (c) => c.creditLimitPaise, cell: (c) => (c.creditLimitPaise ? <Money value={c.creditLimitPaise} /> : '—') },
+    // A vendor's: whether its GST can be claimed, its TDS sections, and MSME.
+    ...(!customer ? [
+      { key: 'itc', header: 'ITC', defaultHidden: true, sortValue: (c: ContactRow) => c.gstTreatment, cell: (c: ContactRow) => (c.gstTreatment === 'registered_composition' || c.gstTreatment === 'unregistered' ? 'No credit' : 'Claimable') },
+      { key: 'tds', header: 'TDS Sections', defaultHidden: true, sortValue: (c: ContactRow) => c.tdsSection ?? '', cell: (c: ContactRow) => (c.tdsSections?.length ? c.tdsSections.join(', ') : c.tdsSection ?? '—') },
+      { key: 'msme', header: 'MSME', defaultHidden: true, sortValue: (c: ContactRow) => (c.isMsme ? 1 : 0), cell: (c: ContactRow) => (c.isMsme ? 'Yes' : '—') },
+    ] : []),
   ];
 
   const viewFields: ViewField<ContactRow>[] = [
@@ -184,7 +195,9 @@ export function ContactList({ side }: { side: Side }) {
     const emails = picked.map((c) => c.email).filter(Boolean);
     if (!emails.length) { toast.error('None of them has an email address.'); return; }
     const subject = 'Please confirm your GST details';
-    const body = 'Dear Customer,\n\nTo issue GST-compliant invoices, please reply with your GSTIN, legal name, billing address and place of supply.\n\nThank you.';
+    const body = customer
+      ? 'Dear Customer,\n\nTo issue GST-compliant invoices, please reply with your GSTIN, legal name, billing address and place of supply.\n\nThank you.'
+      : 'Dear Vendor,\n\nTo record your bills correctly and claim input credit, please reply with your GSTIN, legal name, billing address and source of supply.\n\nThank you.';
     window.location.href = `mailto:?bcc=${encodeURIComponent(emails.join(','))}&subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
   };
   // ── Zoho's ⋯ → Import and Export, as dialogs.
@@ -249,7 +262,7 @@ export function ContactList({ side }: { side: Side }) {
     module: nouns,
     fields: [
       { key: 'name', label: 'Display Name', match: (c, v) => contains(c.displayName, v) },
-      { key: 'type', label: `${noun} Type`, options: [{ value: '', label: '' }, { value: 'business', label: 'Business' }, { value: 'individual', label: 'Individual' }], match: (c, v) => (c.contactType ?? 'business') === v },
+      ...(customer ? [{ key: 'type', label: `${noun} Type`, options: [{ value: '', label: '' }, { value: 'business', label: 'Business' }, { value: 'individual', label: 'Individual' }], match: (c: ContactRow, v: string) => (c.contactType ?? 'business') === v }] : []),
       { key: 'company', label: 'Company Name', match: (c, v) => contains(c.legalName, v) },
       { key: 'first', label: 'First Name', match: (c, v) => contains(c.firstName, v) },
       { key: 'last', label: 'Last Name', match: (c, v) => contains(c.lastName, v) },
@@ -335,18 +348,16 @@ export function ContactList({ side }: { side: Side }) {
               selectable={canEdit || canDelete}
               bulkActions={(picked, clear) => (
                 <div className="flex flex-wrap gap-2" data-slot="contacts-bulk">
-                  {customer && (
-                    <Button size="sm" variant="outline" onClick={() => router.push(`/sales/customers/statements?ids=${picked.map((c) => c.id).join(',')}`)}>
-                      Print Customer Statements
-                    </Button>
-                  )}
+                  <Button size="sm" variant="outline" onClick={() => router.push(`${base}/statements?ids=${picked.map((c) => c.id).join(',')}`)}>
+                    Print {noun} Statements
+                  </Button>
                   {canEdit && <Button size="sm" variant="outline" disabled={busy} onClick={() => setActive(picked, clear, true)}>Mark as Active</Button>}
                   {canEdit && <Button size="sm" variant="outline" disabled={busy} onClick={() => setActive(picked, clear, false)}>Mark as Inactive</Button>}
                   {canEdit && (
                     <Button size="sm" variant="outline" disabled={busy || picked.length < 2}
                       onClick={() => setMerging({ rows: picked, clear, into: picked[0].id })}>Merge</Button>
                   )}
-                  {customer && <Button size="sm" variant="outline" onClick={() => requestGst(picked)}>Request GST Information</Button>}
+                  <Button size="sm" variant="outline" onClick={() => requestGst(picked)}>Request GST Information</Button>
                   {canDelete && (
                     <DropdownMenu>
                       <DropdownMenuTrigger data-slot="contacts-bulk-more"

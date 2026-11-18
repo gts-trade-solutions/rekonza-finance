@@ -12,6 +12,7 @@ import { logAudit, auditMeta, snapshot, changesBetween, describeChanges } from '
 import { isValidGstin } from '@/lib/tax/gst';
 import { ZOHO_COLUMNS, zohoFields } from '@/lib/server/services/contact-fields';
 import { outstandingBeyondDocuments } from '@/lib/server/services/party-outstanding';
+import { stockPosition } from '@/lib/server/reports/stock';
 import { addOpeningDocument, booksStartDate } from '@/lib/server/services/opening-balances';
 
 const ListQuery = z.object({
@@ -149,6 +150,18 @@ export const GET = route(
     const duplicate = (r: (typeof rows)[number]) => (r.gstin && byGstin.get(r.gstin)! > 1) || (r.pan && byPan.get(r.pan)! > 1) || byName.get(key(r.display_name))! > 1;
     // Opening bills and journals (a Tally import's vouchers among them) owe too.
     const beyond = await outstandingBeyondDocuments(db, orgId, ids);
+    // Zoho's "Vendors - Reorder Items": a vendor that is the preferred vendor of
+    // an item at or below its reorder level. Worked out for a vendor list only.
+    const reorderVendors = new Set<number>();
+    if (q.kind === 'vendor' && ids.length) {
+      const watched = await db.selectFrom('items').select(['id', 'preferred_vendor_id', 'reorder_level'])
+        .where('org_id', '=', orgId).where('preferred_vendor_id', 'in', ids).where('reorder_level', 'is not', null).where('is_archived', '=', 0).execute();
+      if (watched.length) {
+        const position = await stockPosition(db, orgId, new Date().toISOString().slice(0, 10));
+        const qty = new Map(position.lines.map((l) => [l.itemId, l.qty]));
+        for (const w of watched) if ((qty.get(String(w.id)) ?? 0) <= Number(w.reorder_level)) reorderVendors.add(Number(w.preferred_vendor_id));
+      }
+    }
 
     return {
       contacts: rows.map((c) => ({
@@ -201,6 +214,7 @@ export const GET = route(
         vendorUnusedCreditsPaise: (payUnused.get(`${c.id}:made`) ?? 0) + (vcUnused.get(c.id) ?? 0),
         overdue: overdueC.has(c.id),
         vendorOverdue: overdueV.has(c.id),
+        reorder: reorderVendors.has(c.id),
         portalEnabled: portalOn.has(c.id),
         duplicate: duplicate(c),
         createdAt: new Date(c.created_at).toISOString(),

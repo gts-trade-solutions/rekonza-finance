@@ -12,7 +12,7 @@ import { toPaiseFromSql } from '@/lib/server/money-sql';
 export type ContactTxKind =
   | 'invoice' | 'payment_received' | 'estimate' | 'retainer_invoice' | 'sales_order' | 'challan' | 'recurring_invoice'
   | 'expense' | 'recurring_expense' | 'project' | 'journal' | 'bill' | 'credit_note'
-  | 'payment_made' | 'purchase_order' | 'vendor_credit';
+  | 'payment_made' | 'purchase_order' | 'vendor_credit' | 'recurring_bill';
 
 export interface ContactTxRow {
   kind: ContactTxKind;
@@ -124,31 +124,72 @@ export async function contactTransactions(
     );
   }
   if (sides.purchases) {
-    const [bills, pay, po, vc, exp] = await Promise.all([
+    const [me, bills, pay, exp, recur, po, vc, jv] = await Promise.all([
+      ex.selectFrom('contacts').select('display_name').where('id', '=', id).where('org_id', '=', orgId).executeTakeFirst(),
       ex.selectFrom('bills').select(['id', 'internal_no', 'vendor_invoice_no', 'bill_date', 'due_date', 'total', 'amount_paid', 'status'])
         .where('org_id', '=', orgId).where('vendor_id', '=', id).orderBy('bill_date', 'desc').orderBy('id', 'desc').limit(LIMIT).execute(),
       ex.selectFrom('payments').select(['id', 'number', 'payment_date', 'mode', 'reference', 'amount', 'unapplied_amount', 'status'])
         .where('org_id', '=', orgId).where('contact_id', '=', id).where('kind', '=', 'made').orderBy('payment_date', 'desc').limit(LIMIT).execute(),
-      ex.selectFrom('purchase_orders').select(['id', 'number', 'order_date', 'total', 'status'])
+      // The vendor's expenses, with what Zoho shows of each: the account, the
+      // bank it was paid from, and the customer it is billed on to.
+      ex.selectFrom('expenses as e').innerJoin('accounts as a', 'a.id', 'e.account_id')
+        .leftJoin('bank_accounts as b', 'b.id', 'e.paid_through_bank_account_id')
+        .leftJoin('contacts as cu', 'cu.id', 'e.billable_customer_id')
+        .leftJoin('invoices as i', 'i.id', 'e.billed_invoice_id')
+        .select(['e.id', 'e.number', 'e.expense_date', 'e.total', 'e.status', 'e.is_billable', 'e.billed_invoice_id', 'e.receipt_file_id',
+          'a.name as account', 'b.name as paid_through', 'cu.display_name as customer', 'i.number as invoice_number'])
+        .where('e.org_id', '=', orgId).where('e.vendor_id', '=', id).orderBy('e.expense_date', 'desc').limit(LIMIT).execute(),
+      ex.selectFrom('recurring_purchases').select(['id', 'kind', 'profile_name', 'frequency', 'next_run', 'last_generated_at', 'is_active', 'end_date', 'template'])
+        .where('org_id', '=', orgId).where('vendor_id', '=', id).limit(LIMIT).execute(),
+      ex.selectFrom('purchase_orders').select(['id', 'number', 'order_date', 'expected_date', 'total', 'status'])
         .where('org_id', '=', orgId).where('vendor_id', '=', id).orderBy('order_date', 'desc').limit(LIMIT).execute(),
-      ex.selectFrom('vendor_credits').select(['id', 'number', 'credit_date', 'total', 'applied_amount', 'status'])
-        .where('org_id', '=', orgId).where('vendor_id', '=', id).orderBy('credit_date', 'desc').limit(LIMIT).execute(),
-      ex.selectFrom('expenses').select(['id', 'number', 'expense_date', 'reference', 'total', 'status'])
-        .where('org_id', '=', orgId).where('vendor_id', '=', id).orderBy('expense_date', 'desc').limit(LIMIT).execute(),
+      ex.selectFrom('vendor_credits as v').leftJoin('bills as bl', 'bl.id', 'v.against_bill_id')
+        .select(['v.id', 'v.number', 'v.credit_date', 'v.total', 'v.applied_amount', 'v.status', 'bl.vendor_invoice_no', 'bl.internal_no'])
+        .where('v.org_id', '=', orgId).where('v.vendor_id', '=', id).orderBy('v.credit_date', 'desc').limit(LIMIT).execute(),
+      ex.selectFrom('journal_entries as je').innerJoin('journal_lines as jl', 'jl.entry_id', 'je.id')
+        .select(['je.id', 'je.entry_no', 'je.entry_date', 'je.memo', sql<string>`SUM(jl.debit)`.as('debit'), sql<string>`SUM(jl.credit)`.as('credit')])
+        .where('je.org_id', '=', orgId).where('jl.contact_id', '=', id).where('je.source_type', 'in', ['manual', 'recurring', 'write_off'])
+        .groupBy(['je.id', 'je.entry_no', 'je.entry_date', 'je.memo']).orderBy('je.entry_date', 'desc').limit(LIMIT).execute(),
     ]);
+    // The account a recurring expense is made against, by name.
+    const accountIdsOf = recur.filter((r) => r.kind === 'expense').map((r) => Number((typeof r.template === 'string' ? JSON.parse(r.template) : r.template)?.accountId)).filter((n) => n > 0);
+    const accountNames = accountIdsOf.length
+      ? new Map((await ex.selectFrom('accounts').select(['id', 'name']).where('org_id', '=', orgId).where('id', 'in', accountIdsOf).execute()).map((a) => [Number(a.id), a.name]))
+      : new Map<number, string>();
+    const PO: Record<string, string[]> = { draft: ['draft'], open: ['issued'], partially_billed: ['partially billed'], billed: ['billed'], closed: ['closed'], cancelled: ['canceled'] };
     out.push(
       ...bills.map((r) => {
         const balance = r.status === 'void' ? 0 : p(r.total) - p(r.amount_paid);
         const overdue = !['draft', 'void', 'paid'].includes(r.status) && balance > 0 && (ymd(r.due_date) ?? now) < now;
         return {
-          kind: 'bill' as const, id: asId(r.id), date: ymd(r.bill_date), number: r.vendor_invoice_no || r.internal_no, ref: r.internal_no, amountPaise: p(r.total), balancePaise: balance, status: overdue ? 'overdue' : r.status,
+          kind: 'bill' as const, id: asId(r.id), date: ymd(r.bill_date), number: r.vendor_invoice_no || r.internal_no, ref: null, amountPaise: p(r.total), balancePaise: balance, status: overdue ? 'overdue' : r.status,
           filters: r.status === 'void' ? ['void'] : balance <= 0 ? ['paid'] : ['open', 'unpaid', ...(r.status === 'partially_paid' ? ['partially paid'] : []), ...(overdue ? ['overdue'] : [])],
+          extra: { vendorName: me?.display_name ?? null },
         };
       }),
       ...pay.map((r) => ({ kind: 'payment_made' as const, id: asId(r.id), date: ymd(r.payment_date), number: r.number, ref: r.reference, amountPaise: p(r.amount), balancePaise: p(r.unapplied_amount), status: r.status, filters: [], extra: { mode: r.mode } })),
-      ...po.map((r) => ({ kind: 'purchase_order' as const, id: asId(r.id), date: ymd(r.order_date), number: r.number, ref: null, amountPaise: p(r.total), balancePaise: null, status: r.status, filters: [r.status] })),
-      ...vc.map((r) => ({ kind: 'vendor_credit' as const, id: asId(r.id), date: ymd(r.credit_date), number: r.number, ref: null, amountPaise: p(r.total), balancePaise: r.status === 'open' ? p(r.total) - p(r.applied_amount) : 0, status: r.status, filters: [r.status === 'void' ? 'void' : r.status === 'open' ? 'open' : 'closed'] })),
-      ...exp.map((r) => ({ kind: 'expense' as const, id: asId(r.id), date: ymd(r.expense_date), number: r.number, ref: r.reference, amountPaise: p(r.total), balancePaise: null, status: r.status, filters: [] })),
+      ...exp.map((r) => ({
+        kind: 'expense' as const, id: asId(r.id), date: ymd(r.expense_date), number: r.number, ref: r.invoice_number, amountPaise: p(r.total), balancePaise: null,
+        status: r.status === 'void' ? 'void' : r.billed_invoice_id ? 'invoiced' : r.is_billable ? 'unbilled' : 'non-billable',
+        filters: [r.billed_invoice_id ? 'invoiced' : r.is_billable ? 'unbilled' : 'non-billable', ...(r.is_billable ? ['billable'] : []), r.receipt_file_id ? 'with receipts' : 'without receipts'],
+        extra: { category: r.account, vendorName: me?.display_name ?? null, paidThrough: r.paid_through, customerName: r.customer, invoiceId: r.billed_invoice_id ? asId(r.billed_invoice_id) : null },
+      })),
+      ...recur.map((r) => {
+        const ended = r.end_date && String(r.end_date).slice(0, 10) < now;
+        const status = ended ? 'expired' : r.is_active ? 'active' : 'stopped';
+        const tpl = (typeof r.template === 'string' ? JSON.parse(r.template) : r.template) as { accountId?: number; amountPaise?: number; qty?: number; ratePaise?: number }[] | { accountId?: number; amountPaise?: number } | null;
+        const amount = Array.isArray(tpl) ? tpl.reduce((t, l) => t + Math.round(Number(l.qty ?? 0) * Number(l.ratePaise ?? 0)), 0) : Number(tpl?.amountPaise ?? 0);
+        return {
+          kind: (r.kind === 'bill' ? 'recurring_bill' : 'recurring_expense') as ContactTxKind, id: asId(r.id), date: ymd(r.next_run), number: r.profile_name, ref: r.frequency, amountPaise: amount, balancePaise: null, status, filters: [status],
+          extra: { frequency: r.frequency, lastDate: ymd(r.last_generated_at), nextDate: ymd(r.next_run), category: !Array.isArray(tpl) && tpl?.accountId ? accountNames.get(Number(tpl.accountId)) ?? null : null },
+        };
+      }),
+      ...po.map((r) => ({ kind: 'purchase_order' as const, id: asId(r.id), date: ymd(r.order_date), number: r.number, ref: null, amountPaise: p(r.total), balancePaise: null, status: r.status, filters: PO[r.status] ?? [], extra: { deliveryDate: ymd(r.expected_date) } })),
+      ...vc.map((r) => ({
+        kind: 'vendor_credit' as const, id: asId(r.id), date: ymd(r.credit_date), number: r.number, ref: r.vendor_invoice_no || r.internal_no || null, amountPaise: p(r.total),
+        balancePaise: r.status === 'open' ? p(r.total) - p(r.applied_amount) : 0, status: r.status, filters: [r.status === 'void' ? 'void' : r.status === 'open' ? 'open' : 'closed'],
+      })),
+      ...jv.map((r) => ({ kind: 'journal' as const, id: asId(r.id), date: ymd(r.entry_date), number: String(r.entry_no), ref: r.memo, amountPaise: Math.max(p(r.debit), p(r.credit)), balancePaise: null, status: 'published', filters: [], extra: { debitPaise: p(r.debit), creditPaise: p(r.credit) } })),
     );
   }
   return out;

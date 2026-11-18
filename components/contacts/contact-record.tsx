@@ -173,7 +173,7 @@ function IncomeChart({ id, side }: { id: string; side: Side }) {
   const total = (state.data?.months ?? []).reduce((t, m) => t + m.amountPaise, 0);
   const waiting = state.loading && !state.data;
   const label = PERIODS.find(([v]) => v === period)?.[1] ?? '';
-  const word = side === 'customer' ? 'Income' : 'Expense';
+  const word = side === 'customer' ? 'Income' : 'Expenses';
   return (
     <div className="space-y-2" data-slot="contact-income">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -295,7 +295,7 @@ function Overview({ d, side, canEdit, onChanged }: { d: ContactDetail; side: Sid
         <Section title="Other Details" slot="contact-other">
           {/* Zoho's rows in Zoho's order; an empty one is left out, as Zoho leaves it. */}
           <dl>
-            <Row label={side === 'customer' ? 'Customer Type' : 'Vendor Type'}>{c.contactType === 'individual' ? 'Individual' : 'Business'}</Row>
+            {side === 'customer' && <Row label="Customer Type">{c.contactType === 'individual' ? 'Individual' : 'Business'}</Row>}
             <Row label="Default Currency">{c.currency ?? 'INR'}</Row>
             {side === 'customer' && <Row label="Price List">{c.priceListLabel}</Row>}
             <Row label="GST Treatment">{TREATMENT[c.gstTreatment] ?? titleCase(c.gstTreatment)}</Row>
@@ -303,8 +303,8 @@ function Overview({ d, side, canEdit, onChanged }: { d: ContactDetail; side: Sid
             <Row label="Business Legal Name">{c.businessLegalName}</Row>
             <Row label="Business Trade Name">{c.businessTradeName}</Row>
             {c.gstTreatment !== 'overseas' && <Row label={side === 'customer' ? 'Place of Supply' : 'Source of Supply'} keep>{c.stateCode && c.stateCode !== '96' ? stateName(c.stateCode) : 'Yet to be updated'}</Row>}
-            {c.gstTreatment !== 'overseas' && <Row label="Tax Preference">{c.taxPreference === 'exempt' ? `Tax Exempt${c.taxExemptionReason ? ` (${c.taxExemptionReason})` : ''}` : 'Taxable'}</Row>}
-            {side === 'customer' && <Row label="Portal Status">{c.portalEnabled ? 'Enabled' : 'Disabled'}</Row>}
+            {side === 'customer' && c.gstTreatment !== 'overseas' && <Row label="Tax Preference">{c.taxPreference === 'exempt' ? `Tax Exempt${c.taxExemptionReason ? ` (${c.taxExemptionReason})` : ''}` : 'Taxable'}</Row>}
+            <Row label="Portal Status">{c.portalEnabled ? 'Enabled' : 'Disabled'}</Row>
             <Row label={side === 'customer' ? 'Customer Language' : 'Vendor Language'}>{c.language ?? 'English'}</Row>
             <Row label="Social Networks">{socials}</Row>
             <Row label="Website URL">{c.website ? <a href={/^https?:/.test(c.website) ? c.website : `https://${c.website}`} target="_blank" rel="noreferrer" className="text-link hover:underline">{c.website}</a> : null}</Row>
@@ -364,7 +364,7 @@ function Overview({ d, side, canEdit, onChanged }: { d: ContactDetail; side: Sid
       </aside>
 
       <div className="min-w-0 flex-1 space-y-6 px-6 py-5">
-        {side === 'customer' && !c.gstin && c.gstTreatment !== 'overseas' && (
+        {!c.gstin && c.gstTreatment !== 'overseas' && (
           <p className="text-[13px] text-muted-foreground" data-slot="gstin-request">You can request your contact to directly update the GSTIN by sending an email.{' '}
             <a className="text-link hover:underline" href={`mailto:${c.email ?? ''}?subject=${encodeURIComponent('Please share your GSTIN')}`}>Send email</a>
           </p>
@@ -455,17 +455,25 @@ const CUSTOMER_SECTIONS: TxSection[] = [
   { kind: 'credit_note', label: 'Credit Notes', newHref: '/sales/credit-notes', statuses: ['All', 'Open', 'Closed', 'Void'],
     cols: [C.date('Credit Date'), { head: 'Credit Note Number', cell: num((r) => `/print/credit-note/${r.id}`) }, C.ref(), C.balance('Balance'), C.amount(), C.status()] },
 ];
+/** A vendor's sections, in Zoho's order, with Zoho's columns and "Status:" lists. */
 const VENDOR_SECTIONS: TxSection[] = [
   { kind: 'bill', label: 'Bills', open: true, newHref: '/purchases/bills/new', statuses: ['All', 'Open', 'Overdue', 'Unpaid', 'Partially Paid', 'Paid', 'Void'],
-    cols: [C.date(), { head: 'Bill#', cell: num((r) => `/purchases/bills/${r.id}`) }, C.ref('Reference Number'), C.amount(), C.balance(), C.status()] },
-  { kind: 'payment_made', label: 'Vendor Payments', newHref: '/purchases/payments/new', statuses: null,
-    cols: [C.date(), { head: 'Payment Number', cell: num((r) => `/print/payment-made/${r.id}`) }, C.ref(), C.extraText('Payment Mode', 'mode', titleCase), C.amount(), C.balance('Unused Amount')] },
-  { kind: 'purchase_order', label: 'Purchase Orders', newHref: '/purchases/purchase-orders', statuses: null,
-    cols: [C.date(), { head: 'Purchase Order#', cell: num((r) => `/print/purchase-order/${r.id}`) }, C.ref(), C.amount(), C.status()] },
+    cols: [C.date(), { head: 'Bill#', cell: num((r) => `/purchases/bills/${r.id}`) }, C.ref('Order Number'), C.extraText('Vendor Name', 'vendorName'), C.amount(), C.balance(), C.status()] },
+  { kind: 'payment_made', label: 'Bill Payments', newHref: '/purchases/payments/new', statuses: null,
+    cols: [C.date(), { head: 'Payment Number', cell: num((r) => `/print/payment-made/${r.id}`) }, C.ref(), C.extraText('Payment Mode', 'mode', titleCase), C.amount('Amount Paid'), C.balance('Unused Amount')] },
+  { kind: 'expense', label: 'Expenses', newHref: '/purchases/expenses', statuses: ['All', 'Unbilled', 'Invoiced', 'Reimbursed', 'Billable', 'Non-Billable', 'With Receipts', 'Without Receipts'],
+    cols: [C.date(), C.extraText('Expense Account', 'category'), { head: 'Invoice Number', cell: (r) => (r.extra?.invoiceId ? <Link href={`/sales/invoices/${r.extra.invoiceId}`} className="text-link hover:underline">{r.ref}</Link> : '-') },
+      C.extraText('Vendor Name', 'vendorName'), C.extraText('Paid Through', 'paidThrough'), C.extraText('Customer Name', 'customerName'), C.amount(), C.status()] },
+  { kind: 'recurring_bill', label: 'Recurring Bills', newHref: '/purchases/recurring', statuses: ['All', 'Active', 'Stopped', 'Expired'],
+    cols: [{ head: 'Profile Name', cell: num(() => '/purchases/recurring') }, C.extraText('Frequency', 'frequency', titleCase), C.extraDate('Last Bill Date', 'lastDate'), C.extraDate('Next Bill Date', 'nextDate'), C.status()] },
+  { kind: 'recurring_expense', label: 'Recurring Expenses', newHref: '/purchases/recurring?kind=expense', statuses: ['All', 'Active', 'Stopped', 'Expired'],
+    cols: [{ head: 'Profile Name', cell: num(() => '/purchases/recurring?kind=expense') }, C.extraText('Expense Account', 'category'), C.extraText('Frequency', 'frequency', titleCase), C.extraDate('Last Expense Date', 'lastDate'), C.extraDate('Next Expense Date', 'nextDate'), C.status()] },
+  { kind: 'purchase_order', label: 'Purchase Orders', newHref: '/purchases/purchase-orders', statuses: ['All', 'Draft', 'Billed', 'Partially Billed', 'Closed', 'Canceled', 'Issued'],
+    cols: [{ head: 'Purchase Order#', cell: num((r) => `/print/purchase-order/${r.id}`) }, C.ref(), C.date(), C.extraDate('Delivery Date', 'deliveryDate'), C.amount(), C.status()] },
   { kind: 'vendor_credit', label: 'Vendor Credits', newHref: '/purchases/vendor-credits', statuses: ['All', 'Open', 'Closed', 'Void'],
-    cols: [C.date(), { head: 'Vendor Credit#', cell: num((r) => `/print/vendor-credit/${r.id}`) }, C.ref(), C.balance('Balance'), C.amount(), C.status()] },
-  { kind: 'expense', label: 'Expenses', newHref: '/purchases/expenses', statuses: null,
-    cols: [C.date(), { head: 'Expense#', cell: (r) => r.number }, C.ref(), C.amount(), C.status()] },
+    cols: [C.date(), { head: 'Credit Note Number', cell: num((r) => `/print/vendor-credit/${r.id}`) }, C.ref('Order Number'), C.balance('Balance'), C.amount(), C.status()] },
+  { kind: 'journal', label: 'Journals', newHref: '/accountant/journals', statuses: null,
+    cols: [C.date(), { head: 'Journal Number', cell: (r) => <Link href="/accountant/journals" className="text-link hover:underline">JE #{r.number}</Link> }, C.ref(), { head: 'Debit', right: true, cell: (r) => <Money value={Number(r.extra?.debitPaise ?? 0)} /> }, { head: 'Credit', right: true, cell: (r) => <Money value={Number(r.extra?.creditPaise ?? 0)} /> }] },
 ];
 
 function TxBlock({ s, rows, open, setOpen, active }: { s: TxSection; rows: ContactTxRow[]; open: boolean; setOpen: (o: boolean) => void; active: boolean }) {
@@ -719,7 +727,7 @@ function StatementTab({ id, side, email }: { id: string; side: Side; email: stri
         {(s) => (
           <>
             <div className="text-center">
-              <p className="text-[17px]">{side === 'customer' ? 'Customer' : 'Vendor'} Statement for {s.party.name}</p>
+              <p className="text-[17px]">{side === 'customer' ? 'Customer Statement for' : 'Vendor Statement For'} {s.party.name}</p>
               <p className="text-[13px] text-muted-foreground">From {day(range.from)} To {day(range.to)}</p>
             </div>
             <StatementPrint s={s} backHref={base} bare />
@@ -883,7 +891,7 @@ function Header({ d, side, onChanged }: { d: ContactDetail; side: Side; onChange
               More <ChevronDown className="size-3.5" strokeWidth={2.2} />
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="min-w-52">
-              {side === 'customer' && canEdit && <DropdownMenuItem onClick={() => setDialog(c.email ? 'portal' : 'portal-email')} data-slot="contact-portal">Configure Customer Portal</DropdownMenuItem>}
+              {canEdit && <DropdownMenuItem onClick={() => setDialog(c.email ? 'portal' : 'portal-email')} data-slot="contact-portal">Configure {side === 'customer' ? 'Customer' : 'Vendor'} Portal</DropdownMenuItem>}
               {canEdit && <DropdownMenuItem onClick={() => setDialog('bank')} data-slot="contact-bank-add">Add Bank Account</DropdownMenuItem>}
               {canEdit && (c.linked
                 ? <DropdownMenuItem onClick={() => void act(`${c.displayName} is unlinked`, () => contacts.unlink(c.id))} data-slot="contact-unlink">Unlink {Other}</DropdownMenuItem>
@@ -898,7 +906,7 @@ function Header({ d, side, onChanged }: { d: ContactDetail; side: Side; onChange
       </div>
       <Dialog open={dialog === 'portal'} onOpenChange={(o) => !o && setDialog(null)}>
         <DialogContent className="sm:max-w-lg">
-          <DialogHeader><DialogTitle>Configure Customer Portal</DialogTitle><DialogDescription>A link {c.displayName} opens to see and pay their invoices.</DialogDescription></DialogHeader>
+          <DialogHeader><DialogTitle>Configure {side === 'customer' ? 'Customer' : 'Vendor'} Portal</DialogTitle><DialogDescription>{side === 'customer' ? `A link ${c.displayName} opens to see and pay their invoices.` : `A link ${c.displayName} opens to see their bills and payments.`}</DialogDescription></DialogHeader>
           <PortalAccess contactId={c.id} side={side} defaultEmail={c.email ?? null} canEdit={canEdit} />
         </DialogContent>
       </Dialog>

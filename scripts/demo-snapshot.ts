@@ -67,6 +67,13 @@ const DIALOGS = [
   { list: '/api/contacts?kind=customer&limit=500', detail: `/api/contacts/[id]/statement?side=customer&from=${new Date().toISOString().slice(0, 8)}01&to=${new Date().toISOString().slice(0, 10)}&filter=outstanding` },
   { list: '/api/contacts?kind=customer&limit=500', detail: '/api/files?targetType=contact&targetId=[id]' },
   { list: '/api/contacts?kind=customer&limit=500', detail: '/api/portal-access?contactId=[id]&side=customer' },
+  // A vendor's record, the same.
+  ...['this_fy', 'prev_fy', 'last_12', 'last_6'].flatMap((period) => ['accrual', 'cash'].map((basis) => ({
+    list: '/api/contacts?kind=vendor', detail: `/api/contacts/[id]/activity?view=income&side=vendor&period=${period}&basis=${basis}`,
+  }))),
+  { list: '/api/contacts?kind=vendor', detail: `/api/contacts/[id]/statement?side=vendor&from=${new Date().toISOString().slice(0, 8)}01&to=${new Date().toISOString().slice(0, 10)}&filter=outstanding` },
+  { list: '/api/contacts?kind=vendor', detail: '/api/files?targetType=contact&targetId=[id]' },
+  { list: '/api/contacts?kind=vendor', detail: '/api/portal-access?contactId=[id]&side=vendor' },
 ];
 
 /**
@@ -88,11 +95,13 @@ const ON_DEMAND = [
   '/api/hsn-codes?activeOnly=true',
   '/api/saved-views?list=items',
   '/api/saved-views?list=customers',
+  '/api/saved-views?list=vendors',
 ];
 
 /** Lists whose records open from a row, and the screen each record opens on. */
 const ROWS = [
   { api: '/api/contacts?kind=customer&limit=500', screen: '/sales/customers/[id]' },
+  { api: '/api/contacts?kind=vendor&archived=true', screen: '/purchases/vendors/[id]' },
   { api: '/api/invoices?limit=500', screen: '/sales/invoices/[id]' },
   { api: '/api/bills?limit=500', screen: '/purchases/bills/[id]' },
   // Inactive ones too, as the item list's "All Items" shows them.
