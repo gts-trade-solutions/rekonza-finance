@@ -28,7 +28,7 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import {
-  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+  Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Money } from '@/components/shared/money';
@@ -405,7 +405,7 @@ function Header({ d, onChanged }: { d: ItemDetail; onChanged: () => void }) {
     setBusy(true);
     try {
       await items.update({ id: it.id, isArchived: !active, expectedUpdatedAt: it.updatedAt });
-      toast.success(active ? `${it.name} is active again` : `${it.name} is marked as inactive`);
+      toast.success(active ? 'The item has been marked as active.' : 'The item has been marked as inactive.');
       refreshSplitList();
       onChanged();
     } catch (e) {
@@ -418,7 +418,7 @@ function Header({ d, onChanged }: { d: ItemDetail; onChanged: () => void }) {
     setBusy(true);
     try {
       await items.remove(it.id);
-      toast.success(`${it.name} deleted`);
+      toast.success('The item has been deleted.');
       setConfirming(false);
       router.push('/sales/items');
     } catch (e) {
@@ -467,15 +467,13 @@ function Header({ d, onChanged }: { d: ItemDetail; onChanged: () => void }) {
       </div>
       <Dialog open={confirming} onOpenChange={setConfirming}>
         <DialogContent className="sm:max-w-md">
+          {/* Zoho's question, word for word. */}
           <DialogHeader>
-            <DialogTitle>Delete {it.name}?</DialogTitle>
-            <DialogDescription>
-              Only an item that was never used can be deleted. One that is on a document, a price list or in stock is kept: mark it as inactive instead.
-            </DialogDescription>
+            <DialogTitle className="text-[14px] font-normal">Do you really want to delete this item?</DialogTitle>
           </DialogHeader>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setConfirming(false)}>Cancel</Button>
             <Button variant="destructive" disabled={busy} onClick={() => void remove()} data-slot="item-delete-confirm">{busy ? 'Deleting…' : 'Delete'}</Button>
+            <Button variant="outline" onClick={() => setConfirming(false)}>Cancel</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

@@ -253,7 +253,7 @@ async function masterData(ex: Executor, c: Ctx): Promise<Finding[]> {
     .where('org_id', '=', c.orgId).where('is_archived', '=', 0).execute();
   const out: Finding[] = [];
   for (const p of parties) {
-    const registered = ['registered', 'registered_composition', 'sez'].includes(p.gst_treatment);
+    const registered = ['registered', 'registered_composition', 'sez', 'tax_deductor'].includes(p.gst_treatment);
     const problem = p.gstin && !isValidGstin(p.gstin)
       ? `GSTIN ${p.gstin} fails its check digit: a character is wrong.`
       : registered && !p.gstin ? 'Marked as GST-registered but has no GSTIN.' : null;

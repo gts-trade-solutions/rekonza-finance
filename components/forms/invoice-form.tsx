@@ -22,7 +22,7 @@ import {
   DocumentForm, FormRow, FormRowPair, FormSectionRule,
 } from '@/components/shared/form-layout';
 import {
-  LineItemsEditor, effectiveDiscountPct, newEditorLine, serialsOf, type EditorLine,
+  LineItemsEditor, effectiveDiscountPct, linesForItems, newEditorLine, serialsOf, type EditorLine,
 } from '@/components/forms/document-lines';
 import { SupplyKindPicker } from '@/components/forms/supply-kind-picker';
 import { QuickContactDialog } from '@/components/forms/quick-create';
@@ -100,6 +100,15 @@ export function InvoiceForm({ variant = 'invoice' }: { variant?: InvoiceVariant 
   // An export's IGST, picked by hand: true paid, false nil under the LUT. Null follows the organisation's setting.
   const [exportChoice, setExportChoice] = useState<boolean | null>(null);
   const [lines, setLines] = useState<EditorLine[]>([newEditorLine('l1')]);
+  // ?items=a,b: the items ticked in the item list (Zoho's bulk "New Transaction → Invoice").
+  const presetItems = useSearchParams().get('items');
+  const [preset, setPreset] = useState(false);
+  useEffect(() => {
+    if (preset || !presetItems || !s.items.length) return;
+    const pre = linesForItems(s.items, presetItems.split(','), 'sale');
+    if (pre.length) setLines(pre);
+    setPreset(true);
+  }, [preset, presetItems, s.items]);
   // The company's own wording when it has set some (Settings → Invoice print).
   const [notes, setNotes] = useState(s.invoiceDefaults.notes ?? 'Thanks for your business.');
   const [terms, setTerms] = useState(

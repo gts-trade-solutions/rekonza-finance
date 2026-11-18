@@ -22,5 +22,7 @@ export const GET = route(async ({ orgId, role, params, req }) => {
   const from = url.searchParams.get('from') ?? '';
   const to = url.searchParams.get('to') ?? '';
   if (!DATE.test(from) || !DATE.test(to) || from > to) throw badRequest('Give a from and to date, from first.');
-  return partyStatement(db, orgId, idParam(params), side, from, to);
+  // Zoho's Filter By: All, or Outstanding (only what is still unpaid).
+  const filter = url.searchParams.get('filter') === 'outstanding' ? 'outstanding' : 'all';
+  return partyStatement(db, orgId, idParam(params), side, from, to, filter);
 });

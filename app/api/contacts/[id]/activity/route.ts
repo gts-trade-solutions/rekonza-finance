@@ -14,6 +14,8 @@ const Q = z.object({
   view: z.enum(['transactions', 'income', 'mails']),
   side: z.enum(['customer', 'vendor']).default('customer'),
   months: z.coerce.number().int().refine((n) => n === 6 || n === 12).default(6),
+  /** Zoho's period: this_fy, prev_fy, last_12 or last_6; months= is the older way to ask. */
+  period: z.enum(['this_fy', 'prev_fy', 'last_12', 'last_6']).optional(),
   basis: z.enum(['accrual', 'cash']).default('accrual'),
 });
 
@@ -28,6 +30,6 @@ export const GET = route(async ({ orgId, role, params, req }) => {
   if (q.view === 'transactions') {
     return { rows: await contactTransactions(db, orgId, id, { sales: q.side === 'customer' && sales, purchases: q.side === 'vendor' && purchases }) };
   }
-  if (q.view === 'income') return { months: await contactIncome(db, orgId, id, q.side, q.months, q.basis, indiaToday()) };
+  if (q.view === 'income') return { months: await contactIncome(db, orgId, id, q.side, q.period ?? (q.months as 6 | 12), q.basis, indiaToday()) };
   return { mails: await contactMails(db, orgId, id) };
 });

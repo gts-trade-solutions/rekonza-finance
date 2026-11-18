@@ -14,7 +14,7 @@
 
 import type { ReactNode } from 'react';
 import Link from 'next/link';
-import { CircleHelp, X } from 'lucide-react';
+import { CircleHelp, TriangleAlert, X } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 
@@ -78,7 +78,7 @@ export function FormRow({
       <div className={cn('min-w-0 flex-1', widths[width])}>
         {children}
         {error ? (
-          <p className="mt-1 text-[11px] text-destructive">{error}</p>
+          <p className="mt-1 flex items-center gap-1 text-[12px] text-destructive" data-slot="field-error"><TriangleAlert className="size-3 shrink-0" />{error}</p>
         ) : hint ? (
           <p className="mt-1 text-[11px] text-muted-foreground">{hint}</p>
         ) : null}
@@ -153,6 +153,21 @@ export function DocumentForm({
         <div className="flex flex-wrap items-center gap-2">{footer}</div>
         {footerSummary && <div className="ml-auto text-right">{footerSummary}</div>}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Zoho's error box at the head of a form: a pink panel listing every problem
+ * the save found, bulleted, with an × to put it away. The fields themselves
+ * carry their own message too.
+ */
+export function FormErrors({ errors, onClose }: { errors: string[]; onClose: () => void }) {
+  if (!errors.length) return null;
+  return (
+    <div role="alert" data-slot="form-errors" className="relative rounded-[var(--radius-card)] bg-[#fde8e8] px-5 py-4 pr-12 text-[13px] text-foreground dark:bg-destructive/15">
+      <ul className="list-disc space-y-1 pl-5">{errors.map((e) => <li key={e}>{e}</li>)}</ul>
+      <button type="button" aria-label="Close" onClick={onClose} className="absolute right-4 top-4 text-destructive hover:opacity-80"><X className="size-4" /></button>
     </div>
   );
 }

@@ -88,6 +88,25 @@ export const GET = route(
         .where('revoked_at', 'is', null).where('expires_at', '>', new Date()).executeTakeFirst(),
     ]);
     const [unusedPay, unusedCn, unusedVc] = unused;
+    // Zoho's "Link to Vendor": the other side of the same business, and what is
+    // open with it; and the price list, as "Name [ 25.000000% Markup ]".
+    const [linkedRow, priceList] = await Promise.all([
+      c.linked_contact_id
+        ? db.selectFrom('contacts').select(['id', 'display_name', 'kind', 'is_archived']).where('id', '=', c.linked_contact_id).where('org_id', '=', orgId).executeTakeFirst()
+        : undefined,
+      c.price_list_id
+        ? db.selectFrom('price_lists').select(['name', 'basis', 'percent']).where('id', '=', c.price_list_id).where('org_id', '=', orgId).executeTakeFirst()
+        : undefined,
+    ]);
+    const linkedOpen = linkedRow
+      ? await Promise.all([
+        db.selectFrom('invoices').select(sql<string>`COALESCE(SUM(total - amount_paid), 0)`.as('v'))
+          .where('org_id', '=', orgId).where('customer_id', '=', linkedRow.id).where('status', 'not in', ['draft', 'void']).executeTakeFirst(),
+        db.selectFrom('bills').select(sql<string>`COALESCE(SUM(total - amount_paid), 0)`.as('v'))
+          .where('org_id', '=', orgId).where('vendor_id', '=', linkedRow.id).where('status', 'not in', ['draft', 'void']).executeTakeFirst(),
+      ])
+      : null;
+    const pct = priceList ? Number(priceList.percent) : 0;
     const payUnused = (kind: string) => toPaiseFromSql(unusedPay.find((r) => r.kind === kind)?.amt ?? '0');
 
     const [invoices, bills, allPayments, beyond] = await Promise.all([
@@ -186,6 +205,14 @@ export const GET = route(
         billWise: !!c.bill_wise,
         portalEnabled: !!portal,
         ...zohoFields(c),
+        linkedContactId: c.linked_contact_id ? asId(c.linked_contact_id) : null,
+        linked: linkedRow ? {
+          id: asId(linkedRow.id), displayName: linkedRow.display_name, kind: linkedRow.kind, isArchived: !!linkedRow.is_archived,
+          receivablePaise: toPaiseFromSql(linkedOpen?.[0]?.v ?? '0'), payablePaise: toPaiseFromSql(linkedOpen?.[1]?.v ?? '0'),
+        } : null,
+        priceListLabel: priceList
+          ? priceList.basis === 'percent' && pct !== 0 ? `${priceList.name} [ ${Math.abs(pct).toFixed(6)}% ${pct > 0 ? 'Markup' : 'Markdown'} ]` : priceList.name
+          : null,
       },
       invoices: invoices.map((i) => ({
         id: asId(i.id),

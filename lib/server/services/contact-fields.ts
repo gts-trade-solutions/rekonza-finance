@@ -10,6 +10,8 @@ export const ZOHO_COLUMNS = {
   billingPincode: 'billing_pincode', billingCountry: 'billing_country', billingPhone: 'billing_phone', billingFax: 'billing_fax',
   shippingAttention: 'shipping_attention', shippingStreet2: 'shipping_street2', shippingCity: 'shipping_city', shippingState: 'shipping_state',
   shippingPincode: 'shipping_pincode', shippingCountry: 'shipping_country', shippingPhone: 'shipping_phone', shippingFax: 'shipping_fax',
+  // Migration 113: the registered names under the GSTIN.
+  businessLegalName: 'business_legal_name', businessTradeName: 'business_trade_name',
 } as const;
 export type ZohoKey = keyof typeof ZOHO_COLUMNS;
 

@@ -154,7 +154,7 @@ export async function gstr9(ex: Executor, orgId: number, startYear: number, bran
        GROUP BY zero_rated
     `.execute(ex),
     sql<Heads & { registered: number }>`
-      SELECT (c.gst_treatment IN ('registered', 'registered_composition', 'sez')) AS registered, ${sum}
+      SELECT (c.gst_treatment IN ('registered', 'registered_composition', 'sez', 'tax_deductor')) AS registered, ${sum}
         FROM bills x JOIN contacts c ON c.id = x.vendor_id
        WHERE x.org_id = ${orgId} AND x.status NOT IN ('draft', 'void') AND x.is_rcm = 1
          AND x.bill_date BETWEEN ${from} AND ${to} ${br}

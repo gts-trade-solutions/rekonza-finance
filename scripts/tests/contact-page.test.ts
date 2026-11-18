@@ -11,10 +11,13 @@ import assert from 'node:assert/strict';
 import { db, type Trx } from '../../lib/server/db';
 import { installChartOfAccounts, accountIds, CODE } from '../../lib/server/ledger/chart-of-accounts';
 import { createInvoice, voidInvoice } from '../../lib/server/services/sales';
-import { createEstimate } from '../../lib/server/services/sales-documents';
+import { createEstimate, createRetainer } from '../../lib/server/services/sales-documents';
+import { postManualJournal } from '../../lib/server/services/journals';
+import { createExpense } from '../../lib/server/services/purchases';
+import { partyStatement } from '../../lib/server/reports/party-statement';
 import { receivePayment } from '../../lib/server/services/payments';
 import { createBill } from '../../lib/server/services/purchases';
-import { contactIncome, contactMails, contactTransactions } from '../../lib/server/services/contact-activity';
+import { contactIncome, contactMails, contactTransactions, incomeMonths } from '../../lib/server/services/contact-activity';
 import { ZOHO_COLUMNS, zohoFields } from '../../lib/server/services/contact-fields';
 import { printableDocument } from '../../lib/server/services/document-print';
 
@@ -68,7 +71,7 @@ test('Transactions: invoices, payments and quotes at once, each with its balance
     const payment = rows.find((r) => r.kind === 'payment_received')!;
     assert.equal(payment.amountPaise, 1500_00);
     assert.equal(payment.balancePaise, 320_00, 'the unused amount');
-    assert.equal(payment.ref, 'neft', 'the mode');
+    assert.equal(payment.extra?.mode, 'neft', 'the payment mode, a column of its own');
 
     assert.equal((await contactTransactions(trx, orgId, vendor, { sales: true, purchases: true })).filter((r) => r.kind === 'bill').length, 1);
     assert.equal((await contactTransactions(trx, orgId, vendor, { sales: true, purchases: false })).length, 0, 'bills only for those who may see purchases');
@@ -137,6 +140,69 @@ test("Zoho's fields come back under their API names; a printed quote carries the
     const doc = await printableDocument(trx, orgId, 'estimate', est.id);
     assert.equal(doc.party.address, '12 Residency Road, Shanthala Nagar', 'both street lines, as one');
     assert.equal(doc.shipTo, null, 'the same address is not printed twice');
+  });
+});
+
+
+test("Zoho's chart periods: the last six or twelve months, this financial year and the one before, from April", () => {
+  assert.deepEqual(incomeMonths('last_6', '2026-11-18'), ['2026-06', '2026-07', '2026-08', '2026-09', '2026-10', '2026-11']);
+  assert.equal(incomeMonths('last_12', '2026-11-18')[0], '2025-12');
+  const fy = incomeMonths('this_fy', '2026-11-18');
+  assert.equal(fy.length, 12);
+  assert.deepEqual([fy[0], fy[11]], ['2026-04', '2027-03']);
+  assert.deepEqual([incomeMonths('prev_fy', '2026-11-18')[0], incomeMonths('prev_fy', '2026-11-18')[11]], ['2025-04', '2026-03']);
+  assert.deepEqual([incomeMonths('this_fy', '2027-02-10')[0], incomeMonths('this_fy', '2027-02-10')[11]], ['2026-04', '2027-03'], 'February is still the year that began last April');
+});
+
+test("Transactions: Zoho's other sections (service invoices, billable expenses, journals), and each row's status filters", async () => {
+  await rolledBack(async (trx) => {
+    const { orgId, branchId, bankId, customer } = await book(trx);
+    const acc = await accountIds(trx, orgId);
+    // An invoice due long ago: unpaid and overdue; a draft; a paid one.
+    await createInvoice(trx, orgId, null, { branchId, customerId: customer, date: '2026-01-05', dueDate: '2026-01-20', status: 'approved', lines: goods(100) });
+    await createInvoice(trx, orgId, null, { branchId, customerId: customer, date: '2026-02-05', dueDate: '2026-02-20', status: 'draft', lines: goods(100) });
+    const paid = await createInvoice(trx, orgId, null, { branchId, customerId: customer, date: '2026-03-05', dueDate: '2026-03-20', status: 'approved', lines: goods(100) });
+    await receivePayment(trx, orgId, null, { branchId, contactId: customer, date: '2026-03-06', mode: 'upi', amountPaise: 118_00, bankAccountId: bankId, allocations: [{ targetType: 'invoice', targetId: paid.id, amountPaise: 118_00 }] });
+    await createRetainer(trx, orgId, null, { branchId, customerId: customer, date: '2026-04-01', description: 'Advance for the annual service contract', amountPaise: 5000_00, status: 'sent' });
+    const expenseHead = (await trx.selectFrom('accounts').select('id').where('org_id', '=', orgId).where('type', '=', 'expense').executeTakeFirstOrThrow()).id;
+    await createExpense(trx, orgId, null, { branchId, date: '2026-04-02', accountId: expenseHead, paidThroughBankAccountId: bankId, amountPaise: 900_00, isBillable: true, billableCustomerId: customer });
+    await postManualJournal(trx, orgId, null, { branchId, date: '2026-04-03', memo: 'Discount allowed', approved: true, lines: [
+      { accountId: (await trx.selectFrom('accounts').select('id').where('org_id', '=', orgId).where('type', '=', 'expense').executeTakeFirstOrThrow()).id, debitPaise: 50_00 },
+      { accountId: acc[CODE.AR], creditPaise: 50_00, contactId: customer },
+    ] });
+
+    const rows = await contactTransactions(trx, orgId, customer, { sales: true, purchases: false });
+    const inv = rows.filter((r) => r.kind === 'invoice');
+    assert.deepEqual(inv.map((r) => r.filters.sort()), [['paid'], ['draft'], ['overdue', 'unpaid']], 'newest first: paid, draft, the old unpaid one also overdue');
+    assert.equal(inv[2].status, 'overdue');
+    const ret = rows.find((r) => r.kind === 'retainer_invoice');
+    assert.ok(ret, 'the service invoice is listed');
+    assert.deepEqual(ret!.filters, ['sent']);
+    assert.equal(ret!.balancePaise, 5000_00);
+    const exp = rows.find((r) => r.kind === 'expense');
+    assert.ok(exp, 'the expense billable to the customer is listed');
+    assert.deepEqual(exp!.filters.sort(), ['billable', 'unbilled', 'without receipts']);
+    const jv = rows.find((r) => r.kind === 'journal');
+    assert.ok(jv, 'the journal naming the customer is listed');
+    assert.equal(jv!.extra?.creditPaise, 50_00);
+    assert.equal(jv!.ref, 'Discount allowed');
+  });
+});
+
+test("Statement, Filter By Outstanding: only what is still unpaid, and what is left on each", async () => {
+  await rolledBack(async (trx) => {
+    const { orgId, branchId, bankId, customer } = await book(trx);
+    const a = await createInvoice(trx, orgId, null, { branchId, customerId: customer, date: '2026-07-01', dueDate: '2026-07-31', status: 'approved', lines: goods(1000) });
+    await createInvoice(trx, orgId, null, { branchId, customerId: customer, date: '2026-07-05', dueDate: '2026-08-04', status: 'approved', lines: goods(500) });
+    const c = await createInvoice(trx, orgId, null, { branchId, customerId: customer, date: '2026-07-09', dueDate: '2026-08-08', status: 'approved', lines: goods(200) });
+    await receivePayment(trx, orgId, null, { branchId, contactId: customer, date: '2026-07-10', mode: 'neft', amountPaise: 1180_00 + 100_00, bankAccountId: bankId,
+      allocations: [{ targetType: 'invoice', targetId: a.id, amountPaise: 1180_00 }, { targetType: 'invoice', targetId: c.id, amountPaise: 100_00 }] });
+    const all = await partyStatement(trx, orgId, customer, 'customer', '2026-07-01', '2026-07-31');
+    const open = await partyStatement(trx, orgId, customer, 'customer', '2026-07-01', '2026-07-31', 'outstanding');
+    assert.ok(all.lines.length > open.lines.length);
+    assert.deepEqual(open.lines.map((l) => l.chargePaise), [590_00, 236_00 - 100_00], 'the paid invoice is left out; the part-paid one shows what is left');
+    assert.equal(open.closingPaise, 590_00 + 136_00);
+    assert.equal(open.closingPaise, all.closingPaise, 'and it adds up to what is owed');
   });
 });
 

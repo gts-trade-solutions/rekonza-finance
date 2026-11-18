@@ -99,7 +99,7 @@ function dutyHead(code: string): 'CGST' | 'SGST' | 'IGST' | 'Cess' | null {
 
 const GST_REGISTRATION: Record<string, string> = {
   registered: 'Regular', composition: 'Composition', unregistered: 'Unregistered',
-  overseas: 'Unknown', sez: 'Regular', sez_developer: 'Regular', deemed_export: 'Regular', uin: 'Regular',
+  overseas: 'Unknown', sez: 'Regular', sez_developer: 'Regular', deemed_export: 'Regular', uin: 'Regular', tax_deductor: 'Regular',
 };
 
 // ── The map, as the screen shows it ──────────────────────────────────────────

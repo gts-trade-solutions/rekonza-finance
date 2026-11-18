@@ -67,6 +67,7 @@ export const GET = route(
         'department', 'designation', 'tax_preference', 'tax_exemption_reason', 'created_at', 'opening_balance',
         'billing_attention', 'billing_street2', 'billing_city', 'billing_state', 'billing_pincode', 'billing_country', 'billing_phone', 'billing_fax',
         'shipping_attention', 'shipping_street2', 'shipping_city', 'shipping_state', 'shipping_pincode', 'shipping_country', 'shipping_phone', 'shipping_fax',
+        'business_legal_name', 'business_trade_name', 'linked_contact_id',
       ])
       .orderBy('display_name')
       .limit(q.limit)
@@ -205,6 +206,7 @@ export const GET = route(
         createdAt: new Date(c.created_at).toISOString(),
         openingBalancePaise: toPaiseFromSql(c.opening_balance),
         ...zohoFields(c),
+        linkedContactId: c.linked_contact_id ? asId(c.linked_contact_id) : null,
       })),
     };
   },
@@ -223,7 +225,7 @@ const ContactInput = z.object({
     .or(z.literal('').transform(() => null)),
   gstTreatment: z.enum([
     'registered', 'registered_composition', 'unregistered', 'consumer',
-    'overseas', 'sez', 'sez_developer', 'deemed_export', 'uin',
+    'overseas', 'sez', 'sez_developer', 'deemed_export', 'uin', 'tax_deductor',
   ]),
   stateCode: z.string().length(2, 'Pick a state.'),
   email: z.string().trim().email('That email does not look right.').nullish()
@@ -301,6 +303,8 @@ const ContactInput = z.object({
   shippingCountry: z.string().trim().max(80).nullish(),
   shippingPhone: z.string().trim().max(30).nullish(),
   shippingFax: z.string().trim().max(30).nullish(),
+  businessLegalName: z.string().trim().max(200).nullish(),
+  businessTradeName: z.string().trim().max(200).nullish(),
 });
 
 
@@ -384,11 +388,10 @@ function toRow(input: z.infer<typeof ContactInput>) {
  * — which is the difference between charging IGST and charging CGST+SGST.
  */
 function checkGstin(input: Partial<z.infer<typeof ContactInput>>) {
-  const registered = input.gstTreatment === 'registered'
-    || input.gstTreatment === 'registered_composition'
-    || input.gstTreatment === 'sez';
+  // Zoho asks a GSTIN (or UIN) of every treatment but unregistered, consumer and overseas.
+  const registered = ['registered', 'registered_composition', 'sez', 'sez_developer', 'deemed_export', 'tax_deductor'].includes(input.gstTreatment ?? '');
   if (registered && !input.gstin) {
-    throw badRequest('A registered party needs a GSTIN.');
+    throw badRequest('Enter the GSTIN / UIN: a registered party needs one.');
   }
   // An international party is outside India: no GSTIN, and not India as its country.
   if (input.gstTreatment === 'overseas' && input.country === 'IN') {

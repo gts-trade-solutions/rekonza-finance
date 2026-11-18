@@ -14,7 +14,7 @@ import {
   DocumentForm, FormRow, FormRowPair, FormSectionRule,
 } from '@/components/shared/form-layout';
 import {
-  LineItemsEditor, effectiveDiscountPct, newEditorLine, serialsOf, type EditorLine,
+  LineItemsEditor, effectiveDiscountPct, linesForItems, newEditorLine, serialsOf, type EditorLine,
 } from '@/components/forms/document-lines';
 import { toastWarnings } from '@/lib/api/warnings';
 import { QuickContactDialog } from '@/components/forms/quick-create';
@@ -60,6 +60,15 @@ function NewBillForm() {
   const [isRcm, setIsRcm] = useState(false);
   const [tdsOverride, setTdsOverride] = useState('');
   const [lines, setLines] = useState<EditorLine[]>([newEditorLine('l1')]);
+  // ?items=a,b: the items ticked in the item list (Zoho's bulk "New Transaction → Bill").
+  const presetItems = params.get('items');
+  const [preset, setPreset] = useState(false);
+  useEffect(() => {
+    if (preset || !presetItems || !s.items.length) return;
+    const pre = linesForItems(s.items, presetItems.split(','), 'purchase');
+    if (pre.length) setLines(pre);
+    setPreset(true);
+  }, [preset, presetItems, s.items]);
   const [itc, setItc] = useState<Record<string, 'eligible' | 'ineligible' | 'capital_goods'>>({});
   const [notes, setNotes] = useState('');
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);

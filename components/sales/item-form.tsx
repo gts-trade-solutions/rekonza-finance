@@ -35,7 +35,7 @@ import { Combobox } from '@/components/ui/combobox';
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
-import { DocumentForm, FormRow } from '@/components/shared/form-layout';
+import { DocumentForm, FormErrors, FormRow } from '@/components/shared/form-layout';
 import { ItemImageField } from '@/components/sales/item-image';
 import { ContactPicker } from '@/components/forms/quick-create';
 import { api, hsnCodes, items, type HsnCodeRow, type ItemRow } from '@/lib/api/client';
@@ -82,9 +82,9 @@ type FormState = typeof BLANK;
 
 const TAX_PREFS = [
   { value: 'taxable', label: 'Taxable' },
-  { value: 'exempt', label: 'Exempt' },
-  { value: 'nil', label: 'Nil rated' },
-  { value: 'non_gst', label: 'Non-GST supply' },
+  { value: 'exempt', label: 'Non-Taxable' },
+  { value: 'nil', label: 'Nil Rated' },
+  { value: 'non_gst', label: 'Non-GST Supply' },
 ] as const;
 
 /** A blank text box is "not set"; anything else has to be a number of zero or more. */
@@ -180,6 +180,8 @@ export function ItemForm({ editing, clone }: { editing?: ItemRow | null; clone?:
   const [form, setForm] = useState<FormState>(() => (editing ? fromItem(editing, false) : clone ? fromItem(clone, true) : BLANK));
   const [imageFileId, setImageFileId] = useState<string | null>(editing?.imageFileId ?? null);
   const [editRates, setEditRates] = useState(false);
+  // Zoho's pink box: what the last save found wrong.
+  const [banner, setBanner] = useState<string[]>([]);
   const set = (patch: Partial<FormState>) => setForm((f) => ({ ...f, ...patch }));
   const goods = form.kind === 'goods';
   const back = editing ? `/sales/items/${editing.id}` : clone ? `/sales/items/${clone.id}` : '/sales/items';
@@ -212,7 +214,7 @@ export function ItemForm({ editing, clone }: { editing?: ItemRow | null; clone?:
 
   const saleAccounts = useMemo(
     () => accounts.filter((a) => a.type === 'income' && !a.isArchived).sort((a, b) => a.code.localeCompare(b.code))
-      .map((a) => ({ value: a.id, label: `[ ${a.code} ] ${a.name}` })),
+      .map((a) => ({ value: a.id, label: `[ ${a.code} ] ${a.name}`, group: 'Income' })),
     [accounts],
   );
   const purchaseAccounts = useMemo(
@@ -221,7 +223,7 @@ export function ItemForm({ editing, clone }: { editing?: ItemRow | null; clone?:
     [accounts],
   );
   const unitOptions = useMemo(() => {
-    const known = UQC.map(([code, label]) => ({ value: code, label: code, sublabel: label }));
+    const known = UQC.map(([code, label]) => ({ value: code, label: `${code} - ${label.toUpperCase()}` }));
     return form.uqc && !UQC.some(([c]) => c === form.uqc) ? [{ value: form.uqc, label: form.uqc, sublabel: 'Your unit' }, ...known] : known;
   }, [form.uqc]);
 
@@ -285,9 +287,16 @@ export function ItemForm({ editing, clone }: { editing?: ItemRow | null; clone?:
   const action = editing ? update : create;
 
   const save = async () => {
-    if (!form.name.trim()) { toast.error('Item name is required'); return; }
-    if (!form.sell && !form.buy) { toast.error('Tick Sales Information, Purchase Information or both: an item is sold, bought, or both.'); return; }
-    if (form.sell && !form.saleAccountId) { toast.error('Choose the account its sales go to.'); return; }
+    const problems = [
+      ...(!form.name.trim() ? ['Please mention the item name'] : []),
+      // A new item needs its rates, as Zoho asks; an old one at nothing stays as it was.
+      ...(!editing && form.sell && !form.salePrice ? ['Please enter the rate of the item.'] : []),
+      ...(!editing && form.buy && canSeeCosts && !form.purchasePrice ? ['Please enter the purchase rate of the item'] : []),
+      ...(!form.sell && !form.buy ? ['Tick Sales Information, Purchase Information or both: an item is sold, bought, or both.'] : []),
+      ...(form.sell && !form.saleAccountId ? ['Choose the account its sales go to.'] : []),
+    ];
+    setBanner(problems);
+    if (problems.length) { window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
     // Goods keep their stock figures as they were read, shown or not: an
     // untracked item's levels are not cleared by saving its name.
     const openingQty = goods ? qtyOrNull(form.openingQty) : null;
@@ -376,11 +385,12 @@ export function ItemForm({ editing, clone }: { editing?: ItemRow | null; clone?:
         </>
       }
     >
+      <FormErrors errors={banner} onClose={() => setBanner([])} />
       {/* The grey band: what the item is. It runs to the window's right edge, as Zoho's does. */}
       <section data-slot="item-basics" className="-mx-5 -mt-7 bg-[#fbfbfb] px-5 py-7 shadow-[0_0_0_100vmax_#fbfbfb] [clip-path:inset(0_-100vmax_0_0)] dark:bg-muted dark:shadow-[0_0_0_100vmax_var(--muted)]">
         <div className="flex flex-col gap-8 lg:flex-row">
           <div className="min-w-0 max-w-[560px] flex-1 space-y-4">
-            <FormRow label="Type" help="Goods are things you hold and ship: they carry an HSN code and can be kept in stock. A service is work you do: it carries a SAC.">
+            <FormRow label="Type" help="Select if this item is a physical good or a service.">
               <Radios
                 name="Goods or service" slot="item-kind" value={form.kind}
                 options={[{ value: 'goods', label: 'Goods' }, { value: 'service', label: 'Service' }]}
@@ -390,10 +400,10 @@ export function ItemForm({ editing, clone }: { editing?: ItemRow | null; clone?:
             <FormRow label="Name" required error={field.name} htmlFor="item-name">
               <Input id="item-name" value={form.name} onChange={(e) => set({ name: e.target.value })} autoFocus={!editing} />
             </FormRow>
-            <FormRow label="SKU" error={field.sku} htmlFor="item-sku" help="The Stock Keeping Unit of the item: your own code for it, unique in your books.">
+            <FormRow label="SKU" error={field.sku} htmlFor="item-sku" help="The Stock Keeping Unit of the item">
               <Input id="item-sku" value={form.sku} onChange={(e) => set({ sku: e.target.value })} />
             </FormRow>
-            <FormRow label="Unit" hint="The unit quantity code GST returns use" help="The item will be measured in terms of this unit (e.g.: NOS, KGS, BOX).">
+            <FormRow label="Unit" hint="The unit quantity code GST returns use" help="The item will be measured in terms of this unit (e.g.: kg, dozen)">
               <Combobox
                 options={unitOptions}
                 value={form.uqc}
@@ -618,9 +628,9 @@ export function ItemForm({ editing, clone }: { editing?: ItemRow | null; clone?:
               data-slot="track-inventory"
             />
             <span>
-              Track Inventory for this item
+              <span title="Enable this option to track this item's stock based on its sales and purchase transactions.">Track Inventory for this item</span>
               <span className="block text-[12px] text-muted-foreground">
-                {editing ? 'Stock tracking is chosen when the item is made, and stays as it was.' : 'You cannot turn inventory tracking on or off once the item is made.'}
+                {editing ? 'Stock tracking is chosen when the item is made, and stays as it was.' : 'You cannot enable/disable inventory tracking once you\'ve created the item.'}
               </span>
             </span>
           </label>

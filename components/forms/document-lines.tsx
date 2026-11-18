@@ -74,6 +74,22 @@ export function newEditorLine(key: string): EditorLine {
   };
 }
 
+/**
+ * Lines for the items ticked in the item list (Zoho's bulk "New Transaction"):
+ * one each, at the item's own sale or purchase figures.
+ */
+export function linesForItems(all: Item[], ids: string[], mode: 'sale' | 'purchase'): EditorLine[] {
+  return ids.map((id) => all.find((i) => i.id === id)).filter((i): i is Item => !!i).map((item, n) => ({
+    ...newEditorLine(`pre${n}`),
+    itemId: item.id,
+    description: (mode === 'purchase' ? item.purchaseDescription || item.description : item.description) ?? '',
+    hsnSac: item.hsnSac,
+    uqc: item.uqc,
+    ratePaise: mode === 'sale' ? item.salePricePaise : item.purchasePricePaise,
+    gstRatePct: item.gstRatePct,
+  }));
+}
+
 /** Effective discount percentage, whichever way the user entered it. */
 export function effectiveDiscountPct(l: EditorLine): number {
   const gross = Math.round(l.ratePaise * l.qty);

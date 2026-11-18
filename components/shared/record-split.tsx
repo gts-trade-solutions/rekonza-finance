@@ -570,7 +570,9 @@ function SplitFrame({ kind, id, children }: { kind: SplitKind; id: string; child
           href={cfg.base}
           aria-label={`Close and go back to ${cfg.label}`}
           title="Close"
-          className="absolute right-4 top-4 z-20 grid size-8 place-items-center rounded text-[#d6141d] hover:bg-muted no-print"
+          // Zoho's X is red beside a transaction (an invoice, a bill) and dark grey beside an item, customer or vendor.
+          className={cn('absolute right-4 top-4 z-20 grid size-8 place-items-center rounded hover:bg-muted no-print', cfg.keepNav ? 'text-[#5f6380]' : 'text-[#d6141d]')}
+          data-slot="split-close"
         >
           <X className="size-5" strokeWidth={1.8} />
         </Link>

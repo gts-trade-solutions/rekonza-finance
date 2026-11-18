@@ -691,6 +691,10 @@ export interface ContactRow {
   shippingCountry?: string | null;
   shippingPhone?: string | null;
   shippingFax?: string | null;
+  // Migration 113: the registered names under the GSTIN, and Zoho's "Link to Vendor".
+  businessLegalName?: string | null;
+  businessTradeName?: string | null;
+  linkedContactId?: string | null;
 }
 
 export interface ItemRow {
@@ -790,7 +794,13 @@ export interface ContactStatementPayment {
 }
 
 export interface ContactDetail {
-  contact: Omit<ContactRow, 'receivablePaise' | 'payablePaise' | 'invoiceCount' | 'billCount'> & { mergedIntoId?: string | null };
+  contact: Omit<ContactRow, 'receivablePaise' | 'payablePaise' | 'invoiceCount' | 'billCount'> & {
+    mergedIntoId?: string | null;
+    /** The other side of the same business (Zoho's "Link to Vendor"), and what is open with it. */
+    linked?: { id: string; displayName: string; kind: 'customer' | 'vendor' | 'both'; isArchived: boolean; receivablePaise: number; payablePaise: number } | null;
+    /** "Name [ 25.000000% Markup ]", as Zoho shows a price list. */
+    priceListLabel?: string | null;
+  };
   invoices: ContactStatementDoc[];
   bills: ContactStatementDoc[];
   payments: ContactStatementPayment[];
@@ -828,8 +838,11 @@ export interface PartyStatement {
 
 export const contacts = {
   get: (id: string) => api.get<ContactDetail>(`/api/contacts/${id}`),
-  statement: (id: string, params: { side: 'customer' | 'vendor'; from: string; to: string }) =>
-    api.get<PartyStatement>(`/api/contacts/${id}/statement`, params),
+  statement: (id: string, params: { side: 'customer' | 'vendor'; from: string; to: string; filter?: 'all' | 'outstanding' }) =>
+    api.get<PartyStatement>(`/api/contacts/${id}/statement`, params.filter === 'outstanding' ? params : { side: params.side, from: params.from, to: params.to }),
+  /** Zoho's "Link to Vendor": a customer and a vendor that are the same business. */
+  link: (id: string, otherId: string) => api.post<{ id: string; linkedContactId: string }>(`/api/contacts/${encodeURIComponent(id)}/link`, { otherId }),
+  unlink: (id: string) => api.delete<{ id: string }>(`/api/contacts/${encodeURIComponent(id)}/link`),
   list: (params?: { kind?: 'customer' | 'vendor' | 'both' | 'all'; search?: string; archived?: boolean; limit?: number }) =>
     api.get<{ contacts: ContactRow[] }>('/api/contacts', params),
   // A possible duplicate (same PAN or name) is saved but flagged: shown as it comes back.
@@ -2013,18 +2026,23 @@ export interface ContactPerson {
 }
 
 export type ContactTxKind =
-  | 'invoice' | 'payment_received' | 'estimate' | 'sales_order' | 'challan' | 'credit_note' | 'recurring_invoice' | 'project'
-  | 'bill' | 'payment_made' | 'purchase_order' | 'vendor_credit' | 'expense';
+  | 'invoice' | 'payment_received' | 'estimate' | 'retainer_invoice' | 'sales_order' | 'challan' | 'recurring_invoice'
+  | 'expense' | 'recurring_expense' | 'project' | 'journal' | 'bill' | 'credit_note'
+  | 'payment_made' | 'purchase_order' | 'vendor_credit';
 export interface ContactTxRow {
   kind: ContactTxKind; id: string; date: string | null; number: string; ref: string | null;
   amountPaise: number; balancePaise: number | null; status: string;
+  /** The "Status:" filter options this row falls under, lower-cased (services/contact-activity.ts). */
+  filters: string[];
+  extra?: Record<string, string | number | null>;
 }
+export type IncomePeriod = 'this_fy' | 'prev_fy' | 'last_12' | 'last_6';
 /** A customer's or vendor's record beyond the master: Transactions, the Income chart, Mails. */
 export const contactActivity = {
   transactions: (id: string, side: 'customer' | 'vendor') =>
     api.get<{ rows: ContactTxRow[] }>(`/api/contacts/${encodeURIComponent(id)}/activity`, { view: 'transactions', side }),
-  income: (id: string, side: 'customer' | 'vendor', months: 6 | 12, basis: 'accrual' | 'cash') =>
-    api.get<{ months: { month: string; amountPaise: number }[] }>(`/api/contacts/${encodeURIComponent(id)}/activity`, { view: 'income', side, months, basis }),
+  income: (id: string, side: 'customer' | 'vendor', period: IncomePeriod, basis: 'accrual' | 'cash') =>
+    api.get<{ months: { month: string; amountPaise: number }[] }>(`/api/contacts/${encodeURIComponent(id)}/activity`, { view: 'income', side, period, basis }),
   mails: (id: string) =>
     api.get<{ mails: { id: string; at: string; to: string; subject: string; status: string; docType: string | null; docId: string | null }[] }>(`/api/contacts/${encodeURIComponent(id)}/activity`, { view: 'mails' }),
 };

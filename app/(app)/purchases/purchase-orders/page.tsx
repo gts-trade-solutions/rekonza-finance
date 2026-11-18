@@ -7,7 +7,7 @@
 // order to a bill is the moment the debt becomes real and the ledger hears
 // about it.
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ArrowRight, ClipboardList, PackageCheck, Plus } from 'lucide-react';
 import { toast } from 'sonner';
 import { useRouter } from 'next/navigation';
@@ -73,6 +73,24 @@ export default function PurchaseOrdersPage() {
 
   const create = useApiAction(purchaseDocuments.create);
   const [voucherTypeId, setVoucherTypeId] = useState('');
+  // ?new=purchase-order&items=a,b: the item list's bulk "New Transaction → Purchase Order".
+  // This order takes one item: the first ticked, from its preferred vendor.
+  const [preset, setPreset] = useState(false);
+  useEffect(() => {
+    if (preset || !items.length || typeof window === 'undefined') return;
+    const q = new URLSearchParams(window.location.search);
+    setPreset(true);
+    if (q.get('new') !== 'purchase-order') return;
+    const ids = (q.get('items') ?? '').split(',').filter(Boolean);
+    const first = items.find((i) => i.id === ids[0]);
+    if (first) {
+      setItemId(first.id);
+      setRate(first.purchasePricePaise);
+      if (first.preferredVendorId) setVendorId(first.preferredVendorId);
+      if (ids.length > 1) toast.info('A purchase order here takes one item: the first one ticked is on it.');
+    }
+    setOpen(true);
+  }, [preset, items]);
 
   const save = async () => {
     if (!vendorId || !itemId) {

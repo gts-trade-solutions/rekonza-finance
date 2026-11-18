@@ -29,7 +29,7 @@ const today = () => {
 };
 
 /** Recipients whose invoices need an IRN once e-invoicing applies. */
-const IRN_TREATMENTS = new Set(['registered', 'registered_composition', 'sez', 'sez_developer', 'overseas', 'deemed_export']);
+const IRN_TREATMENTS = new Set(['registered', 'registered_composition', 'sez', 'sez_developer', 'overseas', 'deemed_export', 'tax_deductor']);
 
 export interface EinvoiceApplicability { applicable: boolean; from: string | null }
 

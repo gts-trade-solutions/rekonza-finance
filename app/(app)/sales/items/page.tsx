@@ -19,7 +19,7 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
-import { ArrowDown, ArrowUp, MoreHorizontal, Package, Plus } from 'lucide-react';
+import { ArrowDown, ArrowUp, ChevronDown, MoreHorizontal, Package, Plus } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import {
@@ -37,7 +37,10 @@ import { EmptyState } from '@/components/shared/empty-state';
 import { AsyncPage } from '@/components/shared/async-state';
 import { api, hsnCodes, items, type HsnCodeRow, type ItemRow } from '@/lib/api/client';
 import { downloadCsv } from '@/components/shared/report-shell';
-import { downloadFilesZip } from '@/lib/xlsx';
+import { downloadFilesZip, type Sheet } from '@/lib/xlsx';
+import { ExportDialog, ExportViewDialog, type ExportModule } from '@/components/shared/export-dialog';
+import { contains, type AdvancedSearchConfig } from '@/components/shared/advanced-search';
+import { useAppStore } from '@/lib/store';
 import type { ViewField } from '@/lib/custom-views';
 import { useApi } from '@/lib/api/use-api';
 import { useCanSeeCosts, usePermission } from '@/lib/store/hooks';
@@ -78,6 +81,7 @@ export default function ItemsPage() {
   const canEdit = usePermission('sales', 'edit');
   const canDelete = usePermission('sales', 'void');
   const canExport = usePermission('sales', 'export');
+  const accounts = useAppStore((st) => st.accounts);
   const [grouping, setGrouping] = useState(false);
   const [sortBy, setSortBy] = useState<{ key: SortKey; dir: 'asc' | 'desc' }>({ key: 'name', dir: 'asc' });
   const [checking, setChecking] = useState<{ item: ItemRow; problem: string }[] | null>(null);
@@ -159,12 +163,43 @@ export default function ItemsPage() {
     state.refetch();
   };
 
-  /** The view as it stands, as a CSV: Zoho's "Export Current View". */
-  const exportView = () => {
-    downloadCsv(`items-${view}.csv`, [
-      ['Name', 'SKU', 'Type', 'Description', 'Rate', 'HSN/SAC', 'Unit', 'GST rate', 'Status'],
-      ...rows.map((r) => [r.name, r.sku ?? '', r.kind === 'service' ? 'Service' : 'Goods', r.description ?? '', (r.salePricePaise / 100).toFixed(2), r.hsnSac ?? '', r.uqc, r.gstRatePct, r.isArchived ? 'Inactive' : 'Active']),
-    ]);
+  // ── Zoho's ⋯ → Export Items and Export Current View, as dialogs.
+  const [exporting, setExporting] = useState(false);
+  const [exportingView, setExportingView] = useState(false);
+  /** The view as it stands, with Zoho's visible columns. */
+  const viewSheet = (): Sheet => ({
+    name: 'Items',
+    rows: [['Name', 'SKU', 'Type', 'Description', 'Rate'], ...rows.map((r) => [r.name, r.sku ?? '', r.kind === 'service' ? 'Service' : 'Goods', r.description ?? '', r.salePricePaise / 100])],
+  });
+  const accountName = (id: string | null | undefined) => accounts.find((a) => a.id === id)?.name ?? '';
+  const exportModules: ExportModule[] = [{
+    value: 'items', label: 'Items',
+    sheets: ({ from, to }) => [{
+      name: 'Items',
+      rows: [
+        ['Item Name', 'SKU', 'Item Type', 'Product Type', 'Description', 'Rate', 'Sales Account', 'HSN/SAC', 'Unit', 'Tax Preference', 'GST Rate',
+          ...(canSeeCosts ? ['Purchase Rate', 'Purchase Account', 'Purchase Description'] : []), 'Status', 'Created Time'],
+        ...all.filter((r) => !from || !to || ((r.createdAt ?? '').slice(0, 10) >= from && (r.createdAt ?? '').slice(0, 10) <= to)).map((r) => [
+          r.name, r.sku ?? '', r.itemType === 'purchases' ? 'Purchase Items' : r.itemType === 'sales' ? 'Sales Items' : 'Sales and Purchase Items',
+          r.kind === 'service' ? 'Service' : 'Goods', r.description ?? '', r.salePricePaise / 100, accountName(r.saleAccountId), r.hsnSac ?? '', r.uqc, r.taxPref, r.gstRatePct,
+          ...(canSeeCosts ? [r.purchasePricePaise / 100, accountName(r.purchaseAccountId), r.purchaseDescription ?? ''] : []), r.isArchived ? 'Inactive' : 'Active', (r.createdAt ?? '').slice(0, 10),
+        ]),
+      ],
+    }],
+  }];
+  /** Zoho's advanced search: the magnifier at the end of the header row. */
+  const advancedSearch: AdvancedSearchConfig<ItemRow> = {
+    module: 'Items',
+    fields: [
+      { key: 'name', label: 'Item Name', match: (r, v) => contains(r.name, v) },
+      { key: 'sku', label: 'SKU', match: (r, v) => contains(r.sku, v) },
+      { key: 'description', label: 'Description', match: (r, v) => contains(`${r.description ?? ''} ${r.purchaseDescription ?? ''}`, v) },
+      { key: 'rate', label: 'Rate', match: (r, v) => Math.abs(r.salePricePaise / 100 - Number(v)) < 0.005 },
+      ...(canSeeCosts ? [{ key: 'purchaseRate', label: 'Purchase Rate', match: (r: ItemRow, v: string) => Math.abs(r.purchasePricePaise / 100 - Number(v)) < 0.005 }] : []),
+      { key: 'status', label: 'Status', options: [{ value: '', label: 'All' }, { value: 'active', label: 'Active' }, { value: 'inactive', label: 'Inactive' }], match: (r, v) => (v === 'active' ? !r.isArchived : r.isArchived) },
+      { key: 'saleAccount', label: 'Sales Account', match: (r, v) => contains(accountName(r.saleAccountId), v) },
+      ...(canSeeCosts ? [{ key: 'purchaseAccount', label: 'Purchase Account', match: (r: ItemRow, v: string) => contains(accountName(r.purchaseAccountId), v) }] : []),
+    ],
   };
   /** Zoho's "Export Opening Stock": each stocked item's opening quantity (and, for those who see costs, its rate). */
   const exportOpening = () => {
@@ -308,8 +343,8 @@ export default function ItemsPage() {
                   <DropdownMenuSub>
                     <DropdownMenuSubTrigger>Export</DropdownMenuSubTrigger>
                     <DropdownMenuSubContent className="min-w-52">
-                      {canImport && <DropdownMenuItem onClick={() => router.push('/settings/export')}>Export Items</DropdownMenuItem>}
-                      {canExport && <DropdownMenuItem onClick={exportView} data-slot="export-view">Export Current View</DropdownMenuItem>}
+                      {canExport && <DropdownMenuItem onClick={() => setExporting(true)} data-slot="export-items">Export Items</DropdownMenuItem>}
+                      {canExport && <DropdownMenuItem onClick={() => setExportingView(true)} data-slot="export-view">Export Current View</DropdownMenuItem>}
                       {canExport && <DropdownMenuItem onClick={exportOpening} data-slot="export-opening">Export Opening Stock</DropdownMenuItem>}
                       {canExport && <DropdownMenuItem onClick={() => void exportImages()} data-slot="export-images">Export Item Images</DropdownMenuItem>}
                     </DropdownMenuSubContent>
@@ -340,6 +375,22 @@ export default function ItemsPage() {
               selectable={canEdit || canDelete}
               bulkActions={(picked, clear) => (
                 <div className="flex flex-wrap gap-2" data-slot="items-bulk">
+                  {/* Zoho's "New Transaction": a document with the ticked items on its lines. */}
+                  <DropdownMenu>
+                    <DropdownMenuTrigger data-slot="items-new-transaction"
+                      className="inline-flex h-8 items-center gap-1 rounded-[var(--radius-button)] border border-secondary-border bg-secondary px-2.5 text-[13px] outline-none hover:brightness-[0.98]">
+                      New Transaction <ChevronDown className="size-3.5" />
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start" className="min-w-40">
+                      {[
+                        ['Quote', `/sales/estimates?new=estimate&items=`],
+                        ['Sales Order', `/sales/sales-orders?new=sales-order&items=`],
+                        ['Invoice', `/sales/invoices/new?items=`],
+                        ['Purchase Order', `/purchases/purchase-orders?new=purchase-order&items=`],
+                        ['Bill', `/purchases/bills/new?items=`],
+                      ].map(([l, href]) => <DropdownMenuItem key={l} onClick={() => router.push(`${href}${picked.map((r) => r.id).join(',')}`)}>{l}</DropdownMenuItem>)}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                   {canEdit && <Button size="sm" variant="outline" disabled={bulkBusy} onClick={() => void setActive(picked, clear, true)}>Mark as Active</Button>}
                   {canEdit && <Button size="sm" variant="outline" disabled={bulkBusy} onClick={() => void setActive(picked, clear, false)}>Mark as Inactive</Button>}
                   {canDelete && <Button size="sm" variant="outline" disabled={bulkBusy} onClick={() => setConfirmDelete({ rows: picked, clear })}>Delete</Button>}
@@ -352,11 +403,14 @@ export default function ItemsPage() {
               activeTab={view}
               onTabChange={(v) => setView(v as View)}
               customViews={{ list: 'items', baseTab: 'all', fields: viewFields }}
+              advancedSearch={advancedSearch}
             />
           )
         }
       </AsyncPage>
       <ItemGroupDialog open={grouping} onOpenChange={setGrouping} onCreated={() => state.refetch()} />
+      {exporting && <ExportDialog open onOpenChange={setExporting} title="Export Items" noun="Items" modules={exportModules} filename="items" pii={false} />}
+      {exportingView && <ExportViewDialog open onOpenChange={setExportingView} filename={`items-${view}`} sheet={viewSheet} />}
       <Dialog open={!!confirmDelete} onOpenChange={(o) => !o && setConfirmDelete(null)}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>

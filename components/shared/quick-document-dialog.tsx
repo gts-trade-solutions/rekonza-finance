@@ -13,7 +13,7 @@
 // discount percentage applied to every line, printed with each. The items
 // offered are the ones the customer buys (goods, services or both).
 
-import { useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { localDay } from '@/lib/selectors';
 import { ListPlus, Plus, Search, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -91,6 +91,20 @@ export function QuickDocumentDialog({
   const [offerPct, setOfferPct] = useState('');
   const [extraValue, setExtraValue] = useState('');
   const [voucherTypeId, setVoucherTypeId] = useState('');
+  // ?new=<kind>&items=a,b opens the dialog with those items on its lines: the
+  // item list's bulk "New Transaction → Quote / Sales Order", as Zoho's does.
+  const [preset, setPreset] = useState(false);
+  useEffect(() => {
+    if (preset || !items.length || typeof window === 'undefined') return;
+    const q = new URLSearchParams(window.location.search);
+    setPreset(true);
+    if (q.get('new') !== kind) return;
+    const ids = (q.get('items') ?? '').split(',').filter(Boolean);
+    const pre = ids.map((id) => items.find((i) => i.id === id)).filter((i) => !!i)
+      .map((i) => ({ ...blankLine(), itemId: i!.id, rate: i!.salePricePaise, gstRatePct: i!.gstRatePct }));
+    if (pre.length) setLines(pre);
+    setOpen(true);
+  }, [preset, items, kind]);
 
   const create = useApiAction(salesDocuments.create);
   // A challan carries no tax, and neither does a business not registered for GST, or on composition.

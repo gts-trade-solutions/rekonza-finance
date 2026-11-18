@@ -76,12 +76,13 @@ export function MergeContactButton({ contactId, name, side, open: openProp, onOp
       </DialogTrigger>}
       <DialogContent className="max-w-lg">
         <DialogHeader>
-          <DialogTitle>Merge {name} into another {side}</DialogTitle>
+          {/* Zoho's words: "Merge Customers", and what merging does. */}
+          <DialogTitle>Merge {side === 'customer' ? 'Customers' : 'Vendors'}</DialogTitle>
           <DialogDescription>
-            Every invoice, bill, payment, order, credit and ledger line of {name} moves to the {side} you choose. {name} is then archived. This cannot be undone.
+            Select a {side} profile with whom you&apos;d like to merge {name}. Once merged, the transactions of {name} will be transferred, and this {side} record will be marked as inactive.
           </DialogDescription>
         </DialogHeader>
-        <ContactPicker kind={side} value={into} onChange={setInto} placeholder={`The ${side} to keep`} canCreate={false} />
+        <ContactPicker kind={side} value={into} onChange={setInto} placeholder={`Select ${side === 'customer' ? 'Customer' : 'Vendor'}`} canCreate={false} />
         {into === contactId && <p className="text-sm text-destructive">Choose a different {side}.</p>}
         {preview.loading && into && <p className="text-sm text-muted-foreground">Checking…</p>}
         {preview.error && <p className="text-sm text-destructive">{preview.error}</p>}
@@ -102,9 +103,9 @@ export function MergeContactButton({ contactId, name, side, open: openProp, onOp
           </div>
         )}
         <DialogFooter>
-          <Button variant="ghost" onClick={() => setOpen(false)}>Cancel</Button>
-          <Button variant="destructive" disabled={!p || !!p.blocked || busy} onClick={() => void merge()} data-slot="merge-confirm">
-            {busy && <Loader2 className="size-3.5 animate-spin" />} Merge into {p?.into.name ?? '…'}
+          <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
+          <Button disabled={!p || !!p.blocked || busy} onClick={() => void merge()} data-slot="merge-confirm">
+            {busy && <Loader2 className="size-3.5 animate-spin" />} Continue
           </Button>
         </DialogFooter>
       </DialogContent>

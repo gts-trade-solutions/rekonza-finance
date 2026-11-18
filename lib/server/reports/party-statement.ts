@@ -106,7 +106,10 @@ export async function partyStatement(
   side: StatementSide,
   from: string,
   to: string,
+  /** Zoho's "Filter By": every transaction, or only the documents still unpaid. */
+  filter: 'all' | 'outstanding' = 'all',
 ): Promise<PartyStatement> {
+  if (filter === 'outstanding') return outstandingStatement(ex, orgId, contactId, side, from, to);
   const c = await ex.selectFrom('contacts')
     .select(['id', 'display_name', 'legal_name', 'gstin', 'state_code', 'billing_address', 'email', 'phone'])
     .where('org_id', '=', orgId).where('id', '=', contactId).executeTakeFirst();
@@ -217,4 +220,53 @@ export async function partyStatement(
     closingPaise: running,
     lines,
   };
+}
+
+/**
+ * Zoho's statement filtered to "Outstanding": only the invoices (or, for a
+ * vendor, the bills) raised in the period that are still unpaid, and any
+ * opening balance still owed, each with what is left on it.
+ */
+async function outstandingStatement(ex: Executor, orgId: number, contactId: number, side: StatementSide, from: string, to: string): Promise<PartyStatement> {
+  const all = await partyStatement(ex, orgId, contactId, side, from, to, 'all');
+  const docs = side === 'customer'
+    ? await ex.selectFrom('invoices').select(['id', 'number', 'invoice_date as date', 'due_date', 'total', 'amount_paid', 'doc_kind'])
+      .where('org_id', '=', orgId).where('customer_id', '=', contactId).where('status', 'not in', ['draft', 'void'])
+      .where('invoice_date', '>=', from).where('invoice_date', '<=', to).orderBy('invoice_date').orderBy('id').execute()
+    : await ex.selectFrom('bills').select(['id', 'internal_no as number', 'bill_date as date', 'due_date', 'total', 'amount_paid'])
+      .where('org_id', '=', orgId).where('vendor_id', '=', contactId).where('status', 'not in', ['draft', 'void'])
+      .where('bill_date', '>=', from).where('bill_date', '<=', to).orderBy('bill_date').orderBy('id').execute();
+  let running = 0;
+  const lines: StatementLine[] = [];
+  // What was owed before the books started and is still unpaid comes first, whatever the period.
+  const openings = await ex.selectFrom('opening_documents').select(['id', 'ref_no', 'doc_date', 'due_date', 'amount', 'amount_paid'])
+    .where('org_id', '=', orgId).where('contact_id', '=', contactId).where('kind', '=', side === 'customer' ? 'receivable' : 'payable')
+    .where('status', '<>', 'void').where('doc_date', '<=', to).orderBy('doc_date').orderBy('id').execute();
+  for (const o of openings) {
+    const due = toPaiseFromSql(o.amount) - toPaiseFromSql(o.amount_paid);
+    if (due <= 0) continue;
+    running += due;
+    lines.push({
+      date: String(o.doc_date).slice(0, 10), kind: 'Opening balance', number: o.ref_no,
+      detail: o.due_date ? `Due ${String(o.due_date).slice(0, 10)}` : null, sourceType: 'opening_document', sourceId: String(o.id),
+      chargePaise: due, paymentPaise: 0, balancePaise: running,
+    });
+  }
+  for (const d of docs) {
+    const due = toPaiseFromSql(d.total) - toPaiseFromSql(d.amount_paid);
+    if (due <= 0) continue;
+    running += due;
+    lines.push({
+      date: String(d.date).slice(0, 10),
+      kind: side === 'customer' ? ('doc_kind' in d && d.doc_kind === 'debit_note' ? 'Debit note' : 'Invoice') : 'Bill',
+      number: d.number,
+      detail: d.due_date ? `Due ${String(d.due_date).slice(0, 10)}` : null,
+      sourceType: side === 'customer' ? 'invoice' : 'bill',
+      sourceId: String(d.id),
+      chargePaise: due,
+      paymentPaise: 0,
+      balancePaise: running,
+    });
+  }
+  return { ...all, openingPaise: 0, chargesPaise: running, paymentsPaise: 0, closingPaise: running, lines };
 }

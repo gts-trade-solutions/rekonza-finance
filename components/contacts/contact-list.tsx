@@ -29,8 +29,11 @@ import { DataTable, resetColumnWidths, type Column } from '@/components/shared/d
 import { Money } from '@/components/shared/money';
 import { EmptyState } from '@/components/shared/empty-state';
 import { AsyncPage } from '@/components/shared/async-state';
-import { downloadCsv } from '@/components/shared/report-shell';
-import { api, contacts, type ContactRow } from '@/lib/api/client';
+import { ExportDialog, ExportViewDialog, type ExportModule } from '@/components/shared/export-dialog';
+import { contains, type AdvancedSearchConfig } from '@/components/shared/advanced-search';
+import { ImportContactsDialog } from '@/components/contacts/contact-import';
+import { api, contactPersons, contacts, type ContactRow } from '@/lib/api/client';
+import type { Sheet } from '@/lib/xlsx';
 import { useApi } from '@/lib/api/use-api';
 import { usePermission } from '@/lib/store/hooks';
 import { stateName } from '@/lib/tax/gst';
@@ -184,10 +187,80 @@ export function ContactList({ side }: { side: Side }) {
     const body = 'Dear Customer,\n\nTo issue GST-compliant invoices, please reply with your GSTIN, legal name, billing address and place of supply.\n\nThank you.';
     window.location.href = `mailto:?bcc=${encodeURIComponent(emails.join(','))}&subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
   };
-  const exportView = () => downloadCsv(`${nouns.toLowerCase()}-${view}.csv`, [
-    ['Name', 'Company Name', 'Email', 'Work Phone', customer ? 'Receivables' : 'Payables', 'Unused Credits', 'GSTIN', 'Status'],
-    ...rows.map((c) => [c.displayName, c.legalName ?? '', c.email ?? '', c.phone ?? '', (balanceOf(c) / 100).toFixed(2), (unusedOf(c) / 100).toFixed(2), c.gstin ?? '', c.isArchived ? 'Inactive' : 'Active']),
-  ]);
+  // ── Zoho's ⋯ → Import and Export, as dialogs.
+  const [importing, setImporting] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [exportingView, setExportingView] = useState(false);
+  /** Export Current View: the view's rows and Zoho's visible columns. */
+  const viewSheet = (): Sheet => ({
+    name: current.label.slice(0, 31),
+    rows: [
+      ['Name', 'Company Name', 'Email', 'Work Phone', customer ? 'Receivables' : 'Payables', 'Unused Credits'],
+      ...rows.map((c) => [c.displayName, c.legalName ?? '', c.email ?? '', c.phone ?? '', balanceOf(c) / 100, unusedOf(c) / 100]),
+    ],
+  });
+  const inPeriod = (c: ContactRow, from: string | null, to: string | null) => !from || !to || ((c.createdAt ?? '').slice(0, 10) >= from && (c.createdAt ?? '').slice(0, 10) <= to);
+  const exportModules: ExportModule[] = [
+    {
+      value: nouns.toLowerCase(), label: nouns,
+      sheets: ({ from, to, pii }) => [{
+        name: nouns,
+        rows: [
+          ['Display Name', 'Company Name', 'Salutation', 'First Name', 'Last Name', 'Email', 'Work Phone', 'Mobile', `${noun} Type`, 'GST Treatment', 'GSTIN', 'PAN',
+            'Place of Supply', 'Currency', 'Payment Terms', customer ? 'Receivables' : 'Payables', 'Unused Credits', 'Credit Limit', 'Status', 'Website', 'Remarks', 'Created Time'],
+          ...all.filter((c) => inPeriod(c, from, to)).map((c) => [
+            c.displayName, c.legalName ?? '', c.salutation ?? '', c.firstName ?? '', c.lastName ?? '',
+            pii ? c.email ?? '' : '', pii ? c.phone ?? '' : '', pii ? c.mobile ?? '' : '',
+            c.contactType === 'individual' ? 'Individual' : 'Business', TREATMENT[c.gstTreatment] ?? c.gstTreatment, c.gstin ?? '', pii ? c.pan ?? '' : '',
+            c.stateCode === '96' ? 'Foreign Country' : stateName(c.stateCode), c.currency ?? 'INR', TERMS[c.paymentTerms ?? ''] ?? c.paymentTerms ?? '',
+            balanceOf(c) / 100, unusedOf(c) / 100, c.creditLimitPaise / 100, c.isArchived ? 'Inactive' : 'Active', c.website ?? '', c.notes ?? '', (c.createdAt ?? '').slice(0, 10),
+          ]),
+        ],
+      }],
+    },
+    {
+      value: 'contact-persons', label: `${noun}'s Contact Persons`,
+      sheets: async ({ from, to, pii }) => {
+        const out: (string | number)[][] = [['Display Name', 'Salutation', 'First Name', 'Last Name', 'Email Address', 'Work Phone', 'Mobile', 'Designation', 'Department', 'Primary']];
+        for (const c of all.filter((x) => inPeriod(x, from, to))) {
+          for (const p of (await contactPersons.list(c.id)).persons) {
+            out.push([c.displayName, p.salutation ?? '', p.firstName ?? p.name, p.lastName ?? '', pii ? p.email ?? '' : '', pii ? p.phone ?? '' : '', pii ? p.mobile ?? '' : '', p.designation ?? '', p.department ?? '', p.isPrimary ? 'Yes' : 'No']);
+          }
+        }
+        return [{ name: 'Contact Persons', rows: out }];
+      },
+    },
+    {
+      value: 'addresses', label: `${noun}'s Addresses`,
+      sheets: ({ from, to, pii }) => [{
+        name: 'Addresses',
+        rows: [
+          ['Display Name', 'Address Type', 'Attention', 'Address', 'Street 2', 'City', 'State', 'Pin Code', 'Country', 'Phone', 'Fax Number'],
+          ...all.filter((c) => inPeriod(c, from, to)).flatMap((c) => (['billing', 'shipping'] as const).map((k) => [
+            c.displayName, k === 'billing' ? 'Billing' : 'Shipping', c[`${k}Attention`] ?? '', (k === 'billing' ? c.billingAddress : c.shippingAddress) ?? '', c[`${k}Street2`] ?? '',
+            c[`${k}City`] ?? '', c[`${k}State`] ?? '', c[`${k}Pincode`] ?? '', c[`${k}Country`] ?? '', pii ? c[`${k}Phone`] ?? '' : '', pii ? c[`${k}Fax`] ?? '' : '',
+          ]).filter((r) => r.slice(2).some(Boolean))),
+        ],
+      }],
+    },
+  ];
+  /** Zoho's advanced search: the magnifier at the end of the header row. */
+  const advancedSearch: AdvancedSearchConfig<ContactRow> = {
+    module: nouns,
+    fields: [
+      { key: 'name', label: 'Display Name', match: (c, v) => contains(c.displayName, v) },
+      { key: 'type', label: `${noun} Type`, options: [{ value: '', label: '' }, { value: 'business', label: 'Business' }, { value: 'individual', label: 'Individual' }], match: (c, v) => (c.contactType ?? 'business') === v },
+      { key: 'company', label: 'Company Name', match: (c, v) => contains(c.legalName, v) },
+      { key: 'first', label: 'First Name', match: (c, v) => contains(c.firstName, v) },
+      { key: 'last', label: 'Last Name', match: (c, v) => contains(c.lastName, v) },
+      { key: 'email', label: 'Email', match: (c, v) => contains(c.email, v) },
+      { key: 'status', label: 'Status', options: [{ value: '', label: 'All' }, { value: 'active', label: 'Active' }, { value: 'inactive', label: 'Inactive' }], match: (c, v) => (v === 'active' ? !c.isArchived : c.isArchived) },
+      { key: 'phone', label: 'Phone', match: (c, v) => contains(`${c.phone ?? ''} ${c.mobile ?? ''}`, v) },
+      { key: 'address', label: 'Address', match: (c, v) => contains([c.billingAddress, c.billingStreet2, c.billingCity, c.billingState, c.billingPincode, c.shippingAddress, c.shippingCity].join(' '), v) },
+      { key: 'pan', label: 'PAN', match: (c, v) => contains(c.pan, v) },
+      { key: 'notes', label: 'Notes', match: (c, v) => contains(c.notes, v) },
+    ],
+  };
 
   return (
     <>
@@ -222,7 +295,7 @@ export function ContactList({ side }: { side: Side }) {
                   <DropdownMenuSub>
                     <DropdownMenuSubTrigger>Import</DropdownMenuSubTrigger>
                     <DropdownMenuSubContent className="min-w-48">
-                      <DropdownMenuItem onClick={() => router.push('/settings/import')}>Import {nouns}</DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => setImporting(true)} data-slot="contacts-import">Import {nouns}</DropdownMenuItem>
                     </DropdownMenuSubContent>
                   </DropdownMenuSub>
                 )}
@@ -230,8 +303,8 @@ export function ContactList({ side }: { side: Side }) {
                   <DropdownMenuSub>
                     <DropdownMenuSubTrigger>Export</DropdownMenuSubTrigger>
                     <DropdownMenuSubContent className="min-w-48">
-                      {canImport && <DropdownMenuItem onClick={() => router.push('/settings/export')}>Export {nouns}</DropdownMenuItem>}
-                      {canExport && <DropdownMenuItem onClick={exportView} data-slot="contacts-export-view">Export Current View</DropdownMenuItem>}
+                      {canExport && <DropdownMenuItem onClick={() => setExporting(true)} data-slot="contacts-export">Export {nouns}</DropdownMenuItem>}
+                      {canExport && <DropdownMenuItem onClick={() => setExportingView(true)} data-slot="contacts-export-view">Export Current View</DropdownMenuItem>}
                     </DropdownMenuSubContent>
                   </DropdownMenuSub>
                 )}
@@ -258,6 +331,7 @@ export function ContactList({ side }: { side: Side }) {
               activeTab={current.value}
               onTabChange={setView}
               customViews={{ list: nouns.toLowerCase(), baseTab: 'all', fields: viewFields }}
+              advancedSearch={advancedSearch}
               selectable={canEdit || canDelete}
               bulkActions={(picked, clear) => (
                 <div className="flex flex-wrap gap-2" data-slot="contacts-bulk">
@@ -323,6 +397,9 @@ export function ContactList({ side }: { side: Side }) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      <ImportContactsDialog side={side} open={importing} onOpenChange={setImporting} onDone={() => state.refetch()} />
+      {exporting && <ExportDialog open onOpenChange={setExporting} title={`Export ${nouns}`} noun={nouns} modules={exportModules} filename={nouns.toLowerCase()} />}
+      {exportingView && <ExportViewDialog open onOpenChange={setExportingView} filename={`${nouns.toLowerCase()}-${view}`} sheet={viewSheet} />}
     </>
   );
 }

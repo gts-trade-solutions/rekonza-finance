@@ -859,6 +859,8 @@ export interface Contacts {
   billing_pincode: string | null;
   billing_state: string | null;
   billing_street2: string | null;
+  business_legal_name: string | null;
+  business_trade_name: string | null;
   cin: string | null;
   constitution: string | null;
   contact_type: Generated<"business" | "individual">;
@@ -875,7 +877,7 @@ export interface Contacts {
   first_name: string | null;
   gst_registered_on: ColumnType<string | null, string | null, string | null>;
   gst_status: string | null;
-  gst_treatment: Generated<"consumer" | "deemed_export" | "overseas" | "registered" | "registered_composition" | "sez" | "sez_developer" | "uin" | "unregistered">;
+  gst_treatment: Generated<"consumer" | "deemed_export" | "overseas" | "registered" | "registered_composition" | "sez" | "sez_developer" | "tax_deductor" | "uin" | "unregistered">;
   gstin: string | null;
   id: Generated<number>;
   incorporated_on: ColumnType<string | null, string | null, string | null>;
@@ -885,6 +887,7 @@ export interface Contacts {
   language: Generated<string>;
   last_name: string | null;
   legal_name: string | null;
+  linked_contact_id: number | null;
   merged_at: Date | null;
   merged_into_id: number | null;
   mobile: string | null;

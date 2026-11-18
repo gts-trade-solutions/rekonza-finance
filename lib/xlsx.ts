@@ -124,7 +124,34 @@ function crc32(bytes: Uint8Array): number {
   return (c ^ 0xffffffff) >>> 0;
 }
 
-function zip(entries: [string, Uint8Array][]): Uint8Array {
+/**
+ * Zip's traditional password protection (PKWARE "ZipCrypto"): what Windows,
+ * macOS and 7-Zip open by asking for the password. Not strong encryption, but
+ * the protection Zoho's "File Protection Password" gives an export too.
+ */
+function zipCrypto(data: Uint8Array, password: string, crc: number): Uint8Array {
+  let k0 = 0x12345678, k1 = 0x23456789, k2 = 0x34567890;
+  const step = (c: number, b: number) => (CRC_TABLE[(c ^ b) & 0xff] ^ (c >>> 8)) >>> 0;
+  const update = (b: number) => {
+    k0 = step(k0, b);
+    k1 = (k1 + (k0 & 0xff)) >>> 0;
+    k1 = (Math.imul(k1, 134775813) + 1) >>> 0;
+    k2 = step(k2, k1 >>> 24);
+  };
+  const stream = () => { const x = (k2 | 2) & 0xffff; return (Math.imul(x, x ^ 1) >>> 8) & 0xff; };
+  for (const b of enc.encode(password)) update(b);
+  const head = new Uint8Array(12);
+  if (typeof crypto !== 'undefined' && crypto.getRandomValues) crypto.getRandomValues(head.subarray(0, 11));
+  else for (let i = 0; i < 11; i++) head[i] = Math.floor(Math.random() * 256);
+  head[11] = (crc >>> 24) & 0xff; // the check byte unzip tests the password against
+  const out = new Uint8Array(12 + data.length);
+  const put = (i: number, plain: number) => { out[i] = plain ^ stream(); update(plain); };
+  for (let i = 0; i < 12; i++) put(i, head[i]);
+  for (let i = 0; i < data.length; i++) put(12 + i, data[i]);
+  return out;
+}
+
+function zip(entries: [string, Uint8Array][], password?: string): Uint8Array {
   const parts: Uint8Array[] = [];
   const central: Uint8Array[] = [];
   let offset = 0;
@@ -132,19 +159,22 @@ function zip(entries: [string, Uint8Array][]): Uint8Array {
   const dosTime = 0;
   const dosDate = ((2026 - 1980) << 9) | (1 << 5) | 1;
 
-  for (const [name, data] of entries) {
+  for (const [name, plain] of entries) {
     const nameBytes = enc.encode(name);
-    const crc = crc32(data);
+    const crc = crc32(plain);
+    // With a password the stored bytes are the encrypted ones, twelve longer; the CRC and size are the plain file's.
+    const data = password ? zipCrypto(plain, password, crc) : plain;
+    const flags = 0x0800 | (password ? 0x0001 : 0);
     const local = new DataView(new ArrayBuffer(30));
     local.setUint32(0, 0x04034b50, true);
     local.setUint16(4, 20, true);
-    local.setUint16(6, 0x0800, true); // UTF-8 names
+    local.setUint16(6, flags, true); // UTF-8 names, and encrypted when there is a password
     local.setUint16(8, 0, true); // stored
     local.setUint16(10, dosTime, true);
     local.setUint16(12, dosDate, true);
     local.setUint32(14, crc, true);
     local.setUint32(18, data.length, true);
-    local.setUint32(22, data.length, true);
+    local.setUint32(22, plain.length, true);
     local.setUint16(26, nameBytes.length, true);
     local.setUint16(28, 0, true);
     parts.push(new Uint8Array(local.buffer), nameBytes, data);
@@ -153,13 +183,13 @@ function zip(entries: [string, Uint8Array][]): Uint8Array {
     cd.setUint32(0, 0x02014b50, true);
     cd.setUint16(4, 20, true);
     cd.setUint16(6, 20, true);
-    cd.setUint16(8, 0x0800, true);
+    cd.setUint16(8, flags, true);
     cd.setUint16(10, 0, true);
     cd.setUint16(12, dosTime, true);
     cd.setUint16(14, dosDate, true);
     cd.setUint32(16, crc, true);
     cd.setUint32(20, data.length, true);
-    cd.setUint32(24, data.length, true);
+    cd.setUint32(24, plain.length, true);
     cd.setUint16(28, nameBytes.length, true);
     cd.setUint32(42, offset, true);
     central.push(new Uint8Array(cd.buffer), nameBytes);
@@ -226,4 +256,63 @@ export function downloadWorkbook(filename: string, sheets: Sheet[]) {
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+// ── Zoho's export formats ───────────────────────────────────────────────────
+
+export type ExportFormat = 'csv' | 'xls' | 'xlsx';
+
+/** A sheet as CSV: quoted where it must be, a byte-order mark so Excel reads the rupee sign. */
+export function csvText(rows: Cell[][]): string {
+  const cell = (v: Cell) => {
+    if (v === null || v === undefined) return '';
+    const s = String(v);
+    return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  return '\ufeff' + rows.map((r) => r.map(cell).join(',')).join('\r\n');
+}
+
+/**
+ * Sheets as Excel's XML Spreadsheet 2003, saved as .xls: Zoho's "XLS
+ * (Microsoft Excel 1997-2004 Compatible)". Excel opens it (and may say the
+ * format is not the extension's); LibreOffice and Numbers read it as is.
+ */
+export function xlsXml(sheets: Sheet[]): string {
+  // The file's own esc: entities escaped, and the control characters XML forbids taken out.
+  const cell = (v: Cell) => (typeof v === 'number' && Number.isFinite(v)
+    ? `<Cell><Data ss:Type="Number">${v}</Data></Cell>`
+    : `<Cell><Data ss:Type="String">${esc(v === null || v === undefined ? '' : String(v))}</Data></Cell>`);
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<?mso-application progid="Excel.Sheet"?>\n`
+    + '<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">'
+    + sheets.map((s) => `<Worksheet ss:Name="${esc(s.name.slice(0, 31))}"><Table>${s.rows.map((r) => `<Row>${r.map(cell).join('')}</Row>`).join('')}</Table></Worksheet>`).join('')
+    + '</Workbook>';
+}
+
+/**
+ * In the browser: sheets handed over in the format chosen, as Zoho's export
+ * dialog does. CSV holds one sheet, so several become one CSV each in a zip.
+ * With a password, the file goes inside a password-protected zip.
+ */
+export function downloadExport(filename: string, sheets: Sheet[], format: ExportFormat, password?: string) {
+  if (!allowOutput('export', filename)) return;
+  const files: [string, Uint8Array][] = format === 'csv'
+    ? sheets.map((s) => [`${sheets.length > 1 ? `${filename}-${s.name}` : filename}.csv`, enc.encode(csvText(s.rows))])
+    : [[`${filename}.${format}`, format === 'xlsx' ? workbook(sheets) : enc.encode(xlsXml(sheets))]];
+  const zipped = !!password || files.length > 1;
+  const bytes = zipped ? zip(files, password || undefined) : files[0][1];
+  const name = zipped ? `${filename}.zip` : files[0][0];
+  const type = zipped ? 'application/zip' : format === 'csv' ? 'text/csv' : format === 'xls' ? 'application/vnd.ms-excel' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/** For tests: the zip bytes as downloadExport builds them. */
+export function exportZip(files: [string, Uint8Array][], password?: string): Uint8Array {
+  return zip(files, password);
 }

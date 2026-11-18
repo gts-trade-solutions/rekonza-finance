@@ -60,9 +60,11 @@ const DIALOGS = [
   { list: '/api/exceptions?view=closed', detail: '/api/exceptions/[id]' },
   // A customer's record: the Income chart's other periods and basis, the
   // attachments behind the paperclip, and More → Configure Customer Portal.
-  ...['months=12&basis=accrual', 'months=6&basis=cash', 'months=12&basis=cash'].map((q) => ({
-    list: '/api/contacts?kind=customer&limit=500', detail: `/api/contacts/[id]/activity?view=income&side=customer&${q}`,
-  })),
+  ...['this_fy', 'prev_fy', 'last_12', 'last_6'].flatMap((period) => ['accrual', 'cash'].map((basis) => ({
+    list: '/api/contacts?kind=customer&limit=500', detail: `/api/contacts/[id]/activity?view=income&side=customer&period=${period}&basis=${basis}`,
+  }))),
+  // The Statement tab's Filter By: Outstanding (its dates match any period, as a report's do).
+  { list: '/api/contacts?kind=customer&limit=500', detail: `/api/contacts/[id]/statement?side=customer&from=${new Date().toISOString().slice(0, 8)}01&to=${new Date().toISOString().slice(0, 10)}&filter=outstanding` },
   { list: '/api/contacts?kind=customer&limit=500', detail: '/api/files?targetType=contact&targetId=[id]' },
   { list: '/api/contacts?kind=customer&limit=500', detail: '/api/portal-access?contactId=[id]&side=customer' },
 ];

@@ -22,6 +22,7 @@ import { createPortal } from 'react-dom';
 import { ArrowDown, ArrowUp, ChevronDown, Plus, Search, SlidersHorizontal, Star, Trash2, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { CustomViewDialog } from '@/components/shared/custom-view-dialog';
+import { AdvancedSearchDialog, type AdvancedSearchConfig } from '@/components/shared/advanced-search';
 import { api } from '@/lib/api/client';
 import { applyView, type CustomView, type ViewField } from '@/lib/custom-views';
 import { Input } from '@/components/ui/input';
@@ -276,6 +277,7 @@ export function DataTable<T>({
   dateFilter,
   columnsKey,
   customViews,
+  advancedSearch,
 }: {
   rows: T[];
   columns: Column<T>[];
@@ -297,6 +299,8 @@ export function DataTable<T>({
   bulkActions?: (selected: T[], clear: () => void) => ReactNode;
   /** Adds the shared date picker to the toolbar and filters rows by it. */
   dateFilter?: DateFilterConfig<T>;
+  /** Zoho's advanced search: the magnifier at the end of the header row, and its dialog. */
+  advancedSearch?: AdvancedSearchConfig<T>;
   /** Where this list's chosen columns are remembered; by default its page title and columns. */
   columnsKey?: string;
   /**
@@ -306,6 +310,9 @@ export function DataTable<T>({
   customViews?: { list: string; fields: ViewField<T>[]; baseTab?: string };
 }) {
   const [query, setQuery] = useState('');
+  // The advanced search's criteria, and its dialog.
+  const [criteria, setCriteria] = useState<Record<string, string>>({});
+  const [searchOpen, setSearchOpen] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   // Uncontrolled fallback. When the page passes value/onChange it owns the
   // range instead, so its tab counts and this table agree on the period.
@@ -457,6 +464,9 @@ export function DataTable<T>({
       out = out.filter((r) => withinRange(dateFilter.getDate(r), range));
     }
     if (activeCustom && customViews) out = applyView(out, activeCustom.filters, customViews.fields);
+    if (advancedSearch && Object.keys(criteria).length) {
+      out = out.filter((r) => advancedSearch.fields.every((f) => !criteria[f.key] || f.match(r, criteria[f.key])));
+    }
     if (query.trim()) {
       const q = query.toLowerCase();
       out = out.filter((r) => searchText(r).includes(q));
@@ -476,7 +486,7 @@ export function DataTable<T>({
     }
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows, query, sort, columns, range, dateFilter, activeCustom]);
+  }, [rows, query, sort, columns, range, dateFilter, activeCustom, criteria, advancedSearch]);
 
   // Selecting rows then changing the filter would act on invisible records.
   useEffect(() => setSelected(new Set()), [activeTab, query, range]);
@@ -606,6 +616,17 @@ export function DataTable<T>({
         </div>
       )}
 
+      {advancedSearch && Object.keys(criteria).length > 0 && (
+        <div className="flex items-center gap-3 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-[13px]" data-slot="advanced-search-results">
+          <span>Search results: {filtered.length} matching {Object.entries(criteria).map(([k, v]) => `${advancedSearch.fields.find((f) => f.key === k)?.label ?? k} "${advancedSearch.fields.find((f) => f.key === k)?.options?.find((o) => o.value === v)?.label ?? v}"`).join(', ')}</span>
+          <button type="button" className="ml-auto text-link hover:underline" onClick={() => setSearchOpen(true)}>Change</button>
+          <button type="button" className="text-link hover:underline" onClick={() => setCriteria({})} data-slot="advanced-search-clear">Clear Search</button>
+        </div>
+      )}
+      {advancedSearch && (
+        <AdvancedSearchDialog config={advancedSearch} view={activeCustom?.name ?? tabs?.find((x) => x.value === activeTab)?.title ?? `${tabs?.find((x) => x.value === activeTab)?.label ?? 'All'} ${advancedSearch.module}`}
+          value={criteria} open={searchOpen} onOpenChange={setSearchOpen} onSearch={setCriteria} />
+      )}
       <div className="overflow-x-auto rounded-md border thin-scroll" data-slot="data-table-grid">
         <Table>
           <TableHeader>
@@ -659,12 +680,20 @@ export function DataTable<T>({
                   )}
                 </TableHead>
               ))}
+              {advancedSearch && (
+                <TableHead className="w-10 text-right">
+                  <button type="button" aria-label="Advanced Search" title="Advanced Search" data-slot="advanced-search-open"
+                    onClick={() => setSearchOpen(true)} className="inline-grid size-6 place-items-center rounded text-muted-foreground hover:text-foreground">
+                    <Search className="size-3.5" />
+                  </button>
+                </TableHead>
+              )}
             </TableRow>
           </TableHeader>
           <TableBody>
             {filtered.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={shown.length + (lead ? 1 : 0)} className="h-28 text-center text-sm text-muted-foreground">
+                <TableCell colSpan={shown.length + (lead ? 1 : 0) + (advancedSearch ? 1 : 0)} className="h-28 text-center text-sm text-muted-foreground">
                   {/* Say which filter is hiding things, or the table looks broken. */}
                   {range.mode !== 'all' ? (
                     <span className="space-y-2">
@@ -722,6 +751,7 @@ export function DataTable<T>({
                       {c.cell(row)}
                     </TableCell>
                   ))}
+                  {advancedSearch && <TableCell className="w-10" />}
                 </TableRow>
               ))
             )}
