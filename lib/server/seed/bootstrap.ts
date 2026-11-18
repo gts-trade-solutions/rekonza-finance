@@ -291,6 +291,8 @@ export async function bootstrap(trx: Trx, options: BootstrapOptions = {}): Promi
         sale_account_id: accounts[i.kind === 'service' ? CODE.SERVICE_INCOME : CODE.SALES],
         purchase_account_id: accounts[CODE.PURCHASES],
         description: i.description ?? null,
+        // Who the shop buys it from (Zoho's preferred vendor).
+        preferred_vendor_id: i.preferredVendorId ? contacts[i.preferredVendorId] ?? null : null,
         track_inventory: 0,
         is_archived: i.isArchived ? 1 : 0,
       })

@@ -38,6 +38,7 @@ import { ApiError, badRequest, conflict, notFound } from '../http';
 import { voidReason, voidStamp } from './void-reason';
 import { recordSerials } from './serials';
 import { checkGodown } from './godowns';
+import { itemSaleAccounts } from './item-accounts';
 
 // ── Shared preamble ──────────────────────────────────────────────────────────
 
@@ -533,6 +534,10 @@ export async function createCreditNote(
     .executeTakeFirstOrThrow();
   const id = Number(inserted.insertId);
 
+  // Each line comes back out of the income head its item's sale went to (the
+  // item's sales account, as on the invoice), the rest out of Sales.
+  const itemAccounts = await itemSaleAccounts(trx, orgId, costed.lines.map((c) => c.itemId));
+  const lineAccount = (c: { itemId: number | null }) => (c.itemId ? itemAccounts.get(c.itemId) ?? null : null);
   await trx
     .insertInto('credit_note_lines')
     .values(
@@ -541,6 +546,7 @@ export async function createCreditNote(
         credit_note_id: id,
         line_no: i + 1,
         item_id: c.itemId,
+        account_id: lineAccount(c),
         description: c.description,
         hsn_sac: c.hsnSac,
         qty: c.qty,
@@ -565,8 +571,15 @@ export async function createCreditNote(
     input.lines.map((l, i) => ({ lineId: cnLineIds[i] ?? null, itemId: l.itemId, qty: l.qty, serials: l.serials })), { check: true });
 
   const acc = await accountIds(trx, orgId);
+  const own = new Map<number, number>();
+  for (const c of costed.lines) {
+    const a = lineAccount(c);
+    if (a) own.set(a, (own.get(a) ?? 0) + c.taxable);
+  }
+  const elsewhere = [...own.values()].reduce((t, v) => t + v, 0);
   const lines: DraftLine[] = [
-    { accountId: requireAccount(acc, CODE.SALES), debit: costed.tax.taxablePaise },
+    { accountId: requireAccount(acc, CODE.SALES), debit: costed.tax.taxablePaise - elsewhere },
+    ...[...own].map(([accountId, debit]) => ({ accountId, debit })),
     { accountId: requireAccount(acc, CODE.GST_CGST), debit: costed.tax.cgstPaise },
     { accountId: requireAccount(acc, CODE.GST_SGST), debit: costed.tax.sgstPaise },
     { accountId: requireAccount(acc, CODE.GST_IGST), debit: costed.tax.igstPaise },

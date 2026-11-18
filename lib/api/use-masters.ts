@@ -55,6 +55,8 @@ interface MastersResponse {
     trackInventory?: boolean; trackBatches?: boolean; trackSerials?: boolean;
     altUqc?: string | null; altFactor?: number | null; mrpPaise?: number | null;
     origin?: 'local' | 'imported';
+    description?: string; purchaseDescription?: string;
+    itemType?: 'sales' | 'purchases' | 'sales_and_purchases'; preferredVendorId?: string | null;
   }[];
   hsnCodes: {
     id: string; code: string; kind: 'hsn' | 'sac'; description: string;
@@ -186,6 +188,11 @@ export function useMasters(): {
             saleAccountId: '',
             purchaseAccountId: '',
             isArchived: false,
+            // What a line says when picked, which side it is offered on, and who it is bought from.
+            description: i.description,
+            purchaseDescription: i.purchaseDescription,
+            itemType: i.itemType,
+            preferredVendorId: i.preferredVendorId ?? null,
           })),
 
           hsnCodes: m.hsnCodes.map<HsnCode>((h) => ({

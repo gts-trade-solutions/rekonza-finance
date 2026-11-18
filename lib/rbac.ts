@@ -127,6 +127,15 @@ export function hasPermission(
   return m[module]?.includes(action) ?? m[module.split('.')[0]]?.includes(action) ?? false;
 }
 
+/**
+ * Who sees what goods cost: purchase prices, standard costs, stock values.
+ * The sales role sells at a price; what the business paid for it is not theirs
+ * to see. The screens hide it, and the item endpoints leave it out.
+ */
+export function canSeeCosts(role: RoleName | undefined): boolean {
+  return role === 'admin' || role === 'accountant' || role === 'viewer';
+}
+
 /** The modules a custom role can be given, in the order the role editor lists them. */
 export const PERMISSION_MODULES: { key: string; label: string; actions: Action[] }[] = [
   { key: 'sales', label: 'Sales', actions: ['view', 'create', 'edit', 'approve', 'void', 'print', 'export'] },

@@ -42,7 +42,8 @@ export function vendorOptions(s: AppState): ComboboxOption[] {
 
 export function itemOptions(s: AppState, priceMode: 'sale' | 'purchase' = 'sale'): ComboboxOption[] {
   return s.items
-    .filter((i) => !i.isArchived)
+    // Zoho's ticks: a sale-only item is not bought, a purchase-only one not sold.
+    .filter((i) => !i.isArchived && i.itemType !== (priceMode === 'sale' ? 'purchases' : 'sales'))
     .map((i) => ({
       value: i.id,
       label: i.name,

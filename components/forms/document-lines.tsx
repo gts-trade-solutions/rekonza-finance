@@ -161,7 +161,8 @@ export function LineItemsEditor({
     const r = codeRates(item.hsnSac);
     update(key, {
       itemId: item.id,
-      description: item.description ?? '',
+      // A purchase line says what the item is called when bought, as Zoho's does.
+      description: (priceMode === 'purchase' ? item.purchaseDescription || item.description : item.description) ?? '',
       hsnSac: item.hsnSac,
       uqc: item.uqc,
       ratePaise: priceFor?.(item.id) ?? (priceMode === 'sale' ? item.salePricePaise : item.purchasePricePaise),

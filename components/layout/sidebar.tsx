@@ -30,6 +30,7 @@ import { setNavCollapsed, useNavChosenCollapsed, useNavCollapsed } from './nav-s
 
 /** Where the "+" on a nav row goes, when that screen has a create form. */
 const CREATE_HREF: Record<string, string> = {
+  '/sales/items': '/sales/items/new',
   '/sales/customers': '/sales/customers/new',
   '/sales/invoices': '/sales/invoices/new',
   '/sales/payments': '/sales/payments/new',

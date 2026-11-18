@@ -37,6 +37,7 @@ import { allocateNumber, assertGstDocNumber, postEntry, reverseEntry, type Draft
 import { CODE, accountIds, requireAccount } from '../ledger/chart-of-accounts';
 import { ApiError, badRequest, notFound } from '../http';
 import { tcsRateOn } from '../tax/rates';
+import { itemSaleAccounts } from './item-accounts';
 
 /** '26-27' for any date in the 2026-27 financial year. */
 /** Whether every line is a service: by its item, or by a SAC (99…) code. */
@@ -474,6 +475,9 @@ export async function createInvoice(
     }).where('id', '=', invoiceId).execute();
   }
 
+  // A line with no account of its own credits its item's sales account, as
+  // Zoho's does (a service item's is Service Income); with neither, Sales.
+  const itemAccounts = await itemSaleAccounts(trx, orgId, computed.map((c) => c.itemId));
   await trx
     .insertInto('invoice_lines')
     .values(
@@ -484,7 +488,7 @@ export async function createInvoice(
         source_line_id: input.lineSources?.[i]?.id ?? null,
         line_no: i + 1,
         item_id: c.itemId,
-        account_id: input.lines[i]?.accountId ?? null,
+        account_id: input.lines[i]?.accountId ?? (c.itemId ? itemAccounts.get(c.itemId) : undefined) ?? null,
         batch_id: batchIds[i] ?? null,
         description: c.description,
         hsn_sac: c.hsnSac,

@@ -14,7 +14,8 @@
 
 import type { ReactNode } from 'react';
 import Link from 'next/link';
-import { X } from 'lucide-react';
+import { CircleHelp, X } from 'lucide-react';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 
 /** One labelled field. `width` controls the control column, not the label. */
@@ -27,9 +28,12 @@ export function FormRow({
   width = 'md',
   className,
   htmlFor,
+  help,
 }: {
   label?: string;
   required?: boolean;
+  /** Zoho's (?) beside a label: what the field is for, on hover. */
+  help?: string;
   hint?: ReactNode;
   error?: string;
   children: ReactNode;
@@ -56,6 +60,19 @@ export function FormRow({
         >
           {label}
           {required && <span className="ml-0.5">*</span>}
+          {help && (
+            <Tooltip>
+              <TooltipTrigger
+                aria-label={`About ${label}`}
+                className="ml-1 inline-grid size-4 translate-y-[2px] place-items-center rounded-full text-muted-foreground hover:text-foreground"
+                data-slot="field-help"
+                render={<span role="button" tabIndex={0} />}
+              >
+                <CircleHelp className="size-3.5" />
+              </TooltipTrigger>
+              <TooltipContent className="max-w-xs text-[12px] leading-relaxed">{help}</TooltipContent>
+            </Tooltip>
+          )}
         </label>
       )}
       <div className={cn('min-w-0 flex-1', widths[width])}>

@@ -98,7 +98,7 @@ export function GlobalSearch({
         label: it.name,
         sublabel: [it.sku, it.hsnSac && `HSN ${it.hsnSac}`].filter(Boolean).join(' · '),
         meta: formatINR(it.salePricePaise),
-        href: '/sales/items',
+        href: `/sales/items/${it.id}`,
       });
     }
 

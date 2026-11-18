@@ -64,6 +64,8 @@ const TONES: Record<string, Tone> = {
   written_off: 'muted',
   refunded: 'muted',
   returned: 'muted',
+  inactive: 'muted',
+  stopped: 'muted',
 };
 
 export function StatusBadge({ status, className }: { status: string; className?: string }) {

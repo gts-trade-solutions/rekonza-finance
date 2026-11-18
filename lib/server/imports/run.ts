@@ -204,12 +204,27 @@ const items: Handler = async (trx, ctx, l, r) => {
   if (openingQty && !track) fail('An item with opening stock has to track stock.');
 
   const sku = opt(r.sku);
+  // Zoho's columns: the preferred vendor by name, the product codes, the purchase description.
+  const vendor = str(r.preferred_vendor) ? party(l, r.preferred_vendor, 'vendor', 'Preferred vendor') : null;
+  const codeOf = (v: unknown, max: number, label: string) => {
+    const c = opt(v)?.toUpperCase() ?? null;
+    if (c && c.length > max) fail(`${label} "${c}" is longer than ${max} characters.`);
+    return c;
+  };
+  // The income and expense heads an item made by hand gets: Sales (Service
+  // Income for a service) and Purchases.
+  const head = (code: string) => l.accounts.get(code)?.id ?? null;
   const id = Number((await trx.insertInto('items').values({
     org_id: ctx.orgId, kind, name, sku, hsn_sac: hsn, uqc: (opt(r.unit) ?? (kind === 'service' ? 'OTH' : 'NOS')).toUpperCase(),
     sale_price: toSqlFromPaise(paise(r.sale_price, 'Sale price') ?? 0), purchase_price: toSqlFromPaise(purchase),
     gst_rate_pct: rate, track_inventory: track ? 1 : 0,
     opening_stock_qty: openingQty ? String(openingQty) : null,
     opening_stock_rate: openingQty ? toSqlFromPaise(openingRate ?? purchase) : null,
+    description: opt(r.description), purchase_description: opt(r.purchase_description),
+    upc: codeOf(r.upc, 20, 'UPC'), ean: codeOf(r.ean, 20, 'EAN'), isbn: codeOf(r.isbn, 20, 'ISBN'), mpn: codeOf(r.mpn, 40, 'MPN'),
+    preferred_vendor_id: vendor,
+    sale_account_id: head(kind === 'service' ? CODE.SERVICE_INCOME : CODE.SALES), purchase_account_id: head(CODE.PURCHASES),
+    created_source: 'import',
   }).executeTakeFirstOrThrow()).insertId);
   l.items.set(l.key(name), { id, name, sku });
   if (sku) l.items.set(l.key(sku), { id, name, sku });

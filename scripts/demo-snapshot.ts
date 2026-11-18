@@ -74,6 +74,10 @@ const ON_DEMAND = [
   '/api/gst?view=gstr3b-file&ret={lastMonth}',
   '/api/documents/targets',
   '/api/documents/targets?type=bill&q=',
+  // Items' ⋯ → HSN/SAC Update History and Validate HSN/SAC, and the custom views behind "New View".
+  '/api/items/hsn-history',
+  '/api/hsn-codes?activeOnly=true',
+  '/api/saved-views?list=items',
 ];
 
 /** Lists whose records open from a row, and the screen each record opens on. */
@@ -81,6 +85,8 @@ const ROWS = [
   { api: '/api/contacts?kind=customer&limit=500', screen: '/sales/customers/[id]' },
   { api: '/api/invoices?limit=500', screen: '/sales/invoices/[id]' },
   { api: '/api/bills?limit=500', screen: '/purchases/bills/[id]' },
+  // Inactive ones too, as the item list's "All Items" shows them.
+  { api: '/api/items?archived=true', screen: '/sales/items/[id]' },
   // Printed copies, opened from a row's "⋯" menu, which leaves no link on the page to follow.
   ...['estimate', 'sales-order', 'challan', 'credit-note', 'retainer'].map((k) => ({ api: `/api/sales-documents?kind=${k}`, screen: `/print/${k}/[id]` })),
   ...['purchase-order', 'vendor-credit'].map((k) => ({ api: `/api/purchase-documents?kind=${k}`, screen: `/print/${k}/[id]` })),
@@ -154,11 +160,17 @@ async function visit(page: Page, route: string) {
   if (await picker.count().catch(() => 0)) {
     try {
       await picker.first().click({ timeout: 3_000 });
-      const views = await page.locator('[data-slot="table-tab"]').evaluateAll((els) => els.map((e) => e.getAttribute('data-tab') || ''));
+      // The menu opens with its search box first: wait for the views themselves.
+      await page.locator('[data-slot="table-tab"]').first().waitFor({ state: 'visible', timeout: 5_000 });
+      const views = await page.locator('[data-slot="table-tab"]').evaluateAll((els) => [...new Set(els.map((e) => e.getAttribute('data-tab') || ''))]);
+      // A menu fading out is still in the page: wait until it has gone before opening the next.
+      const closed = () => page.waitForFunction(() => !document.querySelector('[data-slot="table-tab"]'), null, { timeout: 5_000 }).catch(() => {});
       await page.keyboard.press('Escape');
+      await closed();
       for (const v of views.slice(1)) {
         await picker.first().click({ timeout: 3_000 });
-        await page.locator(`[data-slot="table-tab"][data-tab="${v}"]`).click({ timeout: 3_000 });
+        await page.locator(`[data-slot="table-tab"][data-tab="${v}"]`).first().click({ timeout: 3_000 });
+        await closed();
         await settle(page);
       }
     } catch {

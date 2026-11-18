@@ -200,6 +200,20 @@ export function downloadZip(filename: string, files: [name: string, text: string
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+/** In the browser: hand a zip of files (pictures, say) to the user as a download. */
+export function downloadFilesZip(filename: string, files: [name: string, bytes: Uint8Array][]) {
+  if (!allowOutput('export', filename)) return;
+  const blob = new Blob([zip(files) as BlobPart], { type: 'application/zip' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename.endsWith('.zip') ? filename : `${filename}.zip`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 /** In the browser: hand the workbook to the user as a download. */
 export function downloadWorkbook(filename: string, sheets: Sheet[]) {
   if (!allowOutput('export', filename)) return;

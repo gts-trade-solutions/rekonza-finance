@@ -39,6 +39,7 @@ export const GET = route(
         .select([
           'id', 'kind', 'name', 'sku', 'hsn_sac', 'uqc', 'sale_price',
           'purchase_price', 'gst_rate_pct', 'tax_pref', 'track_inventory', 'track_batches', 'track_serials', 'alt_uqc', 'alt_factor', 'mrp', 'origin',
+          'description', 'purchase_description', 'item_type', 'preferred_vendor_id',
         ])
         .where('org_id', '=', orgId)
         .where('is_archived', '=', 0)
@@ -186,6 +187,12 @@ export const GET = route(
         altUqc: i.alt_uqc,
         altFactor: i.alt_factor === null ? null : Number(i.alt_factor),
         mrpPaise: i.mrp === null ? null : toPaiseFromSql(i.mrp),
+        // What a line says when the item is picked: the description on a sale,
+        // the purchase description (else the description) on a bill or order.
+        description: i.description ?? undefined,
+        purchaseDescription: i.purchase_description ?? undefined,
+        itemType: i.item_type,
+        preferredVendorId: i.preferred_vendor_id ? asId(i.preferred_vendor_id) : null,
       })),
       // Dated rates travel with each code, so a form can pick the rate in
       // force on the document's own date rather than today's.

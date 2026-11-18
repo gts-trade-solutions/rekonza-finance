@@ -55,10 +55,17 @@ export const EXPORT_MODULES: ExportModule[] = [
     key: 'items', label: 'Items', permission: 'sales', dated: false, importKind: 'items',
     rows: async (ex, orgId) => {
       const r = await ex.selectFrom('items').selectAll().where('org_id', '=', orgId).orderBy('name').execute();
+      const vendorIds = [...new Set(r.map((i) => i.preferred_vendor_id).filter((x): x is number => !!x))];
+      const vendors = new Map(vendorIds.length
+        ? (await ex.selectFrom('contacts').select(['id', 'display_name']).where('org_id', '=', orgId).where('id', 'in', vendorIds).execute()).map((c) => [c.id, c.display_name])
+        : []);
       return r.map((i) => ({
         name: i.name, kind: i.kind, sku: i.sku, hsn_sac: i.hsn_sac, unit: i.uqc, sale_price: rs(i.sale_price),
         purchase_price: rs(i.purchase_price), gst_rate: Number(i.gst_rate_pct), track_stock: i.track_inventory ? 'yes' : 'no',
         description: i.description, tax_preference: i.tax_pref, reorder_level: i.reorder_level === null ? null : Number(i.reorder_level),
+        purchase_description: i.purchase_description, preferred_vendor: i.preferred_vendor_id ? vendors.get(i.preferred_vendor_id) ?? null : null,
+        upc: i.upc, ean: i.ean, isbn: i.isbn, mpn: i.mpn,
+        item_type: i.item_type, digital_service: i.is_digital_service ? 'yes' : 'no',
         archived: i.is_archived ? 'yes' : 'no',
       }));
     },

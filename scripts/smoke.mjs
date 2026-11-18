@@ -82,6 +82,8 @@ ROUTES.splice(ROUTES.length - 3, 0,
   ...await sample('/api/invoices?limit=5', 'invoices', (id) => `/sales/invoices/${id}/print`),
   ...await sample('/api/bills?limit=5', 'bills', (id) => `/purchases/bills/${id}`),
   ...await sample('/api/contacts?kind=customer', 'contacts', (id) => `/sales/customers/${id}`),
+  ...await sample('/api/items', 'items', (id) => `/sales/items/${id}`),
+  ...await sample('/api/items', 'items', (id) => `/sales/items/${id}/edit`),
 );
 
 const results = [];

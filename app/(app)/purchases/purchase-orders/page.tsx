@@ -178,8 +178,11 @@ export default function PurchaseOrdersPage() {
                       options={itemOptions({ items } as never, 'purchase')}
                       value={itemId}
                       onChange={(v) => {
+                        const it = items.find((i) => i.id === v);
                         setItemId(v);
-                        setRate(items.find((i) => i.id === v)?.purchasePricePaise ?? 0);
+                        setRate(it?.purchasePricePaise ?? 0);
+                        // Zoho's preferred vendor: the order starts with them, unless one is chosen.
+                        if (!vendorId && it?.preferredVendorId) setVendorId(it.preferredVendorId);
                       }}
                       placeholder="Select an item"
                       searchPlaceholder="Search items by name, SKU or HSN"

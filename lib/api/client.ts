@@ -689,6 +689,19 @@ export interface ItemRow {
   itemGroupId?: string | null;
   variant?: Record<string, string> | null;
   updatedAt: string;
+  createdAt?: string;
+  /** Zoho's Sales / Purchase Information ticks. */
+  itemType?: 'sales' | 'purchases' | 'sales_and_purchases';
+  isDigitalService?: boolean;
+  upc?: string | null;
+  ean?: string | null;
+  isbn?: string | null;
+  mpn?: string | null;
+  purchaseDescription?: string | null;
+  saleAccountId?: string | null;
+  purchaseAccountId?: string | null;
+  preferredVendorId?: string | null;
+  createdSource?: 'user' | 'import';
   qtySold: number;
   soldValuePaise: number;
   marginPaise: number;
@@ -783,12 +796,60 @@ export const contacts = {
   archive: (id: string) => api.patch<{ id: string }>('/api/contacts', { id, isArchived: true }),
 };
 
+/** One item's page (Zoho's item overview): the master, with its stock when it is kept in stock. */
+export interface ItemDetail {
+  item: ItemRow;
+  /** Goods kept in stock: on hand, promised on open sales orders, free to sell. Value is null when costs are hidden. */
+  stock: { onHand: number; valuePaise: number | null; committed: number; available: number } | null;
+  stockGroupName: string | null;
+  components: { itemId: string; name: string; uqc: string; qty: number }[];
+  saleAccount: { id: string; code: string; name: string } | null;
+  purchaseAccount: { id: string; code: string; name: string } | null;
+  preferredVendor: { id: string; name: string } | null;
+  /** Price lists that name this item, with its rate on each (Zoho's "Associated Price Lists"). */
+  priceLists: { id: string; name: string; ratePaise: number; isActive: boolean }[];
+  /** Its reporting tags (Zoho's "Reporting Tags"), as tag and option. */
+  tags: { tagId: string; tag: string; option: string }[];
+}
+
+export type ItemTxKind =
+  | 'estimate' | 'sales_order' | 'invoice' | 'debit_note' | 'challan' | 'credit_note' | 'recurring_invoice'
+  | 'purchase_order' | 'bill';
+
+/** A document line an item is on (its Transactions tab). */
+export interface ItemTxRow {
+  kind: ItemTxKind;
+  id: string;
+  date: string;
+  number: string;
+  party: string;
+  qty: number;
+  ratePaise: number;
+  amountPaise: number;
+  status: string;
+}
+
+/** One change in an item's edit log (its History tab). */
+export interface ItemHistoryEntry {
+  id: string;
+  at: string;
+  actor: string | null;
+  action: string;
+  detail: string | null;
+  changes: { field: string; from: string; to: string }[];
+}
+
 export const items = {
   list: (params?: { kind?: 'goods' | 'service' | 'all'; search?: string; archived?: boolean; limit?: number }) =>
     api.get<{ items: ItemRow[] }>('/api/items', params),
+  get: (id: string) => api.get<ItemDetail>(`/api/items/${encodeURIComponent(id)}`),
+  transactions: (id: string) => api.get<{ purchases: boolean; rows: ItemTxRow[] }>(`/api/items/${encodeURIComponent(id)}/transactions`),
+  history: (id: string) => api.get<{ entries: ItemHistoryEntry[] }>(`/api/items/${encodeURIComponent(id)}/history`),
   create: (input: unknown) => api.post<{ id: string; name: string }>('/api/items', input),
   update: (input: unknown) => api.patch<{ id: string }>('/api/items', input),
   archive: (id: string) => api.patch<{ id: string }>('/api/items', { id, isArchived: true }),
+  /** Deletes an item that was never used; one that was is refused, to be marked inactive instead. */
+  remove: (id: string) => api.delete<{ id: string }>(`/api/items/${encodeURIComponent(id)}`),
 };
 
 // ── TDS returns ──────────────────────────────────────────────────────────────

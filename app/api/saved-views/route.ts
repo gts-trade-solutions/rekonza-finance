@@ -5,7 +5,8 @@ import { route, body, query, asId, notFound, forbidden } from '@/lib/server/http
 // Saved views: a list's filters under a name — "Overdue, this quarter" — for
 // the person who saved it, or shared with everyone in the company.
 
-const LIST = z.enum(['invoices', 'bills', 'expenses', 'payments-received', 'payments-made', 'contacts']);
+// Any list's name: the six with saved filters, and every list with Zoho's custom views ("items", …).
+const LIST = z.string().regex(/^[a-z][a-z0-9-]{1,39}$/, 'That is not a list.');
 
 export const GET = route(async ({ orgId, user, req }) => {
   const { list } = query(req, z.object({ list: LIST }));

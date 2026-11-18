@@ -3,10 +3,12 @@ import { sql } from 'kysely';
 import { db, transaction } from '@/lib/server/db';
 import { saveKit } from '@/lib/server/services/kits';
 import { route, body, query, asId, badRequest, conflict } from '@/lib/server/http';
-import { toPaiseFromSql, toSqlFromPaise } from '@/lib/server/money-sql';
+import { toSqlFromPaise } from '@/lib/server/money-sql';
 import { assertFresh } from '@/lib/server/concurrency';
 import { logAudit, auditMeta, snapshot, changesBetween, describeChanges } from '@/lib/server/audit';
 import { CODE, accountIds } from '@/lib/server/ledger/chart-of-accounts';
+import { selectItems, shapeItems } from '@/lib/server/services/item-read';
+import { ItemInput, UpdateInput } from '@/lib/server/services/item-input';
 
 const ListQuery = z.object({
   kind: z.enum(['goods', 'service', 'all']).optional(),
@@ -17,16 +19,14 @@ const ListQuery = z.object({
 });
 
 /**
- * The item catalogue, with how much each item has actually sold.
- *
- * The sales figures come from the invoice lines rather than a stored counter.
- * A counter is one more thing that can drift; the lines are the record.
+ * The item catalogue, with how much each item has actually sold
+ * (services/item-read.ts, which one item's own page reads too).
  */
 export const GET = route(
   async ({ orgId, req }) => {
     const q = query(req, ListQuery);
 
-    let base = db.selectFrom('items').where('org_id', '=', orgId);
+    let base = selectItems(orgId);
     if (!q.archived) base = base.where('is_archived', '=', 0);
     if (q.kind && q.kind !== 'all') base = base.where('kind', '=', q.kind);
     if (q.search) {
@@ -36,123 +36,11 @@ export const GET = route(
       );
     }
 
-    const rows = await base
-      .select([
-        'id', 'kind', 'name', 'sku', 'hsn_sac', 'uqc', 'sale_price', 'purchase_price',
-        'gst_rate_pct', 'tax_pref', 'description', 'track_inventory', 'track_batches', 'reorder_level',
-        'opening_stock_qty', 'opening_stock_rate', 'is_archived',
-        'mrp', 'standard_cost', 'alt_uqc', 'alt_factor', 'min_level', 'track_serials', 'updated_at', 'stock_group_id', 'valuation_method', 'is_kit', 'item_group_id', 'variant',
-        'image_file_id', 'origin',
-      ])
-      .orderBy('name')
-      .limit(q.limit)
-      .offset(q.offset)
-      .execute();
-
-    const ids = rows.map((r) => r.id);
-    // A kit's components, for the list and the item dialog (services/kits.ts).
-    const comps = ids.length
-      ? await db.selectFrom('item_components').select(['kit_item_id', 'component_item_id', 'qty']).where('org_id', '=', orgId).where('kit_item_id', 'in', ids).execute()
-      : [];
-    const sold = ids.length
-      ? await db
-          .selectFrom('invoice_lines')
-          .innerJoin('invoices', 'invoices.id', 'invoice_lines.invoice_id')
-          .select([
-            'invoice_lines.item_id as id',
-            sql<string>`COALESCE(SUM(invoice_lines.qty), 0)`.as('qty'),
-            sql<string>`COALESCE(SUM(invoice_lines.taxable), 0)`.as('value'),
-          ])
-          .where('invoices.org_id', '=', orgId)
-          .where('invoice_lines.item_id', 'in', ids)
-          .where('invoices.status', 'not in', ['draft', 'void'])
-          .groupBy('invoice_lines.item_id')
-          .execute()
-      : [];
-    const soldBy = new Map(sold.map((s) => [s.id, s]));
-
-    return {
-      items: rows.map((i) => ({
-        id: asId(i.id),
-        kind: i.kind,
-        name: i.name,
-        sku: i.sku,
-        hsnSac: i.hsn_sac,
-        uqc: i.uqc,
-        salePricePaise: toPaiseFromSql(i.sale_price),
-        purchasePricePaise: toPaiseFromSql(i.purchase_price),
-        gstRatePct: Number(i.gst_rate_pct),
-        taxPref: i.tax_pref,
-        description: i.description,
-        origin: i.origin,
-        trackInventory: !!i.track_inventory,
-        trackBatches: !!i.track_batches,
-        reorderLevel: i.reorder_level === null ? null : Number(i.reorder_level),
-        openingStockQty: i.opening_stock_qty === null ? null : Number(i.opening_stock_qty),
-        openingStockRatePaise: i.opening_stock_rate === null ? null : toPaiseFromSql(i.opening_stock_rate),
-        isArchived: !!i.is_archived,
-        mrpPaise: i.mrp === null ? null : toPaiseFromSql(i.mrp),
-        standardCostPaise: i.standard_cost === null ? null : toPaiseFromSql(i.standard_cost),
-        altUqc: i.alt_uqc,
-        altFactor: i.alt_factor === null ? null : Number(i.alt_factor),
-        minLevel: i.min_level === null ? null : Number(i.min_level),
-        trackSerials: !!i.track_serials,
-        stockGroupId: i.stock_group_id ? asId(i.stock_group_id) : null,
-        valuationMethod: i.valuation_method,
-        isKit: !!i.is_kit,
-        imageFileId: i.image_file_id ? asId(i.image_file_id) : null,
-        kitComponents: comps.filter((c) => c.kit_item_id === i.id).map((c) => ({ itemId: asId(c.component_item_id), qty: Number(c.qty) })),
-        itemGroupId: i.item_group_id ? asId(i.item_group_id) : null,
-        variant: i.variant ? (typeof i.variant === 'string' ? JSON.parse(i.variant) : i.variant) as Record<string, string> : null,
-        updatedAt: new Date(i.updated_at).toISOString(),
-        qtySold: Number(soldBy.get(i.id)?.qty ?? 0),
-        soldValuePaise: toPaiseFromSql(soldBy.get(i.id)?.value ?? '0'),
-        // Margin per unit, which is the number that decides whether an item is
-        // worth stocking. Shown only when both prices are known.
-        marginPaise: toPaiseFromSql(i.sale_price) - toPaiseFromSql(i.purchase_price),
-      })),
-    };
+    const rows = await base.orderBy('name').limit(q.limit).offset(q.offset).execute();
+    return { items: await shapeItems(orgId, rows) };
   },
   { permission: { module: 'sales', action: 'view' } },
 );
-
-const ItemInput = z.object({
-  kind: z.enum(['goods', 'service']),
-  name: z.string().trim().min(1, 'An item needs a name.').max(200),
-  sku: z.string().trim().max(60).nullish(),
-  hsnSac: z.string().trim().max(8).nullish(),
-  uqc: z.string().trim().max(10).default('NOS'),
-  salePricePaise: z.number().int().min(0),
-  purchasePricePaise: z.number().int().min(0).default(0),
-  gstRatePct: z.number().min(0).max(50),
-  taxPref: z.enum(['taxable', 'exempt', 'nil', 'non_gst']).default('taxable'),
-  description: z.string().trim().max(1000).nullish(),
-  /** Made or bought in India, or imported: IGST at customs (goods) or by reverse charge (a service). */
-  origin: z.enum(['local', 'imported']).optional(),
-  trackInventory: z.boolean().optional(),
-  trackBatches: z.boolean().optional(),
-  reorderLevel: z.number().min(0).nullish(),
-  // Stock on hand when the books began, and what it was carried at. Opening
-  // stock is an opening balance: it reaches the balance sheet through opening
-  // equity, never through profit.
-  openingStockQty: z.number().min(0).nullish(),
-  openingStockRatePaise: z.number().int().min(0).nullish(),
-  /** The price printed on the pack. A sale above it is flagged. */
-  mrpPaise: z.number().int().min(0).nullish(),
-  /** What a unit is budgeted to cost, set against what it actually costs. */
-  standardCostPaise: z.number().int().min(0).nullish(),
-  /** A second unit it is counted in, and how many of the main unit make one. */
-  altUqc: z.string().trim().max(10).nullish(),
-  altFactor: z.number().positive().nullish(),
-  /** Below this the item is short, not merely due for buying. */
-  minLevel: z.number().min(0).nullish(),
-  trackSerials: z.boolean().optional(),
-  stockGroupId: z.coerce.number().int().positive().nullish(),
-  /** Null follows the book's method. */
-  valuationMethod: z.enum(['average', 'fifo']).nullish(),
-  /** Sold as a set: its components and how many of each (services/kits.ts). Empty makes it an ordinary item again. */
-  kitComponents: z.array(z.object({ itemId: z.coerce.number().int().positive(), qty: z.number().positive() })).max(50).optional(),
-});
 
 /** A stock group has to be one of the book's own. */
 async function checkGroup(orgId: number, id: number | null | undefined) {
@@ -160,6 +48,29 @@ async function checkGroup(orgId: number, id: number | null | undefined) {
   const g = await db.selectFrom('stock_groups').select('id').where('id', '=', id).where('org_id', '=', orgId).executeTakeFirst();
   if (!g) throw badRequest('That stock group does not exist.');
 }
+
+/**
+ * The item's accounts and vendor have to be the book's own: a sales account an
+ * income head, a purchase account an expense (or, for capital goods, an asset),
+ * the preferred vendor a vendor.
+ */
+async function checkLinks(orgId: number, m: { saleAccountId?: number | null; purchaseAccountId?: number | null; preferredVendorId?: number | null }) {
+  const account = async (id: number, types: string[], what: string) => {
+    const a = await db.selectFrom('accounts').select(['type', 'name', 'is_active']).where('id', '=', id).where('org_id', '=', orgId).executeTakeFirst();
+    if (!a) throw badRequest(`That ${what} is not in your chart of accounts.`);
+    if (!types.includes(a.type)) throw badRequest(`${a.name} is ${a.type === 'income' ? 'an income' : `an ${a.type}`} account; the ${what} has to be ${types.length > 1 ? 'an expense or asset' : `an ${types[0]}`} account.`);
+    if (!a.is_active) throw badRequest(`${a.name} is switched off in the chart of accounts.`);
+  };
+  if (m.saleAccountId) await account(m.saleAccountId, ['income'], 'sales account');
+  if (m.purchaseAccountId) await account(m.purchaseAccountId, ['expense', 'asset'], 'purchase account');
+  if (m.preferredVendorId) {
+    const v = await db.selectFrom('contacts').select('kind').where('id', '=', m.preferredVendorId).where('org_id', '=', orgId).executeTakeFirst();
+    if (!v || (v.kind !== 'vendor' && v.kind !== 'both')) throw badRequest('The preferred vendor has to be one of your vendors.');
+  }
+}
+
+/** A product code: letters, digits and dashes, as printed under a barcode. */
+const code = (v: string | null | undefined) => (v ? v.trim().toUpperCase() || null : v);
 
 /** The master's own rules, on what the item will be once saved. */
 function checkMaster(m: { uqc?: string | null; altUqc?: string | null; altFactor?: number | null; minLevel?: number | null; reorderLevel?: number | null }) {
@@ -171,13 +82,6 @@ function checkMaster(m: { uqc?: string | null; altUqc?: string | null; altFactor
     throw badRequest('The minimum level is the floor; the reorder level sits at or above it.');
   }
 }
-
-const UpdateInput = ItemInput.partial().extend({
-  id: z.string(),
-  isArchived: z.boolean().optional(),
-  /** The record's updatedAt as it was read: the edit is refused if it has changed since. */
-  expectedUpdatedAt: z.string().optional(),
-});
 
 /**
  * An HSN/SAC on an item has to be one the organisation has approved, for the
@@ -214,6 +118,7 @@ export const POST = route(
     await checkHsn(orgId, input.hsnSac, input.kind);
     checkMaster(input);
     await checkGroup(orgId, input.stockGroupId);
+    await checkLinks(orgId, input);
 
     // Which income and expense heads this item posts to. The posting engine
     // falls back to Sales and Purchases when these are null, so an item without
@@ -221,9 +126,9 @@ export const POST = route(
     // through the API would differ from one the seed made. Goods and services
     // are separate income heads because the P&L is more useful when they are.
     const acc = await accountIds(db, orgId);
-    const saleAccountId =
-      acc[input.kind === 'service' ? CODE.SERVICE_INCOME : CODE.SALES] ?? null;
-    const purchaseAccountId = acc[CODE.PURCHASES] ?? null;
+    const saleAccountId = input.saleAccountId
+      ?? acc[input.kind === 'service' ? CODE.SERVICE_INCOME : CODE.SALES] ?? null;
+    const purchaseAccountId = input.purchaseAccountId ?? acc[CODE.PURCHASES] ?? null;
 
     const inserted = await db
       .insertInto('items')
@@ -255,6 +160,14 @@ export const POST = route(
         track_serials: input.trackSerials && input.trackInventory ? 1 : 0,
         stock_group_id: input.stockGroupId ?? null,
         valuation_method: input.valuationMethod ?? null,
+        item_type: input.itemType,
+        is_digital_service: input.kind === 'service' && input.isDigitalService ? 1 : 0,
+        upc: code(input.upc) ?? null,
+        ean: code(input.ean) ?? null,
+        isbn: code(input.isbn) ?? null,
+        mpn: code(input.mpn) ?? null,
+        purchase_description: input.purchaseDescription ?? null,
+        preferred_vendor_id: input.preferredVendorId ?? null,
       })
       .executeTakeFirstOrThrow();
 
@@ -299,6 +212,7 @@ export const PATCH = route(
       reorderLevel: input.reorderLevel === undefined ? num(existing.reorder_level) : input.reorderLevel,
     });
     await checkGroup(orgId, input.stockGroupId);
+    await checkLinks(orgId, input);
 
     if (input.isArchived) {
       // Archiving an item used on a document that is still open would leave
@@ -348,6 +262,18 @@ export const PATCH = route(
     set('track_serials', input.trackSerials === undefined ? undefined : input.trackSerials ? 1 : 0);
     set('stock_group_id', input.stockGroupId);
     set('valuation_method', input.valuationMethod);
+    set('item_type', input.itemType);
+    // Only a service is a digital service.
+    set('is_digital_service', input.isDigitalService === undefined ? undefined
+      : input.isDigitalService && (input.kind ?? existing.kind) === 'service' ? 1 : 0);
+    set('upc', code(input.upc));
+    set('ean', code(input.ean));
+    set('isbn', code(input.isbn));
+    set('mpn', code(input.mpn));
+    set('purchase_description', input.purchaseDescription);
+    set('sale_account_id', input.saleAccountId);
+    set('purchase_account_id', input.purchaseAccountId);
+    set('preferred_vendor_id', input.preferredVendorId);
 
     const before = await snapshot(db, 'items', orgId, id, Object.keys(patch));
     if (Object.keys(patch).length) {

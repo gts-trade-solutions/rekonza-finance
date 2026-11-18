@@ -62,6 +62,13 @@ export const TEMPLATES: Record<ImportKind, Template> = {
       { key: 'track_stock', label: 'Track stock', example: 'yes', hint: 'yes or no; goods default to yes' },
       { key: 'opening_qty', label: 'Opening quantity', example: '40' },
       { key: 'opening_rate', label: 'Opening rate', example: '600', hint: 'cost per unit; the purchase price when blank' },
+      { key: 'description', label: 'Description', example: 'Front disc brake pads', hint: 'what a sale says' },
+      { key: 'purchase_description', label: 'Purchase description', example: 'Brake pads, OEM pack', hint: 'what a bill or order says' },
+      { key: 'preferred_vendor', label: 'Preferred vendor', example: 'Brake Works', hint: 'a vendor already in your books' },
+      { key: 'upc', label: 'UPC', example: '012345678905' },
+      { key: 'ean', label: 'EAN', example: '8901234567890' },
+      { key: 'isbn', label: 'ISBN', example: '' },
+      { key: 'mpn', label: 'MPN', example: 'BP-101-OEM' },
     ],
   },
   accounts: {

@@ -7,7 +7,7 @@
 // browser (signing in and out apart), so it can run against any book. What it
 // checks is what the client compares with Zoho's own demo: the frame and its
 // colours, the menu in Zoho's order, the lists (view menu, top-bar search,
-// Customize Columns, Payment Summary), the split view, Home's cards and tabs,
+// Customize Columns, Payment Summary), the split view, the item page, Home's cards and tabs,
 // the Reports Center, the Banking Overview and the settings mode — and that
 // the figures on the Zoho cards agree with the books.
 
@@ -219,7 +219,9 @@ for (const [list, re, label] of [
   await page.waitForSelector(`:is(${ROW})[data-active="1"]`, { timeout: 30000 }).catch(() => {});
   await page.waitForTimeout(800);
   check(`${label}: a record opens beside the list`, (await page.locator('[data-slot=split-list]').isVisible()) && (await page.locator(`:is(${ROW})[data-active="1"]`).count()) === 1);
-  check(`${label}: the sidebar folds to the rail while it is open`, Math.round((await box('aside'))?.width ?? 0) === 72);
+  // Zoho folds the sidebar beside a transaction (invoice, bill) and keeps it open beside a customer or vendor.
+  const folds = label === 'Invoices' || label === 'Bills';
+  check(`${label}: the sidebar ${folds ? 'folds to the rail' : 'stays open, as Zoho keeps it'} while it is open`, Math.round((await box('aside'))?.width ?? 0) === (folds ? 72 : 220));
   check(`${label}: the record's actions sit on Zoho's grey bar`, (await css('.split-page > [data-slot=page-header] > [data-slot=page-actions]', 'backgroundColor')) === 'rgb(247, 248, 252)');
   check(`${label}: the top bar searches the list beside it`, (await page.locator('[data-slot=topbar-search-input]').getAttribute('placeholder')) === `Search in ${label} ( / )`);
   // The list stays loaded when moving to another record.
@@ -255,6 +257,181 @@ await page.waitForTimeout(400);
 const views = (await page.locator('[data-slot=table-tab]').allInnerTexts()).map((t) => t.trim().split(/\s/)[0]);
 check('Active, Inactive and All are offered', views.join(',') === 'Active,Inactive,All', views.join(','));
 await page.keyboard.press('Escape');
+
+// ── E2. Items, as Zoho's item page ─────────────────────────────────────────
+await open('/sales/items');
+check('Items open on "Active Items"', (await page.locator('[data-slot=view-picker]').innerText()).trim() === 'Active Items');
+const itemHeads = (await page.locator('thead th').allInnerTexts()).map((t) => t.trim().toUpperCase()).filter(Boolean);
+check("Items show Zoho's columns", itemHeads.join(',') === 'NAME,SKU,TYPE,DESCRIPTION,RATE', itemHeads.join(', '));
+const itemList = (await api('/api/items?archived=true')).items;
+const activeItems = itemList.filter((i) => !i.isArchived);
+check('Every active item is listed', (await page.locator('tbody tr').count()) === activeItems.length, `${await page.locator('tbody tr').count()} of ${activeItems.length}`);
+check("The demo items carry descriptions, as Zoho's do", activeItems.length > 0 && activeItems.every((i) => i.description));
+await page.locator('[data-slot=view-picker]').click();
+await page.waitForTimeout(400);
+const itemViews = (await page.locator('[data-slot=table-tab]').allInnerTexts()).map((t) => t.trim().split(/\s/)[0]);
+check("Zoho's item views, and Goods beside Services", itemViews.join(',') === 'All,Active,Inactive,Goods,Services', itemViews.join(','));
+await page.locator('[data-slot=table-tab][data-tab=service]').click();
+await page.waitForTimeout(400);
+const serviceTypes = (await page.locator('tbody tr td:nth-child(4)').allInnerTexts()).map((t) => t.trim());
+check('The Services view is titled "Services" and holds only services', (await page.locator('[data-slot=view-picker]').innerText()).trim() === 'Services'
+  && serviceTypes.length === activeItems.filter((i) => i.kind === 'service').length && serviceTypes.every((t) => t === 'Service'), serviceTypes.join(','));
+await page.locator('[data-slot=view-picker]').click();
+await page.locator('[data-slot=table-tab][data-tab=active]').click();
+await page.waitForTimeout(300);
+check("Each item row has Zoho's tick", (await page.locator('tbody tr').first().locator('[data-slot=checkbox]').count()) === 1);
+await page.locator('tbody tr').nth(0).locator('[data-slot=checkbox]').first().click();
+await page.locator('tbody tr').nth(1).locator('[data-slot=checkbox]').first().click();
+await page.waitForTimeout(300);
+const bulk = (await page.locator('[data-slot=items-bulk] button').allInnerTexts()).map((t) => t.trim());
+check('Ticking rows offers Mark as Active, Mark as Inactive and Delete', bulk.join(',') === 'Mark as Active,Mark as Inactive,Delete', bulk.join(','));
+await page.locator('tbody tr').nth(0).locator('[data-slot=checkbox]').first().click();
+await page.locator('tbody tr').nth(1).locator('[data-slot=checkbox]').first().click();
+await page.locator('[data-slot=items-more]').click();
+await page.waitForTimeout(300);
+const listMore = (await page.locator('[role=menu]').last().innerText()).split('\n').map((t) => t.trim()).filter(Boolean);
+const ZOHO_MORE = ['Sort by', 'Import', 'Export', 'Preferences', 'Refresh List', 'Reset Column Width', 'Validate HSN/SAC', 'HSN/SAC Update History'];
+check("The list's ⋯ has Zoho's entries in Zoho's order", listMore.slice(0, ZOHO_MORE.length).join(',') === ZOHO_MORE.join(','), listMore.join(','));
+await page.locator('[data-slot=items-sort]').hover();
+await page.waitForTimeout(400);
+const sortChoices = (await page.locator('[data-slot=items-sort-option]').allInnerTexts()).map((t) => t.trim());
+check('Sort by offers Zoho\'s Name, SKU and Rate', sortChoices.join(',') === 'Name,SKU,Rate', sortChoices.join(','));
+await page.keyboard.press('Escape');
+await page.keyboard.press('Escape');
+await page.waitForTimeout(300);
+const sortableHeads = (await page.locator('thead th[data-sortable="1"]').allInnerTexts()).map((t) => t.trim().toUpperCase());
+check('Only Name, SKU and Rate sort from their headings, as in Zoho', sortableHeads.join(',') === 'NAME,SKU,RATE', sortableHeads.join(','));
+await page.locator('[data-slot=columns-menu]').click();
+await page.waitForTimeout(300);
+check('The column icon offers Wrap Text beside Customize Columns', (await page.locator('[data-slot=wrap-text]').count()) === 1);
+await page.keyboard.press('Escape');
+check('Columns can be widened by dragging their edge', (await page.locator('thead [data-slot=column-resize]').count()) >= 5);
+await page.locator('[data-slot=view-picker]').click();
+await page.waitForTimeout(300);
+check("The view menu has Zoho's search box and DEFAULT FILTERS", (await page.locator('[data-slot=view-search]').count()) === 1 && /DEFAULT FILTERS/i.test(await page.locator('[role=menu]').last().innerText()));
+check("…and Zoho's CREATED BY ME with New View", (await page.locator('[data-slot=views-mine]').count()) === 1 && (await page.locator('[data-slot=new-view-open]').count()) === 1);
+await page.locator('[data-slot=view-search]').click();
+await page.keyboard.type('Inac');
+await page.waitForTimeout(200);
+check('Typing in the view search narrows the views', (await page.locator('[data-slot=table-tab]').count()) === 1);
+await page.keyboard.press('Escape');
+await page.waitForFunction(() => !document.querySelector('[data-slot=table-tab]'), null, { timeout: 5000 }).catch(() => {});
+check('Escape closes the view menu, even from its search box', (await page.locator('[data-slot=table-tab]').count()) === 0);
+await page.keyboard.press('Escape');
+await page.waitForTimeout(300);
+await page.locator('[data-slot=items-more]').click();
+await page.waitForTimeout(300);
+await page.locator('[data-slot=items-sort]').hover();
+await page.waitForTimeout(400);
+await page.locator('[data-slot=items-sort-option][data-value=rate]').click();
+await page.waitForTimeout(400);
+const rates = (await page.locator('tbody tr td:nth-child(6)').allInnerTexts()).map(money);
+check('Sort by Rate puts the cheapest first', rates.length > 1 && rates.every((r, i) => i === 0 || rates[i - 1] <= r), rates.slice(0, 4).map((r) => r / 100).join(' ≤ '));
+await page.locator('[data-slot=items-more]').click();
+await page.locator('[data-slot=items-sort]').hover();
+await page.waitForTimeout(400);
+await page.locator('[data-slot=items-sort-option][data-value=name]').click();
+await page.waitForTimeout(300);
+await page.locator('[data-slot=items-more]').click();
+await page.locator('[data-slot=validate-hsn]').click();
+await page.waitForSelector('[data-slot=hsn-check]', { timeout: 15000 }).catch(() => {});
+const hsnText = await page.locator('[data-slot=hsn-check]').innerText().catch(() => '');
+check('Validate HSN/SAC checks every active item', /active items/.test(hsnText), hsnText.split('\n').slice(0, 2).join(' '));
+await page.keyboard.press('Escape');
+await page.waitForTimeout(300);
+const firstName = (await page.locator('tbody tr').first().locator('td').nth(1).innerText()).trim();
+await page.locator('tbody tr').first().click();
+await page.waitForURL((u) => /\/sales\/items\/\d+$/.test(u.pathname), { timeout: 30000 });
+await page.waitForSelector('[data-slot=item-title]', { timeout: 60000 });
+await page.waitForTimeout(800);
+const itemId = page.url().split('/').pop();
+check('An item opens beside the list', (await page.locator('[data-slot=split-list]').isVisible()) && (await page.locator(`:is(${ROW})[data-active="1"]`).count()) === 1);
+check("…titled with the item's name", (await page.locator('[data-slot=item-title]').innerText()).trim() === firstName, firstName);
+check('…the sidebar stays open, as Zoho keeps it beside an item', Math.round((await box('aside'))?.width ?? 0) === 220);
+check('…and the top bar searches the items beside it', (await page.locator('[data-slot=topbar-search-input]').getAttribute('placeholder')) === 'Search in Items ( / )');
+check("The item's pencil and More sit in its title band, as Zoho's do", (await page.locator('[data-slot=item-edit]').count()) === 1 && (await page.locator('[data-slot=item-more]').count()) === 1
+  && (await page.locator('.split-page > [data-slot=page-header]').count()) === 0);
+const itemTabs = (await page.locator('[data-slot=item-tabs] [role=tab]').allInnerTexts()).map((t) => t.trim());
+check("Zoho's three tabs: Overview, Transactions, History", itemTabs.join('|') === 'Overview|Transactions|History', itemTabs.join('|'));
+const detail = await api(`/api/items/${itemId}`);
+const fieldText = await page.locator('[data-slot=item-overview]').innerText();
+check('The overview gives Item Type, SKU, HSN Code, Unit and Tax Preference', ['Item Type', 'SKU', detail.item.kind === 'service' ? 'SAC' : 'HSN Code', 'Unit', 'Tax Preference'].every((l) => fieldText.includes(l)));
+check('…and Purchase, Sales and Default Tax Rates', ['Purchase Information', 'Sales Information', 'Default Tax Rates'].every((l) => fieldText.includes(l)));
+check("…with Zoho's Created Source, Sales Account and Purchase Account", ['Created Source', 'Sales Account', 'Purchase Account'].every((l) => fieldText.includes(l)));
+check("…and Zoho's Reporting Tags and Associated Price Lists", (await page.locator('[data-slot=item-tags]').count()) === 1 && (await page.locator('[data-slot=item-price-lists]').count()) === 1);
+if (detail.preferredVendor) check('The preferred vendor links to the vendor', (await page.locator('[data-slot=preferred-vendor]').getAttribute('href')) === `/purchases/vendors/${detail.preferredVendor.id}`);
+check('The demo item has its preferred vendor', !!detail.preferredVendor, detail.preferredVendor?.name ?? 'none');
+// The column beside it: Zoho's views and ⋯, its ticks, and its bulk actions.
+await page.locator('[data-slot=split-views]').click();
+await page.waitForTimeout(300);
+const splitViews = (await page.locator('[data-slot=split-view]').allInnerTexts()).map((t) => t.trim());
+check("The column's title opens Zoho's views", splitViews.join(',') === 'All Items,Active Items,Inactive Items,Goods,Services', splitViews.join(','));
+await page.keyboard.press('Escape');
+await page.waitForTimeout(300);
+check("…and it has Zoho's ⋯ beside the +", (await page.locator('[data-slot=split-more]').count()) === 1);
+await page.locator('[data-slot=split-tick]').nth(1).click();
+await page.waitForTimeout(300);
+check('Ticking a row in the column beside it offers Bulk Actions', (await page.locator('[data-slot=split-selected]').innerText()).includes('1 Selected') && (await page.locator('[data-slot=split-bulk]').count()) === 1);
+await page.locator('[data-slot=split-tick]').nth(1).click();
+await page.waitForTimeout(300);
+check('…and unticking gives the header back', (await page.locator('[data-slot=split-selected]').count()) === 0);
+const sellRow = await page.locator('[data-slot=item-sales-info] [data-slot=item-field]').first().innerText();
+check('The selling price is the one in the list', money(sellRow) === detail.item.salePricePaise, sellRow.replace(/\n/g, ' '));
+if (detail.stock) check('Stock on hand is shown for goods kept in stock', (await page.locator('[data-slot=stock-on-hand]').count()) === 1);
+await page.getByRole('tab', { name: 'Transactions' }).click();
+await page.waitForSelector('[data-slot=tx-table]', { timeout: 30000 });
+check("Transactions open on \"Filter By: Quotes\", as Zoho's do", (await page.locator('[data-slot=tx-filter]').innerText()).replace(/\s+/g, ' ').trim() === 'Filter By: Quotes');
+await page.locator('[data-slot=tx-filter]').click();
+await page.waitForTimeout(300);
+const txKinds = (await page.locator('[data-slot=tx-filter-option]').allInnerTexts()).map((t) => t.trim());
+check("The filter lists Zoho's documents in Zoho's order", txKinds.join(',') === 'Quotes,Sales Orders,Invoices,Delivery Challans,Credit Notes,Debit Notes,Recurring Invoices,Purchase Orders,Bills', txKinds.join(','));
+await page.locator('[data-slot=tx-filter-option][data-value=invoice]').click();
+await page.waitForTimeout(300);
+const txApi = (await api(`/api/items/${itemId}/transactions`)).rows.filter((r) => r.kind === 'invoice');
+const txRows = await page.locator('[data-slot=tx-row]').count();
+check('Invoices with the item are all listed', txRows === txApi.length, `${txRows} of ${txApi.length}`);
+if (txRows) {
+  check('…each opening the invoice', /^\/sales\/invoices\/\d+$/.test(await page.locator('[data-slot=tx-row] a').first().getAttribute('href')));
+  const issuedQty = txApi.filter((r) => !['draft', 'void'].includes(r.status)).reduce((t, r) => t + r.qty, 0);
+  check('…and the issued ones add up to what the item has sold', issuedQty === detail.item.qtySold, `${issuedQty} on issued invoices, ${detail.item.qtySold} sold`);
+}
+await page.locator('[data-slot=tx-status]').click();
+await page.waitForTimeout(300);
+const txStatuses = (await page.locator('[data-slot=tx-status-option]').allInnerTexts()).map((t) => t.trim());
+check('The status filter starts with All', txStatuses[0] === 'All' && txStatuses.includes('Paid'), txStatuses.join(','));
+await page.keyboard.press('Escape');
+await page.getByRole('tab', { name: 'History' }).click();
+await page.waitForTimeout(1200);
+check("History lists the edit log, or Zoho's \"No Recent History\"", (await page.locator('[data-slot=history-entry]').count()) > 0 || (await page.locator('[data-slot=history-empty]').innerText().catch(() => '')) === 'No Recent History');
+await page.locator('[data-slot=item-more]').click();
+await page.waitForTimeout(300);
+const moreItems = (await page.locator('[role=menuitem]').allInnerTexts()).map((t) => t.trim());
+check("More holds Zoho's Clone Item, Mark as Inactive and Delete", moreItems.join(',') === 'Clone Item,Mark as Inactive,Delete', moreItems.join(','));
+await page.keyboard.press('Escape');
+await page.locator('[data-slot=item-edit]').click();
+await page.waitForURL((u) => u.pathname === `/sales/items/${itemId}/edit`, { timeout: 30000 });
+await page.waitForSelector('[data-slot=item-basics]', { timeout: 60000 });
+check('Edit Item is a page of its own, not split', (await page.locator('[data-slot=split-list]').count()) === 0 && (await page.locator('[data-slot=document-form] h1').innerText()).trim() === 'Edit Item');
+check('…filled with the item', (await page.locator('#item-name').inputValue()) === firstName);
+check("…its basics on Zoho's grey band", (await css('[data-slot=item-basics]', 'backgroundColor')) === 'rgb(251, 251, 251)');
+check('…with Sales and Purchase Information side by side', (await page.locator('[data-slot=item-sales]').count()) === 1 && (await page.locator('[data-slot=item-purchase]').count()) === 1);
+check("…each with Zoho's tick", (await page.locator('[data-slot=item-sell]').isChecked()) && (await page.locator('[data-slot=item-buy]').isChecked()));
+check("…and its account, in Zoho's [ code ] Name form", /\[ \d+ \] /.test(await page.locator('[data-slot=item-sales] [data-slot=combobox-trigger]').first().innerText()));
+check('Default Tax Rates are read-only until the pencil', (await page.locator('[data-slot=gst-rate]').count()) === 1 && (await page.locator('[data-slot=edit-tax-rates]').count()) === 1);
+check("Zoho's Associate Tags and product codes are on the form", (await page.locator('[data-slot=item-tags]').count()) === 1 && (await page.locator('[data-slot=item-codes] input').count()) === 4);
+await open('/sales/items/new');
+await page.waitForSelector('[data-slot=item-basics]', { timeout: 60000 });
+check('New Item is a page of its own', (await page.locator('[data-slot=document-form] h1').innerText()).trim() === 'New Item');
+check('…Goods chosen, and its stock tracked', (await page.locator('[data-slot=item-kind] input').first().isChecked()) && (await page.locator('[data-slot=track-inventory]').isChecked()));
+await page.waitForTimeout(500);
+check('…its sales going to Sales', /Sales$/.test((await page.locator('[data-slot=item-sales] [data-slot=combobox-trigger]').first().innerText()).trim()));
+await page.locator('[data-slot=item-kind] input').nth(1).check();
+await page.waitForTimeout(300);
+check('A service offers "It is a digital service", and goes to Service Income', (await page.locator('[data-slot=digital-service]').count()) === 1
+  && /Service Income$/.test((await page.locator('[data-slot=item-sales] [data-slot=combobox-trigger]').first().innerText()).trim()));
+await open(`/sales/items/new?clone=${itemId}`);
+await page.waitForSelector('[data-slot=item-basics]', { timeout: 60000 });
+check('Clone Item starts from the item, less its SKU', (await page.locator('#item-name').inputValue()) === firstName && (await page.locator('#item-sku').inputValue()) === '');
 
 // ── F. Home ────────────────────────────────────────────────────────────────
 await open('/dashboard');
@@ -374,6 +551,17 @@ if (!DEMO) {
   check('The Sales role does not see Banking in the menu', (await page.locator('[data-slot=sidebar] a[href="/banking"]').count()) === 0);
   check('…nor Accountant', (await page.locator('[data-slot=sidebar] button', { hasText: /^Accountant$/ }).count()) === 0);
   check('…but has its own screens, in Zoho style', (await page.locator('[data-slot=view-picker]').count()) === 1);
+  const salesItem = (await api('/api/items')).items.find((i) => i.kind === 'goods' && i.trackInventory);
+  const asSales = await api(`/api/items/${salesItem.id}`);
+  check("The Sales role is not sent an item's cost", asSales.item.purchasePricePaise === 0 && asSales.item.standardCostPaise === null && (asSales.stock?.valuePaise ?? null) === null);
+  await open(`/sales/items/${salesItem.id}`);
+  await page.waitForSelector('[data-slot=item-title]', { timeout: 60000 });
+  check('…nor shown Purchase Information', (await page.locator('[data-slot=item-purchase-info]').count()) === 0 && (await page.locator('[data-slot=item-sales-info]').count()) === 1);
+  await page.locator('[data-slot=item-more]').click();
+  await page.waitForTimeout(300);
+  const salesMore = (await page.locator('[role=menuitem]').allInnerTexts()).map((t) => t.trim());
+  await page.keyboard.press('Escape');
+  check('…and cannot delete an item', !salesMore.includes('Delete'), salesMore.join(','));
   await signIn('arun@raceautospares.in');
 }
 

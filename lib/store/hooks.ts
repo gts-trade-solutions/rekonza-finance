@@ -4,7 +4,7 @@
 
 import { useEffect, useState } from 'react';
 import { useAppStore } from './index';
-import { hasPermission, type Action } from '../rbac';
+import { canSeeCosts, hasPermission, type Action } from '../rbac';
 
 /** True once zustand-persist has rehydrated from localStorage (avoids SSR flicker). */
 export function useHydrated(): boolean {
@@ -32,5 +32,5 @@ export function usePermission(module: string, action: Action = 'view'): boolean 
 /** Sales role must not see purchase prices / profit figures. */
 export function useCanSeeCosts(): boolean {
   const role = useAppStore((s) => s.session?.role);
-  return role === 'admin' || role === 'accountant' || role === 'viewer';
+  return canSeeCosts(role);
 }

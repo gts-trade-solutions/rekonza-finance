@@ -10,10 +10,20 @@
 //   edge, hands its search to the top bar ("Search in Invoices ( / )") and
 //   puts its status views in the page title as Zoho's view menu
 //   ("All Invoices" with a caret); see components/layout/page-context.ts.
+// - the view menu has Zoho's search box, its "DEFAULT FILTERS" heading and a
+//   star on each view that keeps it under "FAVORITES";
+// - the icon at the head of the first column opens Customize Columns and Wrap
+//   Text, and a column is widened or narrowed by dragging its edge (Reset
+//   Column Width, in the page's ⋯, puts them back: resetColumnWidths()).
+//   Only the columns Zoho sorts by sort (Column.sortable).
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { ArrowDown, ArrowUp, ChevronDown, Search, SlidersHorizontal, X } from 'lucide-react';
+import { ArrowDown, ArrowUp, ChevronDown, Plus, Search, SlidersHorizontal, Star, Trash2, X } from 'lucide-react';
+import { toast } from 'sonner';
+import { CustomViewDialog } from '@/components/shared/custom-view-dialog';
+import { api } from '@/lib/api/client';
+import { applyView, type CustomView, type ViewField } from '@/lib/custom-views';
 import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Button } from '@/components/ui/button';
@@ -25,7 +35,7 @@ import { ALL_TIME, describeRange, fromPreset, withinRange, type RangeValue } fro
 import { today } from '@/lib/selectors';
 import { cn } from '@/lib/utils';
 import {
-  DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger,
+  DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import {
   claimListSearch, releaseListSearch, useHoldsListSearch, usePageTitle, useViewSlot,
@@ -40,33 +50,137 @@ export function viewTitle(label: string, title: string | null): string {
   return `${label.replace(/^Drafts$/i, 'Draft')} ${title}`;
 }
 
-/** The status views as Zoho's title menu. */
-function ViewPicker({ tabs, active, onChange }: { tabs: TableTab[]; active: string; onChange?: (v: string) => void }) {
+/** Reset every list's column widths on this page (Zoho's "Reset Column Width"). */
+export function resetColumnWidths() {
+  if (typeof window !== 'undefined') window.dispatchEvent(new Event('rekonza:reset-columns'));
+}
+
+/** A view kept under FAVORITES in the view menu, per list, in this browser. */
+function useFavouriteViews(title: string | null) {
+  const key = `rekonza.views.favourites.${title ?? ''}`;
+  const [fav, setFav] = useState<string[]>([]);
+  useEffect(() => {
+    try { setFav(JSON.parse(localStorage.getItem(key) || '[]')); } catch { setFav([]); }
+  }, [key]);
+  const toggle = (v: string) => setFav((f) => {
+    const next = f.includes(v) ? f.filter((x) => x !== v) : [...f, v];
+    try { localStorage.setItem(key, JSON.stringify(next)); } catch { /* this visit only */ }
+    return next;
+  });
+  return { fav, toggle };
+}
+
+/** A saved custom view, as the menu lists it. */
+interface SavedCustom { id: string; name: string; mine: boolean; shared: boolean; filters: CustomView & { kind?: string; favourite?: boolean } }
+
+/** The status views as Zoho's title menu: a search box, FAVORITES, DEFAULT FILTERS, CREATED BY ME, a star on each, and "New View". */
+function ViewPicker({ tabs, active, onChange, custom }: {
+  tabs: TableTab[]; active: string; onChange?: (v: string) => void;
+  custom?: { views: SavedCustom[]; activeId: string | null; onPick: (id: string) => void; onNew: () => void; onDelete: (v: SavedCustom) => void };
+}) {
   const title = usePageTitle();
   const current = tabs.find((t) => t.value === active) ?? tabs[0];
+  const activeCustom = custom?.views.find((v) => v.id === custom.activeId) ?? null;
+  const [q, setQ] = useState('');
+  const { fav, toggle } = useFavouriteViews(title);
+  const match = (t: TableTab) => !q.trim() || t.label.toLowerCase().includes(q.trim().toLowerCase());
+  const item = (t: TableTab) => (
+    <DropdownMenuItem
+      key={t.value}
+      data-slot="table-tab"
+      data-tab={t.value}
+      data-active={t.value === current.value ? '1' : undefined}
+      onClick={() => onChange?.(t.value)}
+      className={cn('group/view justify-between gap-2', t.value === current.value && 'font-medium')}
+    >
+      <span className="truncate">{t.label}</span>
+      <span className="flex shrink-0 items-center gap-2">
+        {t.count != null && <span className="text-[11px] tabular opacity-70">{t.count}</span>}
+        <span
+          role="button"
+          tabIndex={-1}
+          aria-label={fav.includes(t.value) ? `Remove ${t.label} from favourites` : `Add ${t.label} to favourites`}
+          data-slot="view-star"
+          onClick={(e) => { e.preventDefault(); e.stopPropagation(); toggle(t.value); }}
+          className={cn('grid size-5 place-items-center rounded hover:bg-muted', fav.includes(t.value) ? 'text-warning' : 'text-muted-foreground/60 opacity-0 group-hover/view:opacity-100')}
+        >
+          <Star className={cn('size-3.5', fav.includes(t.value) && 'fill-current')} />
+        </span>
+      </span>
+    </DropdownMenuItem>
+  );
+  const favs = tabs.filter((t) => fav.includes(t.value) && match(t));
+  const rest = tabs.filter(match);
+  const customs = (custom?.views ?? []).filter((v) => match({ value: v.id, label: v.name }));
+  const customItem = (v: SavedCustom) => (
+    <DropdownMenuItem
+      key={`custom:${v.id}`}
+      data-slot="custom-view"
+      data-view={v.id}
+      onClick={() => custom?.onPick(v.id)}
+      className={cn('group/view justify-between gap-2', v.id === custom?.activeId && 'font-medium')}
+    >
+      <span className="truncate">{v.name}</span>
+      <span className="flex shrink-0 items-center gap-1">
+        {v.mine && (
+          <span role="button" tabIndex={-1} aria-label={`Delete the view ${v.name}`} data-slot="delete-view"
+            onClick={(e) => { e.preventDefault(); e.stopPropagation(); custom?.onDelete(v); }}
+            className="grid size-5 place-items-center rounded text-muted-foreground/70 opacity-0 hover:bg-muted group-hover/view:opacity-100">
+            <Trash2 className="size-3.5" />
+          </span>
+        )}
+        <span role="button" tabIndex={-1} aria-label={fav.includes(`custom:${v.id}`) ? `Remove ${v.name} from favourites` : `Add ${v.name} to favourites`}
+          onClick={(e) => { e.preventDefault(); e.stopPropagation(); toggle(`custom:${v.id}`); }}
+          className={cn('grid size-5 place-items-center rounded hover:bg-muted', fav.includes(`custom:${v.id}`) ? 'text-warning' : 'text-muted-foreground/60 opacity-0 group-hover/view:opacity-100')}>
+          <Star className={cn('size-3.5', fav.includes(`custom:${v.id}`) && 'fill-current')} />
+        </span>
+      </span>
+    </DropdownMenuItem>
+  );
+  const favCustoms = customs.filter((v) => fav.includes(`custom:${v.id}`));
   return (
-    <DropdownMenu>
+    <DropdownMenu onOpenChange={(o) => { if (!o) setQ(''); }}>
       <DropdownMenuTrigger
         data-slot="view-picker"
         className="flex min-w-0 items-center gap-1.5 rounded text-left text-[18px] font-semibold leading-snug outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
       >
-        <span className="truncate">{viewTitle(current.label, title)}</span>
+        <span className="truncate">{activeCustom ? activeCustom.name : current.title ?? viewTitle(current.label, title)}</span>
         <ChevronDown className="size-4 shrink-0 text-primary" strokeWidth={2.5} />
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="w-64">
-        {tabs.map((t) => (
-          <DropdownMenuItem
-            key={t.value}
-            data-slot="table-tab"
-            data-tab={t.value}
-            data-active={t.value === current.value ? '1' : undefined}
-            onClick={() => onChange?.(t.value)}
-            className={cn('justify-between', t.value === current.value && 'font-medium')}
-          >
-            <span className="truncate">{t.label}</span>
-            {t.count != null && <span className="shrink-0 text-[11px] tabular opacity-70">{t.count}</span>}
-          </DropdownMenuItem>
-        ))}
+      <DropdownMenuContent align="start" className="w-72">
+        {/* Letters typed here search the views; Escape, the arrows and Tab still drive the menu. */}
+        <div className="p-1.5 pb-1" onKeyDown={(e) => { if (!['Escape', 'ArrowDown', 'ArrowUp', 'Tab'].includes(e.key)) e.stopPropagation(); }}>
+          <div className="relative">
+            <Search className="absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+            <Input value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search views" data-slot="view-search" className="h-8 pl-7 text-[13px]" />
+          </div>
+        </div>
+        {favs.length + favCustoms.length > 0 && (
+          <>
+            <DropdownMenuLabel className="text-[11px] font-semibold uppercase text-muted-foreground" data-slot="view-favourites">Favorites</DropdownMenuLabel>
+            {favs.map(item)}
+            {favCustoms.map(customItem)}
+            <DropdownMenuSeparator />
+          </>
+        )}
+        <DropdownMenuLabel className="flex items-center gap-2 text-[11px] font-semibold uppercase text-muted-foreground">
+          Default Filters
+          <span className="rounded-full bg-primary px-1.5 text-[10px] font-medium text-primary-foreground tabular">{tabs.length}</span>
+        </DropdownMenuLabel>
+        {rest.length ? rest.map(item) : <p className="px-2 py-1.5 text-[12px] text-muted-foreground">No view matches.</p>}
+        {custom && (
+          <>
+            <DropdownMenuLabel className="mt-1 flex items-center gap-2 text-[11px] font-semibold uppercase text-muted-foreground" data-slot="views-mine">
+              Created by me
+              <span className="rounded-full bg-muted px-1.5 text-[10px] font-medium text-muted-foreground tabular">{custom.views.length}</span>
+            </DropdownMenuLabel>
+            {customs.map(customItem)}
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={custom.onNew} data-slot="new-view-open" className="gap-2 text-link">
+              <Plus className="size-3.5" /> New View
+            </DropdownMenuItem>
+          </>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -87,6 +201,8 @@ export interface TableTab {
   value: string;
   label: string;
   count?: number;
+  /** The heading the view gives the list, when "<label> <title>" would not read right (Zoho's "Services"). */
+  title?: string;
 }
 
 export interface Column<T> {
@@ -106,16 +222,22 @@ export interface Column<T> {
   primary?: boolean;
   /** Off until switched on under Customize Columns (Zoho's defaults first, the rest one click away). */
   defaultHidden?: boolean;
+  /** False where Zoho does not sort by the column; its value still feeds the search. */
+  sortable?: boolean;
 }
 
-/** Zoho's "Customize Columns": the sliders at the head of a list. */
-function ColumnsMenu<T>({ columns, hidden, onToggle }: { columns: Column<T>[]; hidden: Set<string>; onToggle: (key: string) => void }) {
+/** Zoho's sliders at the head of a list: Customize Columns, and Wrap Text. */
+function ColumnsMenu<T>({ columns, hidden, onToggle, wrap, onWrap }: { columns: Column<T>[]; hidden: Set<string>; onToggle: (key: string) => void; wrap: boolean; onWrap: () => void }) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger aria-label="Customize columns" title="Customize columns" className="grid size-5 place-items-center rounded text-primary hover:bg-primary/10" data-slot="columns-menu">
         <SlidersHorizontal className="size-3.5" strokeWidth={2} />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-60">
+        <DropdownMenuCheckboxItem checked={wrap} closeOnClick={false} onCheckedChange={onWrap} className="text-[13px]" data-slot="wrap-text">
+          Wrap Text
+        </DropdownMenuCheckboxItem>
+        <DropdownMenuSeparator />
         <DropdownMenuLabel className="text-[11px] font-semibold uppercase text-muted-foreground">Customize Columns</DropdownMenuLabel>
         {columns.map((c, i) => (
           <DropdownMenuCheckboxItem
@@ -153,6 +275,7 @@ export function DataTable<T>({
   bulkActions,
   dateFilter,
   columnsKey,
+  customViews,
 }: {
   rows: T[];
   columns: Column<T>[];
@@ -176,6 +299,11 @@ export function DataTable<T>({
   dateFilter?: DateFilterConfig<T>;
   /** Where this list's chosen columns are remembered; by default its page title and columns. */
   columnsKey?: string;
+  /**
+   * Zoho's custom views ("New View"): the list's name in /api/saved-views,
+   * the fields a criterion can test, and the view the rows come from (all of them).
+   */
+  customViews?: { list: string; fields: ViewField<T>[]; baseTab?: string };
 }) {
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -227,8 +355,93 @@ export function DataTable<T>({
     try { localStorage.setItem(storageKey, JSON.stringify([...next])); } catch { /* this visit only */ }
     return next;
   });
-  const shown = columns.filter((c) => !hidden.has(c.key));
+  const listShown = columns.filter((c) => !hidden.has(c.key));
   const lead = pageLevel || selectable;
+
+  // Custom views: loaded for the list, one active at a time in place of a status view.
+  const [savedViews, setSavedViews] = useState<SavedCustom[]>([]);
+  const [activeCustomId, setActiveCustomId] = useState<string | null>(null);
+  const [newViewOpen, setNewViewOpen] = useState(false);
+  const loadViews = async () => {
+    if (!customViews) return;
+    try {
+      const r = await api.get<{ views: SavedCustom[] }>('/api/saved-views', { list: customViews.list });
+      setSavedViews(r.views.filter((v) => v.filters?.kind === 'custom'));
+    } catch { /* no saved views: the status views stand */ }
+  };
+  useEffect(() => {
+    void loadViews();
+    // Read again only when the list changes; loadViews is rebuilt every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [customViews?.list]);
+  const activeCustom = savedViews.find((v) => v.id === activeCustomId) ?? null;
+  // A custom view shows the columns it was saved with, in its order.
+  const viewColumns = activeCustom?.filters.columns?.length
+    ? activeCustom.filters.columns.map((k) => columns.find((c) => c.key === k)).filter((c): c is Column<T> => !!c)
+    : [];
+  const shown = viewColumns.length ? viewColumns : listShown;
+  const pickCustom = (id: string) => {
+    setActiveCustomId(id);
+    if (customViews?.baseTab && activeTab !== customViews.baseTab) onTabChange?.(customViews.baseTab);
+  };
+  const deleteCustom = async (v: SavedCustom) => {
+    if (!window.confirm(`Delete the view "${v.name}"?`)) return;
+    try {
+      await api.delete(`/api/saved-views?id=${encodeURIComponent(v.id)}`);
+      if (activeCustomId === v.id) setActiveCustomId(null);
+      toast.success(`View "${v.name}" deleted`);
+      void loadViews();
+    } catch (e) {
+      toast.error('Not deleted', { description: e instanceof Error ? e.message : String(e) });
+    }
+  };
+
+  // Wrap Text and the widths dragged on each column, remembered with the columns.
+  const [wrap, setWrap] = useState(false);
+  const [widths, setWidths] = useState<Record<string, number>>({});
+  useEffect(() => {
+    try {
+      setWrap(localStorage.getItem(`${storageKey}.wrap`) === '1');
+      setWidths(JSON.parse(localStorage.getItem(`${storageKey}.widths`) || '{}'));
+    } catch { /* defaults */ }
+  }, [storageKey]);
+  useEffect(() => {
+    const reset = () => {
+      setWidths({});
+      try { localStorage.removeItem(`${storageKey}.widths`); } catch { /* nothing kept */ }
+    };
+    window.addEventListener('rekonza:reset-columns', reset);
+    return () => window.removeEventListener('rekonza:reset-columns', reset);
+  }, [storageKey]);
+  const toggleWrap = () => setWrap((w) => {
+    try { localStorage.setItem(`${storageKey}.wrap`, w ? '0' : '1'); } catch { /* this visit only */ }
+    return !w;
+  });
+  /** Drag a heading's right edge to widen or narrow its column. */
+  const startResize = (key: string, e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const th = (e.currentTarget as HTMLElement).closest('th');
+    const start = e.clientX;
+    const from = th?.getBoundingClientRect().width ?? 120;
+    let last = from;
+    const move = (ev: MouseEvent) => {
+      last = Math.max(60, Math.round(from + ev.clientX - start));
+      setWidths((w) => ({ ...w, [key]: last }));
+    };
+    const up = () => {
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+      setWidths((w) => {
+        const next = { ...w, [key]: last };
+        try { localStorage.setItem(`${storageKey}.widths`, JSON.stringify(next)); } catch { /* this visit only */ }
+        return next;
+      });
+    };
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+  };
+  const canSort = (c: Column<T>) => !!c.sortValue && c.sortable !== false;
 
   const searchText = (row: T) =>
     columns
@@ -243,6 +456,7 @@ export function DataTable<T>({
     if (dateFilter && !dateFilter.value && range.mode !== 'all') {
       out = out.filter((r) => withinRange(dateFilter.getDate(r), range));
     }
+    if (activeCustom && customViews) out = applyView(out, activeCustom.filters, customViews.fields);
     if (query.trim()) {
       const q = query.toLowerCase();
       out = out.filter((r) => searchText(r).includes(q));
@@ -262,7 +476,7 @@ export function DataTable<T>({
     }
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows, query, sort, columns, range, dateFilter]);
+  }, [rows, query, sort, columns, range, dateFilter, activeCustom]);
 
   // Selecting rows then changing the filter would act on invisible records.
   useEffect(() => setSelected(new Set()), [activeTab, query, range]);
@@ -294,8 +508,23 @@ export function DataTable<T>({
   return (
     <div ref={rootRef} className="space-y-3" data-slot="data-table" data-bleed={pageLevel ? '' : undefined}>
       {viewsInTitle && createPortal(
-        <ViewPicker tabs={tabs!} active={activeTab ?? tabs![0].value} onChange={onTabChange} />,
+        <ViewPicker
+          tabs={tabs!}
+          active={activeTab ?? tabs![0].value}
+          onChange={(v) => { setActiveCustomId(null); onTabChange?.(v); }}
+          custom={customViews ? { views: savedViews, activeId: activeCustomId, onPick: pickCustom, onNew: () => setNewViewOpen(true), onDelete: (v) => void deleteCustom(v) } : undefined}
+        />,
         viewSlot!,
+      )}
+      {customViews && (
+        <CustomViewDialog
+          open={newViewOpen}
+          onOpenChange={setNewViewOpen}
+          list={customViews.list}
+          fields={customViews.fields}
+          columns={columns.map((c) => ({ key: c.key, header: c.header }))}
+          onSaved={(id) => { void loadViews().then(() => pickCustom(id)); }}
+        />
       )}
       {tabs && tabs.length > 0 && !viewsInTitle && (
         <div className="flex flex-wrap items-center gap-x-6 border-b no-print">
@@ -384,7 +613,7 @@ export function DataTable<T>({
               {lead && (
                 <TableHead className={cn(pageLevel ? 'w-[68px]' : 'w-10')}>
                   <span className="flex items-center gap-3">
-                    {pageLevel && <ColumnsMenu columns={columns} hidden={hidden} onToggle={toggleColumn} />}
+                    {pageLevel && <ColumnsMenu columns={columns} hidden={hidden} onToggle={toggleColumn} wrap={wrap} onWrap={toggleWrap} />}
                     {selectable && (
                       <Checkbox
                         aria-label="Select all"
@@ -399,24 +628,35 @@ export function DataTable<T>({
                 <TableHead
                   key={c.key}
                   className={cn(
-                    'group/th whitespace-nowrap',
+                    'group/th relative whitespace-nowrap',
                     c.align === 'right' && 'text-right',
                     c.align === 'center' && 'text-center',
-                    c.sortValue && 'cursor-pointer select-none',
+                    canSort(c) && 'cursor-pointer select-none',
                     c.headerClassName,
                   )}
-                  onClick={c.sortValue ? () => toggleSort(c.key) : undefined}
+                  style={widths[c.key] ? { width: widths[c.key], minWidth: widths[c.key], maxWidth: widths[c.key] } : undefined}
+                  data-sortable={canSort(c) ? '1' : undefined}
+                  onClick={canSort(c) ? () => toggleSort(c.key) : undefined}
                 >
                   <span className={cn('inline-flex items-center gap-1', c.align === 'right' && 'flex-row-reverse')}>
                     {c.header}
                     {/* Zoho marks only the column the list is sorted by. */}
-                    {c.sortValue &&
+                    {canSort(c) &&
                       (sort?.key === c.key ? (
                         sort.dir === 'asc' ? <ArrowUp className="size-3 text-primary" /> : <ArrowDown className="size-3 text-primary" />
                       ) : (
                         <ArrowDown className="size-3 opacity-0 transition-opacity group-hover/th:opacity-40" />
                       ))}
                   </span>
+                  {pageLevel && (
+                    <span
+                      aria-hidden
+                      data-slot="column-resize"
+                      onMouseDown={(e) => startResize(c.key, e)}
+                      onClick={(e) => e.stopPropagation()}
+                      className="absolute inset-y-1 right-0 w-1.5 cursor-col-resize rounded border-r-2 border-transparent hover:border-primary/50"
+                    />
+                  )}
                 </TableHead>
               ))}
             </TableRow>
@@ -468,13 +708,16 @@ export function DataTable<T>({
                     <TableCell
                       key={c.key}
                       className={cn(
-                        'whitespace-nowrap',
+                        // Wrap Text lets a long value run onto more lines; a narrowed column cuts it short.
+                        wrap ? 'whitespace-normal break-words' : 'whitespace-nowrap',
+                        !wrap && widths[c.key] && 'overflow-hidden text-ellipsis',
                         c.align === 'right' && 'text-right',
                         c.align === 'center' && 'text-center',
                         // The record's name in Zoho's link blue, on a list whose rows open.
                         onRowClick && c.key === primaryKey && 'font-medium text-link',
                         c.className,
                       )}
+                      style={widths[c.key] ? { width: widths[c.key], maxWidth: widths[c.key] } : undefined}
                     >
                       {c.cell(row)}
                     </TableCell>

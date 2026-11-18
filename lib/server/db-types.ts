@@ -906,6 +906,7 @@ export interface CostCentres {
 }
 
 export interface CreditNoteLines {
+  account_id: number | null;
   batch_id: number | null;
   cess: Generated<Decimal>;
   cess_rate_pct: Generated<Decimal>;
@@ -1828,23 +1829,31 @@ export interface Items {
   alt_factor: Decimal | null;
   alt_uqc: string | null;
   created_at: Generated<Date>;
+  created_source: Generated<"import" | "user">;
   description: string | null;
+  ean: string | null;
   gst_rate_pct: Generated<Decimal>;
   hsn_sac: string | null;
   id: Generated<number>;
   image_file_id: number | null;
   is_archived: Generated<number>;
+  is_digital_service: Generated<number>;
   is_kit: Generated<number>;
+  isbn: string | null;
   item_group_id: number | null;
+  item_type: Generated<"purchases" | "sales" | "sales_and_purchases">;
   kind: Generated<"goods" | "service">;
   min_level: Decimal | null;
+  mpn: string | null;
   mrp: Decimal | null;
   name: string;
   opening_stock_qty: Decimal | null;
   opening_stock_rate: Decimal | null;
   org_id: number;
   origin: Generated<"imported" | "local">;
+  preferred_vendor_id: number | null;
   purchase_account_id: number | null;
+  purchase_description: string | null;
   purchase_price: Generated<Decimal>;
   reorder_level: Decimal | null;
   sale_account_id: number | null;
@@ -1856,6 +1865,7 @@ export interface Items {
   track_batches: Generated<number>;
   track_inventory: Generated<number>;
   track_serials: Generated<number>;
+  upc: string | null;
   updated_at: Generated<Date>;
   uqc: Generated<string>;
   valuation_method: "average" | "fifo" | null;

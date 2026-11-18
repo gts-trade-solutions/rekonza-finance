@@ -215,6 +215,12 @@ export interface Item {
   mrpPaise?: Paise;
   openingStockQty?: number;
   reorderLevel?: number;
+  /** Zoho's Sales / Purchase Information ticks: a sale-only item is not offered on bills, a purchase-only one not on invoices. */
+  itemType?: 'sales' | 'purchases' | 'sales_and_purchases';
+  /** What a bill or order line says when it is bought. */
+  purchaseDescription?: string;
+  /** Who it is usually bought from: a new purchase order starts with them. */
+  preferredVendorId?: string | null;
 }
 
 // ── Documents (sales & purchase) ─────────────────────────────────────────────
