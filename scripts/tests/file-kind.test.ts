@@ -23,7 +23,12 @@ test('a file goes to the screen that reads it, by its name', () => {
     assert.equal(fileHome(f), 'pdf', f);
   }
   assert.equal(fileHome('company.iif'), 'quickbooks');
-  assert.equal(fileHome('old-ledger.xls'), 'unreadable');
+  // Excel 97–2003 is read too (lib/imports/xls).
+  assert.equal(fileHome('old-ledger.xls'), 'sheet');
+  // Tally's JSON export, and its HTML and SDF reports, belong to the Tally screen.
+  assert.equal(fileHome('Master.json', '{\n "tallymessage": [ {'), 'tally');
+  assert.equal(fileHome('TrialBal.html'), 'tally');
+  assert.equal(fileHome('StkSum.sdf'), 'tally');
   assert.equal(fileHome('notes.docx'), 'unreadable');
 });
 

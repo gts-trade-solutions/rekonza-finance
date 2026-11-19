@@ -23,8 +23,8 @@ export function isTallyDataFile(name: string): boolean {
   return /\.(900|1800|tsf)$/i.test(base) || /^tbk\d+\.\d{3}$/i.test(base);
 }
 
-/** Tally's export formats that come in as text: XML (and the odd .txt of XML). */
-export const isTallyExportFile = (name: string) => /\.(xml|txt)$/i.test(name);
+/** The files Tally exports, as found inside a zip: XML, JSON, Excel, HTML, ASCII and SDF text. */
+export const isTallyExportFile = (name: string) => /\.(xml|txt|json|xlsx|xls|html?|csv|sdf|asc|prn)$/i.test(name);
 
 export const isZip = (name: string) => /\.zip$/i.test(name);
 

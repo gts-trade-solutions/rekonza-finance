@@ -33,6 +33,7 @@ import { usePermission } from '@/lib/store/hooks';
 import { cn } from '@/lib/utils';
 import { downloadWorkbook } from '@/lib/xlsx';
 import { cellText, readGrid } from '@/lib/imports/read-file';
+import { readTallyReportGrid } from '@/lib/tally/reports';
 import { columnFor, MAX_IMPORT_ROWS, TEMPLATES, templateCsv, templateSheets, type ColumnSpec } from '@/lib/imports/templates';
 import { ENCODINGS, importModule, type ImportModule } from '@/lib/imports/modules';
 
@@ -74,6 +75,8 @@ function Wizard({ m }: { m: ImportModule }) {
   const [map, setMap] = useState<Record<string, string>>({});
   const [remember, setRemember] = useState(false);
   const [mapError, setMapError] = useState<string | null>(null);
+  /** The file is one of Tally's reports ("Trial Balance"): said, with the way to the Tally import. */
+  const [tallyReport, setTallyReport] = useState<string | null>(null);
 
   const saveKey = `rekonza.import-map.${m.slug}`;
 
@@ -86,6 +89,10 @@ function Wizard({ m }: { m: ImportModule }) {
     }
     try {
       const { grid } = await readGrid(file, m.kind, 'auto', enc);
+      // Tally's own reports list groups and their ledgers together: they are read on the Tally screen.
+      const tallyLaid = grid.slice(0, 20).some((r) => r.some((c) => /^particulars$/i.test(cellText(c).trim())));
+      const tally = tallyLaid ? readTallyReportGrid(grid.map((r) => r.map((c) => ({ v: typeof c === 'number' ? c : cellText(c) }))), 'Excel') : null;
+      setTallyReport(tally ? tally.label : null);
       const rows = grid.map((r) => r.map((c) => cellText(c).trim()));
       const start = rows.findIndex((r) => r.filter(Boolean).length >= 2);
       if (start < 0 || rows.length - start < 2) throw new Error('The file needs a row of headings and at least one row under it.');
@@ -144,9 +151,17 @@ function Wizard({ m }: { m: ImportModule }) {
             Your role can look at {m.title.toLowerCase()} but not add them, so the last step will not import.
           </p>
         )}
+        {step === 1 && tallyReport && loaded && (
+          <p className="mx-auto mb-6 flex max-w-[640px] items-start gap-2 rounded-[4px] border border-sky-200 bg-sky-50 px-4 py-2.5 text-[13px] text-sky-900" data-slot="import-tally-report">
+            <span>
+              This is Tally&apos;s <b>{tallyReport}</b>. Tally lists groups and their ledgers together in it, with each group&apos;s total, so read as rows it would count
+              balances twice. <Link href="/tally/import" className="font-medium text-link hover:underline">Bring it in from Tally</Link> instead: that reads Tally&apos;s layout and brings the balances, items and bills in as Tally would.
+            </span>
+          </p>
+        )}
         {step === 1 && (
           <Configure m={m} loaded={loaded} encoding={encoding} onDuplicate={onDuplicate}
-            onFile={(f) => void read(f)} onRemove={() => { setLoaded(null); setMap({}); }}
+            onFile={(f) => void read(f)} onRemove={() => { setLoaded(null); setMap({}); setTallyReport(null); }}
             onEncoding={(e) => { setEncoding(e); if (loaded) void read(loaded.file, e); }}
             onDuplicateChange={setOnDuplicate} />
         )}

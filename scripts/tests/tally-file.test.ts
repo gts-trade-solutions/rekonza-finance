@@ -17,6 +17,10 @@ import { deflateRawSync } from 'node:zlib';
 import { zipText } from '../../lib/xlsx';
 import { isTallyDataFile, sortTallyPicks, unzipEntry, zipEntries } from '../../lib/tally/data-files';
 import { outstandingBeyondDocuments } from '../../lib/server/services/party-outstanding';
+import fs from 'node:fs';
+import path from 'node:path';
+import { tallyJsonToXml } from '../../lib/tally/json';
+import { combineTallyReports, readTallyReportGrid, readTallyReportText, tallyMastersXml } from '../../lib/tally/reports';
 
 interface Fixture { trx: Trx; orgId: number; branchId: number; acc: Record<string, number> }
 
@@ -266,6 +270,76 @@ test('a zip: its files listed, and the Tally XML inside opened, stored or deflat
   assert.ok(summariseTallyFile(parseTallyFiles([text])).ledgers > 0);
 
   await assert.rejects(zipEntries(new Blob(['not a zip at all'])), /not a zip/);
+});
+
+// ── Tally's reports and JSON, brought in ────────────────────────────────────
+
+const fixture = (name: string) => {
+  const b = fs.readFileSync(path.join(__dirname, 'fixtures', 'tally', name));
+  return (b[0] === 0xff && b[1] === 0xfe ? b.toString('utf16le') : b.toString('utf8')).replace(/^﻿/, '');
+};
+
+/** Each account's opening figure, net debit in rupees, by name: what Accountant → Opening Balances shows. */
+async function openings(f: Fixture) {
+  const { rows } = await sql<{ name: string; v: string }>`
+    SELECT a.name, SUM(l.debit - l.credit) AS v FROM journal_lines l
+      JOIN journal_entries e ON e.id = l.entry_id JOIN accounts a ON a.id = l.account_id
+     WHERE l.org_id = ${f.orgId} AND e.source_type IN ('opening', 'opening_balance', 'opening_document')
+     GROUP BY a.name HAVING SUM(l.debit - l.credit) <> 0 ORDER BY a.name`.execute(f.trx);
+  return Object.fromEntries(rows.map((r) => [r.name, Number(r.v)]));
+}
+
+test('a Trial Balance, Stock Summary and bills from Tally open the books as its masters export does', async () => {
+  // Tally's own masters, exported with "closing balance as opening balance".
+  let fromMasters: Record<string, number> = {};
+  await withFixture(async (f) => {
+    const masters = parseTallyFiles([tallyJsonToXml(fixture('masters.json'))]).masters;
+    const out = await importTally(f.trx, ctx(f), masters);
+    assert.deepEqual(out.flatMap((o) => o.errors), []);
+    fromMasters = await openings(f);
+  });
+  assert.equal(fromMasters['Retained Earnings'], 154_830, `the year closed: a loss (${JSON.stringify(fromMasters)})`);
+  assert.ok(Object.values(fromMasters).includes(-500_000), 'the partners’ capital');
+
+  // The reports of the same company, as Excel, HTML, CSV or XML give them.
+  await withFixture(async (f) => {
+    const tb = readTallyReportText(fixture('tb-all.html'), 'tb-all.html')!;
+    const stock = readTallyReportText(fixture('stock.csv'), 'stock.csv')!;
+    const combined = combineTallyReports([tb, stock]);
+    const masters = parseTallyFiles([tallyMastersXml(combined.masters, combined.company)]).masters;
+    const out = await importTally(f.trx, ctx(f), masters);
+    assert.deepEqual(out.flatMap((o) => o.errors), []);
+    assert.deepEqual(await openings(f), fromMasters, 'every account opens the same');
+    const item = await f.trx.selectFrom('items').select(['opening_stock_qty', 'opening_stock_rate'])
+      .where('org_id', '=', f.orgId).where('name', '=', 'Brake Pad Set').executeTakeFirstOrThrow();
+    assert.equal(Number(item.opening_stock_qty), 35);
+    assert.equal(Number(item.opening_stock_rate), 850);
+    const bank = await f.trx.selectFrom('bank_accounts').select('name').where('org_id', '=', f.orgId).where('name', '=', 'HDFC Bank Current').executeTakeFirst();
+    assert.ok(bank, 'a bank ledger becomes a bank account');
+    assert.ok((await verifyLedgerBalances(f.trx, f.orgId)).balanced);
+    // Brought in twice: nothing doubles.
+    const again = await importTally(f.trx, ctx(f), masters);
+    assert.deepEqual(again.flatMap((o) => o.errors), []);
+    assert.deepEqual(await openings(f), fromMasters);
+  });
+
+  // Bills Receivable: each bill a customer's opening invoice, from its own date.
+  await withFixture(async (f) => {
+    const g = (rows: (string | number | null)[][]) => rows.map((r) => r.map((v) => ({ v })));
+    const bills = readTallyReportGrid(g([
+      ['Bills Receivable'], ['Date', 'Ref. No.', "Party's Name", 'Pending', 'Due on'], [null, null, null, 'Amount', null],
+      ['15-Feb-26', 'INV/25-26/0141', 'Kaveri Motors', '35,400.00 Dr', '17-Mar-26'],
+      ['25-Mar-26', 'INV/25-26/0162', 'Sri Murugan Traders', '11,800.00 Dr', '9-Apr-26'],
+    ]), 'Excel')!;
+    const combined = combineTallyReports([bills]);
+    const masters = parseTallyFiles([tallyMastersXml(combined.masters)]).masters;
+    const out = await importTally(f.trx, ctx(f), masters);
+    assert.deepEqual(out.flatMap((o) => o.errors), []);
+    const kaveri = await f.trx.selectFrom('contacts').select(['id', 'kind']).where('org_id', '=', f.orgId).where('display_name', '=', 'Kaveri Motors').executeTakeFirstOrThrow();
+    assert.equal(kaveri.kind, 'customer');
+    const owed = await sql<{ v: string }>`SELECT COALESCE(SUM(debit - credit), 0) AS v FROM journal_lines WHERE org_id = ${f.orgId} AND account_id = ${f.acc[CODE.AR]} AND contact_id = ${kaveri.id}`.execute(f.trx);
+    assert.equal(Number(owed.rows[0].v), 35_400);
+  });
 });
 
 test.after(async () => {

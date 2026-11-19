@@ -34,7 +34,10 @@ export function fileHome(name: string, head = ''): FileHome {
   if (['pdf', 'png', 'jpg', 'jpeg', 'webp'].includes(e)) return 'pdf';
   if (e === 'iif') return 'quickbooks';
   if (e === 'txt') return /^\s*</.test(head.replace(/^﻿/, '').replace(/\0/g, '')) ? 'tally' : 'sheet';
-  if (['xlsx', 'csv', 'tsv', 'tab', 'dsv', 'psv', 'prn', 'json'].includes(e)) return 'sheet';
+  // Tally's JSON export: its masters and vouchers in "tallymessage".
+  if (e === 'json' && /"tallymessage"/i.test(head.replace(/\0/g, ''))) return 'tally';
+  if (['xlsx', 'xls', 'csv', 'tsv', 'tab', 'dsv', 'psv', 'prn', 'json'].includes(e)) return 'sheet';
+  if (['htm', 'html', 'sdf', 'asc'].includes(e)) return 'tally';
   return 'unreadable';
 }
 
