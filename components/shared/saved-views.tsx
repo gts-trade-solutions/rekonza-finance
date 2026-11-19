@@ -12,7 +12,8 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { api } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
 
-export type SavedList = 'invoices' | 'bills' | 'expenses' | 'payments-received' | 'payments-made' | 'contacts';
+/** A list's own views, or a report's saved settings ("report-profit-and-loss"), as Zoho's custom reports. */
+export type SavedList = 'invoices' | 'bills' | 'expenses' | 'payments-received' | 'payments-made' | 'contacts' | `report-${string}`;
 interface View { id: string; name: string; shared: boolean; mine: boolean; filters: Record<string, unknown> }
 
 export function SavedViews<F extends Record<string, unknown>>({ list, current, onApply }: { list: SavedList; current: F; onApply: (f: F) => void }) {

@@ -627,10 +627,53 @@ export async function createCreditNote(
       .set({ applied_amount: toSqlFromPaise(rounded), status: 'applied' })
       .where('id', '=', id)
       .execute();
+    await trx.insertInto('credit_note_applications').values({
+      org_id: orgId, credit_note_id: id, invoice_id: invoice.id, amount: toSqlFromPaise(rounded), applied_on: input.date, created_by_user_id: userId,
+    }).execute();
     await settleIfPaid(trx, orgId, invoice.id);
   }
 
   return { id, number, totalPaise: rounded, journalEntryId: entry.id };
+}
+
+/**
+ * Zoho's "Apply to Invoices": set what is left on a credit note against one or
+ * more of the customer's open invoices, any time after it was raised. An
+ * allocation, not a posting (the credit note's entry already reduced
+ * receivables): each invoice's balance falls, and the application is kept.
+ */
+export async function applyCreditNote(
+  trx: Trx, orgId: number, userId: number | null, creditNoteId: number,
+  input: { date: string; allocations: { invoiceId: number; amountPaise: number }[] },
+): Promise<{ appliedPaise: Paise; status: string }> {
+  const cn = await trx.selectFrom('credit_notes').select(['id', 'number', 'customer_id', 'status', 'total', 'applied_amount', 'note_date'])
+    .where('id', '=', creditNoteId).where('org_id', '=', orgId).forUpdate().executeTakeFirst();
+  if (!cn) throw notFound('That credit note does not exist.');
+  if (cn.status === 'void') throw conflict('That credit note has been voided.');
+  const left = toPaiseFromSql(cn.total) - toPaiseFromSql(cn.applied_amount);
+  const wanted = input.allocations.filter((a) => a.amountPaise > 0);
+  if (!wanted.length) throw badRequest('Give an amount against at least one invoice.');
+  const total = wanted.reduce((t, a) => t + a.amountPaise, 0);
+  if (total > left) throw badRequest(`Only ₹${(left / 100).toLocaleString('en-IN', { minimumFractionDigits: 2 })} is left on ${cn.number} to apply.`);
+  if (input.date < String(cn.note_date).slice(0, 10)) throw badRequest('A credit cannot be applied before the credit note was raised.');
+  for (const a of wanted) {
+    const inv = await trx.selectFrom('invoices').select(['id', 'number', 'customer_id', 'status', 'total', 'amount_paid'])
+      .where('id', '=', a.invoiceId).where('org_id', '=', orgId).forUpdate().executeTakeFirst();
+    if (!inv || inv.customer_id !== cn.customer_id) throw badRequest('Apply a credit note only to its own customer\'s invoices.');
+    if (inv.status === 'void' || inv.status === 'draft') throw badRequest(`Invoice ${inv.number} is ${inv.status}, so no credit can be set against it.`);
+    const open = toPaiseFromSql(inv.total) - toPaiseFromSql(inv.amount_paid);
+    if (a.amountPaise > open) throw badRequest(`Invoice ${inv.number} has only ₹${(open / 100).toLocaleString('en-IN', { minimumFractionDigits: 2 })} left to pay.`);
+    await trx.updateTable('invoices').set((eb) => ({ amount_paid: eb('amount_paid', '+', toSqlFromPaise(a.amountPaise as Paise)) })).where('id', '=', inv.id).execute();
+    await trx.insertInto('credit_note_applications').values({
+      org_id: orgId, credit_note_id: creditNoteId, invoice_id: inv.id, amount: toSqlFromPaise(a.amountPaise as Paise), applied_on: input.date, created_by_user_id: userId,
+    }).execute();
+    await settleIfPaid(trx, orgId, inv.id);
+  }
+  const status = total === left ? 'applied' : 'open';
+  await trx.updateTable('credit_notes')
+    .set({ applied_amount: toSqlFromPaise((toPaiseFromSql(cn.applied_amount) + total) as Paise), status })
+    .where('id', '=', creditNoteId).execute();
+  return { appliedPaise: total as Paise, status };
 }
 
 /** Move an invoice to 'paid' once nothing is left owing on it. */
@@ -644,7 +687,8 @@ async function settleIfPaid(trx: Trx, orgId: number, invoiceId: number): Promise
   if (!inv || inv.status === 'void' || inv.status === 'draft') return;
 
   const balance = toPaiseFromSql(inv.total) - toPaiseFromSql(inv.amount_paid);
-  const status = balance <= 0 ? 'paid' : 'partially_paid';
+  // Settled, partly settled, or (a credit taken back) owed in full again.
+  const status = balance <= 0 ? 'paid' : toPaiseFromSql(inv.amount_paid) > 0 ? 'partially_paid' : 'sent';
   if (inv.status !== status) {
     await trx.updateTable('invoices').set({ status }).where('id', '=', invoiceId).execute();
   }
@@ -711,11 +755,13 @@ export async function refundCreditNote(
     ],
   });
 
+  // A part refund leaves the rest open, to apply or refund later.
+  const after = toPaiseFromSql(cn.applied_amount) + amount;
   await trx
     .updateTable('credit_notes')
     .set({
-      status: 'refunded',
-      applied_amount: toSqlFromPaise(toPaiseFromSql(cn.applied_amount) + amount),
+      status: after >= toPaiseFromSql(cn.total) ? 'refunded' : 'open',
+      applied_amount: toSqlFromPaise(after),
     })
     .where('id', '=', creditNoteId)
     .execute();
@@ -1005,7 +1051,10 @@ export async function voidCreditNote(
     .executeTakeFirst();
   if (!cn) throw notFound('That credit note does not exist.');
   if (cn.status === 'void') throw new ApiError(409, 'That credit note is already void.', 'conflict');
-  if (cn.status === 'refunded') {
+  const refunded = await trx.selectFrom('journal_entries').select('id')
+    .where('org_id', '=', orgId).where('source_type', '=', 'credit_note_refund').where('source_id', '=', creditNoteId)
+    .where('reversal_of_entry_id', 'is', null).executeTakeFirst();
+  if (cn.status === 'refunded' || refunded) {
     throw conflict(
       `${cn.number} has been refunded in cash. Voiding it would leave the payment pointing at nothing — ` +
         'record a receipt from the customer instead.',
@@ -1021,15 +1070,21 @@ export async function voidCreditNote(
     });
   }
 
-  // Give the invoice its balance back if the credit had been set against it.
+  // Give every invoice its balance back: each application kept, or, for a
+  // credit note applied before applications were kept, its own invoice.
+  const apps = await trx.selectFrom('credit_note_applications').select(['invoice_id', 'amount'])
+    .where('org_id', '=', orgId).where('credit_note_id', '=', creditNoteId).execute();
   const applied = toPaiseFromSql(cn.applied_amount);
-  if (cn.against_invoice_id && applied > 0) {
+  const back = apps.length
+    ? apps.map((a) => ({ invoiceId: a.invoice_id, paise: toPaiseFromSql(a.amount) }))
+    : cn.against_invoice_id && applied > 0 ? [{ invoiceId: cn.against_invoice_id, paise: applied }] : [];
+  for (const b of back) {
     await trx
       .updateTable('invoices')
-      .set((eb) => ({ amount_paid: eb('amount_paid', '-', toSqlFromPaise(applied)) }))
-      .where('id', '=', cn.against_invoice_id)
+      .set((eb) => ({ amount_paid: eb('amount_paid', '-', toSqlFromPaise(b.paise)) }))
+      .where('id', '=', b.invoiceId)
       .execute();
-    await settleIfPaid(trx, orgId, cn.against_invoice_id);
+    await settleIfPaid(trx, orgId, b.invoiceId);
   }
 
   await trx

@@ -24,6 +24,7 @@ import {
   Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger,
 } from '@/components/ui/dialog';
 import { PageHeader } from '@/components/shared/page-header';
+import { ModuleMenu } from '@/components/shared/module-menu';
 import { DataTable, type Column } from '@/components/shared/data-table';
 import { Money } from '@/components/shared/money';
 import { EmptyState } from '@/components/shared/empty-state';
@@ -200,7 +201,7 @@ export default function ExpensesPage() {
       <PageHeader
         title="Expenses"
         description="Money already spent, with no supplier bill to settle later — it posts and closes in one step."
-        actions={
+        actions={<>{
           <>
             <Refreshing active={state.refreshing} />
             {canCreate && (
@@ -320,6 +321,7 @@ export default function ExpensesPage() {
               </Dialog>
             )}
           </>
+        }<ModuleMenu slug="expenses" onRefresh={() => void state.refetch()} /></>
         }
       />
 

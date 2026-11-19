@@ -5,6 +5,9 @@
 // or zipped. Tally's own data folder (Company.900, TranMgr.900…) is recognised
 // too, and answered with how to bring that company across (lib/tally/data-files).
 //
+// Any other file chosen here (a customer list, an invoice PDF) is not refused:
+// it is named for what it is and passed on to the import that reads it.
+//
 // One upload may carry the masters, the vouchers, or both, in one file or a
 // few. What the files hold is read here in the browser and shown before
 // anything is sent; then a check runs the whole import on the server and
@@ -14,7 +17,8 @@
 
 import { useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
-import { Database, Download, FileCode2, Loader2, Upload, X } from 'lucide-react';
+import { useRouter } from 'next/navigation';
+import { ArrowRight, Database, Download, FileCode2, FileSpreadsheet, FileText, Loader2, Upload, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -25,16 +29,34 @@ import { imports, type ImportResponse } from '@/lib/api/client';
 import { usePermission } from '@/lib/store/hooks';
 import { parseTallyFiles, readTallyFile, summariseTallyFile } from '@/lib/tally/xml';
 import { tallySampleXml } from '@/lib/tally/sample';
-import { isTallyDataFile, isTallyExportFile, isZip, unzipEntry, zipEntries } from '@/lib/tally/data-files';
+import { isTallyDataFile, isTallyExportFile, unzipEntry, zipEntries } from '@/lib/tally/data-files';
+import { fileHome, type FileHome } from '@/lib/imports/file-kind';
+import { guessFileKind } from '@/lib/imports/read-file';
+import { handOver, type HandedOver } from '@/lib/imports/handover';
+import { TEMPLATES, type ImportKind } from '@/lib/imports/templates';
 
-/** What the file picker offers: Tally's XML, zips of it, and Tally's data files (to explain them). */
-const ACCEPT = '.xml,text/xml,application/xml,.txt,.zip,application/zip,.900,.1800,.tsf,.001';
+/**
+ * What the file picker offers: Tally's XML, zips of it, Tally's data files (to
+ * explain them), and the files Import reads, to pass on to it.
+ */
+const ACCEPT = [
+  '.xml,text/xml,application/xml,.txt,.zip,application/zip,.900,.1800,.tsf,.001',
+  '.xlsx,.csv,.tsv,.dsv,.psv,text/csv,.json,application/json,.pdf,application/pdf,image/png,image/jpeg,image/webp,.iif',
+].join(',');
 const baseName = (n: string) => n.split(/[\\/]/).pop() ?? n;
 
 /** What the server's nginx and the app let through in one request. */
 const MAX_UPLOAD = 24 * 1024 * 1024;
 
 interface Picked { name: string; size: number; xml: string }
+
+/** A file chosen here that another import reads: what it is, and for a sheet, which import its headings fit. */
+interface Other { file: File; home: Exclude<FileHome, 'tally' | 'tally-data' | 'zip'>; kind: ImportKind | null }
+
+/** Spreadsheets first, then invoices, then the rest; each in the order of their names (1-, 2-, … 10-). */
+const HOME_ORDER: Other['home'][] = ['sheet', 'pdf', 'quickbooks', 'unreadable'];
+const inOrder = (a: Other, b: Other) =>
+  HOME_ORDER.indexOf(a.home) - HOME_ORDER.indexOf(b.home) || a.file.name.localeCompare(b.file.name, undefined, { numeric: true });
 
 const today = () => new Date(Date.now() + 5.5 * 3600_000).toISOString().slice(0, 10);
 
@@ -48,7 +70,11 @@ function downloadSample() {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-export function TallyFileImport() {
+export function TallyFileImport({ onOtherFiles }: {
+  /** On Settings → Import: open the other files on that page's own tabs. Elsewhere they are taken there. */
+  onOtherFiles?: (files: HandedOver, open: 'sheet' | 'pdf') => void;
+} = {}) {
+  const router = useRouter();
   const canBooks = usePermission('accountant', 'create');
   const canSales = usePermission('sales', 'create');
   const canImport = canBooks && canSales;
@@ -58,6 +84,8 @@ export function TallyFileImport() {
   const [busy, setBusy] = useState<false | 'check' | 'import'>(false);
   /** Tally data files chosen (Company.900…): not read, only explained. */
   const [dataFiles, setDataFiles] = useState<string[]>([]);
+  /** Spreadsheets, invoice PDFs and the like: for Import, not for here. */
+  const [others, setOthers] = useState<Other[]>([]);
   const input = useRef<HTMLInputElement>(null);
 
   const summary = useMemo(() => (files.length ? summariseTallyFile(parseTallyFiles(files.map((f) => f.xml))) : null), [files]);
@@ -72,12 +100,19 @@ export function TallyFileImport() {
       const read: Picked[] = [];
       const found: string[] = [];
       const nothingInside: string[] = [];
+      const other: Other[] = [];
       for (const f of [...list]) {
-        if (isTallyDataFile(f.name)) {
+        // A .txt is told by what is in it: Tally writes XML to .txt as well.
+        const home = /\.txt$/i.test(f.name) ? null : fileHome(f.name);
+        if (home === 'tally-data') {
           found.push(baseName(f.name));
           continue;
         }
-        if (isZip(f.name)) {
+        if (home && home !== 'tally' && home !== 'zip') {
+          other.push({ file: f, home, kind: home === 'sheet' ? await guessFileKind(f) : null });
+          continue;
+        }
+        if (home === 'zip') {
           const entries = await zipEntries(f);
           const data = entries.filter((e) => isTallyDataFile(e.name));
           const xmls = entries.filter((e) => isTallyExportFile(e.name));
@@ -88,13 +123,22 @@ export function TallyFileImport() {
           if (!data.length && !xmls.length) nothingInside.push(f.name);
           continue;
         }
-        read.push({ name: f.name, size: f.size, xml: await readTallyFile(f) });
+        const xml = await readTallyFile(f);
+        if (fileHome(f.name, xml.slice(0, 200)) === 'sheet') {
+          other.push({ file: f, home: 'sheet', kind: await guessFileKind(f) });
+          continue;
+        }
+        read.push({ name: f.name, size: f.size, xml });
       }
       if (read.length) {
         setFiles((have) => [...have.filter((h) => !read.some((r) => r.name === h.name)), ...read]);
         setResult(null);
       }
       if (found.length) setDataFiles((have) => [...new Set([...have, ...found])]);
+      if (other.length) {
+        setOthers((have) => [...have.filter((h) => !other.some((o) => o.file.name === h.file.name)), ...other]
+          .sort(inOrder));
+      }
       if (nothingInside.length) {
         toast.error(`No Tally files in ${nothingInside.join(', ')}`, { description: 'A zip should hold the XML files Tally exported, or a Tally company folder.' });
       }
@@ -120,6 +164,17 @@ export function TallyFileImport() {
   };
   const checked = !!result && !result.committed && result.outcomes.every((o) => o.errors.length === 0);
 
+  /** The other files, to the import that reads them: on this page's tabs, or on Settings → Import. */
+  const passOn = (open: 'sheet' | 'pdf') => {
+    const files: HandedOver = {
+      sheets: others.filter((o) => o.home === 'sheet').map((o) => o.file),
+      pdfs: others.filter((o) => o.home === 'pdf').map((o) => o.file),
+    };
+    setOthers([]);
+    if (onOtherFiles) onOtherFiles(files, open);
+    else { handOver(files); router.push(`/settings/import?tab=${open}`); }
+  };
+
   return (
     <div className="space-y-4" data-slot="tally-file-import">
       <div className="grid gap-4 lg:grid-cols-2">
@@ -137,7 +192,7 @@ export function TallyFileImport() {
 
         <Card className="space-y-3 border-t-4 border-t-blue-500 p-5">
           <p className="text-sm font-semibold">2 · Choose the files</p>
-          <p className="text-xs text-muted-foreground">One or more .xml files Tally exported (masters, vouchers, or both), or a .zip of them. They are read here first; nothing is saved until you bring them in. Tally&apos;s own data files (Company.900 and the rest) are recognised too.</p>
+          <p className="text-xs text-muted-foreground">One or more .xml files Tally exported (masters, vouchers, or both), or a .zip of them. They are read here first; nothing is saved until you bring them in. Tally&apos;s own data files (Company.900 and the rest) are recognised too, and a spreadsheet, CSV, JSON or invoice PDF chosen here is passed to the import that reads it.</p>
           <input ref={input} type="file" accept={ACCEPT} multiple className="hidden" data-slot="tally-file-input"
             onChange={(e) => void add(e.target.files)} />
           <div className="flex flex-wrap gap-2">
@@ -167,6 +222,8 @@ export function TallyFileImport() {
       </div>
 
       {dataFiles.length > 0 && <DataFilesHelp names={dataFiles} onClear={() => setDataFiles([])} />}
+
+      {others.length > 0 && <OtherFiles files={others} onOpen={passOn} onClear={() => setOthers([])} />}
 
       {summary && (
         <Card className="space-y-4 border-t-4 border-t-emerald-500 p-5" data-slot="tally-file-summary">
@@ -242,6 +299,76 @@ export function TallyFileImport() {
         Sending these books the other way? <Link href="/tally/export" className="font-medium text-primary hover:underline">Export to Tally</Link>.
       </p>
     </div>
+  );
+}
+
+/** Where each kind of other file is read, for the list. */
+const WHERE: Record<Other['home'], string> = {
+  sheet: 'Import → Excel, CSV, text or JSON',
+  pdf: 'Import → Invoices from PDF',
+  quickbooks: 'Import → From QuickBooks',
+  unreadable: '',
+};
+
+/** Files that are not Tally's: what each is, where it is read, and the way there. */
+function OtherFiles({ files, onOpen, onClear }: { files: Other[]; onOpen: (open: 'sheet' | 'pdf') => void; onClear: () => void }) {
+  const sheets = files.filter((f) => f.home === 'sheet').length;
+  const pdfs = files.filter((f) => f.home === 'pdf').length;
+  const quickbooks = files.some((f) => f.home === 'quickbooks');
+  const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+  return (
+    <Card className="space-y-3 border-t-4 border-t-sky-500 p-5" data-slot="tally-other-files">
+      <div className="flex items-start gap-3">
+        <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-sky-600 text-white">
+          <FileSpreadsheet className="size-4" />
+        </span>
+        <div className="min-w-0 flex-1 space-y-1">
+          <p className="text-sm font-semibold">{files.length === 1 ? 'This is not a Tally file' : 'These are not Tally files'}</p>
+          <p className="text-xs text-muted-foreground">
+            This screen reads the XML that Tally exports. {files.length === 1 ? 'This file is' : 'These files are'} read by Import instead,
+            just as {files.length === 1 ? 'it is' : 'they are'}: nothing was uploaded yet.
+          </p>
+        </div>
+        <Button variant="ghost" size="xs" onClick={onClear} data-slot="tally-other-files-clear">Clear</Button>
+      </div>
+      <ul className="space-y-1">
+        {files.map((f) => (
+          <li key={f.file.name} data-slot="tally-other-file" data-home={f.home} data-kind={f.kind ?? undefined}
+            className="flex flex-wrap items-center gap-x-2 gap-y-0.5 rounded-md border bg-muted/40 px-2.5 py-1.5 text-xs">
+            {f.home === 'pdf' ? <FileText className="size-3.5 shrink-0 text-rose-600" /> : <FileSpreadsheet className="size-3.5 shrink-0 text-emerald-600" />}
+            <span className="min-w-0 flex-1 truncate font-medium">{f.file.name}</span>
+            <span className="text-muted-foreground">
+              {f.home === 'sheet' && (f.kind ? <>{TEMPLATES[f.kind].title} · {WHERE.sheet}</> : <>a spreadsheet · {WHERE.sheet}, where you pick what it holds</>)}
+              {f.home === 'pdf' && <>an invoice or bill to read · {WHERE.pdf}</>}
+              {f.home === 'quickbooks' && <>a QuickBooks file · {WHERE.quickbooks}</>}
+              {f.home === 'unreadable' && (/\.xls$/i.test(f.file.name)
+                ? <>an old Excel file: save it as .xlsx (File → Save As) and choose it again</>
+                : <>not a file Rekonza reads: Excel (.xlsx), CSV, text, JSON, PDF or Tally&apos;s XML</>)}
+            </span>
+          </li>
+        ))}
+      </ul>
+      <div className="flex flex-wrap justify-end gap-2">
+        {quickbooks && (
+          <Button size="sm" variant="outline" asChild>
+            <Link href="/settings/import?tab=quickbooks">Open From QuickBooks</Link>
+          </Button>
+        )}
+        {pdfs > 0 && (
+          <Button size="sm" variant={sheets ? 'outline' : 'default'} className="gap-1.5" onClick={() => onOpen('pdf')} data-slot="tally-other-pdfs">
+            Read the {plural(pdfs, 'invoice', 'invoices')} <ArrowRight className="size-3.5" />
+          </Button>
+        )}
+        {sheets > 0 && (
+          <Button size="sm" className="gap-1.5" onClick={() => onOpen('sheet')} data-slot="tally-other-sheets">
+            Import the {plural(sheets, 'spreadsheet', 'spreadsheets')} <ArrowRight className="size-3.5" />
+          </Button>
+        )}
+      </div>
+      {sheets > 0 && pdfs > 0 && (
+        <p className="text-right text-[11px] text-muted-foreground">Either way, both go across: the spreadsheets on one tab, the invoices on the next.</p>
+      )}
+    </Card>
   );
 }
 

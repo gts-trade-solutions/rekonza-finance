@@ -75,6 +75,49 @@ test('moving between companies, each on its own terms; a new company with the sa
   });
 });
 
+test('consolidation: chosen companies; what they owe and sold each other eliminated; a difference between the two sides shown', async () => {
+  const { createBill } = await import('../../lib/server/services/purchases');
+  await rolledBack(async (trx) => {
+    const email = `group-${Date.now()}@example.test`;
+    const a = await company(trx, 'Alpha Traders');
+    const b = await company(trx, 'Beta Exports');
+    await trx.updateTable('organizations').set({ pan: 'AAACA1111A' }).where('id', '=', a.orgId).execute();
+    await trx.updateTable('organizations').set({ pan: 'AAACB2222B' }).where('id', '=', b.orgId).execute();
+    for (const co of [a, b]) {
+      await trx.insertInto('users').values({ org_id: co.orgId, name: 'Owner', email, role: 'admin', password_hash: 'h' }).execute();
+    }
+    // Alpha sells ₹10,000 to Beta (Beta is Alpha's customer); Beta records only ₹9,000 of it as a bill so far.
+    const betaInAlpha = Number((await trx.insertInto('contacts').values({ org_id: a.orgId, kind: 'customer', display_name: 'Beta Exports', state_code: '33', gst_treatment: 'unregistered', pan: 'AAACB2222B' } as never).executeTakeFirstOrThrow()).insertId);
+    const alphaInBeta = Number((await trx.insertInto('contacts').values({ org_id: b.orgId, kind: 'vendor', display_name: 'Alpha Traders', state_code: '33', gst_treatment: 'unregistered', pan: 'AAACA1111A' } as never).executeTakeFirstOrThrow()).insertId);
+    const outsider = Number((await trx.insertInto('contacts').values({ org_id: a.orgId, kind: 'customer', display_name: 'Walk-in', state_code: '33', gst_treatment: 'unregistered' } as never).executeTakeFirstOrThrow()).insertId);
+    await createInvoice(trx, a.orgId, null, { branchId: a.branchId, customerId: betaInAlpha, date: '2026-06-10', dueDate: '2026-07-10', status: 'approved', lines: [{ description: 'Goods', qty: 1, ratePaise: 10_000_00, gstRatePct: 0 }] });
+    await createInvoice(trx, a.orgId, null, { branchId: a.branchId, customerId: outsider, date: '2026-06-11', dueDate: '2026-07-11', status: 'approved', lines: [{ description: 'Goods', qty: 1, ratePaise: 5_000_00, gstRatePct: 0 }] });
+    await createBill(trx, b.orgId, null, { branchId: b.branchId, vendorId: alphaInBeta, vendorInvoiceNo: 'A-1', date: '2026-06-12', dueDate: '2026-07-12', status: 'open', lines: [{ description: 'Goods', qty: 1, ratePaise: 9_000_00, gstRatePct: 0 }] } as never);
+
+    const g = await consolidatedStatements(trx, email, '2026-04-01', '2027-03-31');
+    assert.equal(g.interCompany.length, 1);
+    const p = g.interCompany[0];
+    assert.deepEqual([p.fromName, p.toName], ['Alpha Traders', 'Beta Exports']);
+    assert.equal(p.receivablePaise, 10_000_00);
+    assert.equal(p.counterpartPayablePaise, 9_000_00);
+    assert.equal(p.balanceDifferencePaise, 1_000_00, 'the unbilled ₹1,000, shown');
+    assert.equal(p.salesPaise, 10_000_00);
+    assert.equal(p.counterpartPurchasesPaise, 9_000_00);
+    // Group income: ₹15,000 sold less the ₹10,000 sold within the group.
+    assert.equal(g.totalIncome.total, 5_000_00);
+    assert.equal(g.totalIncome.elimination, -10_000_00);
+    // Group receivables keep only the outsider's ₹5,000.
+    const ar = g.assets.find((r) => r.code === '1200' || r.name.toLowerCase().includes('receivable'))!;
+    assert.equal(ar.total, 5_000_00);
+    assert.equal(g.unreconciledPaise, 1_000_00);
+    // Only Alpha chosen: nothing to eliminate.
+    const one = await consolidatedStatements(trx, email, '2026-04-01', '2027-03-31', [String(a.orgId)]);
+    assert.deepEqual(one.companies.filter((c) => c.included).map((c) => c.name), ['Alpha Traders']);
+    assert.equal(one.interCompany.length, 0);
+    assert.equal(one.totalIncome.total, 15_000_00);
+  });
+});
+
 test.after(async () => {
   await db.destroy();
 });

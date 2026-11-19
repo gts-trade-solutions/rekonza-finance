@@ -14,12 +14,15 @@ const ListQuery = z.object({
   fy: z.string().regex(/^\d{4}-\d{2}$/).optional(),
   /** Compare actuals up to this date rather than the whole year. */
   asOf: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  /** Actuals of one branch, or one cost centre, against the budget. */
+  branchId: z.coerce.number().int().positive().optional(),
+  costCentreId: z.coerce.number().int().positive().optional(),
 });
 
 export const GET = route(
   async ({ orgId, req }) => {
     const q = query(req, ListQuery);
-    return budgetVsActual(db, orgId, { fy: q.fy, asOf: q.asOf, today: new Date().toISOString().slice(0, 10) });
+    return budgetVsActual(db, orgId, { fy: q.fy, asOf: q.asOf, branchId: q.branchId ?? null, costCentreId: q.costCentreId ?? null, today: new Date().toISOString().slice(0, 10) });
   },
   { permission: { module: 'accountant', action: 'view' } },
 );

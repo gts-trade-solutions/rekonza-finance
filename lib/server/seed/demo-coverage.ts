@@ -25,7 +25,10 @@ import 'server-only';
 // records them when it runs (npm run db:backup), never this seed.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { sql } from 'kysely';
+import { attachFile } from '../files/attachments';
 import { db, transaction, type Trx } from '../db';
 import type { IdMap } from './bootstrap';
 import { DEMO_TODAY } from './demo-book';
@@ -35,7 +38,7 @@ import { createBill, createExpense, postBill } from '../services/purchases';
 import { makePayment, receivePayment } from '../services/payments';
 import { createTransfer as bankTransfer } from '../services/banking';
 import { createTransfer as godownTransfer, receiveTransfer } from '../services/stock-transfers';
-import { postManualJournal } from '../services/journals';
+import { postManualJournal, reverseJournal } from '../services/journals';
 import { saveCostCentre } from '../services/cost-centres';
 import { saveRule, approve } from '../services/approvals';
 import { createPurchaseOrder } from '../services/purchase-documents';
@@ -43,9 +46,10 @@ import { receiveFromPurchaseOrder, billFromGoodsReceipt } from '../services/orde
 import { approveBatch, createBatch, markBatchPaid, payableBills, submitBatch } from '../services/payment-batches';
 import { logFollowUp } from '../services/collections';
 import { recordReply, requestConfirmation } from '../services/balance-confirmations';
-import { addAsset, ensureAssetClasses, listAssetClasses, runDepreciation } from '../services/fixed-assets';
+import { addAsset, disposeAsset, ensureAssetClasses, listAssetClasses, runDepreciation } from '../services/fixed-assets';
 import { createEmployee } from '../payroll/employees';
 import { payRun, postRun, prepareRun } from '../payroll/payroll';
+import { payStatutory, statutoryRegister } from '../payroll/statutory-dues';
 import { grantLeave, listLeaveTypes, recordLeave } from '../payroll/leave';
 import { createApiKey } from '../auth/api-keys';
 import { saveWebhook } from '../integrations/webhooks';
@@ -102,6 +106,13 @@ export async function seedDemoCoverage(trx: Trx, ids: IdMap): Promise<CoverageRe
   };
   const ledgerOf = async (bankAccountId: number) => Number((await trx.selectFrom('bank_accounts').select('ledger_account_id')
     .where('id', '=', bankAccountId).executeTakeFirstOrThrow()).ledger_account_id);
+
+  // ── Company: its logo, which every PDF template prints ─────────────────────
+  const logo = await attachFile(trx, org, admin, {
+    type: 'organization', targetId: org, filename: 'race-auto-spares-logo.png',
+    bytes: readFileSync(path.join(process.cwd(), 'lib', 'server', 'seed', 'demo-logo.png')),
+  });
+  await trx.updateTable('organizations').set({ logo_file_id: Number(logo.id) }).where('id', '=', org).execute();
 
   // ── Company: the statutory details beside the PAN ─────────────────────────
   await trx.updateTable('organizations').set({
@@ -202,12 +213,16 @@ export async function seedDemoCoverage(trx: Trx, ids: IdMap): Promise<CoverageRe
     { date: monthEnd(MONTHS[3]), memo: 'Rent for the month, Guindy godown, outstanding', dr: CODE.RENT, cr: CODE.PROVISIONS, amount: 45_000 },
     { date: day(21), memo: 'Advance to Karthik S for the Coimbatore trade fair', dr: CODE.LOANS_ADVANCES, cr: CODE.CASH, amount: 10_000 },
   ];
+  const journalIds: number[] = [];
   for (const j of JOURNALS) {
-    await postManualJournal(trx, org, accountant, {
+    const posted = await postManualJournal(trx, org, accountant, {
       branchId: chennai, date: j.date, memo: j.memo, approved: true,
       lines: [{ accountId: acc(j.dr), debitPaise: R(j.amount) }, { accountId: acc(j.cr), creditPaise: R(j.amount) }],
     });
+    journalIds.push(Number((posted as { id: number }).id));
   }
+  // Last month's rent accrual reversed on the first of this month, as an accountant does (Journals → Reverse).
+  await reverseJournal(trx, org, accountant, journalIds[1], { date: `${DEMO_TODAY.slice(0, 7)}-01`, memo: 'Reversal of the rent accrued at month end' });
   await bankTransfer(trx, org, accountant, { fromBankAccountId: ids.bankAccounts.ba_cash, toBankAccountId: ids.bankAccounts.ba_hdfc, date: day(13), amountPaise: R(20_000), reference: 'Counter sales cash deposited' });
   await bankTransfer(trx, org, admin, { fromBankAccountId: ids.bankAccounts.ba_hdfc, toBankAccountId: ids.bankAccounts.ba_icici, date: day(10), amountPaise: R(2_00_000), reference: 'Funds for Bengaluru depot payments' });
   const against = await trx.selectFrom('invoices').select('id').where('org_id', '=', org).where('customer_id', '=', ids.contacts.c_apex)
@@ -348,6 +363,9 @@ export async function seedDemoCoverage(trx: Trx, ids: IdMap): Promise<CoverageRe
     await runDepreciation(trx, org, accountant, chennai, monthEnd(m));
     depreciationRuns++;
   }
+  // The old storage racks scrapped today: depreciation to yesterday, the loss posted (Fixed Assets → Disposals).
+  const racks = await trx.selectFrom('fixed_assets').select('id').where('org_id', '=', org).where('name', '=', 'Storage racks, main store').executeTakeFirst();
+  if (racks) await disposeAsset(trx, org, accountant, Number(racks.id), { date: day(0), kind: 'scrapped' });
 
   // ── Payroll: five employees, April to July paid, leave taken ──────────────
   const STAFF = [
@@ -373,6 +391,17 @@ export async function seedDemoCoverage(trx: Trx, ids: IdMap): Promise<CoverageRe
     payrollMonths++;
   };
   for (const m of MONTHS.slice(0, 3)) await runMonth(m);
+  // The first two months' dues paid to the EPFO, the ESIC and the state (Payroll → Statutory Registers).
+  for (const [k, m] of MONTHS.slice(0, 2).entries()) {
+    const { dues } = await statutoryRegister(trx, org, m, m);
+    for (const d of dues) {
+      if (d.balancePaise <= 0) continue;
+      await payStatutory(trx, org, admin, {
+        component: d.component, period: m, amountPaise: d.balancePaise, date: nextMonthDay(m, 12), bankAccountId: ids.bankAccounts.ba_hdfc,
+        reference: d.component === 'pf' ? `TRRN 2${String(1003456700 + k * 37)}` : d.component === 'esi' ? `ESIC ${String(5501200 + k * 11)}` : null,
+      });
+    }
+  }
   const leaveTypes = await listLeaveTypes(trx, org);
   const casual = leaveTypes.find((t) => t.paid && /casual/i.test(t.name)) ?? leaveTypes.find((t) => t.paid);
   const sick = leaveTypes.find((t) => t.paid && /sick/i.test(t.name)) ?? casual;

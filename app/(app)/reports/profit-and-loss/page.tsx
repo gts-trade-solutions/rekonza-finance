@@ -21,7 +21,9 @@ import { TrendingDown, TrendingUp } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { tileColors } from '@/components/shared/stat-tile';
 import { Money } from '@/components/shared/money';
-import { BasisSelect, CompareSelect, downloadCsv, ReportShell, useReportRange, type ReportBasis } from '@/components/shared/report-shell';
+import { BasisSelect, BranchSelect, CompareSelect, downloadCsv, ReportShell, useBranchName, useReportRange, type ReportBasis } from '@/components/shared/report-shell';
+import { SavedViews } from '@/components/shared/saved-views';
+
 import { AsyncPage, LoadingRows } from '@/components/shared/async-state';
 import { reports, type GroupedProfitAndLossReport } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
@@ -46,11 +48,13 @@ function ProfitAndLoss() {
   const [range, setRange] = useReportRange();
   const [compare, setCompare] = useState<CompareMode>('none');
   const [basis, setBasis] = useState<ReportBasis>('accrual');
+  const [branch, setBranch] = useState('');
+  const branchName = useBranchName(branch);
   const cmp = compare === 'none' || format !== 'general' ? null : comparisonRange(range, compare);
-  const state = useApi<GroupedProfitAndLossReport>(() => reports.groupedProfitAndLoss(range.from, range.to, undefined, basis), [range.from, range.to, basis]);
+  const state = useApi<GroupedProfitAndLossReport>(() => reports.groupedProfitAndLoss(range.from, range.to, branch || undefined, basis), [range.from, range.to, basis, branch]);
   const prevState = useApi<GroupedProfitAndLossReport | null>(
-    () => (cmp ? reports.groupedProfitAndLoss(cmp.from, cmp.to, undefined, basis) : Promise.resolve(null)),
-    [cmp?.from, cmp?.to, basis],
+    () => (cmp ? reports.groupedProfitAndLoss(cmp.from, cmp.to, branch || undefined, basis) : Promise.resolve(null)),
+    [cmp?.from, cmp?.to, basis, branch],
   );
   const prev = cmp ? prevState.data ?? null : null;
 
@@ -63,14 +67,17 @@ function ProfitAndLoss() {
       extraActions={(
         <div className="flex gap-2">
           <div className="w-32"><BasisSelect value={basis} onChange={setBasis} /></div>
+          <div className="w-40"><BranchSelect value={branch} onChange={setBranch} /></div>
           {format === 'general' && <div className="w-52"><CompareSelect value={compare} onChange={setCompare} /></div>}
+          <div className="self-end"><SavedViews list="report-profit-and-loss" current={{ from: range.from, to: range.to, mode: range.mode, basis, branch, compare }}
+            onApply={(v) => { if (v.from && v.to) setRange({ from: String(v.from), to: String(v.to), mode: 'custom' }); setBasis((v.basis as ReportBasis) ?? 'accrual'); setBranch(String(v.branch ?? '')); setCompare((v.compare as CompareMode) ?? 'none'); }} /></div>
         </div>
       )}
       onExport={() => {
         const pl = state.data;
         if (!pl) return;
         downloadCsv(format === 'horizontal' ? 'profit-and-loss-horizontal.csv' : 'profit-and-loss.csv', [
-          [`Profit and Loss${format === 'horizontal' ? ' (horizontal)' : ''}${basis === 'cash' ? ' (cash basis)' : ''}`, `${pl.from} to ${pl.to}`],
+          [`Profit and Loss${format === 'horizontal' ? ' (horizontal)' : ''}${basis === 'cash' ? ' (cash basis)' : ''}${branchName ? ` · ${branchName}` : ''}`, `${pl.from} to ${pl.to}`],
           ...profitAndLossRows(pl, format),
         ]);
       }}
@@ -123,7 +130,7 @@ function ProfitAndLoss() {
               </div>
 
               <p className="text-center text-sm text-muted-foreground">
-                From {longDate(pl.from)} to {longDate(pl.to)} · Basis: Accrual
+                From {longDate(pl.from)} to {longDate(pl.to)} · Basis: {basis === 'cash' ? 'Cash' : 'Accrual'}{branchName ? ` · Branch: ${branchName}` : ''}
               </p>
 
               {format === 'horizontal'

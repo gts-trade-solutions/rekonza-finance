@@ -17,7 +17,7 @@ import type { Paise } from '../../types';
 import { toSqlFromPaise } from '../money-sql';
 import { postEntry, type DraftLine } from '../ledger/posting';
 import { CODE } from '../ledger/chart-of-accounts';
-import { GST_RATES, GST_STATES, isValidGstin } from '../../tax/gst';
+import { GST_RATES, GST_STATES, isValidGstin, stateFromAlpha } from '../../tax/gst';
 import { TEMPLATES, type ImportKind } from '../../imports/templates';
 import { createInvoice } from '../services/sales';
 import { createBill, createExpense } from '../services/purchases';
@@ -26,6 +26,7 @@ import { createPurchaseOrder } from '../services/purchase-documents';
 import { makePayment, receivePayment, type PaymentMode } from '../services/payments';
 import { toPaiseFromSql } from '../money-sql';
 import { addOpeningDocument, setAccountOpenings } from '../services/opening-balances';
+import { findBillDuplicates } from '../services/bill-duplicates';
 
 export type Row = Record<string, unknown>;
 
@@ -58,10 +59,11 @@ const opt = (v: unknown) => str(v) || null;
 const addDays = (iso: string, n: number) => new Date(Date.parse(`${iso}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
 
 function num(v: unknown, label: string): number | null {
-  const s = str(v).replace(/[₹,\s]/g, '');
+  // Zoho and Excel write ₹1,200.00, Rs. 1200, INR 1200 or 18%.
+  const s = str(v).replace(/^(?:rs\.?|inr)\s*/i, '').replace(/[₹,\s%]/g, '').replace(/(?:cr|dr)\.?$/i, '');
   if (!s) return null;
-  // (1,000) is how some exports write a negative.
-  const n = Number(s.replace(/^\((.*)\)$/, '-$1'));
+  // (1,000) and 1000- are how some exports write a negative.
+  const n = Number(s.replace(/^\((.*)\)$/, '-$1').replace(/^([\d.]+)-$/, '-$1'));
   if (!Number.isFinite(n)) fail(`${label} "${str(v)}" is not a number.`);
   return n;
 }
@@ -70,15 +72,20 @@ const paise = (v: unknown, label: string) => {
   return n === null ? null : Math.round(n * 100);
 };
 
-/** yyyy-mm-dd, dd-mm-yyyy, dd/mm/yyyy or dd.mm.yyyy. */
+const MONTH_NO: Record<string, number> = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
+
+/** yyyy-mm-dd, yyyy/mm/dd, dd-mm-yyyy, dd/mm/yyyy, dd.mm.yyyy, and Zoho's "15 Nov 2026" or "Nov 15, 2026". */
 function date(v: unknown, label: string): string {
-  const s = str(v);
+  // A spreadsheet date read as a timestamp ("2026-11-15T00:00:00.000Z") is its day.
+  const s = str(v).replace(/T\d{2}:\d{2}(:\d{2}(\.\d+)?)?Z?$/, '');
   if (!s) fail(`${label} is missing.`);
-  let m = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(s);
+  let m = /^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/.exec(s);
   let y: number, mo: number, d: number;
   if (m) [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
-  else if ((m = /^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})$/.exec(s))) [d, mo, y] = [Number(m[1]), Number(m[2]), Number(m[3])];
-  else return fail(`${label} "${s}" is not a date. Use yyyy-mm-dd or dd-mm-yyyy.`);
+  else if ((m = /^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4}|\d{2})$/.exec(s))) [d, mo, y] = [Number(m[1]), Number(m[2]), m[3].length === 2 ? 2000 + Number(m[3]) : Number(m[3])];
+  else if ((m = /^(\d{1,2})[\s\-/.]([A-Za-z]{3})[A-Za-z]*[\s\-/.,]+(\d{4}|\d{2})$/.exec(s)) && MONTH_NO[m[2].toLowerCase()]) [d, mo, y] = [Number(m[1]), MONTH_NO[m[2].toLowerCase()], m[3].length === 2 ? 2000 + Number(m[3]) : Number(m[3])];
+  else if ((m = /^([A-Za-z]{3})[A-Za-z]*\s+(\d{1,2}),?\s+(\d{4})$/.exec(s)) && MONTH_NO[m[1].toLowerCase()]) [d, mo, y] = [Number(m[2]), MONTH_NO[m[1].toLowerCase()], Number(m[3])];
+  else return fail(`${label} "${s}" is not a date. Use yyyy-mm-dd, dd-mm-yyyy or 15 Nov 2026.`);
   const iso = `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
   const back = new Date(`${iso}T00:00:00Z`);
   if (back.getUTCMonth() + 1 !== mo || back.getUTCDate() !== d) fail(`${label} "${s}" is not a real date.`);
@@ -102,6 +109,12 @@ function state(v: unknown): string | null {
     if (!GST_STATES[code]) fail(`State code ${s} is not a GST state.`);
     return code;
   }
+  // Zoho's place of supply: the state's two letters (TN), or "[TN] - Tamil Nadu".
+  const bracket = /^\[?([A-Za-z]{2})\]?(\s*-\s*.*)?$/.exec(s);
+  if (bracket) {
+    const code = stateFromAlpha(bracket[1]);
+    if (code) return code;
+  }
   return STATE_BY_NAME.get(s.toLowerCase().replace(/[^a-z]/g, '').replace(/^the/, '')) ?? fail(`"${s}" is not a state name GST uses.`);
 }
 
@@ -115,12 +128,14 @@ function gstRate(v: unknown): number | null {
 // ── Lookups shared by the handlers ───────────────────────────────────────────
 
 async function lookups(trx: Trx, orgId: number) {
-  const [contacts, items, accounts, hsn, banks] = await Promise.all([
+  const [contacts, items, accounts, hsn, banks, home] = await Promise.all([
     trx.selectFrom('contacts').select(['id', 'display_name', 'kind']).where('org_id', '=', orgId).execute(),
     trx.selectFrom('items').select(['id', 'name', 'sku']).where('org_id', '=', orgId).execute(),
     trx.selectFrom('accounts').select(['id', 'code', 'name']).where('org_id', '=', orgId).execute(),
     trx.selectFrom('hsn_codes').select(['code']).where('org_id', '=', orgId).execute(),
     trx.selectFrom('bank_accounts').select(['id', 'name']).where('org_id', '=', orgId).where('is_active', '=', 1).execute(),
+    // The head office's state: where a party with no address on record is taken to be.
+    trx.selectFrom('branches').select('state_code').where('org_id', '=', orgId).orderBy('is_primary', 'desc').orderBy('id').executeTakeFirst(),
   ]);
   const key = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim();
   return {
@@ -130,6 +145,7 @@ async function lookups(trx: Trx, orgId: number) {
     accountsByName: new Map(accounts.map((a) => [key(a.name), a])),
     banks: new Map(banks.map((b) => [key(b.name), b])),
     hsn: new Set(hsn.map((h) => h.code)),
+    homeState: home?.state_code ?? null,
     key,
   };
 }
@@ -160,7 +176,9 @@ type Handler = (trx: Trx, ctx: ImportContext, l: Lookups, row: Row) => Promise<'
 
 const contacts: Handler = async (trx, ctx, l, r) => {
   const name = str(r.name) || fail('Name is missing.');
-  const type = str(r.type).toLowerCase();
+  // Zoho writes Customer, Vendor; some lists say Supplier or Customer & Vendor.
+  const raw = str(r.type).toLowerCase();
+  const type = raw === 'supplier' ? 'vendor' : /customer.*(vendor|supplier)|both/.test(raw) ? 'both' : raw;
   if (!['customer', 'vendor', 'both'].includes(type)) fail(`Type "${str(r.type)}" should be customer, vendor or both.`);
   if (l.contacts.has(l.key(name))) {
     if (ctx.onDuplicate === 'skip') return 'skipped';
@@ -168,11 +186,15 @@ const contacts: Handler = async (trx, ctx, l, r) => {
   }
   const gstin = opt(r.gstin)?.toUpperCase() ?? null;
   if (gstin && !isValidGstin(gstin)) fail(`GSTIN ${gstin} fails its checksum, so it is mistyped somewhere.`);
-  const st = state(r.state) ?? (gstin ? gstin.slice(0, 2) : null) ?? fail('Give the state, or a GSTIN.');
+  // No state and no GSTIN: an unregistered party with no address on record is in
+  // the supplier's own state (IGST Act s.10(1)(d) and s.12(2)(b)), as Zoho assumes too.
+  const st = state(r.state) ?? (gstin ? gstin.slice(0, 2) : null) ?? l.homeState ?? fail('Give the state, or a GSTIN.');
   if (gstin && gstin.slice(0, 2) !== st) fail(`GSTIN ${gstin} is from state ${gstin.slice(0, 2)}, not ${st}.`);
   const pan = opt(r.pan)?.toUpperCase() ?? (gstin ? gstin.slice(2, 12) : null);
   if (pan && !/^[A-Z]{5}\d{4}[A-Z]$/.test(pan)) fail(`PAN ${pan} should be five letters, four digits and a letter.`);
-  const days = num(r.credit_days, 'Credit days');
+  // Days, or Zoho's terms as written: "Net 30", "Due on Receipt".
+  const terms = str(r.credit_days);
+  const days = /due\s*on\s*receipt/i.test(terms) ? 0 : /net\s*(\d+)/i.test(terms) ? Number(/net\s*(\d+)/i.exec(terms)![1]) : num(r.credit_days, 'Credit days');
   const udyam = opt(r.msme_udyam_no)?.toUpperCase() ?? null;
 
   const id = Number((await trx.insertInto('contacts').values({
@@ -192,7 +214,8 @@ const items: Handler = async (trx, ctx, l, r) => {
     if (ctx.onDuplicate === 'skip') return 'skipped';
     fail(`"${name}" is already in your items.`);
   }
-  const kind = (str(r.kind).toLowerCase() || 'goods') as 'goods' | 'service';
+  // Zoho's Product Type is goods or service; "services" and "Service" mean the same.
+  const kind = (str(r.kind).toLowerCase().replace(/^services$/, 'service') || 'goods') as 'goods' | 'service';
   if (!['goods', 'service'].includes(kind)) fail(`Kind "${str(r.kind)}" should be goods or service.`);
   const rate = gstRate(r.gst_rate) ?? 18;
   const hsn = opt(r.hsn_sac);
@@ -291,12 +314,31 @@ const expenses: Handler = async (trx, ctx, l, r) => {
   return 'created';
 };
 
-const MODES = ['cash', 'cheque', 'upi', 'neft', 'imps', 'card'];
+const MODES: PaymentMode[] = ['cash', 'cheque', 'neft', 'rtgs', 'imps', 'upi', 'card', 'netbanking', 'other'];
+/** Zoho's and the banks' words for a mode: "Bank Transfer", "Net Banking", "Credit Card", "Check". */
+const MODE_WORDS: Record<string, PaymentMode> = {
+  banktransfer: 'neft', bank: 'neft', transfer: 'neft', netbanking: 'netbanking', internetbanking: 'netbanking', creditcard: 'card',
+  debitcard: 'card', check: 'cheque', chq: 'cheque', dd: 'cheque', demanddraft: 'cheque', gpay: 'upi', phonepe: 'upi', paytm: 'upi', others: 'other',
+};
 const payment = (side: 'received' | 'made'): Handler => async (trx, ctx, l, r) => {
   const contactId = party(l, side === 'received' ? r.customer : r.vendor, side === 'received' ? 'customer' : 'vendor', side === 'received' ? 'Customer' : 'Vendor');
-  const mode = (str(r.mode).toLowerCase() || 'neft') as PaymentMode;
-  if (!MODES.includes(mode)) fail(`Mode "${str(r.mode)}" should be one of ${MODES.join(', ')}.`);
+  const word = str(r.mode).toLowerCase().replace(/[^a-z]/g, '');
+  const mode = (word ? (MODES as string[]).includes(word) ? word : MODE_WORDS[word] : 'neft') as PaymentMode | undefined;
+  if (!mode) fail(`Mode "${str(r.mode)}" should be one of ${MODES.join(', ')}.`);
   const amount = paise(r.amount, 'Amount') ?? fail('Amount is missing.');
+  // The same payment already in the books (same party, day, amount and reference): a file imported twice.
+  const day = date(r.date, 'Date');
+  const ref = opt(r.reference);
+  const twin = await trx.selectFrom('payments').select('id')
+    .where('org_id', '=', ctx.orgId).where('contact_id', '=', contactId).where('kind', '=', side)
+    .where('payment_date', '=', day).where('amount', '=', toSqlFromPaise(amount as Paise))
+    .$if(!!ref, (q) => q.where('reference', '=', ref!))
+    .where('status', '!=', 'void')
+    .executeTakeFirst();
+  if (twin) {
+    if (ctx.onDuplicate === 'skip') return 'skipped';
+    fail(`This ${side === 'received' ? 'receipt' : 'payment'} (${day}, ₹${(amount / 100).toLocaleString('en-IN')}${ref ? `, ${ref}` : ''}) is already in your books.`);
+  }
   const allocations = [];
   const doc = str(side === 'received' ? r.invoice : r.bill);
   if (doc) {
@@ -309,7 +351,7 @@ const payment = (side: 'received' | 'made'): Handler => async (trx, ctx, l, r) =
     allocations.push({ targetType: side === 'received' ? 'invoice' as const : 'bill' as const, targetId: d!.id, amountPaise: Math.min(open, amount) });
   }
   const input = {
-    branchId: ctx.branchId, contactId, date: date(r.date, 'Date'), mode, amountPaise: amount,
+    branchId: ctx.branchId, contactId, date: day, mode: mode!, amountPaise: amount,
     bankAccountId: bankOf(l, r.account, side === 'received' ? 'Deposited to' : 'Paid from').id, reference: opt(r.reference),
     tdsPaise: paise(r.tds, 'TDS') ?? 0, bankChargesPaise: paise(r.bank_charges, 'Bank charges') ?? 0, allocations, notes: opt(r.notes),
   };
@@ -323,7 +365,7 @@ const HANDLERS: Partial<Record<ImportKind, Handler>> = {
 
 // ── Grouped kinds: one document from several rows ────────────────────────────
 
-type GroupHandler = (trx: Trx, ctx: ImportContext, l: Lookups, rows: Row[]) => Promise<void>;
+type GroupHandler = (trx: Trx, ctx: ImportContext, l: Lookups, rows: Row[]) => Promise<void | 'skipped'>;
 
 const journals: GroupHandler = async (trx, ctx, l, rows) => {
   const when = date(rows[0].date, 'Date');
@@ -331,7 +373,8 @@ const journals: GroupHandler = async (trx, ctx, l, rows) => {
   const control = new Set([CODE.AR, CODE.AP] as string[]);
   const lines: DraftLine[] = rows.map((r) => {
     const code = str(r.account_code) || fail('Account code is missing.');
-    const acct = l.accounts.get(code) ?? fail(`Account ${code} is not in your chart.`);
+    // A code, or the account's name as Zoho's exports give it.
+    const acct = l.accounts.get(code) ?? l.accountsByName.get(l.key(code)) ?? fail(`Account ${code} is not in your chart.`);
     const dr = paise(r.debit, 'Debit') ?? 0;
     const cr = paise(r.credit, 'Credit') ?? 0;
     if ((dr > 0) === (cr > 0)) fail(`Account ${code}: give a debit or a credit, not both or neither.`);
@@ -382,10 +425,17 @@ const invoices: GroupHandler = async (trx, ctx, l, rows) => {
 
 const bills: GroupHandler = async (trx, ctx, l, rows) => {
   const when = date(rows[0].date, 'Date');
+  // The supplier's bill already in the books: left alone ("Skip Duplicates"), or named.
+  const vendorId = party(l, rows[0].vendor, 'vendor', 'Vendor');
+  const twin = (await findBillDuplicates(trx, ctx.orgId, { vendorId, vendorInvoiceNo: str(rows[0].bill_no) })).exact;
+  if (twin) {
+    if (ctx.onDuplicate === 'skip') return 'skipped';
+    fail(`already in your books as ${twin.internalNo}, dated ${twin.date}.`);
+  }
   const lines = [];
   for (const r of rows) lines.push(await lineOf(trx, ctx, l, r));
   await createBill(trx, ctx.orgId, ctx.userId, {
-    branchId: ctx.branchId, vendorId: party(l, rows[0].vendor, 'vendor', 'Vendor'),
+    branchId: ctx.branchId, vendorId,
     vendorInvoiceNo: str(rows[0].bill_no), date: when,
     dueDate: str(rows[0].due_date) ? date(rows[0].due_date, 'Due date') : when, status: 'open', lines,
   });
@@ -457,8 +507,12 @@ function messageOf(err: unknown): string {
 export async function runImport(trx: Trx, ctx: ImportContext, kind: ImportKind, rows: Row[]): Promise<ImportOutcome> {
   const out: ImportOutcome = { kind, rows: rows.length, created: 0, skipped: 0, errors: [], notes: [] };
   const t = TEMPLATES[kind];
-  // The spreadsheet's own row number: the heading is row 1.
-  const rowNo = (i: number) => i + 2;
+  // The file's own line number, as the import screen sends it (it skips blank
+  // lines and any title rows above the headings); else the heading is row 1.
+  const rowNo = (i: number) => {
+    const line = Number(rows[i]?.__line);
+    return Number.isInteger(line) && line > 0 ? line : i + 2;
+  };
 
   rows.forEach((r, i) => {
     for (const c of t.columns) {
@@ -474,7 +528,8 @@ export async function runImport(trx: Trx, ctx: ImportContext, kind: ImportKind, 
     rows.forEach((r, i) => {
       try {
         const code = str(r.account_code);
-        const acct = l.accounts.get(code) ?? fail(`Account ${code} is not in your chart.`);
+        // A code, or the account's name as Zoho's exports give it.
+    const acct = l.accounts.get(code) ?? l.accountsByName.get(l.key(code)) ?? fail(`Account ${code} is not in your chart.`);
         lines.push({ accountId: acct.id, netPaise: (paise(r.debit, 'Debit') ?? 0) - (paise(r.credit, 'Credit') ?? 0) });
       } catch (err) {
         out.errors.push({ row: rowNo(i), message: messageOf(err) });
@@ -504,8 +559,8 @@ export async function runImport(trx: Trx, ctx: ImportContext, kind: ImportKind, 
     });
     for (const g of groups.values()) {
       try {
-        await grouped(trx, ctx, l, g.rows);
-        out.created++;
+        if ((await grouped(trx, ctx, l, g.rows)) === 'skipped') out.skipped++;
+        else out.created++;
       } catch (err) {
         out.errors.push({ row: rowNo(g.first), message: `${str(g.rows[0][by])}: ${messageOf(err)}` });
       }

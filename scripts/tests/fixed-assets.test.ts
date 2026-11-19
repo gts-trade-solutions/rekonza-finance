@@ -160,6 +160,8 @@ test('sold by invoice: gain or loss, and the clearing account empties', async ()
       source: { kind: 'paid', fromAccountId: f.bankLedger },
     });
     await runDepreciation(f.trx, f.orgId, null, f.branchId, '2026-09-30');
+    // Dated inside a period already depreciated: refused, or that depreciation would stay for days it was gone.
+    await assert.rejects(disposeAsset(f.trx, f.orgId, null, id, { date: '2026-09-15', kind: 'scrapped' }), /charged up to 2026-09-30/);
     const r = await disposeAsset(f.trx, f.orgId, null, id, {
       date: '2026-11-15', kind: 'sold', customerId: f.customer, salePaise: 7_50_000_00, gstRatePct: 18,
     });
@@ -175,6 +177,14 @@ test('sold by invoice: gain or loss, and the clearing account empties', async ()
     assert.equal(Number(inv.subtotal), 7_50_000);
     assert.ok((await verifyLedgerBalances(f.trx, f.orgId)).balanced);
     await assert.rejects(disposeAsset(f.trx, f.orgId, null, id, { date: '2026-12-01', kind: 'scrapped' }), /already disposed/);
+    // The disposals report: cost, depreciation to the day it left, what it fetched, the gain.
+    const { assetDisposals } = await import('../../lib/server/services/fixed-assets');
+    const [d] = await assetDisposals(f.trx, f.orgId, '2026-04-01', '2027-03-31');
+    assert.equal(d.costPaise, 8_00_000_00);
+    assert.equal(d.accumulatedPaise, r.accumulatedPaise);
+    assert.equal(d.proceedsPaise, 7_50_000_00);
+    assert.equal(d.gainPaise, r.gainPaise);
+    assert.equal(d.kind, 'sold');
   });
 });
 

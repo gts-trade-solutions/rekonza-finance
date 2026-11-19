@@ -13,25 +13,19 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import Link from 'next/link';
-import { createContext, Fragment, useContext, useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { AlertTriangle, ArrowLeft, Printer } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import { Button } from '@/components/ui/button';
 import type { InvoiceDetail } from '@/lib/api/client';
-import { rupeesInWords } from '@/lib/billing/words';
 import { upiPayUri } from '@/lib/billing/upi';
 import { formatINR } from '@/lib/money';
 import { stateName, stateTaxLabel } from '@/lib/tax/gst';
 import { cn } from '@/lib/utils';
-import { isPrintLanguage, PRINT_LANGUAGES, translate, type PrintLanguage } from '@/lib/print-languages';
+import { isPrintLanguage, PRINT_LANGUAGES, type PrintLanguage } from '@/lib/print-languages';
 import { printPage } from '@/lib/output-guard';
-import { DEFAULT_TEMPLATE } from '@/lib/print-template';
-
-/** "#1d4ed8" at a strength, for the tinted table header of the modern layout. */
-const tint = (hex: string, alpha: number) => {
-  const n = parseInt(hex.slice(1), 16);
-  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
-};
+import { DEFAULT_TEMPLATE, layoutFor } from '@/lib/print-template';
+import { addressLines, SheetLang, taxRows, termsLabel, zohoWords, ZohoSheet, type Ribbon, type SheetLine, type SheetModel } from '@/components/print/zoho-sheet';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -59,23 +53,7 @@ const istTime = (value: string) => {
   return `${parts.day} ${MONTHS[Number(parts.month) - 1]} ${parts.year}, ${parts.hour}:${parts.minute}`;
 };
 
-/** Amounts in a table column: the ₹ is in the header, not on every cell. */
-const amt = (paise: number) =>
-  (paise / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-
 const place = (code: string) => `${stateName(code)} (${code})`;
-
-/** The second language the sheet prints its labels in, if any. */
-const Lang = createContext<PrintLanguage | null>(null);
-
-/** A label, and under it the same in the second language. */
-function L({ t, inline = false }: { t: string; inline?: boolean }) {
-  const local = translate(t, useContext(Lang));
-  if (!local) return <>{t}</>;
-  return inline
-    ? <>{t} <span className="font-normal normal-case tracking-normal">· {local}</span></>
-    : <>{t}<span className="block font-normal normal-case tracking-normal text-slate-500">{local}</span></>;
-}
 
 interface Copy {
   key: string;
@@ -206,6 +184,12 @@ export function PrintView({ inv, shared = false }: { inv: InvoiceDetail; shared?
   const [copy, setCopy] = useState('original');
   const [lang, setLang] = useState<PrintLanguage | ''>(isPrintLanguage(inv.seller.printLanguage) ? inv.seller.printLanguage : '');
   const shown = copy === 'all' ? copies : copies.filter((c) => c.key === copy);
+  // PDF/Print on the invoice opens this page with ?print=1: print once the logo has loaded.
+  useEffect(() => {
+    if (shared || new URLSearchParams(window.location.search).get('print') !== '1') return;
+    const timer = window.setTimeout(() => printPage(), 700);
+    return () => window.clearTimeout(timer);
+  }, [shared]);
 
   return (
     <div className="space-y-4">
@@ -261,11 +245,11 @@ export function PrintView({ inv, shared = false }: { inv: InvoiceDetail; shared?
         </div>
       ))}
 
-      <Lang.Provider value={lang || null}>
+      <SheetLang.Provider value={lang || null}>
         {shown.map((c, i) => (
           <InvoiceSheet key={c.key} inv={inv} copyLabel={c.label} last={i === shown.length - 1} />
         ))}
-      </Lang.Provider>
+      </SheetLang.Provider>
     </div>
   );
 }
@@ -275,337 +259,132 @@ export function InvoiceSheetPrint({ inv, last }: { inv: InvoiceDetail; last: boo
   return <InvoiceSheet inv={inv} copyLabel="Original for recipient" last={last} />;
 }
 
-function PartyBlock({
-  label,
-  name,
-  address,
-  city,
-  pincode,
-  stateCode,
-  gstin,
-  extra,
-}: {
-  label: string;
-  name?: string;
-  address: string | null;
-  city: string | null;
-  pincode: string | null;
-  stateCode?: string;
-  gstin?: string | null;
-  extra?: ReactNode;
-}) {
-  // Plenty of addresses already end in the city and PIN; printing them again
-  // underneath reads as a mistake.
-  const cityLine = address && pincode && address.includes(pincode) ? '' : [city, pincode].filter(Boolean).join(' – ');
-  return (
-    <div className="min-w-0 space-y-0.5">
-      <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500"><L t={label} inline /></p>
-      {name && <p className="font-semibold">{name}</p>}
-      {address && <p className="whitespace-pre-line">{address}</p>}
-      {cityLine && <p>{cityLine}</p>}
-      {stateCode && <p><L t="State" inline />: {place(stateCode)}</p>}
-      {gstin !== undefined && (
-        <p>
-          GSTIN: <span className="font-mono">{gstin ?? 'Unregistered'}</span>
-        </p>
-      )}
-      {extra}
-    </div>
-  );
-}
-
-function InvoiceSheet({ inv, copyLabel, last }: { inv: InvoiceDetail; copyLabel: string; last: boolean }) {
+/** The invoice, read into the shape every Zoho template prints. */
+export function invoiceModel(inv: InvoiceDetail, copyLabel: string | null): SheetModel {
   const { title, endorsement } = documentTitle(inv);
   const e = inv.einvoice;
-  const qr = e.status === 'submitted' ? e.signedQr ?? null : null;
-
   // Which tax columns the table needs. A bill of supply charges no tax at all;
   // otherwise the supply type decides between the CGST + SGST pair and IGST.
   const taxed = inv.seller.registration === 'regular' && inv.supplyType !== 'nil_or_exempt';
   const split = taxed && inv.supplyType === 'intra';
-  const integrated =
-    taxed && !split && (inv.tax.igstPaise > 0 || inv.supplyType === 'inter' || inv.supplyType === 'export_with_tax');
-  const cess = inv.lines.some((l) => l.cessPaise > 0);
-  const discount = inv.lines.some((l) => l.discountPct > 0);
-  const taxable = inv.lines.reduce((t, l) => t + l.taxablePaise, 0);
-  const tag = inv.status === 'void' ? 'Cancelled' : inv.status === 'draft' ? 'Draft' : null;
-  // The business's template (Settings → Invoice print): layout, accent, logo, signature, footer.
+  const integrated = taxed && !split && (inv.tax.igstPaise > 0 || inv.supplyType === 'inter' || inv.supplyType === 'export_with_tax');
+  const stateTax = stateTaxLabel(inv.placeOfSupply);
   const t = inv.seller.template ?? DEFAULT_TEMPLATE;
-  const modern = t.layout === 'modern';
-  const compact = t.layout === 'compact';
-
-  const totals: [string, number][] = [
-    ['Taxable value', taxable],
-    ...(split
-      ? ([
-          ['CGST', inv.tax.cgstPaise],
-          [stateTaxLabel(inv.placeOfSupply), inv.tax.sgstPaise],
-        ] as [string, number][])
-      : []),
-    ...(integrated ? ([['IGST', inv.tax.igstPaise]] as [string, number][]) : []),
-    ...(inv.tax.cessPaise ? ([['Cess', inv.tax.cessPaise]] as [string, number][]) : []),
-    ...(inv.shippingChargePaise ? ([['Shipping', inv.shippingChargePaise]] as [string, number][]) : []),
-    ...(inv.tcsPaise ? ([['TCS', inv.tcsPaise]] as [string, number][]) : []),
-    ...(inv.adjustmentPaise ? ([[inv.adjustmentLabel ?? 'Adjustment', inv.adjustmentPaise]] as [string, number][]) : []),
-    ...(inv.roundOffPaise ? ([['Round off', inv.roundOffPaise]] as [string, number][]) : []),
-  ];
-
-  return (
-    <article
-      className={cn(
-        'print-sheet mx-auto max-w-4xl rounded-[3px] border bg-white leading-snug text-slate-900 shadow-sm dark:bg-white',
-        compact ? 'p-5 text-[11px]' : 'p-7 text-[12px]',
-        modern && 'border-t-[6px]',
-        // Paper supplies its own edge: no frame, no shadow, no inset.
-        'print:max-w-none print:rounded-none print:border-0 print:p-0 print:text-[10.5px] print:shadow-none',
-        !last && 'break-after-page',
-      )}
-      data-slot="tax-invoice"
-      data-layout={t.layout}
-      style={modern ? { borderTopColor: t.accent } : undefined}
-    >
-      {/* ── Title, supplier, and the IRP's stamp ───────────────────────── */}
-      <header className="flex items-start justify-between gap-6 border-b border-slate-300 pb-4">
-        <div className="min-w-0 space-y-2">
-          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-            <h1 className={cn('font-bold uppercase tracking-wide', compact ? 'text-base' : 'text-lg')} style={t.layout !== 'classic' ? { color: t.accent } : undefined}><L t={title} inline /></h1>
-            <span className="text-[11px] font-medium uppercase tracking-[0.06em] text-slate-600"><L t={copyLabel} inline /></span>
-            {tag && (
-              <span className="rounded-[2px] border border-slate-900 px-1.5 text-[10px] font-bold uppercase tracking-wide">
-                {tag}
-              </span>
-            )}
-          </div>
-          {inv.voucherType?.heading && <p className="text-sm font-semibold">{inv.voucherType.heading}</p>}
-          {endorsement && <p className="text-[11px] font-semibold uppercase">{endorsement}</p>}
-          {inv.exportInfo?.shippingBillNo && (
-            <p className="text-[10px]">
-              Shipping bill {inv.exportInfo.shippingBillNo}
-              {inv.exportInfo.shippingBillDate ? ` dated ${day(inv.exportInfo.shippingBillDate)}` : ''}
-              {inv.exportInfo.portCode ? `, port ${inv.exportInfo.portCode}` : ''}
-            </p>
-          )}
-          {t.showLogo && inv.seller.logoUrl && (
-            // eslint-disable-next-line @next/next/no-img-element -- printed as-is; next/image adds nothing on paper
-            <img
-              src={inv.seller.logoUrl}
-              alt={`${inv.seller.name} logo`}
-              className="max-h-14 max-w-[45mm] object-contain object-left"
-              data-slot="invoice-logo"
-            />
-          )}
-          <PartyBlock
-            label="Supplier"
-            name={inv.seller.name}
-            address={inv.seller.address}
-            city={inv.seller.city}
-            pincode={inv.seller.pincode}
-            stateCode={inv.seller.stateCode}
-            gstin={inv.seller.registration === 'unregistered' ? undefined : inv.seller.gstin}
-            extra={
-              <>
-                {inv.seller.tradeName && <p>Trading as {inv.seller.tradeName}</p>}
-                {inv.seller.pan && <p>PAN: <span className="font-mono">{inv.seller.pan}</span></p>}
-                {(inv.seller.phone || inv.seller.email) && (
-                  <p>{[inv.seller.phone, inv.seller.email].filter(Boolean).join(' · ')}</p>
-                )}
-              </>
-            }
-          />
-        </div>
-        {qr && (
-          <div className="shrink-0 text-center" data-slot="invoice-qr">
-            <QRCodeSVG
-              value={qr}
-              size={152}
-              level="M"
-              marginSize={0}
-              title="Signed QR code issued by the Invoice Registration Portal"
-              className="size-[38mm] max-w-full"
-            />
-            <p className="mt-1 text-[9px] uppercase tracking-[0.08em] text-slate-500">e-Invoice QR</p>
-          </div>
-        )}
-      </header>
-
-      {e.status === 'submitted' && e.irn && (
-        <section className="grid gap-x-6 gap-y-1 border-b border-slate-300 py-2.5 sm:grid-cols-2" data-slot="invoice-irn">
-          <p className="min-w-0 sm:col-span-2">
-            <span className="text-slate-500">IRN </span>
-            <span className="break-all font-mono text-[10.5px]">{e.irn}</span>
-          </p>
-          {e.ackNo && (
-            <p>
-              <span className="text-slate-500">Ack no. </span>
-              <span className="font-mono">{e.ackNo}</span>
-            </p>
-          )}
-          {e.ackDate && (
-            <p>
-              <span className="text-slate-500">Ack date </span>
-              {istTime(e.ackDate)}
-            </p>
-          )}
-          {e.environment !== 'production' && (
-            <p className="text-[10px] font-semibold uppercase text-slate-700 sm:col-span-2">
-              {e.environment === 'sandbox'
-                ? 'NIC sandbox test registration — nothing was filed'
-                : 'Issued by the built-in stand-in — not registered with the government portal'}
-            </p>
-          )}
-        </section>
-      )}
-
-      {/* ── The document, and who it is for ────────────────────────────── */}
-      <section className="grid gap-5 border-b border-slate-300 py-4 sm:grid-cols-3">
-        <dl className="grid grid-cols-[auto_1fr] content-start gap-x-3 gap-y-0.5">
-          <dt className="text-slate-500"><L t="Invoice no." /></dt>
-          <dd className="whitespace-nowrap font-mono font-semibold">{inv.number}</dd>
-          <dt className="text-slate-500"><L t="Invoice date" /></dt>
-          <dd>{day(inv.date)}</dd>
-          <dt className="text-slate-500"><L t="Due date" /></dt>
-          <dd>{day(inv.dueDate)}</dd>
-          <dt className="text-slate-500"><L t="Place of supply" /></dt>
-          <dd>{place(inv.placeOfSupply)}</dd>
-          <dt className="text-slate-500"><L t="Reverse charge" /></dt>
-          <dd><L t="No" /></dd>
-          {inv.orderNumber && (
-            <>
-              <dt className="text-slate-500"><L t="Order no." /></dt>
-              <dd>{inv.orderNumber}</dd>
-            </>
-          )}
-          {(inv.printFields ?? []).map((f) => (
-            <Fragment key={f.label}>
-              <dt className="text-slate-500">{f.label}</dt>
-              <dd>{f.value}</dd>
-            </Fragment>
-          ))}
-          {inv.ewayBill && (
-            <>
-              <dt className="text-slate-500"><L t="E-way bill" /></dt>
-              <dd className="font-mono">{inv.ewayBill.number}</dd>
-            </>
-          )}
-        </dl>
-        <PartyBlock
-          label="Billed to"
-          name={inv.buyer.name}
-          address={inv.buyer.address}
-          city={inv.buyer.city}
-          pincode={inv.buyer.pincode}
-          stateCode={inv.buyer.stateCode}
-          gstin={inv.buyer.gstin}
-        />
-        {inv.shipTo ? (
-          <PartyBlock
-            label="Shipped to"
-            address={inv.shipTo.address}
-            city={inv.shipTo.city}
-            pincode={inv.shipTo.pincode}
-          />
-        ) : (
-          <div className="hidden sm:block" />
-        )}
-      </section>
-
-      {/* ── Lines ──────────────────────────────────────────────────────── */}
-      <div className="overflow-x-auto py-3">
-        <table className="w-full border-collapse">
-          <thead>
-            <tr className="border-y border-slate-300 bg-slate-50 text-[10px] uppercase tracking-[0.05em] text-slate-600" style={modern ? { backgroundColor: tint(t.accent, 0.08), color: t.accent } : undefined}>
-              <th className="px-1.5 py-1.5 text-left font-semibold">#</th>
-              <th className="px-1.5 py-1.5 text-left font-semibold"><L t="Description" /></th>
-              <th className="px-1.5 py-1.5 text-left font-semibold">HSN/SAC</th>
-              <th className="px-1.5 py-1.5 text-right font-semibold"><L t="Qty" /></th>
-              <th className="px-1.5 py-1.5 text-right font-semibold"><L t="Rate" /> (₹)</th>
-              {discount && <th className="px-1.5 py-1.5 text-right font-semibold"><L t="Disc." /></th>}
-              <th className="px-1.5 py-1.5 text-right font-semibold"><L t="Taxable" /> (₹)</th>
-              {split && <th className="px-1.5 py-1.5 text-right font-semibold">CGST (₹)</th>}
-              {split && <th className="px-1.5 py-1.5 text-right font-semibold">{stateTaxLabel(inv.placeOfSupply)} (₹)</th>}
-              {integrated && <th className="px-1.5 py-1.5 text-right font-semibold">IGST (₹)</th>}
-              {cess && <th className="px-1.5 py-1.5 text-right font-semibold"><L t="Cess" /> (₹)</th>}
-              <th className="px-1.5 py-1.5 text-right font-semibold"><L t="Amount" /> (₹)</th>
-            </tr>
-          </thead>
-          <tbody>
-            {inv.lines.map((l, i) => (
-              <tr key={l.id} className="border-b border-slate-200 align-top">
-                <td className="px-1.5 py-1.5">{i + 1}</td>
-                <td className="px-1.5 py-1.5">{l.description ?? '—'}</td>
-                <td className="px-1.5 py-1.5 font-mono">{l.hsnSac ?? '—'}</td>
-                <td className="whitespace-nowrap px-1.5 py-1.5 text-right tabular-nums">
-                  {l.qty} {l.uqc ?? ''}
-                </td>
-                <td className="px-1.5 py-1.5 text-right tabular-nums">{amt(l.ratePaise)}</td>
-                {discount && <td className="px-1.5 py-1.5 text-right tabular-nums">{l.discountPct ? `${l.discountPct}%` : '—'}</td>}
-                <td className="px-1.5 py-1.5 text-right tabular-nums">{amt(l.taxablePaise)}</td>
-                {split && <TaxCell amount={l.cgstPaise} rate={l.gstRatePct / 2} />}
-                {split && <TaxCell amount={l.sgstPaise} rate={l.gstRatePct / 2} />}
-                {integrated && <TaxCell amount={l.igstPaise} rate={l.gstRatePct} />}
-                {cess && <td className="px-1.5 py-1.5 text-right tabular-nums">{amt(l.cessPaise)}</td>}
-                <td className="px-1.5 py-1.5 text-right font-medium tabular-nums">{amt(l.totalPaise)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+  const lines: SheetLine[] = inv.lines.map((l) => {
+    const item = l.itemName?.trim() || null;
+    const text = l.description?.trim() || null;
+    return {
+      name: item ?? text ?? '—',
+      description: item && text && text !== item ? text : null,
+      hsn: l.hsnSac, qty: l.qty, unit: l.uqc, ratePaise: l.ratePaise, discountPct: l.discountPct,
+      taxablePaise: l.taxablePaise, gstRatePct: l.gstRatePct, cgstPaise: l.cgstPaise, sgstPaise: l.sgstPaise,
+      igstPaise: l.igstPaise, cessPaise: l.cessPaise, amountPaise: l.totalPaise,
+    };
+  });
+  const subTotal = inv.lines.reduce((s2, l) => s2 + l.taxablePaise, 0);
+  const noun = inv.debitNote ? 'Debit Note' : 'Invoice';
+  return {
+    title,
+    numberLabel: `${noun}#`,
+    number: inv.number,
+    copyLabel,
+    stamp: inv.status === 'void' ? 'Cancelled' : inv.status === 'draft' ? 'Draft' : null,
+    endorsement,
+    headings: [
+      ...(inv.voucherType?.heading ? [inv.voucherType.heading] : []),
+      ...(inv.exportInfo?.shippingBillNo
+        ? [`Shipping bill ${inv.exportInfo.shippingBillNo}${inv.exportInfo.shippingBillDate ? ` dated ${day(inv.exportInfo.shippingBillDate)}` : ''}${inv.exportInfo.portCode ? `, port ${inv.exportInfo.portCode}` : ''}`]
+        : []),
+    ],
+    seller: {
+      name: inv.seller.name,
+      logoUrl: inv.seller.logoUrl,
+      lines: addressLines(inv.seller.address, inv.seller.city, inv.seller.pincode, inv.seller.stateCode),
+      gstin: inv.seller.registration === 'unregistered' ? null : inv.seller.gstin,
+      extra: [
+        ...(inv.seller.tradeName ? [`Trading as ${inv.seller.tradeName}`] : []),
+        ...(inv.seller.pan ? [`PAN ${inv.seller.pan}`] : []),
+        ...(inv.seller.phone || inv.seller.email ? [[inv.seller.phone, inv.seller.email].filter(Boolean).join(' · ')] : []),
+      ],
+    },
+    billTo: {
+      label: 'Bill To', name: inv.buyer.name,
+      lines: addressLines(inv.buyer.address, inv.buyer.city, inv.buyer.pincode, inv.buyer.stateCode),
+      gstin: inv.buyer.gstin,
+    },
+    shipTo: inv.shipTo ? { label: 'Ship To', name: inv.buyer.name, lines: addressLines(inv.shipTo.address, inv.shipTo.city, inv.shipTo.pincode) } : null,
+    facts: [
+      { label: `${noun} Date`, value: day(inv.date) },
+      ...(inv.paymentTerms ? [{ label: 'Terms', value: termsLabel(inv.paymentTerms) }] : []),
+      { label: 'Due Date', value: day(inv.dueDate) },
+      ...(inv.orderNumber ? [{ label: 'P.O.#', value: inv.orderNumber }] : []),
+      { label: 'Place Of Supply', value: place(inv.placeOfSupply) },
+      ...(inv.ewayBill ? [{ label: 'E-Way Bill#', value: inv.ewayBill.number }] : []),
+      ...(inv.printFields ?? []).map((f) => ({ label: f.label, value: f.value })),
+      { label: 'Reverse Charge', value: 'No' },
+    ],
+    balance: { label: 'Balance Due', paise: inv.balancePaise },
+    date: day(inv.date),
+    taxColumns: split ? 'split' : integrated ? 'integrated' : 'none',
+    stateTax,
+    lines,
+    subTotalPaise: subTotal,
+    totals: [
+      ...(inv.shippingChargePaise ? [{ label: 'Shipping Charge', paise: inv.shippingChargePaise }] : []),
+      ...taxRows(inv.lines, split, integrated, stateTax),
+      ...(inv.supplyType === 'export_lut' ? [{ label: 'IGST (Nil, under LUT)', paise: 0 }] : []),
+      ...(inv.tcsPaise ? [{ label: 'TCS', paise: inv.tcsPaise }] : []),
+      ...(inv.adjustmentPaise ? [{ label: inv.adjustmentLabel ?? 'Adjustment', paise: inv.adjustmentPaise }] : []),
+      ...(inv.roundOffPaise ? [{ label: 'Round Off', paise: inv.roundOffPaise }] : []),
+    ],
+    totalLabel: 'Total',
+    totalPaise: inv.totalPaise,
+    after: inv.amountPaidPaise > 0 ? [{ label: 'Payment Made', paise: -inv.amountPaidPaise }] : [],
+    balanceRow: { label: 'Balance Due', paise: inv.balancePaise },
+    words: zohoWords(inv.totalPaise),
+    notes: inv.notes,
+    terms: inv.terms || inv.voucherType?.terms || null,
+    payment: <PaymentDetails inv={inv} />,
+    extra: inv.foreign ? (
+      <div>
+        <p className="text-[#6c6c6c]">Invoice currency</p>
+        <p className="font-medium">{new Intl.NumberFormat('en-IN', { style: 'currency', currency: inv.foreign.currency }).format(inv.foreign.totalPaise / 100)} at ₹{inv.foreign.rate} per {inv.foreign.currency}</p>
       </div>
+    ) : null,
+    irn: e.status === 'submitted' && e.irn ? <IrnBlock inv={inv} /> : null,
+    qr: e.status === 'submitted' ? e.signedQr ?? null : null,
+    signatory: inv.seller.signatoryName,
+    footer: t.footer,
+  };
+}
 
-      {/* ── Totals ─────────────────────────────────────────────────────── */}
-      <section className="grid gap-5 sm:grid-cols-[1fr_minmax(0,17rem)]">
-        <div className="space-y-3">
-          <div>
-            <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500"><L t="Amount in words" inline /></p>
-            <p className="font-medium">{rupeesInWords(inv.totalPaise)}</p>
-          </div>
-          {inv.foreign && (
-            <div>
-              <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">Invoice currency</p>
-              <p className="font-medium">{new Intl.NumberFormat('en-IN', { style: 'currency', currency: inv.foreign.currency }).format(inv.foreign.totalPaise / 100)} at ₹{inv.foreign.rate} per {inv.foreign.currency}</p>
-            </div>
-          )}
-          <PaymentDetails inv={inv} />
-          {inv.notes && (
-            <div>
-              <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500"><L t="Notes" inline /></p>
-              <p className="whitespace-pre-line">{inv.notes}</p>
-            </div>
-          )}
-          {(inv.terms || inv.voucherType?.terms) && (
-            <div>
-              <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500"><L t="Terms" inline /></p>
-              <p className="whitespace-pre-line text-slate-700">{inv.terms || inv.voucherType?.terms}</p>
-            </div>
-          )}
-        </div>
-        <dl className="space-y-1">
-          {totals.map(([label, value]) => (
-            <div key={label} className="flex justify-between gap-4">
-              <dt className="text-slate-600"><L t={label} inline /></dt>
-              <dd className="tabular-nums">{formatINR(value)}</dd>
-            </div>
-          ))}
-          <div className="flex justify-between gap-4 border-t border-slate-400 pt-1.5 text-[13px] font-bold">
-            <dt><L t="Invoice total" inline /></dt>
-            <dd className="tabular-nums">{formatINR(inv.totalPaise)}</dd>
-          </div>
-        </dl>
-      </section>
-
-      {/* ── Signature ──────────────────────────────────────────────────── */}
-      {t.showSignature && (
-        <footer className={cn('flex justify-end', compact ? 'mt-5' : 'mt-8')}>
-          <div className="w-60 text-center">
-            <p>For {inv.seller.name}</p>
-            <div className={compact ? 'h-8' : 'h-12'} />
-            {inv.seller.signatoryName && <p className="font-medium">{inv.seller.signatoryName}</p>}
-            <p className="border-t border-slate-400 pt-1 text-slate-600"><L t="Authorised signatory" /></p>
-          </div>
-        </footer>
+/** The IRN, the acknowledgement, and whether it is a real registration. */
+function IrnBlock({ inv }: { inv: InvoiceDetail }) {
+  const e = inv.einvoice;
+  return (
+    <div className="space-y-[2px]" data-slot="invoice-irn">
+      <p className="min-w-0"><span className="text-[#6c6c6c]">IRN </span><span className="break-all font-mono text-[10px]">{e.irn}</span></p>
+      {e.ackNo && <p><span className="text-[#6c6c6c]">Ack No </span><span className="font-mono">{e.ackNo}</span></p>}
+      {e.ackDate && <p><span className="text-[#6c6c6c]">Ack Date </span>{istTime(e.ackDate)}</p>}
+      {e.environment !== 'production' && (
+        <p className="text-[9.5px] font-semibold uppercase">
+          {e.environment === 'sandbox' ? 'NIC sandbox test registration — nothing was filed' : 'Issued by the built-in stand-in — not registered with the government portal'}
+        </p>
       )}
-      {t.footer && <p className="mt-6 border-t border-slate-200 pt-2 text-center text-[10px] text-slate-500" data-slot="invoice-footer">{t.footer}</p>}
-    </article>
+    </div>
   );
+}
+
+/** The invoice in the template chosen for it (or for invoices), as Zoho shows it on the record. */
+export function InvoiceDocument({ inv, ribbon, copyLabel = null, last = true }: {
+  inv: InvoiceDetail; ribbon?: Ribbon | null; copyLabel?: string | null; last?: boolean;
+}) {
+  const t = inv.seller.template ?? DEFAULT_TEMPLATE;
+  return <ZohoSheet model={invoiceModel(inv, copyLabel)} template={t} layout={layoutFor(t, 'invoice', inv.printTemplate)} ribbon={ribbon} last={last} />;
+}
+
+function InvoiceSheet({ inv, copyLabel, last }: { inv: InvoiceDetail; copyLabel: string; last: boolean }) {
+  return <InvoiceDocument inv={inv} copyLabel={copyLabel} last={last} />;
 }
 
 /**
@@ -631,7 +410,7 @@ function PaymentDetails({ inv }: { inv: InvoiceDetail }) {
     <div className="flex items-start gap-4" data-slot="invoice-payment">
       {bank && (
         <div className="min-w-0">
-          <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">Bank details</p>
+          <p className="text-[#6c6c6c]">Bank Details</p>
           <dl className="grid grid-cols-[auto_1fr] gap-x-3">
             <dt className="text-slate-500">Account name</dt>
             <dd>{bank.accountHolder}</dd>
@@ -663,11 +442,3 @@ function PaymentDetails({ inv }: { inv: InvoiceDetail }) {
   );
 }
 
-function TaxCell({ amount, rate }: { amount: number; rate: number }) {
-  return (
-    <td className="px-1.5 py-1.5 text-right tabular-nums">
-      {amt(amount)}
-      <span className="block text-[9.5px] text-slate-500">@ {rate}%</span>
-    </td>
-  );
-}

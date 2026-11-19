@@ -47,3 +47,17 @@ test('saving a form unchanged is not an edit', () => {
 test.after(async () => {
   await db.destroy();
 });
+
+test('the audit trail filters by Indian days, searches IPs, and writes each change as old → new for the export', async () => {
+  const { auditRows, changeText, istEnd, istStart, istStamp } = await import('../../lib/server/audit-query');
+  // 00:30 on 15 Nov in India is still 14 Nov in UTC: it belongs to the 15th.
+  const early = new Date('2026-11-14T19:00:00.000Z');
+  assert.ok(early >= istStart('2026-11-15') && early <= istEnd('2026-11-15'));
+  assert.ok(!(early >= istStart('2026-11-14') && early <= istEnd('2026-11-14')));
+  assert.equal(istStamp(early), '15 Nov 2026, 00:30:00');
+  assert.equal(changeText({ rate: { from: 450, to: 500 }, gst_rate_pct: { from: null, to: 28 } }), 'rate: 450 → 500; gst rate pct: (empty) → 28');
+  // The filters become SQL the export and the screen share.
+  const sqlText = auditRows(1, { search: '10.0.0.7', from: '2026-11-15', to: '2026-11-15', action: 'update' }).select('id').compile().sql;
+  assert.match(sqlText, /`ip` like \?/);
+  assert.match(sqlText, /`created_at` >= \?/);
+});

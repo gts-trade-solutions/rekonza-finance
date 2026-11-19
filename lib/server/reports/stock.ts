@@ -62,6 +62,8 @@ export interface StockLine {
   stockGroupId: string | null;
   /** How it is valued: its own method, or the book's. */
   valuation: 'average' | 'fifo';
+  /** A FIFO item's rate for units older than every purchase layer (its opening rate, else its purchase price). */
+  openingRatePaise?: number;
 }
 
 export interface StockPosition {
@@ -103,6 +105,64 @@ interface Movement { item_id: number; fy: number; qty: string; cost?: string }
  * adjustments that name no branch belong to the primary branch, because that
  * is where an organisation with one location keeps everything.
  */
+/** One purchase layer of an item: a bill line (with its landed cost) or a production run. */
+export interface FifoLayer { qty: number; cost: Paise }
+
+/**
+ * Each item's purchase layers, newest first: bill lines (with any landed cost
+ * and the tax that could not be claimed) and finished production. FIFO values
+ * what is left from these, newest back; the cost of a FIFO sale is what the
+ * same stack loses when the sale's units go from its oldest end.
+ */
+export async function fifoLayers(ex: Executor, orgId: number, asOf: string, branchId?: number): Promise<Map<number, FifoLayer[]>> {
+  const docBranch = (col: string) => (branchId ? sql`AND ${sql.ref(col)} = ${branchId}` : sql``);
+  const { rows: layers } = await sql<{ item_id: number; qty: string; cost: string }>`
+    SELECT item_id, qty, cost FROM (
+      SELECT bl.item_id, b.bill_date AS d, bl.id AS seq, bl.qty,
+             bl.taxable + CASE WHEN bl.itc_eligibility NOT IN ('eligible', 'capital_goods') AND b.is_rcm = 0
+                               THEN bl.cgst + bl.sgst + bl.igst + bl.cess ELSE 0 END
+                        + COALESCE(landed.amt, 0) AS cost
+        FROM bill_lines bl JOIN bills b ON b.id = bl.bill_id
+        -- Landed cost spread over the line (services/landed-cost.ts), from the charge bill's date.
+        LEFT JOIN (
+          SELECT lcl.bill_line_id, SUM(lcl.amount) AS amt
+            FROM landed_cost_lines lcl
+            JOIN landed_costs lc ON lc.id = lcl.landed_cost_id
+            JOIN bills cb ON cb.id = lc.charge_bill_id
+           WHERE lc.org_id = ${orgId} AND lc.allocated_on <= ${asOf} AND cb.status NOT IN ('draft','void')
+           GROUP BY lcl.bill_line_id
+        ) landed ON landed.bill_line_id = bl.id
+       WHERE b.org_id = ${orgId} AND b.status NOT IN ('draft','void')
+         AND bl.item_id IS NOT NULL AND bl.qty > 0 AND b.bill_date <= ${asOf} ${docBranch('b.branch_id')}
+      UNION ALL
+      SELECT p.item_id, p.produced_on AS d, p.id AS seq, p.qty, p.cost
+        FROM productions p
+       WHERE p.org_id = ${orgId} AND p.status = 'done' AND p.produced_on <= ${asOf} ${docBranch('p.branch_id')}
+    ) x ORDER BY d DESC, seq DESC
+  `.execute(ex);
+  const byItem = new Map<number, FifoLayer[]>();
+  for (const l of layers) {
+    const list = byItem.get(Number(l.item_id)) ?? [];
+    list.push({ qty: Number(l.qty), cost: toPaiseFromSql(l.cost) });
+    byItem.set(Number(l.item_id), list);
+  }
+  return byItem;
+}
+
+/** The FIFO value of the newest `qty` units: from the latest layers back, anything older at the opening rate. */
+export function fifoValue(layers: FifoLayer[], qty: number, openingRatePaise: number): number {
+  let left = qty;
+  let value = 0;
+  for (const layer of layers) {
+    if (left <= 0) break;
+    const take = Math.min(left, layer.qty);
+    value += (layer.cost / layer.qty) * take;
+    left -= take;
+  }
+  if (left > 0) value += left * openingRatePaise;
+  return value;
+}
+
 export async function stockPosition(
   ex: Executor,
   orgId: number,
@@ -365,51 +425,15 @@ export async function stockPosition(
   // closing quantity is valued from its latest purchases back, and anything
   // older than them at the opening rate. Only for the items valued that way.
   if (lines.some((l) => l.valuation === 'fifo')) {
-    const { rows: layers } = await sql<{ item_id: number; qty: string; cost: string }>`
-      SELECT item_id, qty, cost FROM (
-        SELECT bl.item_id, b.bill_date AS d, bl.id AS seq, bl.qty,
-               bl.taxable + CASE WHEN bl.itc_eligibility NOT IN ('eligible', 'capital_goods') AND b.is_rcm = 0
-                                 THEN bl.cgst + bl.sgst + bl.igst + bl.cess ELSE 0 END
-                          + COALESCE(landed.amt, 0) AS cost
-          FROM bill_lines bl JOIN bills b ON b.id = bl.bill_id
-          -- Landed cost spread over the line (services/landed-cost.ts), from the charge bill's date.
-          LEFT JOIN (
-            SELECT lcl.bill_line_id, SUM(lcl.amount) AS amt
-              FROM landed_cost_lines lcl
-              JOIN landed_costs lc ON lc.id = lcl.landed_cost_id
-              JOIN bills cb ON cb.id = lc.charge_bill_id
-             WHERE lc.org_id = ${orgId} AND lc.allocated_on <= ${asOf} AND cb.status NOT IN ('draft','void')
-             GROUP BY lcl.bill_line_id
-          ) landed ON landed.bill_line_id = bl.id
-         WHERE b.org_id = ${orgId} AND b.status NOT IN ('draft','void')
-           AND bl.item_id IS NOT NULL AND bl.qty > 0 AND b.bill_date <= ${asOf} ${docBranch('b.branch_id')}
-        UNION ALL
-        SELECT p.item_id, p.produced_on AS d, p.id AS seq, p.qty, p.cost
-          FROM productions p
-         WHERE p.org_id = ${orgId} AND p.status = 'done' AND p.produced_on <= ${asOf} ${docBranch('p.branch_id')}
-      ) x ORDER BY d DESC, seq DESC
-    `.execute(ex);
-    const byItem = new Map<number, { qty: number; cost: Paise }[]>();
-    for (const l of layers) {
-      const list = byItem.get(Number(l.item_id)) ?? [];
-      list.push({ qty: Number(l.qty), cost: toPaiseFromSql(l.cost) });
-      byItem.set(Number(l.item_id), list);
-    }
+    const byItem = await fifoLayers(ex, orgId, asOf, branchId);
     for (const line of lines) {
       if (line.qty <= 0 || line.valuation !== 'fifo') continue;
-      let left = line.qty;
-      let value = 0;
-      for (const layer of byItem.get(Number(line.itemId)) ?? []) {
-        if (left <= 0) break;
-        const take = Math.min(left, layer.qty);
-        value += (layer.cost / layer.qty) * take;
-        left -= take;
-      }
       const it = items.find((x) => String(x.id) === line.itemId)!;
       const openingRate = it.opening_stock_rate === null ? toPaiseFromSql(it.purchase_price) : toPaiseFromSql(it.opening_stock_rate);
-      if (left > 0) value += left * openingRate;
+      const value = fifoValue(byItem.get(Number(line.itemId)) ?? [], line.qty, openingRate);
       line.valuePaise = Math.round(value);
       line.unitCostPaise = Math.round(value / line.qty);
+      line.openingRatePaise = openingRate;
     }
   }
 

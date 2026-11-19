@@ -15,6 +15,7 @@ import { useRouter } from 'next/navigation';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { PageHeader } from '@/components/shared/page-header';
+import { ModuleMenu } from '@/components/shared/module-menu';
 import { DataTable, type Column } from '@/components/shared/data-table';
 import { BulkPrintButton, documentMenuColumn } from '@/components/shared/document-menu';
 import { Money } from '@/components/shared/money';
@@ -161,7 +162,7 @@ export default function SalesOrdersPage() {
       <PageHeader
         title="Sales Orders"
         description="Confirmed orders on their way to the invoice: send a proforma, mark the work in process, and Ready for delivery raises the tax invoice and the challan by itself."
-        actions={
+        actions={<>{
           canCreate && (
             <QuickDocumentDialog
               kind="sales-order"
@@ -176,6 +177,7 @@ export default function SalesOrdersPage() {
               )}
             />
           )
+        }<ModuleMenu slug="sales-orders" onRefresh={() => void state.refetch()} /></>
         }
       />
       <AsyncPage state={state}>

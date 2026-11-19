@@ -92,6 +92,13 @@ export const GET = route(
           .execute()
       : [];
 
+    // The reversal of each entry, if it has one: the screen says "Reversed by #…" and offers no second reversal.
+    const reversals = ids.length
+      ? await db.selectFrom('journal_entries').select(['reversal_of_entry_id', 'entry_no'])
+        .where('org_id', '=', orgId).where('reversal_of_entry_id', 'in', ids).execute()
+      : [];
+    const reversedBy = new Map(reversals.map((r) => [Number(r.reversal_of_entry_id), r.entry_no]));
+
     const linesByEntry = new Map<number, typeof lines>();
     for (const l of lines) {
       const list = linesByEntry.get(l.entry_id) ?? [];
@@ -110,6 +117,7 @@ export const GET = route(
         // A reversal is a correction posted alongside the original, never a
         // rewrite of it — showing the link is what makes that visible.
         reversalOf: e.reversal_of_entry_id ? asId(e.reversal_of_entry_id) : null,
+        reversedBy: reversedBy.get(Number(e.id)) ?? null,
         totalDebitPaise: toPaiseFromSql(e.total_debit),
         totalCreditPaise: toPaiseFromSql(e.total_credit),
         postedAt: e.posted_at,
@@ -231,12 +239,25 @@ const ReverseInput = z.object({
   memo: z.string().max(500).optional(),
 });
 
+/** The entries reversed from the journal screen: those that stand on their own, not a document's. */
+const REVERSIBLE = new Set(['manual', 'opening', 'opening_balance', 'reclassification', 'recurring', 'doubtful_debts', 'tally_import', 'fx_revaluation']);
+
 /** Reverse an entry. Corrections are posted, never edited in place. */
 export const PATCH = route(
   async ({ orgId, user, req }) => {
     const input = await body(req, ReverseInput);
     const entryId = Number(input.entryId);
     if (!Number.isInteger(entryId)) throw badRequest('Invalid entry.');
+    // An invoice's, a bill's or a payment's entry is undone by voiding the
+    // document: reversing only its entry would leave the document standing and
+    // the ledger and the documents telling different stories.
+    const entry = await db.selectFrom('journal_entries').select(['source_type', 'entry_no', 'reversal_of_entry_id'])
+      .where('id', '=', entryId).where('org_id', '=', orgId).executeTakeFirst();
+    if (!entry) throw badRequest('That entry does not exist.');
+    if (!REVERSIBLE.has(entry.source_type)) {
+      throw badRequest(`Entry #${entry.entry_no} was posted by ${entry.source_type.replace(/_/g, ' ')}. Void or cancel that document instead; its entry is reversed with it.`);
+    }
+    if (entry.reversal_of_entry_id) throw badRequest(`Entry #${entry.entry_no} is itself a reversal. Post a new journal to correct it.`);
 
     // Whatever the entry settled is owed again once it is reversed.
     const reversal = await transaction(async (trx) =>
@@ -250,7 +271,8 @@ export const PATCH = route(
       action: 'void',
       targetType: 'journal_entry',
       targetId: entryId,
-      detail: `Reversed by entry ${reversal.entryNo}`,
+      targetLabel: `#${entry.entry_no}`,
+      detail: `Reversed by entry #${reversal.entryNo}${input.date ? ` dated ${input.date}` : ''}`,
       ...auditMeta(req),
     });
 

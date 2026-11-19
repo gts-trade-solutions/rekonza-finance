@@ -506,6 +506,12 @@ export async function disposeAsset(trx: Trx, orgId: number, userId: number | nul
   const cls = await classOf(trx, orgId, a.class_id);
   const home = a.status === 'in_use' ? cls.account_id : requireAccount(acc, CODE.CWIP);
   const [loaded] = await loadAssets(trx, orgId, { ids: [assetId] });
+  // Depreciation already charged past the disposal date would stay in the
+  // books for days the asset was gone: date the disposal after the last run,
+  // or reverse that run first.
+  if (a.status === 'in_use' && loaded.lastTo && input.date <= loaded.lastTo) {
+    throw badRequest(`Depreciation on ${a.name} has been charged up to ${loaded.lastTo}. Date the disposal after that, or reverse that depreciation run first.`);
+  }
 
   // Depreciation up to the day before it leaves, posted now.
   let catchUp = 0;
@@ -594,6 +600,42 @@ export interface RegisterRow {
   insuranceExpiry: string | null; amcExpiry: string | null; lastVerifiedOn: string | null;
   /** Things to look at: insurance or AMC lapsing within 30 days, not verified in a year. */
   flags: string[];
+}
+
+export interface DisposalRow {
+  id: string; tagNo: string; name: string; className: string; acquiredOn: string; disposedOn: string; kind: 'sold' | 'scrapped' | null;
+  costPaise: number; accumulatedPaise: number; writtenDownPaise: number; proceedsPaise: number; gainPaise: number;
+  invoiceId: string | null; entryId: string | null;
+}
+
+/**
+ * The assets that left between two dates: what each cost, the depreciation
+ * charged to the day it left, the written-down value, what it fetched, and the
+ * gain or loss — the disposals column of the Schedule III movement schedule.
+ */
+export async function assetDisposals(ex: Executor, orgId: number, from: string, to: string): Promise<DisposalRow[]> {
+  const rows = await ex.selectFrom('fixed_assets as a').innerJoin('asset_classes as c', 'c.id', 'a.class_id')
+    .select(['a.id', 'a.tag_no', 'a.name', 'c.name as class_name', 'a.acquired_on', 'a.disposed_on', 'a.disposal_kind', 'a.disposal_value',
+      'a.disposal_invoice_id', 'a.disposal_entry_id', 'a.opening_accumulated'])
+    .where('a.org_id', '=', orgId).where('a.status', '=', 'disposed')
+    .where('a.disposed_on', '>=', from).where('a.disposed_on', '<=', to).orderBy('a.disposed_on').execute();
+  if (!rows.length) return [];
+  const ids = rows.map((r) => r.id);
+  const [costs, charged] = await Promise.all([
+    ex.selectFrom('asset_costs').select(['asset_id', sql<string>`SUM(amount)`.as('v')]).where('asset_id', 'in', ids).groupBy('asset_id').execute(),
+    ex.selectFrom('depreciation_lines').select(['asset_id', sql<string>`SUM(amount)`.as('v')]).where('asset_id', 'in', ids).where('reversed', '=', 0).groupBy('asset_id').execute(),
+  ]);
+  return rows.map((r) => {
+    const cost = toPaiseFromSql(costs.find((c) => c.asset_id === r.id)?.v ?? '0');
+    const acc = toPaiseFromSql(r.opening_accumulated) + toPaiseFromSql(charged.find((c) => c.asset_id === r.id)?.v ?? '0');
+    const proceeds = r.disposal_value ? toPaiseFromSql(r.disposal_value) : 0;
+    return {
+      id: String(r.id), tagNo: r.tag_no, name: r.name, className: r.class_name, acquiredOn: String(r.acquired_on).slice(0, 10),
+      disposedOn: String(r.disposed_on).slice(0, 10), kind: r.disposal_kind, costPaise: cost, accumulatedPaise: acc,
+      writtenDownPaise: cost - acc, proceedsPaise: proceeds, gainPaise: proceeds - (cost - acc),
+      invoiceId: r.disposal_invoice_id ? String(r.disposal_invoice_id) : null, entryId: r.disposal_entry_id ? String(r.disposal_entry_id) : null,
+    };
+  });
 }
 
 export async function assetRegister(ex: Executor, orgId: number, asOf = new Date().toISOString().slice(0, 10)): Promise<RegisterRow[]> {

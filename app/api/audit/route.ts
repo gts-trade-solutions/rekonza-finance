@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { sql } from 'kysely';
 import { db } from '@/lib/server/db';
 import { route, query, asId } from '@/lib/server/http';
+import { AuditFilter, auditRows, changesIn } from '@/lib/server/audit-query';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // The audit trail, read-only.
@@ -10,17 +11,13 @@ import { route, query, asId } from '@/lib/server/http';
 // Indian companies keeping books electronically to maintain an edit log of
 // every change, retain it for eight financial years, and to have no facility
 // for disabling it. Rows are written by lib/server/audit.ts as a side effect of
-// the actions they describe; nothing can write one directly, and nothing at all
-// can remove one.
+// the actions they describe, and by POST /api/audit/output when a person prints
+// or downloads something (their own act, recorded under their own name);
+// nothing can write any other row directly, and nothing at all can remove one.
+// GET /api/audit/export takes every row these filters find, as a file.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const ListQuery = z.object({
-  targetType: z.string().optional(),
-  action: z.string().optional(),
-  actorUserId: z.string().optional(),
-  from: z.string().optional(),
-  to: z.string().optional(),
-  search: z.string().optional(),
+const ListQuery = AuditFilter.extend({
   limit: z.coerce.number().int().min(1).max(1000).default(300),
   offset: z.coerce.number().int().min(0).default(0),
 });
@@ -28,25 +25,7 @@ const ListQuery = z.object({
 export const GET = route(
   async ({ orgId, req }) => {
     const q = query(req, ListQuery);
-
-    let base = db.selectFrom('audit_log').where('org_id', '=', orgId);
-    if (q.targetType && q.targetType !== 'all') base = base.where('target_type', '=', q.targetType);
-    if (q.action && q.action !== 'all') base = base.where('action', '=', q.action);
-    if (q.actorUserId) base = base.where('actor_user_id', '=', Number(q.actorUserId));
-    if (q.from) base = base.where('created_at', '>=', new Date(`${q.from}T00:00:00`));
-    // Inclusive of the end date, so a single-day filter shows that whole day.
-    if (q.to) base = base.where('created_at', '<=', new Date(`${q.to}T23:59:59.999`));
-    if (q.search) {
-      const term = `%${q.search}%`;
-      base = base.where((eb) =>
-        eb.or([
-          eb('actor_name', 'like', term),
-          eb('target_label', 'like', term),
-          eb('detail', 'like', term),
-          eb('reason', 'like', term),
-        ]),
-      );
-    }
+    const base = auditRows(orgId, q);
 
     const [rows, total, kinds, guards] = await Promise.all([
       base
@@ -103,18 +82,3 @@ export const GET = route(
   },
   { permission: { module: 'accountant', action: 'view' } },
 );
-
-/** The edit log an update carries, if it carries one. */
-function changesIn(payload: unknown): Record<string, { from: unknown; to: unknown }> | null {
-  const p = typeof payload === 'string' ? safeParse(payload) : payload;
-  const c = p && typeof p === 'object' ? (p as { changes?: unknown }).changes : null;
-  return c && typeof c === 'object' && Object.keys(c).length ? (c as Record<string, { from: unknown; to: unknown }>) : null;
-}
-
-function safeParse(s: string): unknown {
-  try {
-    return JSON.parse(s);
-  } catch {
-    return null;
-  }
-}

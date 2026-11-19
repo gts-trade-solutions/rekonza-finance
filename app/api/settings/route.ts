@@ -62,6 +62,8 @@ export const GET = route(
         id: asId(org.id),
         name: org.name,
         legalName: org.legal_name,
+        /** The logo every document prints (Settings → Organization Profile, as in Zoho). */
+        logoFileId: org.logo_file_id ? asId(org.logo_file_id) : null,
         pan: org.pan,
         tan: org.tan,
         email: org.email,

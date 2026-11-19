@@ -37,7 +37,7 @@ export const TEMPLATES: Record<ImportKind, Template> = {
       { key: 'legal_name', label: 'Legal name', example: 'Sri Murugan Motors Pvt Ltd' },
       { key: 'gstin', label: 'GSTIN', example: '33AABCS1234F1Z5' },
       { key: 'pan', label: 'PAN', example: 'AABCS1234F' },
-      { key: 'state', label: 'State', example: '33', hint: 'two-digit code or name; taken from the GSTIN when blank' },
+      { key: 'state', label: 'State', example: '33', hint: 'two-digit code, letters (TN) or name; from the GSTIN when blank, else your own state' },
       { key: 'email', label: 'Email', example: 'accounts@example.com' },
       { key: 'phone', label: 'Phone', example: '9840012345' },
       { key: 'address', label: 'Address', example: '12 Anna Salai' },
@@ -281,6 +281,88 @@ export const TEMPLATES: Record<ImportKind, Template> = {
   },
 };
 
+/**
+ * Other names a file may give a column: Zoho Books' own export headings first
+ * (so a Zoho export imports as it is), then the usual spreadsheet words.
+ * Matched like the labels, ignoring case, spaces and punctuation.
+ */
+const DOC_LINE: Record<string, string[]> = {
+  item: ['Item Name', 'Product', 'Product Name', 'Item Code'],
+  description: ['Item Desc', 'Item Description', 'Line Description'],
+  hsn_sac: ['HSN', 'SAC', 'HSN Code', 'HSN/SAC Code', 'HSN SAC'],
+  qty: ['Qty', 'Item Quantity', 'Quantity Ordered'],
+  rate: ['Item Price', 'Price', 'Unit Price', 'Item Rate', 'Selling Price'],
+  discount_pct: ['Discount', 'Discount(%)', 'Item Discount', 'Discount Percent', 'Discount Percentage'],
+  gst_rate: ['Item Tax %', 'Item Tax', 'Tax %', 'Tax Percentage', 'Tax Rate', 'GST %', 'GST', 'Item Tax Percentage', 'Intra State Tax Rate'],
+};
+
+export const ALIASES: Partial<Record<ImportKind, Record<string, string[]>>> = {
+  contacts: {
+    type: ['Contact Type', 'Customer or Vendor', 'Party Type'],
+    name: ['Display Name', 'Contact Name', 'Customer Name', 'Vendor Name', 'Party Name', 'Party'],
+    legal_name: ['Company Name', 'Business Legal Name', 'Registered Name'],
+    gstin: ['GST Identification Number (GSTIN)', 'GST Identification Number', 'GSTIN/UIN', 'GST Number', 'GST No', 'GSTIN Number'],
+    pan: ['PAN Number', 'PAN No'],
+    state: ['Place of Contact', 'Place of Supply', 'Billing State', 'State Code', 'Source of Supply'],
+    email: ['EmailID', 'Email ID', 'Email Address', 'E-mail'],
+    phone: ['Phone', 'MobilePhone', 'Mobile Phone', 'Mobile', 'Work Phone', 'Contact Number', 'Phone Number'],
+    address: ['Billing Address', 'Billing Street', 'Street', 'Address Line 1'],
+    city: ['Billing City'],
+    pincode: ['Billing Code', 'Billing Zip', 'Billing Pincode', 'Zip', 'Zip Code', 'Pincode', 'Postal Code', 'PIN'],
+    credit_days: ['Payment Terms', 'Payment Terms Label', 'Credit Period', 'Credit Terms'],
+    msme_udyam_no: ['MSME Registration Number', 'Udyam Registration Number', 'Udyam No'],
+  },
+  items: {
+    name: ['Item Name', 'Product Name', 'Product', 'Item'],
+    kind: ['Product Type', 'Goods or Service', 'Goods/Services'],
+    sku: ['Item Code', 'Product Code', 'Code'],
+    hsn_sac: ['HSN', 'SAC', 'HSN Code', 'HSN/SAC Code'],
+    unit: ['Usage unit', 'Usage Unit', 'Units', 'UOM', 'UQC'],
+    sale_price: ['Rate', 'Selling Price', 'Sales Rate', 'Sales Price', 'Price', 'MRP'],
+    purchase_price: ['Purchase Rate', 'Cost Price', 'Cost', 'Purchase Cost'],
+    gst_rate: ['Intra State Tax Rate', 'Tax Percentage', 'GST %', 'GST', 'Tax Rate', 'Tax %', 'Inter State Tax Rate'],
+    track_stock: ['Track Inventory', 'Inventory Tracking', 'Stock Item'],
+    opening_qty: ['Opening Stock', 'Opening Quantity', 'Stock On Hand', 'Opening Stock Quantity'],
+    opening_rate: ['Opening Stock Rate', 'Opening Stock Value per Unit', 'Opening Rate per Unit'],
+    description: ['Sales Description', 'Item Description'],
+    preferred_vendor: ['Vendor', 'Vendor Name', 'Preferred Supplier'],
+  },
+  accounts: {
+    code: ['Account Code', 'Ledger Code'],
+    name: ['Account Name', 'Ledger Name', 'Ledger'],
+    type: ['Account Type', 'Type'],
+    description: ['Account Description'],
+  },
+  journals: {
+    voucher_no: ['Journal Number', 'Journal#', 'Voucher No', 'Entry Number'],
+    date: ['Journal Date', 'Voucher Date'],
+    account_code: ['Account', 'Account Code', 'Ledger', 'Ledger Code'],
+    party: ['Contact Name', 'Customer Name', 'Vendor Name'],
+    narration: ['Notes', 'Description', 'Reference Number', 'Memo'],
+  },
+  invoices: { invoice_no: ['Invoice Number', 'Invoice#', 'Invoice No', 'Bill No'], date: ['Invoice Date'], due_date: ['Due Date'], customer: ['Customer Name', 'Party Name', 'Display Name'], ...DOC_LINE },
+  bills: { bill_no: ['Bill Number', 'Bill#', 'Bill No', 'Vendor Invoice Number', 'Supplier Invoice No'], date: ['Bill Date'], due_date: ['Due Date'], vendor: ['Vendor Name', 'Supplier', 'Supplier Name', 'Party Name'], ...DOC_LINE },
+  estimates: { number: ['Estimate Number', 'Quote Number', 'Quote#', 'Estimate#'], date: ['Estimate Date', 'Quote Date'], expiry_date: ['Expiry Date', 'Valid Till'], customer: ['Customer Name'], ...DOC_LINE },
+  'sales-orders': { number: ['SalesOrder Number', 'Sales Order Number', 'Sales Order#', 'SO Number'], date: ['Order Date', 'Sales Order Date', 'SalesOrder Date'], expected_ship_date: ['Expected Shipment Date', 'Shipment Date'], customer: ['Customer Name'], ...DOC_LINE },
+  'credit-notes': { number: ['Credit Note Number', 'CreditNote Number', 'Credit Note#'], date: ['Credit Note Date', 'CreditNote Date'], customer: ['Customer Name'], reason: ['Reason for Credit Note', 'Credit Note Reason'], against_invoice: ['Associated Invoice Number', 'Invoice Number', 'Invoice#', 'Reference Invoice'], ...DOC_LINE },
+  'purchase-orders': { number: ['Purchase Order Number', 'PurchaseOrder Number', 'PO Number', 'Purchase Order#'], date: ['Purchase Order Date', 'PO Date'], expected_date: ['Expected Delivery Date', 'Delivery Date'], vendor: ['Vendor Name', 'Supplier'], ...DOC_LINE },
+  expenses: {
+    date: ['Expense Date'], account_code: ['Expense Account', 'Account', 'Expense Account Code'], paid_through: ['Paid Through', 'Paid Through Account'],
+    total: ['Expense Amount', 'Total', 'Amount', 'Total Amount'], gst_rate: ['Tax Percentage', 'Tax %', 'GST %'], vendor: ['Vendor Name', 'Merchant'],
+    reference: ['Reference#', 'Reference Number', 'Ref No'], notes: ['Description', 'Expense Description'], customer: ['Customer Name'],
+  },
+  'payments-received': {
+    date: ['Payment Date', 'Date'], customer: ['Customer Name'], amount: ['Amount', 'Payment Amount', 'Amount Received'], mode: ['Payment Mode', 'Mode of Payment'],
+    account: ['Deposit To', 'Deposited To', 'Deposit Account'], reference: ['Reference Number', 'Reference#', 'Payment Reference'],
+    tds: ['TDS', 'Tax Deducted', 'Withholding Tax Amount'], bank_charges: ['Bank Charges (if any)', 'Bank Charge'], invoice: ['Invoice Number', 'Invoice#'], notes: ['Description', 'Notes'],
+  },
+  'payments-made': {
+    date: ['Payment Date', 'Date'], vendor: ['Vendor Name', 'Supplier'], amount: ['Amount', 'Payment Amount', 'Amount Paid'], mode: ['Payment Mode', 'Mode of Payment'],
+    account: ['Paid Through', 'Paid From Account'], reference: ['Reference Number', 'Reference#'], tds: ['TDS', 'Tax Deducted'],
+    bank_charges: ['Bank Charges (if any)', 'Bank Charge'], bill: ['Bill Number', 'Bill#'], notes: ['Description', 'Notes'],
+  },
+};
+
 export const IMPORT_KINDS = Object.keys(TEMPLATES) as ImportKind[];
 /** One import, one file: enough for a year's masters, small enough to check in one go. */
 export const MAX_IMPORT_ROWS = 5000;
@@ -292,7 +374,11 @@ export function columnFor(kind: ImportKind, heading: string): string | null {
   const h = squash(heading);
   if (!h) return null;
   const col = TEMPLATES[kind].columns.find((c) => squash(c.key) === h || squash(c.label) === h);
-  return col?.key ?? null;
+  if (col) return col.key;
+  // Zoho's export headings and other common names (ALIASES), for columns the template has.
+  const names = ALIASES[kind] ?? {};
+  const keys = new Set(TEMPLATES[kind].columns.map((c) => c.key));
+  return Object.entries(names).find(([key, list]) => keys.has(key) && list.some((a) => squash(a) === h))?.[0] ?? null;
 }
 
 /** The template as CSV: headings, then one example row. */

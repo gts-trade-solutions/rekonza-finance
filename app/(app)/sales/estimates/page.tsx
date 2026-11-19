@@ -13,6 +13,7 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/shared/page-header';
+import { ModuleMenu } from '@/components/shared/module-menu';
 import { DataTable, type Column } from '@/components/shared/data-table';
 import { BulkPrintButton, documentMenuColumn } from '@/components/shared/document-menu';
 import { Money } from '@/components/shared/money';
@@ -121,7 +122,7 @@ export default function EstimatesPage() {
       <PageHeader
         title="Quotes"
         description="A quote is a promise, not a sale — nothing touches the ledger until it becomes an invoice."
-        actions={
+        actions={<>{
           canCreate && (
             <QuickDocumentDialog
               kind="estimate"
@@ -136,6 +137,7 @@ export default function EstimatesPage() {
               )}
             />
           )
+        }<ModuleMenu slug="quotes" onRefresh={() => void state.refetch()} /></>
         }
       />
       <AsyncPage state={state}>

@@ -3,7 +3,7 @@ import {
   FileText, Landmark, type LucideIcon, Package, Receipt,
   ReceiptIndianRupee, Repeat, ScrollText, Settings, ShieldCheck, ShoppingCart,
   Truck, Users, Wallet, FileCheck2, HandCoins, ClipboardList, CalendarClock,
-  FileMinus, Building, AlertTriangle, Split, Lock, ChartColumnBig, MonitorDown, PackageCheck, Scale, CalendarDays, LifeBuoy,
+  FileMinus, Building, AlertTriangle, Split, Lock, ChartColumnBig, MonitorDown, PackageCheck, Scale, CalendarDays, CalendarCheck2, LifeBuoy,
   ScanBarcode, BellRing, Download, Upload, ArrowLeftRight, FileUp, FileDown, AlertOctagon, Radar, FilePlus2, Timer, FolderKanban, Ship, PhoneCall, ListChecks, LayoutTemplate, Shuffle, Globe,
   House, ShoppingBasket, ShoppingBag, Clock, UserRoundCog, ChartNoAxesColumn, Folder,
 } from 'lucide-react';
@@ -161,6 +161,7 @@ export const NAV_GROUPS: NavGroup[] = [
     extra: true,
     items: [
       { label: 'Compliance Calendar', href: '/gst/compliance-calendar', icon: CalendarDays, module: 'gst', badge: 'complianceDue' },
+      { label: 'Return Status', href: '/gst/return-status', icon: CalendarCheck2, module: 'gst' },
       { label: 'E-Invoices (IRP)', href: '/gst/einvoices', icon: FileCheck2, module: 'gst', badge: 'einvoicePending', registration: 'regular', feature: 'gst' },
       { label: 'GSTR-1', href: '/gst/gstr1', icon: FileText, module: 'gst', registration: 'regular', feature: 'gst' },
       { label: 'GSTR-3B', href: '/gst/gstr3b', icon: FileSpreadsheet, module: 'gst', registration: 'regular', feature: 'gst' },
@@ -187,6 +188,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { label: 'Advances & Loans', href: '/payroll/advances', icon: Banknote, module: 'payroll' },
       { label: 'Expense Claims', href: '/payroll/claims', icon: Receipt, module: 'payroll' },
       { label: 'Declarations', href: '/payroll/declarations', icon: FileCheck2, module: 'payroll' },
+      { label: 'Statutory Registers', href: '/payroll/statutory', icon: FileSpreadsheet, module: 'payroll' },
       { label: 'Form 16 / 130', href: '/payroll/form-16', icon: FileText, module: 'payroll' },
       { label: 'Full & Final', href: '/payroll/full-and-final', icon: HandCoins, module: 'payroll' },
     ],

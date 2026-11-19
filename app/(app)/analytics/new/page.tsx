@@ -17,6 +17,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useMemo, useState, type DragEvent } from 'react';
 import Papa from 'papaparse';
+import { readXls } from '@/lib/imports/xls';
 import {
   ArrowLeft, BookOpen, ClipboardPaste, FileSpreadsheet, Info, Loader2, Lock, Sparkles, TriangleAlert, Upload,
 } from 'lucide-react';
@@ -116,7 +117,12 @@ export default function NewAnalyticsPage() {
         setSheetIdx(0);
         reset(usable[0].data, file.name, base);
       } else if (/\.xls$/i.test(file.name)) {
-        throw new Error('Older .xls workbooks cannot be read here. Open it in Excel, save it as .xlsx or CSV, and upload that.');
+        // Excel 97–2003 (or HTML or text saved as .xls), read in the browser (lib/imports/xls.ts).
+        const r = readXls(new Uint8Array(await file.arrayBuffer()));
+        const grid = ('grid' in r ? r.grid : Papa.parse<string[]>(r.text, { skipEmptyLines: 'greedy' }).data) as RawCell[][];
+        if (!grid.some((row) => row.some((c) => c !== null && c !== ''))) throw new Error('That workbook has no data in it.');
+        setSheets([]);
+        reset(grid, file.name, base);
       } else {
         const text = (await file.text()).replace(/^﻿/, '');
         const parsed = Papa.parse<string[]>(text, { skipEmptyLines: 'greedy' });

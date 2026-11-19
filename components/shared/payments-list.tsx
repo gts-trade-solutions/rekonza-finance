@@ -14,6 +14,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card } from '@/components/ui/card';
 import { PageHeader } from '@/components/shared/page-header';
+import { ModuleMenu } from '@/components/shared/module-menu';
 import { DataTable, type Column } from '@/components/shared/data-table';
 import { BulkPrintButton, documentMenuColumn } from '@/components/shared/document-menu';
 import { Money } from '@/components/shared/money';
@@ -129,6 +130,7 @@ export function PaymentsList({ kind }: { kind: 'received' | 'made' }) {
                 </Link>
               </Button>
             )}
+            <ModuleMenu slug={isReceipt ? 'payments-received' : 'payments-made'} onRefresh={() => void state.refetch()} />
           </>
         }
       />

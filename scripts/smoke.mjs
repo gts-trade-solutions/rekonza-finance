@@ -91,6 +91,8 @@ ROUTES.splice(ROUTES.length - 3, 0,
   ...await sample('/api/contacts?kind=vendor', 'contacts', (id) => `/purchases/vendors/statements?ids=${id}`),
   ...await sample('/api/items', 'items', (id) => `/sales/items/${id}`),
   ...await sample('/api/items', 'items', (id) => `/sales/items/${id}/edit`),
+  // Zoho's import, from each list's ⋯ menu.
+  '/import/customers', '/import/vendors', '/import/items', '/import/invoices', '/import/bills', '/import/payments-received', '/import/journals',
 );
 
 const results = [];

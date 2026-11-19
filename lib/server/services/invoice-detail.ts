@@ -30,7 +30,7 @@ export async function invoiceDetail(orgId: number, id: number) {
       'invoices.igst', 'invoices.cess', 'invoices.tcs', 'invoices.shipping_charge',
       'invoices.adjustment', 'invoices.adjustment_label', 'invoices.round_off',
       'invoices.total', 'invoices.amount_paid', 'invoices.order_number',
-      'invoices.subject', 'invoices.payment_terms', 'invoices.notes', 'invoices.terms',
+      'invoices.subject', 'invoices.payment_terms', 'invoices.print_template', 'invoices.notes', 'invoices.terms',
       'invoices.journal_entry_id', 'invoices.customer_id', 'invoices.branch_id',
       'invoices.doc_kind', 'invoices.against_invoice_id', 'invoices.note_reason', 'invoices.paid_at_sale',
       'invoices.created_at', 'invoices.eway_bill_no',
@@ -231,6 +231,8 @@ export async function invoiceDetail(orgId: number, id: number) {
       .map((f) => ({ label: f.label, value: f.type === 'checkbox' ? (f.value === 'true' ? 'Yes' : 'No') : f.value! })),
     subject: inv.subject,
     paymentTerms: inv.payment_terms,
+    /** The template this invoice prints in, when not the one set for invoices. */
+    printTemplate: inv.print_template ?? null,
     notes: inv.notes,
     terms: inv.terms,
     // The voucher type's own print format, when the invoice is of one.
@@ -253,6 +255,7 @@ export async function invoiceDetail(orgId: number, id: number) {
       id: asId(l.id),
       itemId: l.item_id ? asId(l.item_id) : null,
       description: l.description?.trim() || l.item_name || null,
+      itemName: l.item_name ?? null,
       hsnSac: l.hsn_sac,
       qty: Number(l.qty),
       uqc: l.uqc,

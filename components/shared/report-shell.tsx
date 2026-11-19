@@ -47,6 +47,31 @@ export function CompareSelect({ value, onChange }: { value: CompareMode; onChang
   );
 }
 
+/**
+ * Zoho's location filter: one branch (each GSTIN is one) or all of them.
+ * '' is every branch. The statements filter their journal lines by it.
+ */
+export function BranchSelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const branches = useAppStore((st) => st.branches);
+  if (branches.length < 2 && !value) return null;
+  return (
+    <div className="space-y-1">
+      <label className="text-[11px] font-medium text-muted-foreground" htmlFor="report-branch">Branch</label>
+      <select id="report-branch" value={value} onChange={(e) => onChange(e.target.value)} data-slot="report-branch"
+        className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm">
+        <option value="">All branches</option>
+        {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+      </select>
+    </div>
+  );
+}
+
+/** The name of the branch a report is filtered to, for its heading and export. */
+export function useBranchName(id: string): string | null {
+  const branches = useAppStore((st) => st.branches);
+  return id ? branches.find((b) => b.id === id)?.name ?? null : null;
+}
+
 /** Zoho's "Report basis": accrual counts a sale when invoiced, cash when it is paid. */
 export type ReportBasis = 'accrual' | 'cash';
 

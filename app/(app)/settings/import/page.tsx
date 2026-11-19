@@ -12,7 +12,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import Papa from 'papaparse';
-import { ArrowLeft, Download, FileSpreadsheet, Loader2, Upload } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Check, Download, FileSpreadsheet, Loader2, Upload } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -26,8 +26,10 @@ import { columnFor, IMPORT_KINDS, MAX_IMPORT_ROWS, TEMPLATES, templateCsv, templ
 import { downloadWorkbook } from '@/lib/xlsx';
 import { Outcomes } from '@/components/shared/import-outcomes';
 import { TallyFileImport } from '@/components/tally/file-import';
-import { jsonGrid, templateJson } from '@/lib/imports/json';
-import { DELIMITERS, delimiterName, guessDelimiter, readTextFile, TEXT_FILE_TYPES } from '@/lib/delimited';
+import { templateJson } from '@/lib/imports/json';
+import { DELIMITERS, delimiterName, TEXT_FILE_TYPES } from '@/lib/delimited';
+import { cellText, guessFileKind, readGrid } from '@/lib/imports/read-file';
+import { takeHandedOver, type HandedOver } from '@/lib/imports/handover';
 import { QuickBooksImport } from '@/components/quickbooks/file-import';
 import { PdfInvoiceImport } from '@/components/imports/pdf-invoice-import';
 
@@ -36,19 +38,37 @@ type Tab = (typeof TABS)[number];
 /** A PDF or a photo of an invoice: read on the PDF tab, not as a sheet. */
 const isPdfOrPhoto = (f: File) => /\.(pdf|png|jpe?g|webp)$/i.test(f.name) || /^(application\/pdf|image\/)/.test(f.type);
 
-/** A cell as text the server reads: dates as yyyy-mm-dd. */
-const cellText = (v: unknown) =>
-  v instanceof Date ? v.toISOString().slice(0, 10) : v === null || v === undefined ? '' : String(v);
-
 export default function ImportPage() {
   const [tab, setTab] = useState<Tab>('sheet');
-  // PDFs chosen on the spreadsheet tab, handed to the PDF tab.
+  // PDFs handed to the PDF tab, which reads them at once; and those waiting
+  // until it is opened, so none is read (with AI credits) unseen.
   const [pdfs, setPdfs] = useState<File[] | null>(null);
-  // ?tab=pdf (or tally, quickbooks) opens that tab, as the sidebar's links do.
+  const [pdfsWaiting, setPdfsWaiting] = useState<File[]>([]);
+  // Spreadsheets handed to the sheet tab, which lines them up one after another.
+  const [sheets, setSheets] = useState<File[] | null>(null);
+  const [sheetsWaiting, setSheetsWaiting] = useState(0);
+
+  /** Files chosen on another screen (the Tally tab, Tally → Import): each set to its own tab. */
+  const receive = (h: HandedOver, open: Tab) => {
+    if (h.sheets.length) setSheets(h.sheets);
+    if (h.pdfs.length) {
+      if (open === 'pdf') setPdfs(h.pdfs);
+      else setPdfsWaiting((have) => [...have, ...h.pdfs]);
+    }
+    setTab(open);
+  };
+  // ?tab=pdf (or tally, quickbooks) opens that tab, as the sidebar's links do;
+  // with any files Tally → Import passed on.
   useEffect(() => {
     const want = new URLSearchParams(window.location.search).get('tab');
-    if (want && (TABS as readonly string[]).includes(want)) setTab(want as Tab);
+    const open = want && (TABS as readonly string[]).includes(want) ? (want as Tab) : 'sheet';
+    const handed = takeHandedOver();
+    if (handed.sheets.length || handed.pdfs.length) receive(handed, open);
+    else setTab(open);
   }, []);
+  useEffect(() => {
+    if (tab === 'pdf' && pdfsWaiting.length) { setPdfs(pdfsWaiting); setPdfsWaiting([]); }
+  }, [tab, pdfsWaiting]);
   return (
     <>
       <PageHeader
@@ -67,16 +87,48 @@ export default function ImportPage() {
           <TabsTrigger value="tally">From Tally</TabsTrigger>
           <TabsTrigger value="quickbooks">From QuickBooks</TabsTrigger>
         </TabsList>
-        <TabsContent value="sheet" className="mt-4"><SheetImport onPdf={(files) => { setPdfs(files); setTab('pdf'); }} /></TabsContent>
+        {tab === 'sheet' && pdfsWaiting.length > 0 && (
+          <AlsoChosen what={`${pdfsWaiting.length} invoice${pdfsWaiting.length === 1 ? '' : 's'} to read`} where="Invoices from PDF" onOpen={() => setTab('pdf')} />
+        )}
+        {tab === 'pdf' && sheetsWaiting > 0 && (
+          <AlsoChosen what={`${sheetsWaiting} spreadsheet${sheetsWaiting === 1 ? '' : 's'} to import`} where="Excel, CSV, text or JSON" onOpen={() => setTab('sheet')} />
+        )}
+        <TabsContent value="sheet" className="mt-4" keepMounted>
+          <SheetImport incoming={sheets} onWaiting={setSheetsWaiting}
+            onPdf={(files) => { setPdfs(files); setTab('pdf'); }}
+            onPdfLater={(files) => setPdfsWaiting((have) => [...have, ...files])} />
+        </TabsContent>
         <TabsContent value="pdf" className="mt-4" keepMounted><PdfInvoiceImport incoming={pdfs} /></TabsContent>
         <TabsContent value="quickbooks" className="mt-4"><QuickBooksImport /></TabsContent>
-        <TabsContent value="tally" className="mt-4 space-y-6"><TallyFileImport /><TallyImport /></TabsContent>
+        <TabsContent value="tally" className="mt-4 space-y-6"><TallyFileImport onOtherFiles={receive} /><TallyImport /></TabsContent>
       </Tabs>
     </>
   );
 }
 
-function SheetImport({ onPdf }: { onPdf: (files: File[]) => void }) {
+/** Files chosen elsewhere are waiting on this tab: say so, with the way there. */
+function AlsoChosen({ what, where, onOpen }: { what: string; where: string; onOpen: () => void }) {
+  return (
+    <p className="mt-3 flex flex-wrap items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-900 dark:border-blue-900 dark:bg-blue-950/40 dark:text-blue-100" data-slot="import-also-chosen">
+      Also chosen: {what}, on the <span className="font-medium">{where}</span> tab.
+      <Button size="xs" variant="outline" className="ml-auto gap-1" onClick={onOpen}>Open it <ArrowRight className="size-3" /></Button>
+    </p>
+  );
+}
+
+/** A file lined up on the sheet tab, with the import its headings are for. */
+interface Lined { file: File; kind: ImportKind | null; imported: boolean }
+
+function SheetImport({ incoming, onWaiting, onPdf, onPdfLater }: {
+  /** Spreadsheets chosen on another screen: lined up, the first opened. */
+  incoming: File[] | null;
+  /** How many lined-up files are still to import, for the other tabs to mention. */
+  onWaiting: (n: number) => void;
+  /** Only PDFs (or photos) chosen here: read them on their own tab. */
+  onPdf: (files: File[]) => void;
+  /** PDFs chosen along with spreadsheets: kept for the PDF tab. */
+  onPdfLater: (files: File[]) => void;
+}) {
   const [kind, setKind] = useState<ImportKind>('contacts');
   const [rows, setRows] = useState<Record<string, string>[]>([]);
   const [headings, setHeadings] = useState<{ heading: string; key: string | null }[]>([]);
@@ -90,6 +142,9 @@ function SheetImport({ onPdf }: { onPdf: (files: File[]) => void }) {
   const [otherSep, setOtherSep] = useState('');
   const [readWith, setReadWith] = useState<string | null>(null);
   const [lastFile, setLastFile] = useState<File | null>(null);
+  // Several files at once: each opens in turn, set to its own import.
+  const [lined, setLined] = useState<Lined[]>([]);
+  const [openFile, setOpenFile] = useState<File | null>(null);
   const t = TEMPLATES[kind];
 
   const missing = useMemo(
@@ -97,38 +152,38 @@ function SheetImport({ onPdf }: { onPdf: (files: File[]) => void }) {
     [t, headings],
   );
 
-  const reset = (k: ImportKind) => { setKind(k); setRows([]); setHeadings([]); setFileName(''); setResult(null); };
+  const reset = (k: ImportKind) => { setKind(k); setRows([]); setHeadings([]); setFileName(''); setResult(null); setOpenFile(null); };
 
-  const load = async (file: File | undefined | null, chosen = sep === 'other' ? otherSep : sep) => {
+  /**
+   * Read a file under an import. `findKind`: when that import misses a column
+   * the file needs and another import takes the file whole, read it as that one.
+   */
+  const load = async (file: File | undefined | null, chosen = sep === 'other' ? otherSep : sep, k: ImportKind = kind, findKind = false): Promise<void> => {
     if (!file) return;
     setResult(null);
     setReadWith(null);
     try {
-      let grid: unknown[][];
-      if (/\.xlsx$/i.test(file.name)) {
-        const { default: readXlsxFile } = await import('read-excel-file/browser');
-        const sheets = (await readXlsxFile(file)) as unknown as { sheet: string; data: unknown[][] }[];
-        grid = sheets.find((s) => s.data.some((r) => r.some((c) => c !== null && c !== '')))?.data ?? [];
-      } else if (/\.json$/i.test(file.name)) {
-        // The same grid a spreadsheet gives (lib/imports/json.ts).
-        grid = jsonGrid(await file.text(), kind);
-      } else {
-        // CSV or any delimited text: comma, tab, pipe, semicolon, or a separator of the user's own.
-        const text = await readTextFile(file);
-        const delimiter = chosen === 'auto' || !chosen ? guessDelimiter(text) : chosen;
-        grid = Papa.parse<string[]>(text, { delimiter, skipEmptyLines: 'greedy' }).data;
-        setReadWith(delimiter);
-        setLastFile(file);
-      }
+      const { grid, delimiter } = await readGrid(file, k, chosen);
+      if (delimiter) { setReadWith(delimiter); setLastFile(file); }
       if (grid.length < 2) throw new Error('The file needs a row of headings and at least one row under it.');
-      const map = grid[0].map((h, idx) => ({ heading: cellText(h).trim(), key: columnFor(kind, cellText(h)), idx }));
+      const map = grid[0].map((h, idx) => ({ heading: cellText(h).trim(), key: columnFor(k, cellText(h)), idx }));
+      const lacking = TEMPLATES[k].columns.some((c) => c.required && !map.some((m) => m.key === c.key));
+      if (findKind && lacking) {
+        const better = await guessFileKind(file);
+        if (better && better !== k) {
+          toast.info(`Read as ${TEMPLATES[better].title}`, { description: `${file.name} has the columns of ${TEMPLATES[better].title.toLowerCase()}, not of ${TEMPLATES[k].title.toLowerCase()}.` });
+          return await load(file, chosen, better, false);
+        }
+      }
       const body = grid.slice(1)
         .filter((r) => r.some((c) => cellText(c).trim() !== ''))
         .map((r) => Object.fromEntries(map.filter((m) => m.key).map((m) => [m.key!, cellText(r[m.idx]).trim()])));
       if (body.length > MAX_IMPORT_ROWS) throw new Error(`The file has ${body.length} rows; import up to ${MAX_IMPORT_ROWS} at a time.`);
+      setKind(k);
       setHeadings(map);
       setRows(body);
       setFileName(file.name);
+      setOpenFile(file);
     } catch (e) {
       toast.error('Could not read that file', { description: e instanceof Error ? e.message : String(e) });
     } finally {
@@ -136,12 +191,34 @@ function SheetImport({ onPdf }: { onPdf: (files: File[]) => void }) {
     }
   };
 
+  /** Several files: lined up, each set to the import its headings are for, and the first opened. */
+  const lineUp = async (files: File[]) => {
+    const guessed: Lined[] = await Promise.all(files.map(async (file) => ({ file, kind: await guessFileKind(file), imported: false })));
+    setLined((have) => [...have.filter((h) => !guessed.some((g) => g.file.name === h.file.name)), ...guessed]);
+    const first = guessed[0];
+    if (first) await load(first.file, sep === 'other' ? otherSep : sep, first.kind ?? kind, !first.kind);
+  };
+  // Only a new hand-over lines files up; the reader and the callback are the same each time.
+  useEffect(() => {
+    if (incoming?.length) void lineUp(incoming);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [incoming]);
+  useEffect(() => {
+    onWaiting(lined.filter((l) => !l.imported).length);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lined]);
+  const nextUp = lined.find((l) => !l.imported && l.file !== openFile);
+  const openLined = (l: Lined) => void load(l.file, sep === 'other' ? otherSep : sep, l.kind ?? kind, !l.kind);
+
   const run = async (dryRun: boolean) => {
     setBusy(dryRun ? 'check' : 'import');
     try {
       const r = await imports.rows(kind, rows, { dryRun, onDuplicate });
       setResult(r);
-      if (r.committed) toast.success(`${t.title} imported`);
+      if (r.committed) {
+        toast.success(`${t.title} imported`);
+        setLined((have) => have.map((l) => (l.file === openFile ? { ...l, imported: true } : l)));
+      }
     } catch (e) {
       toast.error('The import did not run', { description: e instanceof Error ? e.message : String(e) });
     } finally {
@@ -162,6 +239,33 @@ function SheetImport({ onPdf }: { onPdf: (files: File[]) => void }) {
         ))}
       </Card>
       <div className="space-y-4">
+        {lined.length > 0 && (
+          <Card className="space-y-2 border-t-4 border-t-blue-500 p-4" data-slot="sheet-lined">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-sm font-semibold">Files to import, one after another</p>
+              {nextUp && (
+                <Button size="sm" className="gap-1.5" data-slot="sheet-next" onClick={() => openLined(nextUp)}>
+                  Next: {nextUp.file.name} <ArrowRight className="size-3.5" />
+                </Button>
+              )}
+            </div>
+            <ul className="space-y-1">
+              {lined.map((l) => (
+                <li key={l.file.name} data-slot="sheet-lined-file" data-imported={l.imported || undefined}
+                  className={`flex flex-wrap items-center gap-2 rounded-md border px-2.5 py-1.5 text-xs ${l.file === openFile ? 'border-primary/50 bg-primary/5' : 'bg-muted/30'}`}>
+                  {l.imported ? <Check className="size-3.5 text-emerald-600" /> : <FileSpreadsheet className="size-3.5 text-muted-foreground" />}
+                  <button type="button" className="min-w-0 flex-1 truncate text-left font-medium hover:underline" onClick={() => openLined(l)}>
+                    {l.file.name}
+                  </button>
+                  <span className="text-muted-foreground">
+                    {l.kind ? TEMPLATES[l.kind].title : 'pick its import on the left'}
+                    {l.imported ? ' · imported' : l.file === openFile ? ' · open below' : ''}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </Card>
+        )}
         <Card className="space-y-3 p-5">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="min-w-0">
@@ -209,7 +313,12 @@ function SheetImport({ onPdf }: { onPdf: (files: File[]) => void }) {
                 const files = [...(e.target.files ?? [])];
                 // Invoices as PDFs (or photos) are read on their own tab, by the AI.
                 if (files.length && files.every(isPdfOrPhoto)) { e.target.value = ''; onPdf(files); return; }
-                void load(files.find((f) => !isPdfOrPhoto(f)));
+                const pdfs = files.filter(isPdfOrPhoto);
+                const sheets = files.filter((f) => !isPdfOrPhoto(f));
+                if (pdfs.length) onPdfLater(pdfs);
+                // One file: under the import chosen, or the one it fits if that cannot take it. More: lined up.
+                if (sheets.length > 1) void lineUp(sheets);
+                else void load(sheets[0], undefined, kind, true);
               }} />
             <Button size="sm" className="gap-1.5" onClick={() => input.current?.click()}>
               <Upload className="size-3.5" /> Choose an Excel, CSV, text, JSON or PDF file

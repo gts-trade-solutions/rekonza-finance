@@ -20,6 +20,7 @@ import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger,
 } from '@/components/ui/dialog';
 import { PageHeader } from '@/components/shared/page-header';
+import { ModuleMenu } from '@/components/shared/module-menu';
 import { DataTable, type Column } from '@/components/shared/data-table';
 import { Money } from '@/components/shared/money';
 import { AsyncPage } from '@/components/shared/async-state';
@@ -54,6 +55,9 @@ const SAVE_LABEL: Record<SaveMode, string> = { post: 'Post journal', optional: '
 const KIND_LABEL: Record<HeldJournalRow['kind'], string> = { optional: 'Optional', post_dated: 'Post-dated', approval: 'Awaiting approval' };
 const dmy = (d: string) => new Date(d).toLocaleDateString('en-IN');
 
+/** The entries reversed from here (the server's REVERSIBLE): a document's entry goes with its document. */
+const REVERSIBLE = new Set(['manual', 'opening', 'opening_balance', 'reclassification', 'recurring', 'doubtful_debts', 'tally_import', 'fx_revaluation']);
+
 export default function JournalsPage() {
   const canCreate = usePermission('accountant', 'create');
 
@@ -73,6 +77,9 @@ export default function JournalsPage() {
   const [reverseOn, setReverseOn] = useState('');
   const [rows, setRows] = useState<DraftRow[]>([emptyRow('r1'), emptyRow('r2')]);
   const [viewing, setViewing] = useState<JournalEntryRow | null>(null);
+  // Reverse: asked first, with the date the reversal is posted on.
+  const [reversing, setReversing] = useState<JournalEntryRow | null>(null);
+  const [reverseDate, setReverseDate] = useState(() => new Date().toISOString().slice(0, 10));
   const templates = useApi(() => api.get<{ templates: JournalTemplateRow[] }>('/api/journal-templates'), []);
   const [tplName, setTplName] = useState<string | null>(null);
   const [tplBusy, setTplBusy] = useState(false);
@@ -184,12 +191,13 @@ export default function JournalsPage() {
     held.refetch();
   };
 
-  const doReverse = async (r: JournalEntryRow) => {
-    const done = await reverse.run(r.id, `Manual reversal of JE #${r.entryNo}`);
+  const doReverse = async (r: JournalEntryRow, date: string) => {
+    const done = await reverse.run(r.id, `Manual reversal of JE #${r.entryNo}`, date);
     if (!done) {
       toast.error(reverse.error ?? 'Could not reverse that entry');
       return;
     }
+    setReversing(null);
     toast.success(`Reversal posted as #${done.entryNo}`, {
       description: 'The original entry stays in the books — nothing is ever deleted.',
     });
@@ -205,6 +213,7 @@ export default function JournalsPage() {
         <div className="flex items-center gap-2">
           <span>{r.memo}</span>
           {r.reversalOf && <Badge variant="outline" className="border-destructive/40 text-[9px]">Reversal</Badge>}
+          {r.reversedBy && <Badge variant="outline" className="text-[9px]" data-slot="reversed-by">Reversed by #{r.reversedBy}</Badge>}
           {r.sourceType === 'opening' && <Badge variant="secondary" className="text-[9px]">Opening</Badge>}
           {r.sourceType === 'reclassification' && <Badge variant="secondary" className="text-[9px]">Bulk update</Badge>}
         </div>
@@ -223,13 +232,14 @@ export default function JournalsPage() {
           <Button size="xs" variant="outline" onClick={(e) => { e.stopPropagation(); setViewing(r); }}>
             View
           </Button>
-          {canCreate && !r.reversalOf && (
+          {canCreate && !r.reversalOf && !r.reversedBy && REVERSIBLE.has(r.sourceType) && (
             <Button
               size="xs"
               variant="outline"
               className="gap-1"
               disabled={reverse.busy}
-              onClick={(e) => { e.stopPropagation(); void doReverse(r); }}
+              onClick={(e) => { e.stopPropagation(); setReverseDate(new Date().toISOString().slice(0, 10)); setReversing(r); }}
+              data-slot="reverse-journal"
             >
               <Undo2 className="size-3" /> Reverse
             </Button>
@@ -244,7 +254,7 @@ export default function JournalsPage() {
       <PageHeader
         title="Manual Journals"
         description="The raw primitive underneath every other screen. Nothing posts unless debits equal credits exactly."
-        actions={
+        actions={<>{
           canCreate && (
             <div className="flex gap-2">
             <Button size="sm" variant="outline" asChild className="gap-1.5"><Link href="/accountant/journal-templates"><LayoutTemplate className="size-4" /> Templates</Link></Button>
@@ -421,6 +431,7 @@ export default function JournalsPage() {
             </Dialog>
             </div>
           )
+        }<ModuleMenu slug="journals" onRefresh={() => void state.refetch()} /></>
         }
       />
 
@@ -456,6 +467,24 @@ export default function JournalsPage() {
           {viewing && <JournalEntryTable entry={viewing} />}
           {viewing && <Attachments targetType="journal" targetId={viewing.id} canEdit={canCreate} title="Supporting documents" />}
           {viewing && <TagsPanel entity="journal_entry" id={viewing.id} canEdit={canCreate} />}
+        </DialogContent>
+      </Dialog>
+      <Dialog open={!!reversing} onOpenChange={(o) => !o && setReversing(null)}>
+        <DialogContent data-slot="reverse-dialog">
+          <DialogHeader>
+            <DialogTitle>Reverse journal #{reversing?.entryNo}?</DialogTitle>
+            <DialogDescription>
+              A mirror entry is posted on the date below, and anything this journal settled is owed again. The original stays in the books;
+              nothing is deleted. A date in a locked period is refused.
+            </DialogDescription>
+          </DialogHeader>
+          <Field label="Reversal date">
+            <Input type="date" value={reverseDate} onChange={(e) => setReverseDate(e.target.value)} />
+          </Field>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setReversing(null)}>Cancel</Button>
+            <Button variant="destructive" disabled={reverse.busy || !reverseDate} onClick={() => reversing && void doReverse(reversing, reverseDate)}>Reverse</Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </>

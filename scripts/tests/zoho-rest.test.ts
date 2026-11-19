@@ -17,7 +17,7 @@ import { answerQuote, createPortalLink, openPortal, ownsInvoice, portalOverview,
 import { checkStock } from '../../lib/server/services/guards';
 import { stockPosition } from '../../lib/server/reports/stock';
 import { stockLedger } from '../../lib/server/reports/stock-movement';
-import { readTemplate } from '../../lib/print-template';
+import { layoutFor, readTemplate, templatesOf, TEMPLATE_GALLERY, TEMPLATE_GROUPS } from '../../lib/print-template';
 
 interface Book { trx: Trx; orgId: number; branchId: number; customer: number; vendor: number; bankId: number }
 
@@ -153,12 +153,28 @@ test('portal: a link opens one contact only, lapses when withdrawn; a customer a
   });
 });
 
-test('invoice template: a stored template is read safely; anything missing or wrong falls back', () => {
-  assert.deepEqual(readTemplate(null), { layout: 'classic', accent: '#0f172a', showLogo: true, showSignature: true, footer: null });
+test('PDF templates: a stored template is read safely; old layouts map to Zoho templates; anything wrong falls back', () => {
+  assert.deepEqual(readTemplate(null), { layout: 'standard', accent: null, showLogo: true, showSignature: true, footer: null, byDoc: {}, added: {} });
+  // The three layouts before Zoho's gallery, and the old default ink, which nobody chose.
   assert.deepEqual(readTemplate(JSON.stringify({ layout: 'modern', accent: '#1d4ed8', showLogo: false, footer: ' CIN U12345TN2020PTC000001 ' })),
-    { layout: 'modern', accent: '#1d4ed8', showLogo: false, showSignature: true, footer: 'CIN U12345TN2020PTC000001' });
-  assert.equal(readTemplate({ layout: 'fancy', accent: 'red' }).layout, 'classic');
-  assert.equal(readTemplate({ accent: 'red' }).accent, '#0f172a');
+    { layout: 'minimalist', accent: '#1d4ed8', showLogo: false, showSignature: true, footer: 'CIN U12345TN2020PTC000001', byDoc: {}, added: {} });
+  assert.equal(readTemplate({ layout: 'classic', accent: '#0f172a' }).layout, 'standard');
+  assert.equal(readTemplate({ layout: 'classic', accent: '#0f172a' }).accent, null);
+  assert.equal(readTemplate({ layout: 'compact' }).layout, 'compact');
+  assert.equal(readTemplate({ layout: 'fancy', accent: 'red' }).layout, 'standard');
+  assert.equal(readTemplate({ accent: 'red' }).accent, null);
+  // Each kind of document its own default, and its own list; nonsense is dropped.
+  const t = readTemplate({ layout: 'standard', byDoc: { invoice: 'spreadsheet', estimate: 'grand', nonsense: 'basic', bill: 'fancy' }, added: { invoice: ['lite', 'lite', 'fancy'] } });
+  assert.deepEqual(t.byDoc, { invoice: 'spreadsheet', estimate: 'grand' });
+  assert.deepEqual(t.added, { invoice: ['lite'] });
+  assert.equal(layoutFor(t, 'invoice'), 'spreadsheet');
+  assert.equal(layoutFor(t, 'challan'), 'standard');
+  // One invoice may print in a template of its own.
+  assert.equal(layoutFor(t, 'invoice', 'basic'), 'basic');
+  assert.equal(layoutFor(t, 'invoice', 'nonsense'), 'spreadsheet');
+  assert.deepEqual(templatesOf(t, 'invoice'), ['spreadsheet', 'lite']);
+  assert.equal(TEMPLATE_GALLERY.length, 12);
+  assert.deepEqual(TEMPLATE_GROUPS.map((g) => TEMPLATE_GALLERY.filter((x) => x.group === g).length), [4, 1, 3, 4]);
 });
 
 test.after(() => db.destroy());

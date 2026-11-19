@@ -12,7 +12,7 @@ import { Scale } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Money } from '@/components/shared/money';
-import { BasisSelect, downloadCsv, ReportShell, ReportTable, useReportRange, type ReportBasis } from '@/components/shared/report-shell';
+import { BasisSelect, BranchSelect, downloadCsv, ReportShell, ReportTable, useReportRange, type ReportBasis } from '@/components/shared/report-shell';
 import { AsyncPage, LoadingRows } from '@/components/shared/async-state';
 import {
   reports, type ScheduleIIIAgeing, type ScheduleIIIBalanceSheetReport, type ScheduleIIILine,
@@ -104,9 +104,10 @@ export default function ScheduleIIIPage() {
     if (new URLSearchParams(window.location.search).get('tab') === 'pl') setTab('pl');
   }, []);
   const [basis, setBasis] = useState<ReportBasis>('accrual');
-  const bs = useApi<ScheduleIIIBalanceSheetReport>(() => reports.scheduleIIIBalanceSheet(range.to, undefined, basis), [range.to, basis]);
+  const [branch, setBranch] = useState('');
+  const bs = useApi<ScheduleIIIBalanceSheetReport>(() => reports.scheduleIIIBalanceSheet(range.to, branch || undefined, basis), [range.to, basis, branch]);
   const pl = useApi<ScheduleIIIProfitAndLossReport>(
-    () => reports.scheduleIIIProfitAndLoss(range.from, range.to, undefined, basis), [range.from, range.to, basis],
+    () => reports.scheduleIIIProfitAndLoss(range.from, range.to, branch || undefined, basis), [range.from, range.to, basis, branch],
   );
 
   const exportCsv = () => {
@@ -141,7 +142,7 @@ export default function ScheduleIIIPage() {
       description="The balance sheet and profit and loss laid out as the Companies Act requires, with the previous period beside them."
       range={range}
       onRangeChange={setRange}
-      extraActions={<div className="w-32"><BasisSelect value={basis} onChange={setBasis} /></div>}
+      extraActions={<div className="flex gap-2"><div className="w-32"><BasisSelect value={basis} onChange={setBasis} /></div><div className="w-40"><BranchSelect value={branch} onChange={setBranch} /></div></div>}
       onExport={exportCsv}
     >
       <FormatSwitch value="schedule-iii" statement={tab === 'pl' ? 'pl' : 'bs'} base={tab === 'pl' ? '/reports/profit-and-loss' : '/reports/balance-sheet'} />

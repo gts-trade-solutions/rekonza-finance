@@ -9,6 +9,8 @@
 // The two sides differ only in wording and in what the numbers mean for you —
 // money you are owed against money you owe — so one component serves both.
 
+import { useMemo, useState } from 'react';
+import { Input } from '@/components/ui/input';
 import { DoubtfulDebtsCard } from '@/components/shared/doubtful-debts';
 import { Money } from '@/components/shared/money';
 import { downloadCsv, ReportShell, ReportTable, useReportRange } from '@/components/shared/report-shell';
@@ -45,7 +47,16 @@ const COPY = {
 export function AgeingReport({ side }: { side: 'ar' | 'ap' }) {
   const copy = COPY[side];
   const [range, setRange] = useReportRange();
-  const state = useApi<AgeingData>(() => reports.ageing(side, range.to), [side, range.to]);
+  const raw = useApi<AgeingData>(() => reports.ageing(side, range.to), [side, range.to]);
+  // Zoho's customer / vendor filter: the rows narrowed to the parties typed, the totals with them.
+  const [party, setParty] = useState('');
+  const state = useMemo(() => {
+    const q = party.trim().toLowerCase();
+    if (!raw.data || !q) return raw;
+    const rows = raw.data.rows.filter((r) => r.name.toLowerCase().includes(q));
+    const totals = Object.fromEntries(AGEING_BUCKETS.map((b) => [b, rows.reduce((t, r) => t + (r.buckets[b] ?? 0), 0)]));
+    return { ...raw, data: { ...raw.data, rows, totals, grandTotalPaise: rows.reduce((t, r) => t + r.totalPaise, 0) } as AgeingData };
+  }, [raw, party]);
 
   return (
     <ReportShell
@@ -54,6 +65,12 @@ export function AgeingReport({ side }: { side: 'ar' | 'ap' }) {
       range={range}
       onRangeChange={setRange}
       asOfOnly
+      extraActions={(
+        <label className="space-y-1">
+          <span className="block text-[11px] font-medium text-muted-foreground">{copy.party}</span>
+          <Input value={party} onChange={(e) => setParty(e.target.value)} placeholder={`All ${copy.party.toLowerCase()}s`} className="h-9 w-52" data-slot="ageing-party" />
+        </label>
+      )}
       onExport={() => {
         const d = state.data;
         if (!d) return;

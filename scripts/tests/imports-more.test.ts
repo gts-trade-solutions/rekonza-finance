@@ -117,4 +117,50 @@ test('expenses and payments: posted, settling the named invoice or bill; bad row
   });
 });
 
+test('payments as banks and Zoho write them: RTGS, "Bank Transfer", two-digit years, 1,200 Cr; a file imported twice is skipped; problems name the file line', async () => {
+  await withBook(async (trx, ctx) => {
+    const rows = [
+      { date: '15/09/26', customer: 'Sri Murugan Motors', amount: '1,200.00 Cr', mode: 'RTGS', account: 'HDFC Current', reference: 'UTR 77', __line: '7' },
+      { date: '16-Sep-26', customer: 'Sri Murugan Motors', amount: '800', mode: 'Bank Transfer', account: 'HDFC Current', __line: '9' },
+      { date: '17/09/2026', customer: 'Sri Murugan Motors', amount: '5', mode: 'barter', account: 'HDFC Current', __line: '12' },
+    ];
+    const first = await runImport(trx, ctx, 'payments-received', rows);
+    assert.equal(first.created, 2);
+    assert.deepEqual(first.errors.map((e) => e.row), [12], 'the line in the file, not the count of rows read');
+    const modes = await trx.selectFrom('payments').select(['mode', 'payment_date', 'amount']).where('org_id', '=', ctx.orgId).orderBy('id').execute();
+    assert.deepEqual(modes.map((m) => [m.mode, String(m.payment_date).slice(0, 10), Number(m.amount)]), [['rtgs', '2026-09-15', 1200], ['neft', '2026-09-16', 800]]);
+    // The same file again: skipped with "skip duplicates", refused by name otherwise.
+    const again = await runImport(trx, { ...ctx, onDuplicate: 'skip' }, 'payments-received', rows.slice(0, 2));
+    assert.equal(again.created, 0);
+    assert.equal(again.skipped, 2);
+    const strict = await runImport(trx, ctx, 'payments-received', rows.slice(0, 1));
+    assert.match(strict.errors[0].message, /already in your books/);
+  });
+});
+
+test('a supplier’s bill entered twice: refused by name; skipped on import; a voided one frees its number; look-alikes flagged', async () => {
+  const { findBillDuplicates, billKey } = await import('../../lib/server/services/bill-duplicates');
+  await withBook(async (trx, ctx) => {
+    await runImport(trx, ctx, 'bills', [{ bill_no: 'LA/77', date: '2026-09-04', vendor: 'Lakshmi Auto', ...line('5', '600') }]);
+    const vendorId = Number((await trx.selectFrom('contacts').select('id').where('org_id', '=', ctx.orgId).where('display_name', '=', 'Lakshmi Auto').executeTakeFirstOrThrow()).id);
+    // The same bill again: refused with the bill it repeats, or skipped.
+    const again = await runImport(trx, ctx, 'bills', [{ bill_no: 'LA/77', date: '2026-09-04', vendor: 'Lakshmi Auto', ...line('5', '600') }]);
+    assert.match(again.errors[0].message, /already in your books as BILL/);
+    const skipped = await runImport(trx, { ...ctx, onDuplicate: 'skip' }, 'bills', [{ bill_no: 'la/77', date: '2026-09-04', vendor: 'Lakshmi Auto', ...line('5', '600') }]);
+    assert.equal(skipped.skipped, 1, 'the number in another case is the same number');
+    // Look-alikes: written differently, or the same amount on the same day.
+    assert.equal(billKey('INV-001'), billKey('inv1'));
+    const bill = await trx.selectFrom('bills').select(['id', 'total']).where('org_id', '=', ctx.orgId).where('vendor_invoice_no', '=', 'LA/77').executeTakeFirstOrThrow();
+    const look = await findBillDuplicates(trx, ctx.orgId, { vendorId, vendorInvoiceNo: 'LA-077' });
+    assert.equal(look.exact, null);
+    assert.match(look.likely[0].why, /same bill number written as LA\/77/);
+    const sameDay = await findBillDuplicates(trx, ctx.orgId, { vendorId, vendorInvoiceNo: 'ZZ-1', totalPaise: Math.round(Number(bill.total) * 100), date: '2026-09-04' });
+    assert.match(sameDay.likely[0].why, /same amount on the same day/);
+    // Voided, the number is free for the corrected bill.
+    await trx.updateTable('bills').set({ status: 'void' }).where('id', '=', bill.id).execute();
+    const fresh = await runImport(trx, ctx, 'bills', [{ bill_no: 'LA/77', date: '2026-09-05', vendor: 'Lakshmi Auto', ...line('4', '600') }]);
+    assert.equal(fresh.created, 1, fresh.errors.map((e) => e.message).join('; '));
+  });
+});
+
 test.after(() => db.destroy());

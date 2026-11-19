@@ -37,7 +37,7 @@ import { explodeKits } from './kits';
 import { badRequest, conflict } from '../http';
 import { postEntry, type DraftLine } from '../ledger/posting';
 import { CODE, accountIds, requireAccount } from '../ledger/chart-of-accounts';
-import { dayBefore, stockPosition } from '../reports/stock';
+import { dayBefore, fifoLayers, fifoValue, stockPosition } from '../reports/stock';
 import { inventoryInLedger } from '../reports/statements';
 import { getPolicies } from './org-settings';
 import { indiaToday } from './held-journals';
@@ -57,17 +57,53 @@ async function trackedItems(ex: Executor, orgId: number, ids: (number | null)[])
   return new Map(rows.map((r) => [Number(r.id), toPaiseFromSql(r.purchase_price)]));
 }
 
-/** What these goods cost, at each item's cost on the day (its catalogue price when it has none yet). */
-async function costOf(ex: Executor, orgId: number, date: string, given: { itemId: number | null; qty: number }[]): Promise<Paise> {
+/**
+ * What these goods cost, at each item's cost on the day (its catalogue price
+ * when it has none yet).
+ *
+ * A sale of a FIFO item takes its oldest units, so it costs what the FIFO
+ * value of the stock loses when they go: the value before the sale less the
+ * value after, from the same purchase layers the Inventory Valuation report
+ * uses (reports/stock.ts). The ledger and the report then agree sale by sale,
+ * not only at the month-end true-up. `sale.counted` says whether the stock
+ * position on the day already counts this sale (an invoice that stands).
+ */
+async function costOf(
+  ex: Executor, orgId: number, date: string, given: { itemId: number | null; qty: number }[],
+  sale?: { counted: boolean },
+): Promise<Paise> {
   // A kit costs what its components cost.
   const lines = await explodeKits(ex, orgId, given);
   const tracked = await trackedItems(ex, orgId, lines.map((l) => l.itemId));
   if (!tracked.size) return 0;
   const pos = await stockPosition(ex, orgId, date, { includeArchived: true });
-  const unit = new Map(pos.lines.map((l) => [Number(l.itemId), l.unitCostPaise]));
+  const byId = new Map(pos.lines.map((l) => [Number(l.itemId), l]));
+  const qtyOf = new Map<number, number>();
+  for (const l of lines) if (l.itemId && tracked.has(l.itemId)) qtyOf.set(l.itemId, (qtyOf.get(l.itemId) ?? 0) + l.qty);
+
+  const fifoCost = new Map<number, number>();
+  const fifo = sale ? [...qtyOf.keys()].filter((id) => byId.get(id)?.valuation === 'fifo') : [];
+  if (fifo.length) {
+    const layers = await fifoLayers(ex, orgId, date);
+    const items = await ex.selectFrom('items').select(['id', 'opening_stock_rate', 'purchase_price']).where('org_id', '=', orgId).where('id', 'in', fifo).execute();
+    for (const id of fifo) {
+      const q = qtyOf.get(id)!;
+      const after = sale!.counted ? byId.get(id)!.qty : byId.get(id)!.qty - q;
+      // Selling more than is in stock: the layers cannot say, so the average below decides.
+      if (after < 0 || q <= 0) continue;
+      const it = items.find((x) => Number(x.id) === id);
+      const rate = it ? toPaiseFromSql(it.opening_stock_rate ?? it.purchase_price) : 0;
+      const stack = layers.get(id) ?? [];
+      fifoCost.set(id, fifoValue(stack, after + q, rate) - fifoValue(stack, after, rate));
+    }
+  }
+
   return lines.reduce((t, l) => {
     if (!l.itemId || !tracked.has(l.itemId)) return t;
-    const cost = unit.get(l.itemId) || tracked.get(l.itemId) || 0;
+    const whole = fifoCost.get(l.itemId);
+    // This line's share of the item's FIFO cost in the document.
+    if (whole !== undefined) return t + Math.round((whole * l.qty) / qtyOf.get(l.itemId)!);
+    const cost = byId.get(l.itemId)?.unitCostPaise || tracked.get(l.itemId) || 0;
     return t + Math.round(cost * l.qty);
   }, 0);
 }
@@ -76,7 +112,10 @@ async function costOf(ex: Executor, orgId: number, date: string, given: { itemId
 export async function saleCostLines(trx: Trx, orgId: number, date: string, invoiceId: number): Promise<DraftLine[]> {
   if (!(await perpetualOn(trx, orgId, date))) return [];
   const lines = await trx.selectFrom('invoice_lines').select(['item_id', 'qty']).where('invoice_id', '=', invoiceId).execute();
-  const cost = await costOf(trx, orgId, date, lines.map((l) => ({ itemId: l.item_id, qty: Number(l.qty) })));
+  // The stock position counts an invoice that stands; one still being approved is not in it yet.
+  const inv = await trx.selectFrom('invoices').select('status').where('id', '=', invoiceId).executeTakeFirst();
+  const counted = !!inv && inv.status !== 'draft' && inv.status !== 'void';
+  const cost = await costOf(trx, orgId, date, lines.map((l) => ({ itemId: l.item_id, qty: Number(l.qty) })), { counted });
   if (cost <= 0) return [];
   const acc = await accountIds(trx, orgId);
   return [

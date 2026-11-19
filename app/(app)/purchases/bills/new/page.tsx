@@ -1,6 +1,7 @@
 'use client';
 
 import { useRouter, useSearchParams } from 'next/navigation';
+import Link from 'next/link';
 import { Suspense, useEffect, useMemo, useState } from 'react';
 import { FileText, Loader2, Paperclip, Save, ScanText, ShieldAlert } from 'lucide-react';
 import { toast } from 'sonner';
@@ -183,6 +184,19 @@ function NewBillForm() {
     const qty = lines.reduce((t, l) => t + (l.qty || 0), 0);
     return { tax, tds, gross, payable: gross - tds.tdsPaise, qty };
   }, [lines, supplyType, isComposition, vendor, tdsOverride, isRcm, fyTaxable, rates.data, date]);
+
+  // Is this supplier's bill already in the books? Asked as the number, the total or the date change.
+  const [twins, setTwins] = useState<BillTwinsResult | null>(null);
+  const twinTotal = totals.payable > 0 ? totals.payable : null;
+  useEffect(() => {
+    const no = vendorInvoiceNo.trim();
+    if (!vendorId || !no) { setTwins(null); return; }
+    const timer = window.setTimeout(() => {
+      api.get<BillTwinsResult>('/api/bills/duplicates', { vendorId, number: no, date, ...(twinTotal ? { totalPaise: String(twinTotal) } : {}) })
+        .then(setTwins).catch(() => setTwins(null));
+    }, 450);
+    return () => window.clearTimeout(timer);
+  }, [vendorId, vendorInvoiceNo, date, twinTotal]);
 
   const readBill = async (file: File) => {
     setReading(true);
@@ -373,11 +387,15 @@ function NewBillForm() {
 
         <FormRowPair>
           <FormRow label="Bill#" required hint="As printed on the vendor's document">
-            <Input
-              value={vendorInvoiceNo}
-              onChange={(e) => setVendorInvoiceNo(e.target.value)}
-              placeholder="Their invoice number"
-            />
+            <div className="space-y-1.5">
+              <Input
+                value={vendorInvoiceNo}
+                onChange={(e) => setVendorInvoiceNo(e.target.value)}
+                placeholder="Their invoice number"
+                aria-invalid={!!twins?.exact}
+              />
+              <BillTwins twins={twins} />
+            </div>
           </FormRow>
           <FormRow label="Order Number">
             <Input
@@ -599,3 +617,29 @@ function NewBillForm() {
     </DocumentForm>
   );
 }
+
+interface BillTwin { id: string; internalNo: string; vendorInvoiceNo: string; vendorName: string; date: string; totalPaise: number; why: string }
+interface BillTwinsResult { exact: BillTwin | null; likely: BillTwin[] }
+
+/** The same supplier's bill already entered (refused on save), or one that looks like it (a second look). */
+function BillTwins({ twins }: { twins: BillTwinsResult | null }) {
+  if (!twins || (!twins.exact && !twins.likely.length)) return null;
+  const line = (t: BillTwin) => (
+    <li key={t.id}>
+      <Link href={`/purchases/bills/${t.id}`} target="_blank" className="font-medium underline">{t.internalNo}</Link>{' '}
+      ({t.vendorInvoiceNo}, {t.date}, ₹{(t.totalPaise / 100).toLocaleString('en-IN', { minimumFractionDigits: 2 })}): {t.why}
+    </li>
+  );
+  return twins.exact ? (
+    <div className="rounded-[4px] border border-[#e85b4f]/40 bg-[#fdecee] px-3 py-2 text-[12px] text-[#c0392b]" data-slot="bill-duplicate">
+      <p className="font-medium">This bill is already in your books. It cannot be entered twice.</p>
+      <ul className="mt-1 list-disc pl-4">{line(twins.exact)}</ul>
+    </div>
+  ) : (
+    <div className="rounded-[4px] border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-900" data-slot="bill-likely-duplicate">
+      <p className="font-medium">Possible duplicate. Check before saving:</p>
+      <ul className="mt-1 list-disc pl-4">{twins.likely.slice(0, 3).map(line)}</ul>
+    </div>
+  );
+}
+

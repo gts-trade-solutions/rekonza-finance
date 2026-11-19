@@ -6,7 +6,7 @@ import { toPaiseFromSql } from '@/lib/server/money-sql';
 import { logAudit, auditMeta } from '@/lib/server/audit';
 import {
   applyRetainer, convertToInvoice, createChallan, createCreditNote, createEstimate,
-  createRetainer, createSalesOrder, refundCreditNote, salesOrderFromEstimate, voidCreditNote,
+  createRetainer, createSalesOrder, refundCreditNote, applyCreditNote, salesOrderFromEstimate, voidCreditNote,
 } from '@/lib/server/services/sales-documents';
 import { challanFromSalesOrder, invoiceFromChallan, invoiceFromSalesOrder } from '@/lib/server/services/order-flow';
 import { raiseProforma, setOrderStage, STAGE_LABEL } from '@/lib/server/services/order-stages';
@@ -73,7 +73,7 @@ export const GET = route(
       q.kind === 'estimate' ? sql`, d.expiry_date AS expiry, d.subtotal, d.converted_to_type, d.converted_to_id, NULL AS applied`
       : q.kind === 'sales-order' ? sql`, d.expected_ship_date AS expiry, d.subtotal, NULL AS converted_to_type, NULL AS converted_to_id, d.invoiced_amount AS applied`
       : q.kind === 'challan' ? sql`, NULL AS expiry, d.total AS subtotal, d.challan_type AS converted_to_type, NULL AS converted_to_id, NULL AS applied`
-      : q.kind === 'credit-note' ? sql`, NULL AS expiry, d.subtotal, d.reason AS converted_to_type, d.against_invoice_id AS converted_to_id, d.applied_amount AS applied`
+      : q.kind === 'credit-note' ? sql`, NULL AS expiry, d.subtotal, d.reason AS converted_to_type, d.against_invoice_id AS converted_to_id, d.applied_amount AS applied, (SELECT i.number FROM invoices i WHERE i.id = d.against_invoice_id) AS linked_number`
       : sql`, NULL AS expiry, d.amount AS subtotal, d.description AS converted_to_type, NULL AS converted_to_id, d.applied_amount AS applied`;
 
     const totalCol = q.kind === 'retainer' ? sql`d.amount` : sql`d.total`;
@@ -87,7 +87,7 @@ export const GET = route(
       id: number; number: string; dt: string; status: string; customer_id: number;
       customer_name: string; total: string; subtotal: string; expiry: string | null;
       converted_to_type: string | null; converted_to_id: number | null;
-      applied: string | null; paid: string | null;
+      applied: string | null; paid: string | null; linked_number?: string | null;
     }>`
       SELECT d.id, d.number, ${dateCol} AS dt, d.status, d.customer_id,
              c.display_name AS customer_name, ${totalCol} AS total, ${paidCol} AS paid ${extra}
@@ -127,6 +127,8 @@ export const GET = route(
         // date, a reason, a description.
         detail: r.converted_to_type,
         linkedId: r.converted_to_id === null ? null : asId(r.converted_to_id),
+        // A credit note's invoice by its number, as the screen shows it.
+        linkedNumber: r.linked_number ?? null,
         expiry: r.expiry ? String(r.expiry).slice(0, 10) : null,
         ...(links ? links.get(r.id) ?? {} : {}),
       })),
@@ -338,6 +340,13 @@ const ActionInput = z.discriminatedUnion('action', [
     id: z.union([z.string(), z.number()]),
     reason: z.string().nullish(),
   }),
+  // Zoho's "Apply to Invoices": what is left on a credit note, set against open invoices.
+  z.object({
+    action: z.literal('apply-credit-note'),
+    id: z.union([z.string(), z.number()]),
+    date: DATE,
+    allocations: z.array(z.object({ invoiceId: z.union([z.string(), z.number()]).transform(Number), amountPaise: z.number().int().min(0) })).min(1).max(100),
+  }),
   z.object({
     action: z.literal('set-status'),
     kind: z.enum(KINDS),
@@ -441,6 +450,19 @@ export const PATCH = route(
           }),
         );
         return { refundedPaise: r.refundedPaise, journalEntryId: asId(r.journalEntryId) };
+      }
+
+      case 'apply-credit-note': {
+        const r = await transaction(async (trx) => {
+          const out = await applyCreditNote(trx, orgId, user.userId, id, { date: input.date, allocations: input.allocations });
+          await logAudit({
+            trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'update', targetType: 'credit-note', targetId: id,
+            detail: `Applied ₹${(out.appliedPaise / 100).toLocaleString('en-IN', { minimumFractionDigits: 2 })} to ${input.allocations.filter((a) => a.amountPaise > 0).length} invoice(s)`,
+            ...auditMeta(req),
+          });
+          return out;
+        });
+        return { appliedPaise: r.appliedPaise, status: r.status };
       }
 
       case 'void-credit-note': {

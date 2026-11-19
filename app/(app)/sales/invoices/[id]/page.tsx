@@ -11,11 +11,10 @@ import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { useState } from 'react';
 import {
-  ArrowLeft, Ban, Copy, FileText, Loader2, MoreHorizontal, Printer, Receipt, Send,
+  Ban, ChevronDown, Copy, FileText, Loader2, MoreHorizontal, Printer, Receipt, Send, Sparkles, Wallet,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -27,8 +26,6 @@ import {
 } from '@/components/ui/dialog';
 import { PageHeader } from '@/components/shared/page-header';
 import { Money } from '@/components/shared/money';
-import { InvoiceStatus } from '@/components/shared/invoice-status';
-import { EInvoiceMark } from '@/components/shared/einvoice-mark';
 import { ReportTable } from '@/components/shared/report-shell';
 import { AsyncPage } from '@/components/shared/async-state';
 import { Attachments } from '@/components/shared/attachments';
@@ -43,9 +40,12 @@ import { usePermission } from '@/lib/store/hooks';
 import { invoices as invoiceApi, type InvoiceDetail } from '@/lib/api/client';
 import { useApi, useApiAction } from '@/lib/api/use-api';
 import { formatINR } from '@/lib/money';
-import { stateTaxLabel } from '@/lib/tax/gst';
 import { VoidedNote } from '@/components/shared/voided-note';
 import { SendInvoice } from '@/components/sales/send-invoice';
+import { InvoiceDocument, invoiceModel } from '@/components/print/invoice-print';
+import { ribbonFor } from '@/components/print/zoho-sheet';
+import { TemplatePreview } from '@/components/settings/template-gallery';
+import { DEFAULT_TEMPLATE, layoutFor, templateInfo, templatesOf, type TemplateKey } from '@/lib/print-template';
 
 const d = (s: string) =>
   new Date(s).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
@@ -84,15 +84,21 @@ export default function InvoiceDetailPage() {
               description={`${inv.debitNote ? `Debit note${inv.debitNote.against ? ` against ${inv.debitNote.against.number}` : ''} · ` : inv.paidAtSale ? 'Sales receipt · paid at the time of sale · ' : ''}${inv.customer.name} · raised ${d(inv.date)}, due ${d(inv.dueDate)}`}
               actions={
                 <>
-                  <Button variant="outline" size="sm" asChild>
-                    <Link href="/sales/invoices"><ArrowLeft className="mr-1.5 size-3.5" /> Invoices</Link>
-                  </Button>
-                  <Button variant="outline" size="sm" asChild className="gap-1.5">
-                    <Link href={`/sales/invoices/${inv.id}/print`} data-slot="print-link">
-                      <Printer className="size-3.5" /> Print
-                    </Link>
-                  </Button>
                   {inv.status !== 'draft' && inv.status !== 'void' && <SendInvoice inv={inv} onSent={() => void state.refetch()} />}
+                  <DropdownMenu>
+                    <DropdownMenuTrigger className="inline-flex h-8 items-center gap-1.5 rounded-[3px] border px-3 text-[13px] transition-colors hover:bg-accent" data-slot="pdf-print">
+                      <Printer className="size-3.5" /> PDF/Print <ChevronDown className="size-3" />
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start">
+                      <DropdownMenuItem onClick={() => router.push(`/sales/invoices/${inv.id}/print?print=1`)}>PDF</DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => router.push(`/sales/invoices/${inv.id}/print?print=1`)} data-slot="print-link">Print</DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                  {canCreate && inv.status !== 'draft' && inv.status !== 'void' && inv.balancePaise > 0 && (
+                    <Button variant="outline" size="sm" asChild className="gap-1.5">
+                      <Link href={`/sales/payments/new?customer=${inv.customer.id}&invoice=${inv.id}`} data-slot="record-payment"><Wallet className="size-3.5" /> Record Payment</Link>
+                    </Button>
+                  )}
                   {canCreate && !inv.debitNote && (
                     <Button variant="outline" size="sm" asChild className="gap-1.5">
                       <Link href={`/sales/invoices/new?clone=${inv.id}`} data-slot="clone-invoice"><Copy className="size-3.5" /> Clone</Link>
@@ -156,26 +162,12 @@ export default function InvoiceDetailPage() {
               }
             />
 
-            <div className="flex flex-wrap items-center gap-3">
-              <InvoiceStatus status={inv.status} dueDate={inv.dueDate} balancePaise={inv.balancePaise} />
-              <EInvoiceMark einvoice={{ status: inv.einvoice.status as never, irn: inv.einvoice.irn ?? undefined }} />
-              <Badge variant="outline" className="text-[10px] uppercase">
-                {inv.supplyType === 'intra' ? `CGST + ${stateTaxLabel(inv.placeOfSupply)}` : inv.supplyType === 'inter' ? 'IGST'
-                  : inv.supplyType === 'export_lut' ? 'Export · IGST nil under LUT' : inv.supplyType === 'export_with_tax' ? 'Export · IGST paid'
-                  : inv.supplyType.replace(/_/g, ' ')}
-              </Badge>
-              <Badge variant="secondary" className="text-[10px] capitalize">{inv.supplyKind}</Badge>
-              {inv.foreign && (
-                <Badge variant="outline" className="text-[10px]">
-                  {new Intl.NumberFormat('en-IN', { style: 'currency', currency: inv.foreign.currency }).format(inv.foreign.totalPaise / 100)} at ₹{inv.foreign.rate}
-                </Badge>
-              )}
-              {inv.balancePaise > 0 && (
-                <span className="text-sm text-muted-foreground">
-                  <Money value={inv.balancePaise} className="font-medium text-foreground" /> outstanding
-                </span>
-              )}
-            </div>
+            <WhatsNext inv={inv} canCreate={canCreate} canEdit={canEdit} onMarkSent={async () => {
+              if (await send.run(inv.id)) {
+                toast.success(`${inv.number} marked sent`);
+                await state.refetch();
+              } else if (send.error) toast.error(send.error);
+            }} />
 
             <VoidedNote voided={inv.voided} what="invoice" />
 
@@ -186,146 +178,23 @@ export default function InvoiceDetailPage() {
               approval={inv.approval} onChanged={() => void state.refetch()}
             />
 
-            <Tabs defaultValue="document">
+            {inv.payments.length > 0 && <PaymentsReceived inv={inv} />}
+
+            <div className="rounded-[4px] bg-[#f6f7f9] px-2 py-6 dark:bg-muted/30 sm:px-8" data-slot="invoice-preview">
+              <InvoiceDocument inv={inv} ribbon={ribbonFor(inv.status, inv.status !== 'paid' && inv.status !== 'void' && inv.status !== 'draft' && inv.balancePaise > 0 && inv.dueDate < new Date().toISOString().slice(0, 10))} />
+              <TemplateLine inv={inv} canEdit={canEdit} onChanged={() => void state.refetch()} />
+            </div>
+
+            <CustomFieldsPanel entity="invoice" id={inv.id} canEdit={canEdit} />
+            <TagsPanel entity="invoice" id={inv.id} canEdit={canEdit} />
+            <Attachments targetType="invoice" targetId={inv.id} canEdit={canEdit} title="Signed copies, proof of delivery and other files" />
+
+            <Tabs defaultValue="journal">
               <TabsList>
-                <TabsTrigger value="document">Document</TabsTrigger>
                 <TabsTrigger value="journal">Journal</TabsTrigger>
                 <TabsTrigger value="payments">Payments ({inv.payments.length})</TabsTrigger>
-                <TabsTrigger value="activity">Comments &amp; history</TabsTrigger>
+                <TabsTrigger value="activity">Comments &amp; History</TabsTrigger>
               </TabsList>
-
-              {/* ── The invoice itself ─────────────────────────────────── */}
-              <TabsContent value="document" className="mt-4 space-y-4">
-                <Card className="p-5">
-                  <div className="grid gap-6 sm:grid-cols-2">
-                    <div>
-                      <p className="micro-label">Billed to</p>
-                      <p className="mt-1 font-medium">{inv.customer.name}</p>
-                      {inv.customer.address && (
-                        <p className="mt-0.5 text-sm text-muted-foreground">{inv.customer.address}</p>
-                      )}
-                      {inv.customer.gstin && (
-                        <p className="mt-1 font-mono text-xs text-muted-foreground">GSTIN {inv.customer.gstin}</p>
-                      )}
-                    </div>
-                    <div className="sm:text-right">
-                      <p className="micro-label">Supplied from</p>
-                      <p className="mt-1 font-medium">{inv.branch.name}</p>
-                      {inv.branch.gstin && (
-                        <p className="mt-1 font-mono text-xs text-muted-foreground">GSTIN {inv.branch.gstin}</p>
-                      )}
-                      <p className="mt-1 text-xs text-muted-foreground">
-                        Place of supply: {inv.placeOfSupply}
-                      </p>
-                    </div>
-                  </div>
-                  {inv.subject && <p className="mt-4 border-t pt-4 text-sm">{inv.subject}</p>}
-                </Card>
-
-                <Card className="overflow-hidden p-0">
-                  <ReportTable>
-                    <thead>
-                      <tr className="border-b bg-muted/50 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
-                        <th className="px-4 py-2.5 text-left">Item</th>
-                        <th className="px-4 py-2.5 text-left">HSN/SAC</th>
-                        <th className="px-4 py-2.5 text-right">Qty</th>
-                        <th className="px-4 py-2.5 text-right">Rate</th>
-                        <th className="px-4 py-2.5 text-right">Taxable</th>
-                        <th className="px-4 py-2.5 text-right">GST</th>
-                        <th className="px-4 py-2.5 text-right">Amount</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {inv.lines.map((l) => (
-                        <tr key={l.id} className="border-b last:border-0">
-                          <td className="px-4 py-2.5">{l.description ?? '—'}</td>
-                          <td className="px-4 py-2.5 font-mono text-xs text-muted-foreground">{l.hsnSac ?? '—'}</td>
-                          <td className="px-4 py-2.5 text-right tabular">{l.qty} {l.uqc}</td>
-                          <td className="px-4 py-2.5 text-right"><Money value={l.ratePaise} /></td>
-                          <td className="px-4 py-2.5 text-right"><Money value={l.taxablePaise} /></td>
-                          <td className="px-4 py-2.5 text-right">
-                            {/* A bill of supply charges no GST, so it shows no rate (as it prints). */}
-                            {inv.supplyType === 'nil_or_exempt' || inv.supplyType === 'export_lut' ? (
-                              <span className="text-xs text-muted-foreground" data-slot="line-gst-nil">Nil</span>
-                            ) : (
-                              <>
-                                <span className="text-xs text-muted-foreground">{l.gstRatePct}%</span>{' '}
-                                <Money value={l.cgstPaise + l.sgstPaise + l.igstPaise} />
-                              </>
-                            )}
-                          </td>
-                          <td className="px-4 py-2.5 text-right font-medium"><Money value={l.totalPaise} /></td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </ReportTable>
-                </Card>
-
-                <div className="grid gap-4 lg:grid-cols-2">
-                  <Card className="p-5">
-                    {inv.notes && (
-                      <>
-                        <p className="micro-label">Notes</p>
-                        <p className="mt-1 text-sm text-muted-foreground">{inv.notes}</p>
-                      </>
-                    )}
-                    {inv.terms && (
-                      <>
-                        <p className="micro-label mt-4">Terms</p>
-                        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{inv.terms}</p>
-                      </>
-                    )}
-                  </Card>
-
-                  <Card className="p-5">
-                    <dl className="space-y-2 text-sm">
-                      {[
-                        ['Taxable value', inv.subtotalPaise],
-                        ...(inv.tax.cgstPaise ? [['CGST', inv.tax.cgstPaise] as const] : []),
-                        ...(inv.tax.sgstPaise ? [[stateTaxLabel(inv.placeOfSupply), inv.tax.sgstPaise] as const] : []),
-                        ...(inv.tax.igstPaise ? [['IGST', inv.tax.igstPaise] as const] : []),
-                        ...(inv.shippingChargePaise ? [['Shipping', inv.shippingChargePaise] as const] : []),
-                        ...(inv.tcsPaise ? [['TCS', inv.tcsPaise] as const] : []),
-                        ...(inv.adjustmentPaise ? [[inv.adjustmentLabel ?? 'Adjustment', inv.adjustmentPaise] as const] : []),
-                        ...(inv.roundOffPaise ? [['Round off', inv.roundOffPaise] as const] : []),
-                      ].map(([label, value]) => (
-                        <div key={String(label)} className="flex justify-between gap-4">
-                          <dt className="text-muted-foreground">{label}</dt>
-                          <dd><Money value={value as number} /></dd>
-                        </div>
-                      ))}
-                      {inv.supplyType === 'export_lut' && (
-                        <div className="flex justify-between gap-4" data-slot="igst-nil-lut">
-                          <dt className="text-muted-foreground">IGST</dt>
-                          <dd className="text-right text-xs font-medium">Nil — under LUT{inv.exportInfo?.lutArn ? ` ${inv.exportInfo.lutArn}` : ''}</dd>
-                        </div>
-                      )}
-                      <div className="flex justify-between gap-4 border-t pt-2 text-base font-semibold">
-                        <dt>Total</dt>
-                        <dd><Money value={inv.totalPaise} /></dd>
-                      </div>
-                      {inv.amountPaidPaise > 0 && (
-                        <>
-                          <div className="flex justify-between gap-4">
-                            <dt className="text-muted-foreground">Paid</dt>
-                            <dd className="text-emerald-600 dark:text-emerald-400">
-                              <Money value={inv.amountPaidPaise} />
-                            </dd>
-                          </div>
-                          <div className="flex justify-between gap-4 font-medium">
-                            <dt>Balance due</dt>
-                            <dd><Money value={inv.balancePaise} /></dd>
-                          </div>
-                        </>
-                      )}
-                    </dl>
-                  </Card>
-                </div>
-
-                <CustomFieldsPanel entity="invoice" id={inv.id} canEdit={canEdit} />
-                <TagsPanel entity="invoice" id={inv.id} canEdit={canEdit} />
-                <Attachments targetType="invoice" targetId={inv.id} canEdit={canEdit} title="Signed copies, proof of delivery and other files" />
-              </TabsContent>
 
               <TabsContent value="activity" className="mt-4">
                 <ActivityPanel targetType="invoice" targetId={inv.id} />
@@ -463,3 +332,108 @@ export default function InvoiceDetailPage() {
     </AsyncPage>
   );
 }
+
+/** Zoho's "WHAT'S NEXT?" line: what to do with the invoice now. */
+function WhatsNext({ inv, canCreate, canEdit, onMarkSent }: {
+  inv: InvoiceDetail; canCreate: boolean; canEdit: boolean; onMarkSent: () => void;
+}) {
+  if (inv.status === 'void' || inv.balancePaise <= 0) return null;
+  const draft = inv.status === 'draft';
+  const partly = !draft && inv.amountPaidPaise > 0;
+  const text = draft
+    ? 'Send this Invoice to your customer or mark it as Sent.'
+    : partly
+      ? 'Invoice has been partially paid. Record payment for it as soon as you receive the full payment.'
+      : 'Invoice has been sent. Record payment for it as soon as you receive payment.';
+  return (
+    <Card className="flex flex-wrap items-center gap-3 px-5 py-3.5 text-[13px]" data-slot="whats-next">
+      <Sparkles className="size-4 text-primary" />
+      <span className="font-semibold uppercase">What&apos;s next?</span>
+      <span className="text-muted-foreground">{text}</span>
+      <span className="ml-auto flex gap-2">
+        {draft && canEdit && <Button size="sm" variant="outline" onClick={onMarkSent}>Mark As Sent</Button>}
+        {!draft && canCreate && (
+          <Button size="sm" asChild><Link href={`/sales/payments/new?customer=${inv.customer.id}&invoice=${inv.id}`}>Record Payment</Link></Button>
+        )}
+      </span>
+    </Card>
+  );
+}
+
+/** "Payments Received (n)", folded above the invoice as in Zoho. */
+function PaymentsReceived({ inv }: { inv: InvoiceDetail }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Card className="p-0" data-slot="payments-received">
+      <button type="button" onClick={() => setOpen(!open)} className="flex w-full items-center gap-2 px-5 py-3 text-left text-[13px] font-medium">
+        <ChevronDown className={`size-4 transition-transform ${open ? '' : '-rotate-90'}`} /> Payments Received <span className="rounded-full bg-muted px-1.5 text-[11px]">{inv.payments.length}</span>
+      </button>
+      {open && (
+        <div className="divide-y border-t text-[13px]">
+          {inv.payments.map((p) => (
+            <div key={p.id} className="flex items-center gap-4 px-5 py-2.5">
+              <span className="w-28 text-muted-foreground">{d(p.date)}</span>
+              <Link href={`/sales/payments/${p.id}`} className="text-link hover:underline">{p.number}</Link>
+              <span className="uppercase text-muted-foreground">{p.mode}</span>
+              <Money value={p.amountPaise} className="ml-auto font-medium" />
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+/** "PDF Template : 'Standard' Change" — the template this invoice prints in. */
+function TemplateLine({ inv, canEdit, onChanged }: { inv: InvoiceDetail; canEdit: boolean; onChanged: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const t = inv.seller.template ?? DEFAULT_TEMPLATE;
+  const current = layoutFor(t, 'invoice', inv.printTemplate);
+  const byDefault = layoutFor(t, 'invoice');
+  const choices = [...new Set([...templatesOf(t, 'invoice'), current])];
+  const model = invoiceModel(inv, null);
+  const choose = async (key: TemplateKey) => {
+    setBusy(true);
+    try {
+      await invoiceApi.setTemplate(inv.id, key === byDefault ? null : key);
+      toast.success(`${inv.number} prints in ${templateInfo(key).name}`);
+      setOpen(false);
+      onChanged();
+    } catch (e) {
+      toast.error('Not changed', { description: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <>
+      <p className="mx-auto mt-3 max-w-[210mm] text-right text-[13px]" data-slot="pdf-template-line">
+        PDF Template : &apos;{templateInfo(current).name}&apos;{' '}
+        {canEdit && <button type="button" className="text-link hover:underline" onClick={() => setOpen(true)} data-slot="pdf-template-change">Change</button>}
+      </p>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="max-w-4xl sm:max-w-4xl">
+          <DialogHeader>
+            <DialogTitle>Choose a template for {inv.number}</DialogTitle>
+            <DialogDescription>
+              Only this invoice changes. The template for all invoices, and the rest of Zoho&apos;s twelve, are in{' '}
+              <Link href="/settings/templates?doc=invoice" className="text-link hover:underline">Settings → PDF Templates</Link>.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex max-h-[65vh] flex-wrap gap-5 overflow-y-auto">
+            {choices.map((key) => (
+              <button key={key} type="button" disabled={busy} onClick={() => void choose(key)}
+                className={`w-[200px] border p-2 text-left transition-shadow hover:shadow-md ${key === current ? 'border-primary ring-2 ring-primary/30' : ''}`}
+                data-slot={`choose-${key}`}>
+                <TemplatePreview model={model} template={t} layout={key} width={182} />
+                <p className="mt-1.5 text-[13px]">{templateInfo(key).name}{key === byDefault && <span className="text-muted-foreground"> · default</span>}</p>
+              </button>
+            ))}
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+

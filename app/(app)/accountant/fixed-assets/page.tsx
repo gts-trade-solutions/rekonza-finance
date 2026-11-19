@@ -25,7 +25,8 @@ import { Money } from '@/components/shared/money';
 import { StatTile } from '@/components/shared/stat-tile';
 import { AsyncPage, LoadingRows } from '@/components/shared/async-state';
 import { Field, MoneyInput } from '@/components/shared/form-bits';
-import { ReportTable } from '@/components/shared/report-shell';
+import { downloadCsv, ReportTable } from '@/components/shared/report-shell';
+import { api } from '@/lib/api/client';
 import { AddAssetDialog, AssetDialog, ClassDialog } from '@/components/assets/asset-dialogs';
 import {
   fixedAssets, type AssetClassRow, type AssetRegisterRow, type DepreciationRunRow, type ItBlockRow,
@@ -65,6 +66,7 @@ export default function FixedAssetsPage() {
             <TabsList>
               <TabsTrigger value="register">Register ({d.assets.filter((a) => a.status !== 'disposed').length})</TabsTrigger>
               <TabsTrigger value="depreciation">Depreciation</TabsTrigger>
+              <TabsTrigger value="disposals">Disposals</TabsTrigger>
               <TabsTrigger value="it">Income-tax book</TabsTrigger>
               <TabsTrigger value="classes">Classes</TabsTrigger>
             </TabsList>
@@ -73,6 +75,9 @@ export default function FixedAssetsPage() {
             </TabsContent>
             <TabsContent value="depreciation" className="mt-4">
               <Depreciation canEdit={canEdit} onChanged={() => void state.refetch()} />
+            </TabsContent>
+            <TabsContent value="disposals" className="mt-4">
+              <Disposals onOpen={setOpenId} />
             </TabsContent>
             <TabsContent value="it" className="mt-4">
               <ItBook canEdit={canEdit} classes={d.classes} />
@@ -423,3 +428,68 @@ function Classes({ classes, canEdit, onChanged }: { classes: AssetClassRow[]; ca
     </div>
   );
 }
+
+interface DisposalRow {
+  id: string; tagNo: string; name: string; className: string; acquiredOn: string; disposedOn: string; kind: 'sold' | 'scrapped' | null;
+  costPaise: number; accumulatedPaise: number; writtenDownPaise: number; proceedsPaise: number; gainPaise: number; invoiceId: string | null;
+}
+
+/** The assets that left in a period: cost, depreciation to the day they left, written-down value, proceeds, gain or loss. */
+function Disposals({ onOpen }: { onOpen: (id: string) => void }) {
+  const fy = (() => { const d = new Date(); return d.getMonth() < 3 ? d.getFullYear() - 1 : d.getFullYear(); })();
+  const [from, setFrom] = useState(`${fy}-04-01`);
+  const [to, setTo] = useState(new Date().toISOString().slice(0, 10));
+  const state = useApi<{ rows: DisposalRow[] }>(() => api.get('/api/fixed-assets', { view: 'disposals', from, to }), [from, to]);
+  const rows = state.data?.rows ?? [];
+  const sum = (k: keyof DisposalRow) => rows.reduce((t, r) => t + Number(r[k]), 0);
+  const r2 = (p: number) => (p / 100).toFixed(2);
+  return (
+    <Card className="overflow-hidden p-0" data-slot="asset-disposals">
+      <div className="flex flex-wrap items-end gap-3 border-b px-4 py-3">
+        <Field label="From"><Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="h-8 w-40" /></Field>
+        <Field label="To"><Input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="h-8 w-40" /></Field>
+        <Button size="sm" variant="outline" className="ml-auto" disabled={!rows.length} onClick={() => downloadCsv(`asset-disposals-${from}-${to}.csv`, [
+          ['Tag', 'Asset', 'Class', 'Acquired', 'Disposed', 'How', 'Cost', 'Accumulated depreciation', 'Written-down value', 'Proceeds', 'Gain (loss)'],
+          ...rows.map((r) => [r.tagNo, r.name, r.className, r.acquiredOn, r.disposedOn, r.kind ?? '', r2(r.costPaise), r2(r.accumulatedPaise), r2(r.writtenDownPaise), r2(r.proceedsPaise), r2(r.gainPaise)]),
+          ['', 'Total', '', '', '', '', r2(sum('costPaise')), r2(sum('accumulatedPaise')), r2(sum('writtenDownPaise')), r2(sum('proceedsPaise')), r2(sum('gainPaise'))],
+        ])}>Export</Button>
+      </div>
+      {rows.length === 0 ? (
+        <p className="p-6 text-sm text-muted-foreground">{state.loading ? 'Loading…' : 'No asset was sold or scrapped in this period. Dispose of one from its record (Verify & dispose).'}</p>
+      ) : (
+        <ReportTable>
+          <thead>
+            <tr className="border-b bg-muted/50 text-[11px] uppercase tracking-wide text-muted-foreground">
+              <th className="px-3 py-2 text-left">Asset</th><th className="px-3 py-2 text-left">Disposed</th><th className="px-3 py-2 text-left">How</th>
+              <th className="px-3 py-2 text-right">Cost</th><th className="px-3 py-2 text-right">Acc. depreciation</th><th className="px-3 py-2 text-right">WDV</th>
+              <th className="px-3 py-2 text-right">Proceeds</th><th className="px-3 py-2 text-right">Gain (loss)</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.id} className="cursor-pointer border-b hover:bg-row-hover" onClick={() => onOpen(r.id)}>
+                <td className="px-3 py-2"><span className="font-mono text-xs text-muted-foreground">{r.tagNo}</span> {r.name}<span className="block text-xs text-muted-foreground">{r.className}</span></td>
+                <td className="px-3 py-2">{r.disposedOn}</td>
+                <td className="px-3 py-2 capitalize">{r.kind ?? '—'}</td>
+                <td className="px-3 py-2 text-right"><Money value={r.costPaise} /></td>
+                <td className="px-3 py-2 text-right"><Money value={r.accumulatedPaise} /></td>
+                <td className="px-3 py-2 text-right"><Money value={r.writtenDownPaise} /></td>
+                <td className="px-3 py-2 text-right"><Money value={r.proceedsPaise} /></td>
+                <td className="px-3 py-2 text-right"><Money value={r.gainPaise} colored /></td>
+              </tr>
+            ))}
+            <tr className="border-t-2 bg-muted/40 font-semibold">
+              <td className="px-3 py-2" colSpan={3}>Total</td>
+              <td className="px-3 py-2 text-right"><Money value={sum('costPaise')} /></td>
+              <td className="px-3 py-2 text-right"><Money value={sum('accumulatedPaise')} /></td>
+              <td className="px-3 py-2 text-right"><Money value={sum('writtenDownPaise')} /></td>
+              <td className="px-3 py-2 text-right"><Money value={sum('proceedsPaise')} /></td>
+              <td className="px-3 py-2 text-right"><Money value={sum('gainPaise')} colored /></td>
+            </tr>
+          </tbody>
+        </ReportTable>
+      )}
+    </Card>
+  );
+}
+

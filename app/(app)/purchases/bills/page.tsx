@@ -15,6 +15,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { PaymentSummary } from '@/components/shared/payment-summary';
 import { PageHeader } from '@/components/shared/page-header';
+import { ModuleMenu } from '@/components/shared/module-menu';
 import { DataTable, type Column } from '@/components/shared/data-table';
 import { BulkPrintButton } from '@/components/shared/document-menu';
 import { SavedViews } from '@/components/shared/saved-views';
@@ -149,7 +150,7 @@ export default function BillsPage() {
       <PageHeader
         title="Bills"
         description="Supplier invoices. Input credit, reverse charge and TDS are worked out from the vendor and the lines."
-        actions={
+        actions={<>{
           <>
             <Refreshing active={state.refreshing} />
             <SavedViews list="bills" current={{ status: filter, range }} onApply={(v) => { setFilter(String(v.status ?? 'all')); if (v.range) setRange(v.range as RangeValue); }} />
@@ -159,6 +160,7 @@ export default function BillsPage() {
               </Button>
             )}
           </>
+        }<ModuleMenu slug="bills" onRefresh={() => void state.refetch()} /></>
         }
       />
 

@@ -106,7 +106,7 @@ export function ImportContactsDialog({ side, open, onOpenChange, onDone }: { sid
               <label className="flex cursor-pointer items-center gap-2"><input type="radio" name="import-what" className="size-3.5 accent-primary" checked={what === 'persons'} onChange={() => setWhat('persons')} data-slot="import-persons-choice" /> {noun}&apos;s Contact Persons</label>
             </div>
             <DialogFooter>
-              <Button data-slot="import-continue" onClick={() => (what === 'contacts' ? router.push('/settings/import') : setStep('persons'))}>Continue</Button>
+              <Button data-slot="import-continue" onClick={() => (what === 'contacts' ? router.push(side === 'customer' ? '/import/customers' : '/import/vendors') : setStep('persons'))}>Continue</Button>
               <Button variant="outline" onClick={() => close(false)}>Cancel</Button>
             </DialogFooter>
           </>

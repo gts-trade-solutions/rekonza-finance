@@ -1,11 +1,12 @@
 import { z } from 'zod';
 import { db, transaction } from '@/lib/server/db';
-import { route, body, idParam, asId, forbidden } from '@/lib/server/http';
+import { route, body, idParam, asId, forbidden, notFound } from '@/lib/server/http';
 import { markInvoiceSent, setExportDetails, voidInvoice } from '@/lib/server/services/sales';
 import { writeOffInvoice } from '@/lib/server/services/journals';
 import { hasPermission } from '@/lib/rbac';
 import { logAudit, auditMeta } from '@/lib/server/audit';
 import { invoiceDetail } from '@/lib/server/services/invoice-detail';
+import { TEMPLATE_KEYS, templateInfo } from '@/lib/print-template';
 
 /** One invoice with its lines, its payments, and the journal entry behind it. */
 export const GET = route(
@@ -14,7 +15,9 @@ export const GET = route(
 );
 
 const ActionInput = z.object({
-  action: z.enum(['send', 'void', 'export-details', 'write-off']),
+  action: z.enum(['send', 'void', 'export-details', 'write-off', 'template']),
+  // template: the PDF template this invoice prints in; null follows Settings → PDF Templates.
+  template: z.enum(TEMPLATE_KEYS).nullish(),
   reason: z.string().max(300).optional(),
   // write-off: the date, and how much (all that is left, when omitted).
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
@@ -54,6 +57,23 @@ export const POST = route(
         return e;
       });
       return { id: asId(id), journalEntryId: asId(entry.id) };
+    }
+
+    if (action === 'template') {
+      // The look of one invoice, as Zoho's "PDF Template : … Change": nothing it says changes.
+      if (!hasPermission(role, 'sales', 'edit')) throw forbidden('Your role cannot change how invoices print.');
+      await transaction(async (trx) => {
+        const inv = await trx.selectFrom('invoices').select(['number']).where('id', '=', id).where('org_id', '=', orgId).executeTakeFirst();
+        if (!inv) throw notFound('Invoice not found.');
+        await trx.updateTable('invoices').set({ print_template: input.template ?? null }).where('id', '=', id).where('org_id', '=', orgId).execute();
+        await logAudit({
+          trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'update',
+          targetType: 'invoice', targetId: id, targetLabel: inv.number,
+          detail: input.template ? `PDF template set to ${templateInfo(input.template).name}` : 'PDF template set back to the one for invoices',
+          ...auditMeta(req),
+        });
+      });
+      return { id: asId(id), template: input.template ?? null };
     }
 
     if (action === 'export-details') {

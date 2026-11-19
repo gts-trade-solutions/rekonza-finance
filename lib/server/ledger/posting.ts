@@ -23,6 +23,7 @@ import { sql } from 'kysely';
 import type { Paise } from '../../types';
 import type { Trx } from '../db';
 import { toPaiseFromSql, toSqlFromPaise } from '../money-sql';
+import { ApiError } from '../http';
 
 export class UnbalancedEntryError extends Error {
   readonly debits: Paise;
@@ -463,18 +464,18 @@ export async function reverseEntry(
     .where('org_id', '=', orgId)
     .executeTakeFirst();
 
-  if (!original) throw new Error(`Journal entry ${entryId} not found`);
+  if (!original) throw new ApiError(404, `Journal entry ${entryId} not found.`, 'not_found');
 
   const already = await trx
     .selectFrom('journal_entries')
-    .select('id')
+    .select(['id', 'entry_no'])
+    .where('org_id', '=', orgId)
     .where('reversal_of_entry_id', '=', entryId)
     .executeTakeFirst();
   if (already) {
-    throw new Error(
-      `Entry ${original.entry_no} has already been reversed by entry ${already.id}. ` +
-        'Reversing it twice would double the correction.',
-    );
+    throw new ApiError(409,
+      `Entry #${original.entry_no} has already been reversed by entry #${already.entry_no}. ` +
+        'Reversing it twice would double the correction.', 'conflict');
   }
 
   const lines = await trx

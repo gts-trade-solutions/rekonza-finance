@@ -142,12 +142,17 @@ test('re-importing an overlapping statement adds nothing twice', async () => {
   });
 });
 
-test('a repeated line within one file is imported once', async () => {
+test('identical lines in one statement are separate transactions; a statement that repeats them is still recognised', async () => {
   await withFixture(async ({ trx, orgId, bankId }) => {
-    const dup = { date: '2026-08-01', narration: 'SAME LINE', withdrawalPaise: 1_000 };
-    const res = await importStatement(trx, orgId, null, bankId, 'dupes.csv', [dup, dup, dup]);
-    assert.equal(res.imported, 1);
-    assert.equal(res.duplicates, 2);
+    // Two ₹2,000 ATM withdrawals on one day, with no reference: two real lines.
+    const atm = { date: '2026-08-01', narration: 'ATM WDL', withdrawalPaise: 200_000 };
+    const first = await importStatement(trx, orgId, null, bankId, 'aug.csv', [atm, atm]);
+    assert.equal(first.imported, 2);
+    assert.equal(first.duplicates, 0);
+    // The next download overlaps: the same two lines and one new one.
+    const again = await importStatement(trx, orgId, null, bankId, 'aug-sep.csv', [atm, atm, { date: '2026-09-01', narration: 'NEW', depositPaise: 5_000 }]);
+    assert.equal(again.imported, 1);
+    assert.equal(again.duplicates, 2);
   });
 });
 

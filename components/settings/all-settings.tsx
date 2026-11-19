@@ -81,7 +81,8 @@ export const SETTING_SECTIONS: { title: string; groups: SettingGroup[] }[] = [
         title: 'Customization', icon: Palette, tint: 'from-[#fdf3dd] text-[#9e6a03]',
         links: [
           { label: 'Transaction Number Series', tab: 'numbering' },
-          { label: 'PDF Templates', href: '/settings/invoice-print' },
+          { label: 'PDF Templates', href: '/settings/templates' },
+          { label: 'Bank, UPI and Terms on PDFs', href: '/settings/invoice-print' },
           { label: 'Email Notifications', href: '/settings/email-templates' },
           { label: 'Reporting Tags', tab: 'tags' },
           { label: 'Custom Fields', tab: 'custom-fields' },
@@ -224,10 +225,10 @@ export function AllSettings() {
 }
 
 /** The left menu beside an open setting. */
-export function SettingsNav({ tab }: { tab: string }) {
+export function SettingsNav({ tab, href }: { tab?: string; href?: string }) {
   const visible = useVisible();
   const [open, setOpen] = useState<string | null>(null);
-  const current = SETTING_SECTIONS.flatMap((s) => s.groups).find((g) => g.links.some((l) => l.tab === tab))?.title ?? null;
+  const current = SETTING_SECTIONS.flatMap((s) => s.groups).find((g) => g.links.some((l) => (tab && l.tab === tab) || (href && l.href === href)))?.title ?? null;
   useEffect(() => { setOpen(current); }, [current]);
   return (
     <nav className="thin-scroll sticky top-0 max-h-[calc(100vh-75px)] w-[240px] shrink-0 overflow-y-auto border-r bg-surface py-4" data-slot="settings-nav">
@@ -254,7 +255,7 @@ export function SettingsNav({ tab }: { tab: string }) {
                 {isOpen && (
                   <div className="my-1 space-y-1">
                     {links.map((l) => {
-                      const active = l.tab === tab && !!l.tab;
+                      const active = (l.tab === tab && !!l.tab) || (!!href && l.href === href);
                       return (
                         <Link
                           key={l.label}
@@ -283,7 +284,7 @@ export function SettingsNav({ tab }: { tab: string }) {
 /** Settings pages that open in the settings mode (no sidebar, the white header). */
 export function isSettingsMode(pathname: string): boolean {
   return pathname === '/settings'
-    || ['/settings/tax-rates', '/settings/hsn-codes', '/settings/invoice-print', '/settings/email-templates', '/settings/billing']
+    || ['/settings/tax-rates', '/settings/hsn-codes', '/settings/invoice-print', '/settings/templates', '/settings/email-templates', '/settings/billing']
       .some((p) => pathname === p || pathname.startsWith(p + '/'));
 }
 

@@ -22,6 +22,20 @@ export const GST_STATES: Record<string, string> = {
   '36': 'Telangana', '37': 'Andhra Pradesh', '38': 'Ladakh', '96': 'Foreign Country',
 };
 
+/** Each state's two letters, as Zoho shows the place of supply: "[TN] - Tamil Nadu". */
+export const STATE_ALPHA: Record<string, string> = {
+  '01': 'JK', '02': 'HP', '03': 'PB', '04': 'CH', '05': 'UK', '06': 'HR', '07': 'DL', '08': 'RJ', '09': 'UP', '10': 'BR', '11': 'SK', '12': 'AR',
+  '13': 'NL', '14': 'MN', '15': 'MZ', '16': 'TR', '17': 'ML', '18': 'AS', '19': 'WB', '20': 'JH', '21': 'OD', '22': 'CG', '23': 'MP', '24': 'GJ',
+  '26': 'DN', '27': 'MH', '29': 'KA', '30': 'GA', '31': 'LD', '32': 'KL', '33': 'TN', '34': 'PY', '35': 'AN', '36': 'TS', '37': 'AP', '38': 'LA', '97': 'OT',
+};
+
+/** A state's code from its two letters, as Zoho writes the place of supply ("TN"), with the older spellings. */
+export function stateFromAlpha(letters: string): string | null {
+  const l = letters.trim().toUpperCase();
+  const old: Record<string, string> = { OR: '21', CT: '22', UT: '05', UA: '05', TG: '36', DD: '26', GJ: '24' };
+  return Object.entries(STATE_ALPHA).find(([, a]) => a === l)?.[0] ?? old[l] ?? null;
+}
+
 /**
  * Every GST rate a line may carry. From 22 September 2025 the standard rates
  * are 5%, 18% and 40% (demerit goods); 28% remains for tobacco and pan masala,

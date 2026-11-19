@@ -11,7 +11,8 @@ import { readTemplate } from '@/lib/print-template';
 // the signatory's name.
 //
 // The logo itself is uploaded as an attachment on the organisation
-// (POST /api/files, targetType 'organization'); this only reports it.
+// (POST /api/files, targetType 'organization'); this only reports it. The
+// template is chosen in Settings → PDF Templates (/api/settings/templates).
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const GET = route(
@@ -80,13 +81,6 @@ const PrintInput = z.object({
   defaultNotes: text(2000),
   signatoryName: text(150),
   printLanguage: z.enum(['hi', 'mr', 'gu', 'ta', 'te', 'kn', 'ml', 'bn']).nullish(),
-  template: z.object({
-    layout: z.enum(['classic', 'modern', 'compact']),
-    accent: z.string().regex(/^#[0-9a-fA-F]{6}$/, 'Pick a colour.'),
-    showLogo: z.boolean(),
-    showSignature: z.boolean(),
-    footer: z.string().trim().max(300).nullish(),
-  }).nullish(),
 });
 
 export const PUT = route(
@@ -126,7 +120,6 @@ export const PUT = route(
         default_invoice_notes: input.defaultNotes ?? null,
         signatory_name: input.signatoryName ?? null,
         print_language: input.printLanguage ?? null,
-        ...(input.template ? { print_template: JSON.stringify(input.template) } : {}),
       }).where('id', '=', orgId).execute();
 
       await logAudit({

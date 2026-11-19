@@ -29,7 +29,8 @@ const pad = (n: number) => String(n).padStart(2, '0');
 /** A statement date as yyyy-mm-dd: day first, as Indian banks write it, unless told otherwise. */
 export function statementDate(v: unknown, order: DateOrder = 'dmy'): string | null {
   if (v instanceof Date && !Number.isNaN(v.getTime())) return `${v.getFullYear()}-${pad(v.getMonth() + 1)}-${pad(v.getDate())}`;
-  const s = String(v ?? '').trim();
+  // A time after the date ("01/11/2026 10:15:32", "01-Nov-2026 10:15 AM") is not part of the day.
+  const s = String(v ?? '').trim().replace(/(?:\s+|T)\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:\s*[AP]M)?(?:Z|[+-]\d{2}:?\d{2})?$/i, '');
   let m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
   if (m) return `${m[1]}-${m[2]}-${m[3]}`;
   m = s.match(/^(\d{4})[/.](\d{1,2})[/.](\d{1,2})$/);
@@ -40,7 +41,8 @@ export function statementDate(v: unknown, order: DateOrder = 'dmy'): string | nu
     const [d, mo] = order === 'mdy' ? [Number(m[2]), Number(m[1])] : [Number(m[1]), Number(m[2])];
     return mo >= 1 && mo <= 12 && d >= 1 && d <= 31 ? `${y}-${pad(mo)}-${pad(d)}` : null;
   }
-  m = s.match(/^(\d{1,2})[\s-]([A-Za-z]{3})[A-Za-z]*[\s-,]+(\d{2,4})$/);
+  // 01-Nov-2026, 01 Nov 26, 01/Nov/2026, 01.Nov.2026
+  m = s.match(/^(\d{1,2})[\s\-/.]([A-Za-z]{3})[A-Za-z]*[\s\-/.,]+(\d{2,4})$/);
   if (m && MONTHS[m[2].toLowerCase()]) {
     const y = m[3].length === 2 ? 2000 + Number(m[3]) : Number(m[3]);
     return `${y}-${pad(MONTHS[m[2].toLowerCase()])}-${pad(Number(m[1]))}`;
@@ -53,12 +55,23 @@ export function statementDate(v: unknown, order: DateOrder = 'dmy'): string | nu
   return null;
 }
 
+/**
+ * An amount as banks write it: 1,234.50, ₹1,234.50, INR 1234.50, 1234.50 Dr,
+ * (1,234.50) or 1234.50- for a minus. A Dr or Cr after it is left to the
+ * caller, which reads which side it is on.
+ */
 export const amount = (v: unknown): number => {
   if (typeof v === 'number') return v;
-  const s = String(v ?? '').replace(/[,₹\s]/g, '').replace(/(Dr|Cr)\.?$/i, '');
+  let s = String(v ?? '').replace(/[,₹\s]/g, '').replace(/^(?:rs\.?|inr)/i, '').replace(/(Dr|Cr)\.?$/i, '');
+  let sign = 1;
+  if (/^\(.*\)$/.test(s)) { sign = -1; s = s.slice(1, -1); }
+  if (/^[\d.]+-$/.test(s)) { sign = -1; s = s.slice(0, -1); }
   const n = parseFloat(s);
-  return Number.isFinite(n) ? n : 0;
+  return Number.isFinite(n) ? sign * n : 0;
 };
+
+/** Whether a Dr/Cr indicator (or the text of an amount) says money went out: D, Dr, DB, Debit, Withdrawal. */
+export const isDebitMark = (text: string) => /^(d|dr|db|debit)\.?$/i.test(text.trim()) || /debit|withdraw|dr\.?$/i.test(text.trim());
 
 const find = (headers: string[], ...names: RegExp[]) => headers.findIndex((h) => names.some((n) => n.test(h)));
 const norm = (c: unknown) => String(c ?? '').trim().toLowerCase();
@@ -144,7 +157,7 @@ export function readWithMapping(grid: unknown[][], col: StatementMapping): { row
     if (!out && !inn && col.amount >= 0) {
       const a = amount(r[col.amount]);
       const kind = col.drcr >= 0 ? norm(r[col.drcr]) : String(r[col.amount] ?? '').toLowerCase();
-      if (/dr|debit|withdraw/.test(kind) || a < 0) out = Math.abs(a); else inn = Math.abs(a);
+      if (isDebitMark(kind) || a < 0) out = Math.abs(a); else inn = Math.abs(a);
     }
     if (!out && !inn) continue;
     const bal = col.balance >= 0 ? String(r[col.balance] ?? '').trim() : '';

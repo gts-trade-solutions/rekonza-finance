@@ -605,6 +605,7 @@ export interface Bills {
   total: Generated<Decimal>;
   updated_at: Generated<Date>;
   vendor_id: number;
+  vendor_invoice_key: Generated<string | null>;
   vendor_invoice_no: string;
   void_reason: string | null;
   voided_at: Date | null;
@@ -934,6 +935,17 @@ export interface CostCentres {
   id: Generated<number>;
   is_active: Generated<number>;
   name: string;
+  org_id: number;
+}
+
+export interface CreditNoteApplications {
+  amount: Decimal;
+  applied_on: ColumnType<string, string, string>;
+  created_at: Generated<Date>;
+  created_by_user_id: number | null;
+  credit_note_id: number;
+  id: Generated<number>;
+  invoice_id: number;
   org_id: number;
 }
 
@@ -1778,6 +1790,7 @@ export interface Invoices {
   paid_at_sale: Generated<number>;
   payment_terms: string | null;
   place_of_supply: string;
+  print_template: string | null;
   project_id: number | null;
   rejection_reason: string | null;
   round_off: Generated<Decimal>;
@@ -2873,6 +2886,20 @@ export interface ShareLinks {
   token_hash: string;
 }
 
+export interface StatutoryPayments {
+  amount: Decimal;
+  bank_account_id: number;
+  component: "esi" | "lwf" | "pf" | "pt";
+  created_at: Generated<Date>;
+  created_by_user_id: number | null;
+  id: Generated<number>;
+  journal_entry_id: number | null;
+  org_id: number;
+  paid_on: ColumnType<string, string, string>;
+  period: string;
+  reference: string | null;
+}
+
 export interface StockAdjustments {
   adjust_date: ColumnType<string, string, string>;
   batch_id: number | null;
@@ -3386,6 +3413,7 @@ export interface DB {
   contact_persons: ContactPersons;
   contacts: Contacts;
   cost_centres: CostCentres;
+  credit_note_applications: CreditNoteApplications;
   credit_note_lines: CreditNoteLines;
   credit_notes: CreditNotes;
   custom_field_values: CustomFieldValues;
@@ -3500,6 +3528,7 @@ export interface DB {
   sessions: Sessions;
   settings: Settings;
   share_links: ShareLinks;
+  statutory_payments: StatutoryPayments;
   stock_adjustments: StockAdjustments;
   stock_groups: StockGroups;
   stock_transfer_lines: StockTransferLines;

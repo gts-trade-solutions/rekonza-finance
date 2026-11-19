@@ -153,6 +153,24 @@ test('periodic books are untouched: no cost lines, statements as before', async 
 
 // ── Exceptions ──────────────────────────────────────────────────────────────
 
+test('perpetual inventory, FIFO: a sale costs its oldest units, and the ledger keeps what the valuation report says', async () => {
+  await withFixture(async (f) => {
+    await f.trx.updateTable('items').set({ valuation_method: 'fifo' }).where('id', '=', f.itemId).execute();
+    await switchToPerpetual(f.trx, f.orgId, null, '2026-05-01'); // 10 on the shelf at ₹100
+    await buy(f, '2026-05-10', 10, 13_000); // 10 more at ₹130
+    // FIFO: twelve sold take the ten at ₹100 and two at ₹130 = ₹1,260 (the newest-price shortcut would say ₹1,560).
+    const inv = await sell(f, '2026-06-01', 12, 20_000);
+    const e = await f.trx.selectFrom('invoices').select('journal_entry_id').where('id', '=', inv.id).executeTakeFirstOrThrow();
+    assert.deepEqual(await lineOn(f.trx, e.journal_entry_id!, CODE.COGS), { dr: 126_000, cr: 0 });
+    // What is left is eight at ₹130 = ₹1,040, in the ledger and in the report, before any month-end true-up.
+    assert.equal((await stockPosition(f.trx, f.orgId, '2026-06-30')).totalValuePaise, 104_000);
+    assert.equal(await inventoryInLedger(f.trx, f.orgId, '2026-06-30'), 104_000);
+    assert.equal(await trueUpStock(f.trx, f.orgId, null, '2026-06-30'), 0, 'nothing for the true-up to correct');
+    const bs = await balanceSheet(f.trx, f.orgId, '2026-06-30');
+    assert.ok(bs.balanced);
+  });
+});
+
 test('exceptions: raised to the account owner, escalated, closed by themselves, worked by people', async () => {
   await withFixture(async (f) => {
     // Dated from today: a person's "resolved" is stamped with the real clock.

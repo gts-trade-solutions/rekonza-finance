@@ -164,6 +164,37 @@ test('a month: proration, loss of pay, every deduction, posting and paying', asy
   });
 });
 
+test('statutory registers and dues: each month’s PF, ESI, PT and LWF due, paid against the bank, the payable cleared', async () => {
+  const { payStatutory, statutoryRegister } = await import('../../lib/server/payroll/statutory-dues');
+  await withFixture(async (f) => {
+    const runId = await prepareRun(f.trx, f.orgId, null, '2026-06', { [f.ids.b]: { lopDays: 3 } });
+    // A draft is not yet owed.
+    assert.equal((await statutoryRegister(f.trx, f.orgId, '2026-06', '2026-06')).dues.length, 0);
+    await postRun(f.trx, f.orgId, null, runId);
+    const reg = await statutoryRegister(f.trx, f.orgId, '2026-06', '2026-06');
+    assert.equal(reg.lines.length, 4, 'one line per employee');
+    const due = (c: string) => reg.dues.find((d) => d.component === c)!;
+    assert.equal(due('pf').duePaise, R(11_250), 'the same as PF Payable');
+    assert.equal(due('esi').duePaise, R(877));
+    assert.equal(due('pt').duePaise, R(600));
+    assert.equal(due('lwf').duePaise, R(400));
+    assert.equal(due('pf').dueDate, '2026-07-15');
+    // Part of the PF paid with its TRRN: the payable is reduced by exactly that, the register shows what is left.
+    await payStatutory(f.trx, f.orgId, null, { component: 'pf', period: '2026-06', amountPaise: R(10_000), date: '2026-07-10', bankAccountId: f.bankId, reference: 'TRRN 1234567890' });
+    assert.equal(await balance(f, CODE.PF_PAYABLE), -R(1_250));
+    const after = await statutoryRegister(f.trx, f.orgId, '2026-06', '2026-06');
+    const pf = after.dues.find((d) => d.component === 'pf')!;
+    assert.equal(pf.paidPaise, R(10_000));
+    assert.equal(pf.balancePaise, R(1_250));
+    assert.equal(pf.payments[0].reference, 'TRRN 1234567890');
+    // More than is left, or before the month: refused.
+    await assert.rejects(payStatutory(f.trx, f.orgId, null, { component: 'pf', period: '2026-06', amountPaise: R(2_000), date: '2026-07-11', bankAccountId: f.bankId }), /Only ₹1,250.00/);
+    await assert.rejects(payStatutory(f.trx, f.orgId, null, { component: 'esi', period: '2026-06', amountPaise: R(100), date: '2026-05-31', bankAccountId: f.bankId }), /before that month begins/);
+    await payStatutory(f.trx, f.orgId, null, { component: 'esi', period: '2026-06', amountPaise: R(877), date: '2026-07-12', bankAccountId: f.bankId });
+    assert.equal(await balance(f, CODE.ESI_PAYABLE), 0, 'ESI paid in full: nothing left owing');
+  });
+});
+
 test('ESI coverage holds to the end of the contribution period, then lapses', async () => {
   await withFixture(async (f) => {
     await prepareRun(f.trx, f.orgId, null, '2026-06');

@@ -17,6 +17,7 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { PaymentSummary } from '@/components/shared/payment-summary';
 import { PageHeader } from '@/components/shared/page-header';
+import { ModuleMenu } from '@/components/shared/module-menu';
 import { DataTable, type Column } from '@/components/shared/data-table';
 import { BulkPrintButton } from '@/components/shared/document-menu';
 import { SavedViews } from '@/components/shared/saved-views';
@@ -149,7 +150,7 @@ export default function InvoicesPage() {
       <PageHeader
         title="Invoices"
         description="Every approved invoice posts a balanced journal entry the moment it is created."
-        actions={
+        actions={<>{
           <>
             <Refreshing active={state.refreshing} />
             <SavedViews list="invoices" current={{ status: filter, range }} onApply={(v) => { setFilter(String(v.status ?? 'all')); if (v.range) setRange(v.range as RangeValue); }} />
@@ -159,6 +160,7 @@ export default function InvoicesPage() {
               </Button>
             )}
           </>
+        }<ModuleMenu slug="invoices" onRefresh={() => void state.refetch()} /></>
         }
       />
 

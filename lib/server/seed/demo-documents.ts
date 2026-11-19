@@ -20,7 +20,7 @@ import type { Trx } from '../db';
 import type { IdMap } from './bootstrap';
 import { DEMO_TODAY } from './demo-book';
 import {
-  applyRetainer, convertToInvoice, createChallan, createCreditNote,
+  applyCreditNote, applyRetainer, convertToInvoice, createChallan, createCreditNote,
   createEstimate, createRetainer, createSalesOrder, refundCreditNote,
 } from '../services/sales-documents';
 import { receivePayment } from '../services/payments';
@@ -236,6 +236,19 @@ export async function seedDemoDocuments(trx: Trx, ids: IdMap): Promise<Documents
       }],
     });
     creditNotes++;
+
+    // The second, left on account, is applied later to the customer's oldest open
+    // invoice (Credit Notes → Apply to Invoices), as Zoho lets one do.
+    if (i === 1) {
+      const open = await trx.selectFrom('invoices').select(['id', 'total', 'amount_paid'])
+        .where('org_id', '=', ids.orgId).where('customer_id', '=', inv.customer_id).where('status', 'in', ['sent', 'approved', 'overdue', 'partially_paid'])
+        .orderBy('invoice_date').execute();
+      const target = open.find((o) => Number(o.total) - Number(o.amount_paid) > 0);
+      if (target) {
+        const left = Math.round((Number(target.total) - Number(target.amount_paid)) * 100);
+        await applyCreditNote(trx, ids.orgId, admin, cn.id, { date: daysAgo(1), allocations: [{ invoiceId: Number(target.id), amountPaise: Math.min(left, cn.totalPaise) }] });
+      }
+    }
 
     // The third is settled in cash — the customer wanted the money back rather
     // than a credit against a future order.

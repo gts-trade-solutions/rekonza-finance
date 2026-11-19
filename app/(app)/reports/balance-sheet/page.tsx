@@ -19,7 +19,9 @@ import { useSearchParams } from 'next/navigation';
 import { Scale } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Money } from '@/components/shared/money';
-import { BasisSelect, CompareSelect, downloadCsv, ReportShell, useReportRange, type ReportBasis } from '@/components/shared/report-shell';
+import { BasisSelect, BranchSelect, CompareSelect, downloadCsv, ReportShell, useBranchName, useReportRange, type ReportBasis } from '@/components/shared/report-shell';
+import { SavedViews } from '@/components/shared/saved-views';
+
 import { AsyncPage, LoadingRows } from '@/components/shared/async-state';
 import { reports, type GroupedBalanceSheetReport } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
@@ -43,9 +45,11 @@ function BalanceSheet() {
   const [range, setRange] = useReportRange();
   const [compare, setCompare] = useState<CompareMode>('none');
   const [basis, setBasis] = useState<ReportBasis>('accrual');
-  const state = useApi<GroupedBalanceSheetReport>(() => reports.groupedBalanceSheet(range.to, undefined, basis), [range.to, basis]);
+  const [branch, setBranch] = useState('');
+  const branchName = useBranchName(branch);
+  const state = useApi<GroupedBalanceSheetReport>(() => reports.groupedBalanceSheet(range.to, branch || undefined, basis), [range.to, basis, branch]);
   const cmpTo = compare === 'none' || format !== 'general' ? null : comparisonRange(range, compare).to;
-  const prevState = useApi<GroupedBalanceSheetReport | null>(() => (cmpTo ? reports.groupedBalanceSheet(cmpTo, undefined, basis) : Promise.resolve(null)), [cmpTo, basis]);
+  const prevState = useApi<GroupedBalanceSheetReport | null>(() => (cmpTo ? reports.groupedBalanceSheet(cmpTo, branch || undefined, basis) : Promise.resolve(null)), [cmpTo, basis, branch]);
   const prev = cmpTo ? prevState.data ?? null : null;
 
   return (
@@ -58,7 +62,10 @@ function BalanceSheet() {
       extraActions={(
         <div className="flex gap-2">
           <div className="w-32"><BasisSelect value={basis} onChange={setBasis} /></div>
+          <div className="w-40"><BranchSelect value={branch} onChange={setBranch} /></div>
           {format === 'general' && <div className="w-52"><CompareSelect value={compare} onChange={setCompare} /></div>}
+          <div className="self-end"><SavedViews list="report-balance-sheet" current={{ to: range.to, basis, branch, compare }}
+            onApply={(v) => { if (v.to) setRange({ ...range, to: String(v.to), mode: 'day' }); setBasis((v.basis as ReportBasis) ?? 'accrual'); setBranch(String(v.branch ?? '')); setCompare((v.compare as CompareMode) ?? 'none'); }} /></div>
         </div>
       )}
       onExport={() => {
@@ -87,7 +94,7 @@ function BalanceSheet() {
               </div>
             </Card>
 
-            <p className="text-center text-sm text-muted-foreground">As of {asAt(bs.asOf)} · Basis: Accrual</p>
+            <p className="text-center text-sm text-muted-foreground">As of {asAt(bs.asOf)} · Basis: {basis === 'cash' ? 'Cash' : 'Accrual'}{branchName ? ` · Branch: ${branchName}` : ''}</p>
 
             {format === 'horizontal'
               ? <HorizontalBalanceSheet bs={bs} />

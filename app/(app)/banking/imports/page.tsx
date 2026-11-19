@@ -21,6 +21,7 @@
 import { useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import Papa from 'papaparse';
+import { readXls } from '@/lib/imports/xls';
 import { CheckCircle2, Download, FileSpreadsheet, Info, ListChecks, Loader2, Settings2, Trash2, Undo2, Upload, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card } from '@/components/ui/card';
@@ -91,8 +92,15 @@ async function readFile(file: File): Promise<Omit<QueuedFile, 'key' | 'accountId
   const format = detectFormat(file.name, head);
   const base = { name: file.name, format, grid: null, mapping: null, accountHint: null };
   if (format === 'xlsx') {
+    // Excel 97–2003, as most Indian banks still send it; or their HTML or text saved as .xls.
     if (/\.xls$/i.test(file.name)) {
-      return { ...base, rows: [], problem: 'Old .xls files cannot be read here. Open it in Excel and save as .xlsx, or download the statement as CSV.' };
+      try {
+        const r = readXls(new Uint8Array(await file.arrayBuffer()));
+        if ('grid' in r) return fromGrid(base, r.grid);
+        return fromGrid(base, Papa.parse<string[]>(r.text, { skipEmptyLines: true }).data);
+      } catch (e) {
+        return { ...base, rows: [], problem: e instanceof Error ? e.message : String(e) };
+      }
     }
     const { default: readXlsxFile } = await import('read-excel-file/browser');
     const sheets = (await readXlsxFile(file)) as unknown as { sheet: string; data: unknown[][] }[];
@@ -248,7 +256,7 @@ export default function BankImportsPage() {
           >
             <Upload className="mb-2 size-6 text-muted-foreground" />
             <p className="text-sm font-medium">Drop statements here, or click to browse</p>
-            <p className="mt-1 text-xs text-muted-foreground">Several at once. CSV, TSV, Excel (.xlsx), OFX/QFX, QIF, CAMT.053 (XML), MT940 or JSON</p>
+            <p className="mt-1 text-xs text-muted-foreground">Several at once. CSV, TSV, Excel (.xlsx or .xls), OFX/QFX, QIF, CAMT.053 (XML), MT940 or JSON</p>
           </div>
           <input
             ref={fileRef}

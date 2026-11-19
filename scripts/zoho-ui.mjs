@@ -36,6 +36,8 @@ await context.route(`${BASE}/api/**`, (r) => {
   const req = r.request();
   const p = new URL(req.url()).pathname;
   if (req.method() === 'GET' || ['/api/auth/login', '/api/auth/logout', '/api/auth/demo'].includes(p)) return r.continue();
+  // An import's check runs the import and throws it away: nothing is saved.
+  if (req.method() === 'POST' && p === '/api/imports' && JSON.parse(req.postData() || '{}').dryRun === true) return r.continue();
   blocked.push(`${req.method()} ${p}`);
   return r.fulfill({ status: 403, contentType: 'application/json', body: JSON.stringify({ error: 'Read-only check', code: 'read_only' }) });
 });
@@ -767,6 +769,67 @@ if (!DEMO) {
   await page.keyboard.press('Escape');
   check('…and cannot delete an item', !salesMore.includes('Delete'), salesMore.join(','));
   await signIn('arun@raceautospares.in');
+}
+
+// ── M. PDF templates, the logo, and Zoho's import ─────────────────────────
+{
+  const tpl = await api('/api/settings/templates');
+  await open('/settings/templates?doc=invoice');
+  const docs = (await page.locator('[data-slot=template-docs] a').allInnerTexts()).map((x) => x.trim());
+  check("PDF Templates: Zoho's kinds of document down the left", docs.length === 11 && docs[0] === 'Quotes' && docs.includes('Invoices') && docs.at(-1) === 'Vendor Payments', docs.join(','));
+  check('…"Invoice Templates", its default marked', (await page.locator('h1', { hasText: 'Invoice Templates' }).count()) === 1 && (await page.locator('[data-slot=template-default]').count()) === 1);
+  if ((await page.locator('[data-slot=template-new]').count()) > 0) {
+    await page.click('[data-slot=template-new]');
+    await page.waitForSelector('[data-slot=template-gallery]');
+    const tabs = (await page.locator('[data-slot=template-gallery] [role=tab]').allInnerTexts()).map((x) => x.trim());
+    check("…+ New opens Zoho's gallery: All (12), Standard (4), Spreadsheet (1), Premium (3), Universal (4)", tabs.join('|') === 'All (12)|Standard (4)|Spreadsheet (1)|Premium (3)|Universal (4)', tabs.join('|'));
+    check('…with all twelve templates drawn', (await page.locator('[data-slot=template-gallery] [data-slot^=gallery-]').count()) === 12);
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(400);
+  }
+
+  const invId = openInv.invoices.find((i) => i.status !== 'void' && i.balancePaise > 0)?.id ?? inv1;
+  await open(`/sales/invoices/${invId}`);
+  await page.waitForSelector('[data-slot=invoice-preview] [data-slot=tax-invoice]', { timeout: 60000 }).catch(() => {});
+  check('Invoice: the invoice itself shows on the record, in its PDF template', (await page.locator('[data-slot=invoice-preview] [data-slot=tax-invoice][data-layout]').count()) === 1);
+  check('…with the status ribbon across its corner', (await page.locator('[data-slot=invoice-preview] [data-slot=status-ribbon]').count()) === 1);
+  check('…and the logo, when the business has one', !tpl.business.logoUrl || (await page.locator('[data-slot=invoice-preview] [data-slot=invoice-logo]').count()) === 1);
+  const line = (await page.locator('[data-slot=pdf-template-line]').innerText().catch(() => '')).trim();
+  check("…\"PDF Template : '…'\" under it, as in Zoho", /^PDF Template : '.+'/.test(line), line);
+  check("…\"WHAT'S NEXT?\" while something is owed", (await page.locator('[data-slot=whats-next]').count()) === 1);
+  check('…PDF/Print and Record Payment on the bar', (await page.locator('[data-slot=pdf-print]').count()) === 1 && (await page.locator('[data-slot=record-payment]').count()) === 1);
+
+  await open('/settings?tab=org');
+  check('Organization Profile: the logo box at the top, as in Zoho', (await page.locator('[data-slot=org-logo] [data-slot=logo-upload]').count()) === 1);
+
+  for (const [list, slug, title] of [['/sales/invoices', 'invoices', 'Invoices'], ['/sales/estimates', 'quotes', 'Quotes'], ['/purchases/bills', 'bills', 'Bills'], ['/sales/payments', 'payments-received', 'Customer Payments'], ['/accountant/journals', 'journals', 'Manual Journals']]) {
+    await open(list);
+    await page.locator('[data-slot=module-menu]').first().click();
+    await page.waitForTimeout(300);
+    await page.getByRole('menuitem', { name: 'Import' }).first().hover();
+    await page.waitForTimeout(500);
+    const item = (await page.locator('[data-slot=module-import]').innerText().catch(() => '')).trim();
+    check(`${title}: ⋯ → Import → "Import ${title}"`, item === `Import ${title}`, item);
+    await page.keyboard.press('Escape');
+    await page.keyboard.press('Escape');
+    void slug;
+  }
+
+  await open('/import/invoices');
+  check('Import: "Invoices - Select File" with Configure, Map Fields, Preview', (await page.locator('[data-slot=import-title]').innerText()).trim() === 'Invoices - Select File'
+    && (await page.locator('[data-slot=import-stepper] li').count()) === 3);
+  check("…Zoho's eight character encodings", (await page.locator('#import-encoding option').count()) === 8);
+  check('…Next waits for a file', await page.locator('[data-slot=import-next]').isDisabled());
+  const csv = 'Invoice Date,Invoice Number,Customer Name,Item Name,Quantity,Item Price,Item Tax %\n15/11/2026,ZB-1,Apex Motors Pvt Ltd,Brake pads,2,1450,28%\n';
+  await page.locator('[data-slot=import-file-input]').setInputFiles({ name: 'zoho-invoices.csv', mimeType: 'text/csv', buffer: Buffer.from(csv) });
+  await page.waitForSelector('[data-slot=import-file-name]');
+  await page.click('[data-slot=import-next]');
+  await page.waitForSelector('[data-slot=import-map]');
+  const sel = (key) => page.locator(`[data-slot=map-row-${key}] select`).inputValue();
+  check("Map Fields: Zoho's own headings are matched by themselves", (await sel('customer')) === 'Customer Name' && (await sel('rate')) === 'Item Price' && (await sel('gst_rate')) === 'Item Tax %' && (await sel('invoice_no')) === 'Invoice Number');
+  await page.click('[data-slot=import-next]');
+  await page.waitForSelector('[data-slot=import-ready], [data-slot=import-problems], [data-slot=import-demo-note]', { timeout: 60000 }).catch(() => {});
+  check('Preview: the file checked before anything is saved', (await page.locator('[data-slot=preview-ready]').count()) === 1);
 }
 
 // ── L. A phone ─────────────────────────────────────────────────────────────

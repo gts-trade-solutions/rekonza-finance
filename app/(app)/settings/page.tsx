@@ -39,6 +39,7 @@ import { GoLivePanel } from '@/components/settings/golive-panel';
 import { SignInsPanel } from '@/components/settings/sign-ins-panel';
 import { TwoStepPanel } from '@/components/settings/two-step-panel';
 import { ChangePasswordCard, UsersPanel } from '@/components/settings/users-panel';
+import { LogoUpload } from '@/components/settings/logo-upload';
 import { PrivacyPanel } from '@/components/settings/privacy-panel';
 import { CompanyRegistration, DivisionsCard } from '@/components/settings/company-profile';
 import { DeveloperPanel } from '@/components/settings/developer-panel';
@@ -52,7 +53,7 @@ import { stateName } from '@/lib/tax/gst';
 
 interface SettingsResponse {
   org: {
-    id: string; name: string; legalName: string | null; pan: string | null; tan: string | null;
+    id: string; name: string; legalName: string | null; logoFileId?: string | null; pan: string | null; tan: string | null;
     lutArn: string | null; lutValidFrom: string | null; lutValidTo: string | null;
     tradeScope?: TradeForm['tradeScope']; supplies?: TradeForm['supplies']; lutDeclared?: boolean; exportIgst?: TradeForm['exportIgst'];
     constitution?: string | null; businessNature?: string[]; cin?: string | null; incorporatedOn?: string | null; gstRegisteredOn?: string | null;
@@ -225,6 +226,10 @@ function SettingsPage() {
 
             {/* Organisation */}
             <TabsContent value="org" className="mt-4 space-y-4">
+              <Card className="space-y-3 p-5" data-slot="org-logo">
+                <h3 className="text-sm font-semibold">Organization Logo</h3>
+                <LogoUpload orgId={d.org.id} logoFileId={d.org.logoFileId ?? null} canEdit={canEdit} onChanged={() => void state.refetch()} />
+              </Card>
               <Card className="space-y-5 p-5">
                 <h3 className="text-sm font-semibold">Organisation details</h3>
                 <div className="grid gap-4 sm:grid-cols-2">

@@ -19,6 +19,7 @@ import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger,
 } from '@/components/ui/dialog';
 import { PageHeader } from '@/components/shared/page-header';
+import { ModuleMenu } from '@/components/shared/module-menu';
 import { DataTable, type Column } from '@/components/shared/data-table';
 import { BulkPrintButton, documentMenuColumn } from '@/components/shared/document-menu';
 import { Money } from '@/components/shared/money';
@@ -168,7 +169,7 @@ export default function PurchaseOrdersPage() {
       <PageHeader
         title="Purchase Orders"
         description="Commitments to buy. Nothing hits the ledger until the goods arrive and the bill is recorded."
-        actions={
+        actions={<>{
           canCreate && (
             <Dialog open={open} onOpenChange={setOpen}>
               <DialogTrigger asChild>
@@ -246,6 +247,7 @@ export default function PurchaseOrdersPage() {
               </DialogContent>
             </Dialog>
           )
+        }<ModuleMenu slug="purchase-orders" onRefresh={() => void state.refetch()} /></>
         }
       />
       <AsyncPage state={state}>

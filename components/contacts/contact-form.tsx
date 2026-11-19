@@ -53,7 +53,7 @@ import { useApi } from '@/lib/api/use-api';
 import { useAppStore } from '@/lib/store';
 import { termsOptions } from '@/lib/options';
 import { COUNTRIES, currencyOptions } from '@/lib/countries';
-import { GST_STATES, isValidGstin } from '@/lib/tax/gst';
+import { GST_STATES, isValidGstin, STATE_ALPHA } from '@/lib/tax/gst';
 import { TDS_SECTIONS } from '@/lib/tax/tds';
 import { companyTypeFrom } from '@/lib/company-profile';
 import type { SupplyKind } from '@/lib/types';
@@ -86,12 +86,6 @@ export const GST_TREATMENTS: { value: Treatment; label: string; sublabel?: strin
 /** The treatments that carry a GSTIN (or UIN), and Zoho's legal and trade names with it. */
 const NEEDS_GSTIN: string[] = ['registered', 'registered_composition', 'sez', 'sez_developer', 'deemed_export', 'tax_deductor', 'uin'];
 
-/** Each state's two letters, as Zoho shows the place of supply: "[TN] - Tamil Nadu". */
-const STATE_ALPHA: Record<string, string> = {
-  '01': 'JK', '02': 'HP', '03': 'PB', '04': 'CH', '05': 'UK', '06': 'HR', '07': 'DL', '08': 'RJ', '09': 'UP', '10': 'BR', '11': 'SK', '12': 'AR',
-  '13': 'NL', '14': 'MN', '15': 'MZ', '16': 'TR', '17': 'ML', '18': 'AS', '19': 'WB', '20': 'JH', '21': 'OD', '22': 'CG', '23': 'MP', '24': 'GJ',
-  '26': 'DN', '27': 'MH', '29': 'KA', '30': 'GA', '31': 'LD', '32': 'KL', '33': 'TN', '34': 'PY', '35': 'AN', '36': 'TS', '37': 'AP', '38': 'LA', '97': 'OT',
-};
 const PLACES = Object.entries(GST_STATES).filter(([code]) => code !== '96')
   .map(([code, name]) => ({ value: code, label: `[${STATE_ALPHA[code] ?? code}] - ${name}`, name }))
   .sort((a, b) => a.name.localeCompare(b.name));

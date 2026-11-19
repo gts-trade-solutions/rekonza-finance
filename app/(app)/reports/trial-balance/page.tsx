@@ -11,7 +11,9 @@ import { useState } from 'react';
 import { CheckCircle2 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Money } from '@/components/shared/money';
-import { BasisSelect, downloadCsv, ReportShell, ReportTable, useReportRange, type ReportBasis } from '@/components/shared/report-shell';
+import { BasisSelect, BranchSelect, useBranchName, downloadCsv, ReportShell, ReportTable, useReportRange, type ReportBasis } from '@/components/shared/report-shell';
+import { SavedViews } from '@/components/shared/saved-views';
+
 import { AsyncPage, LoadingRows } from '@/components/shared/async-state';
 import { reports, type TrialBalanceReport } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
@@ -21,7 +23,9 @@ import { ledgerHref } from '@/lib/source-links';
 export default function TrialBalancePage() {
   const [range, setRange] = useReportRange();
   const [basis, setBasis] = useState<ReportBasis>('accrual');
-  const state = useApi<TrialBalanceReport>(() => reports.trialBalance(range.to, undefined, basis), [range.to, basis]);
+  const [branch, setBranch] = useState('');
+  const branchName = useBranchName(branch);
+  const state = useApi<TrialBalanceReport>(() => reports.trialBalance(range.to, branch || undefined, basis), [range.to, basis, branch]);
 
   return (
     <ReportShell
@@ -30,11 +34,19 @@ export default function TrialBalancePage() {
       range={range}
       onRangeChange={setRange}
       asOfOnly
-      extraActions={<div className="w-32"><BasisSelect value={basis} onChange={setBasis} /></div>}
+      extraActions={(
+        <div className="flex gap-2">
+          <div className="w-32"><BasisSelect value={basis} onChange={setBasis} /></div>
+          <div className="w-40"><BranchSelect value={branch} onChange={setBranch} /></div>
+          <div className="self-end"><SavedViews list="report-trial-balance" current={{ to: range.to, basis, branch }}
+            onApply={(v) => { if (v.to) setRange({ ...range, to: String(v.to), mode: 'day' }); setBasis((v.basis as ReportBasis) ?? 'accrual'); setBranch(String(v.branch ?? '')); }} /></div>
+        </div>
+      )}
       onExport={() => {
         const tb = state.data;
         if (!tb) return;
         downloadCsv('trial-balance.csv', [
+          ...(branchName ? [[`Trial Balance · ${branchName}`, `as at ${tb.asOf}`]] : []),
           ['Code', 'Account', 'Type', 'Debit', 'Credit'],
           ...tb.rows.map((r) => [r.code, r.name, r.type, toRupees(r.debitSide), toRupees(r.creditSide)]),
           ['', 'TOTAL', '', toRupees(tb.totalDebit), toRupees(tb.totalCredit)],

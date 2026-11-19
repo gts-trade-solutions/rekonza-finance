@@ -297,6 +297,45 @@ test('a credit note applied to an invoice settles it', async () => {
   });
 });
 
+test('Apply to Invoices later, across two invoices; a part refund leaves the rest open; void gives each invoice its balance back', async () => {
+  const { applyCreditNote } = await import('../../lib/server/services/sales-documents');
+  await withFixture(async ({ trx, orgId, branchId, customerId, itemId, bankId }) => {
+    const inv = (date: string) => createInvoice(trx, orgId, null, { branchId, customerId, date, dueDate: '2026-09-30', status: 'approved', lines: [{ itemId, qty: 1 }] });
+    const a = await inv('2026-08-01');
+    const b = await inv('2026-08-02');
+    // A standalone credit for three units, nothing applied yet.
+    const cn = await createCreditNote(trx, orgId, null, { branchId, customerId, date: '2026-08-05', reason: 'Goods returned', lines: [{ itemId, qty: 3 }] });
+    const owed = async (id: number) => {
+      const r = await trx.selectFrom('invoices').select(['total', 'amount_paid', 'status']).where('id', '=', id).executeTakeFirstOrThrow();
+      return { left: toPaiseFromSql(r.total) - toPaiseFromSql(r.amount_paid), status: r.status, total: toPaiseFromSql(r.total) };
+    };
+    const one = (await owed(a.id)).total;
+    // Two invoices in full, a week later.
+    const applied = await applyCreditNote(trx, orgId, null, cn.id, { date: '2026-08-12', allocations: [{ invoiceId: a.id, amountPaise: one }, { invoiceId: b.id, amountPaise: one }] });
+    assert.equal(applied.status, 'open', 'a third of the credit is still left');
+    assert.deepEqual([(await owed(a.id)).status, (await owed(b.id)).status], ['paid', 'paid']);
+    await assert.rejects(applyCreditNote(trx, orgId, null, cn.id, { date: '2026-08-12', allocations: [{ invoiceId: a.id, amountPaise: 100 }] }), /left to pay/);
+    // The rest refunded in two parts: open after the first, refunded after the second.
+    const rest = cn.totalPaise - 2 * one;
+    await refundCreditNote(trx, orgId, null, cn.id, { bankAccountId: bankId, date: '2026-08-20', amountPaise: Math.floor(rest / 2) as never });
+    let row = await trx.selectFrom('credit_notes').select('status').where('id', '=', cn.id).executeTakeFirstOrThrow();
+    assert.equal(row.status, 'open', 'a part refund leaves the rest on the credit note');
+    // Voiding after cash went back is refused.
+    await assert.rejects(voidCreditNote(trx, orgId, null, cn.id, 'Raised in error'), /refunded in cash/);
+
+    // Another credit, applied to both, then voided: each invoice is owed again.
+    const c = await inv('2026-08-03');
+    const d = await inv('2026-08-04');
+    const cn2 = await createCreditNote(trx, orgId, null, { branchId, customerId, date: '2026-08-06', reason: 'Price error', lines: [{ itemId, qty: 1 }] });
+    await applyCreditNote(trx, orgId, null, cn2.id, { date: '2026-08-07', allocations: [{ invoiceId: c.id, amountPaise: 1000 }, { invoiceId: d.id, amountPaise: cn2.totalPaise - 1000 }] });
+    await voidCreditNote(trx, orgId, null, cn2.id, 'Raised in error');
+    assert.deepEqual([(await owed(c.id)).left, (await owed(d.id)).left], [one, one], 'both invoices owed in full again');
+    assert.equal((await owed(c.id)).status, 'approved' === (await owed(c.id)).status ? 'approved' : 'sent');
+    row = await trx.selectFrom('credit_notes').select('status').where('id', '=', cn2.id).executeTakeFirstOrThrow();
+    assert.equal(row.status, 'void');
+  });
+});
+
 test('a credit note cannot exceed what is still owed on the invoice it names', async () => {
   await withFixture(async ({ trx, orgId, branchId, customerId, itemId }) => {
     const inv = await createInvoice(trx, orgId, null, {

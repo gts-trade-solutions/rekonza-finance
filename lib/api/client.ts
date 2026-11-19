@@ -285,6 +285,8 @@ export interface InvoiceDetail {
   orderNumber: string | null;
   subject: string | null;
   paymentTerms: string | null;
+  /** The template this invoice prints in, when not the one set for invoices (Settings → PDF Templates). */
+  printTemplate?: string | null;
   notes: string | null;
   terms: string | null;
   /** Of a voucher type: its print heading, terms, and whether the UPI code and bank details print. */
@@ -303,6 +305,8 @@ export interface InvoiceDetail {
     id: string;
     itemId: string | null;
     description: string | null;
+    /** The catalogue item's name, when the line was picked from it. */
+    itemName?: string | null;
     hsnSac: string | null;
     qty: number;
     uqc: string | null;
@@ -398,6 +402,9 @@ export const invoices = {
   /** Write off what is left as a bad debt. */
   writeOff: (id: string, reason: string, amountPaise?: number) =>
     api.post<{ id: string; journalEntryId: string }>(`/api/invoices/${id}`, { action: 'write-off', reason, amountPaise }),
+  /** The PDF template this one invoice prints in; null follows Settings → PDF Templates. */
+  setTemplate: (id: string, template: string | null) =>
+    api.post<{ id: string; template: string | null }>(`/api/invoices/${id}`, { action: 'template', template }),
 };
 
 export interface BillListItem {
@@ -1083,6 +1090,8 @@ export interface SalesDocRow {
   /** The second string this kind carries: a reason, a purpose, a description. */
   detail: string | null;
   linkedId: string | null;
+  /** A credit note's invoice, by its number. */
+  linkedNumber?: string | null;
   expiry: string | null;
   /** Challans and orders: the products on it. */
   items?: { name: string; qty: number; uqc: string | null }[];
@@ -1129,6 +1138,9 @@ export const salesDocuments = {
     api.patch<{ refundedPaise: number; journalEntryId: string }>('/api/sales-documents', {
       action: 'refund-credit-note', id, bankAccountId, date, amountPaise, reference,
     }),
+  /** Zoho's "Apply to Invoices": what is left on the credit note, set against open invoices. */
+  applyCreditNote: (id: string, date: string, allocations: { invoiceId: string; amountPaise: number }[]) =>
+    api.patch<{ appliedPaise: number; status: string }>('/api/sales-documents', { action: 'apply-credit-note', id, date, allocations }),
   voidCreditNote: (id: string, reason?: string) =>
     api.patch<{ id: string; status: string }>('/api/sales-documents', {
       action: 'void-credit-note', id, reason,
@@ -1307,6 +1319,9 @@ export const audit = {
     targetType?: string; action?: string; actorUserId?: string;
     from?: string; to?: string; search?: string; limit?: number; offset?: number;
   }) => api.get<AuditResponse>('/api/audit', params),
+  /** Every row the filters find, for the export dialog: header first; IP addresses only with pii. */
+  exportRows: (params: { targetType?: string; action?: string; from?: string; to?: string; search?: string; pii?: boolean }) =>
+    api.get<{ header: string[]; rows: string[][]; truncated: boolean }>('/api/audit/export', { ...params, pii: params.pii === false ? '0' : '1' }),
 };
 
 // ── Period locks ─────────────────────────────────────────────────────────────
@@ -1339,9 +1354,17 @@ export interface BudgetRow {
   type: string;
   budgetPaise: number;
   actualPaise: number;
+  /** Budget less actual: what is left of the year's budget. */
   variancePaise: number;
   pct: number;
   notes: string | null;
+  /** The budget spread over the days gone, to the as-at date. */
+  budgetToDatePaise: number;
+  /** Against the budget to date, plus being good (under on spending, over on income). */
+  varianceToDatePaise: number;
+  variancePct: number;
+  favourable: boolean;
+  months: { month: string; budgetPaise: number; actualPaise: number; variancePaise: number }[];
 }
 
 export interface BudgetResponse {
@@ -1351,12 +1374,15 @@ export interface BudgetResponse {
   asOf: string;
   /** How far through the financial year the comparison runs. */
   elapsedPct: number;
+  branchId: string | null;
+  costCentreId: string | null;
+  months: string[];
   rows: BudgetRow[];
-  totals: { budgetPaise: number; actualPaise: number };
+  totals: { budgetPaise: number; actualPaise: number; budgetToDatePaise: number; varianceToDatePaise: number };
 }
 
 export const budgets = {
-  list: (params?: { fy?: string; asOf?: string }) => api.get<BudgetResponse>('/api/budgets', params),
+  list: (params?: { fy?: string; asOf?: string; branchId?: string; costCentreId?: string }) => api.get<BudgetResponse>('/api/budgets', params),
   set: (fy: string, entries: { accountId: string; amountPaise: number; notes?: string | null }[]) =>
     api.put<{ fy: string; updated: number }>('/api/budgets', { fy, entries }),
 };
@@ -2584,6 +2610,8 @@ export interface JournalEntryRow {
   sourceType: string;
   sourceId: string | null;
   reversalOf: string | null;
+  /** The entry number of this entry's reversal, once reversed. */
+  reversedBy?: number | null;
   totalDebitPaise: number;
   totalCreditPaise: number;
   postedAt: string;
@@ -2605,8 +2633,8 @@ export const journal = {
       | { held: false; id: string; entryNo: number; totalDebitPaise: number }
       | { held: true; heldId: string; kind: HeldJournalKind; approverRole: ApproverRole | null }
     >('/api/journal', input),
-  reverse: (entryId: string, memo?: string) =>
-    api.patch<{ id: string; entryNo: number }>('/api/journal', { entryId, memo }),
+  reverse: (entryId: string, memo?: string, date?: string) =>
+    api.patch<{ id: string; entryNo: number }>('/api/journal', { entryId, memo, date }),
 };
 
 /** A journal kept to fill the journal form again (/api/journal-templates). */
@@ -2751,6 +2779,22 @@ export interface InvoicePrintInput {
 export const invoicePrint = {
   get: () => api.get<InvoicePrintSettings>('/api/settings/invoice-print'),
   save: (input: InvoicePrintInput) => api.put<{ ok: true }>('/api/settings/invoice-print', input),
+};
+
+/** Settings → PDF Templates: the template each document prints in, and the business as it prints. */
+export interface PdfTemplateSettings {
+  template: import('@/lib/print-template').PrintTemplate;
+  business: {
+    orgId: string; name: string; logoUrl: string | null; logoFileId: string | null;
+    address: string | null; city: string | null; pincode: string | null; stateCode: string | null;
+    gstin: string | null; pan: string | null; email: string | null; phone: string | null; signatoryName: string | null;
+  };
+}
+
+export const pdfTemplates = {
+  get: () => api.get<PdfTemplateSettings>('/api/settings/templates'),
+  save: (template: import('@/lib/print-template').PrintTemplate) =>
+    api.put<{ template: import('@/lib/print-template').PrintTemplate }>('/api/settings/templates', { template }),
 };
 
 // ── Opening balances ─────────────────────────────────────────────────────────

@@ -430,7 +430,10 @@ export async function balanceSheet(
 
   const assetRows = all.filter((r) => r.type === 'asset' && r.balancePaise !== 0);
   if (closingStockPaise !== 0) {
-    assetRows.push(computedRow('closing-stock', postedNow ? 'Stock not yet in the ledger' : 'Closing stock (weighted average cost)', 'asset', 'stock', closingStockPaise));
+    // The method the stock is valued by, as the items say: FIFO, weighted average, or both.
+    const methods = new Set(stockNow.lines.filter((l) => l.qty > 0).map((l) => l.valuation));
+    const method = methods.has('fifo') && methods.has('average') ? 'FIFO and weighted average' : methods.has('fifo') ? 'FIFO' : 'weighted average cost';
+    assetRows.push(computedRow('closing-stock', postedNow ? 'Stock not yet in the ledger' : `Closing stock (${method})`, 'asset', 'stock', closingStockPaise));
   }
   const liabilityRows = all.filter((r) => r.type === 'liability' && r.balancePaise !== 0);
   const equityRows = all.filter((r) => r.type === 'equity' && r.balancePaise !== 0);

@@ -108,6 +108,10 @@ export async function checklist(ex: Executor, orgId: number): Promise<ChecklistA
     n(sql`SELECT COUNT(*) AS n FROM bills WHERE org_id = ${orgId} AND tds_amount > 0`), c('gstr2b_entries'),
   ]);
   const [budgets] = await Promise.all([c('budgets')]);
+  const [reversals, cnApplications, statutoryPaid] = await Promise.all([
+    n(sql`SELECT COUNT(*) AS n FROM journal_entries WHERE org_id = ${orgId} AND reversal_of_entry_id IS NOT NULL`),
+    c('credit_note_applications'), c('statutory_payments'),
+  ]);
   const [apiKeys, webhooks, tally, mail, gateway] = await Promise.all([
     c('api_keys', sql`AND revoked_at IS NULL`), c('webhooks'), c('tally_connectors'), Promise.resolve(mailStatus()), gatewayStatus(ex, orgId),
   ]);
@@ -188,11 +192,13 @@ export async function checklist(ex: Executor, orgId: number): Promise<ChecklistA
       p('Company', `${org?.name ?? ''}${companies > 1 ? ` · ${companies} companies` : ''}`, '/settings?tab=org'),
       p('Financial year setup', `${fyLabel}, ${MONTH[fyStart]} to ${MONTH[((fyStart + 10) % 12) + 1]}`, '/accountant/period-close'),
       p('Backup and restore', backups ? `${plural(backups, 'backup')}, last ${day(lastBackup?.at)}${drills ? `; restore proved ${day(lastDrill?.at)}` : ''}` : 'Daily encrypted backup and restore drill (npm run db:backup)', '/settings?tab=backups', !!backups),
+      p('Multi-company consolidation', companies > 1 ? `${companies} companies; what they owe and sold each other eliminated` : 'Side by side, inter-company balances and trade eliminated', '/reports/consolidated', companies > 1),
       p('Statutory configuration', [gstins && `${plural(gstins, 'GSTIN')}`, org?.pan && 'PAN', org?.tan && 'TAN', org?.cin && 'CIN'].filter(Boolean).join(' · ') || 'Not set', '/settings?tab=statutory', !!(gstins || org?.pan)),
     ],
     security: [
       p('Role based access', `${plural(users, 'user')} in ${plural(roles, 'role')}${customRoles ? `, ${plural(customRoles, 'custom role')}` : ''}`, '/settings?tab=users'),
       p('Audit logs', `${plural(audit, 'entry')}, none editable`, '/accountant/audit-trail', audit > 0),
+      p('Audit log export', 'Every filtered event to CSV, XLS or XLSX: Indian time, user, IP, old and new values', '/accountant/audit-trail', audit > 0),
       p('MFA', `${mfa} of ${users} users on two-step sign-in`, '/settings?tab=policies', mfa > 0),
       p('Approval history', `${plural(approvals, 'approval step')}${rules ? ` under ${plural(rules, 'rule')}` : ''}`, '/approvals', approvals > 0),
     ],
@@ -202,10 +208,12 @@ export async function checklist(ex: Executor, orgId: number): Promise<ChecklistA
       p('Employee masters', plural(employees, 'employee'), '/payroll/employees', employees > 0),
       p('Warehouse masters', plural(warehouses, 'warehouse'), '/inventory/warehouses', warehouses > 0),
       p('Items and stock groups', `${plural(items, 'item')} in ${plural(stockGroups, 'group')}`, '/sales/items', items > 0),
+      p('Bulk import with validation', 'Configure, Map Fields, Preview: every row checked before anything is saved; Zoho exports, Excel .xls and .xlsx, CSV', '/import/customers'),
     ],
     vouchers: [
       p('Sales invoices and bills', `${plural(Number(v.inv), 'invoice')} · ${plural(Number(v.bill), 'bill')}`, '/sales/invoices', v.inv > 0),
       p('Journal', plural(Number(v.jv), 'journal'), '/accountant/journals', v.jv > 0),
+      p('Voucher reversal', reversals ? `${plural(reversals, 'reversal')} posted, each linked to its original` : 'Reverse a journal on a date of your choice; the original stays', '/accountant/journals', reversals > 0),
       p('Contra', plural(Number(v.contra), 'contra entry'), '/banking/transfers', v.contra > 0),
       p('Debit note', plural(Number(v.dn), 'debit note'), '/sales/debit-notes', v.dn > 0),
       p('Credit note', plural(Number(v.cn), 'credit note'), '/sales/credit-notes', v.cn > 0),
@@ -216,40 +224,47 @@ export async function checklist(ex: Executor, orgId: number): Promise<ChecklistA
       p('Transfer', `${plural(transfers, 'transfer')} between godowns`, '/inventory/transfers', transfers > 0),
       p('Valuation reports', stock ? `Stock worth ${inr(stock.totalValuePaise)} at ${valuation?.v?.includes('fifo') ? 'FIFO' : 'weighted average'} cost` : 'Stock summary and valuation', '/inventory/stock', !!stock),
       p('Goods receipts', plural(grn, 'goods receipt'), '/purchases/goods-receipts', grn > 0),
+      p('FIFO and the ledger agree', 'A FIFO sale is costed from its oldest purchases, so Inventory in the ledger equals the valuation report', '/reports/inventory-valuation', !!stock),
     ],
     banking: [
       p('Bank accounts', plural(bankCount, 'account'), '/banking', bankCount > 0),
       p('Bank reconciliation', `${Number(bank?.matched ?? 0)} of ${Number(bank?.total ?? 0)} statement lines reconciled`, '/banking/reconcile', Number(bank?.matched ?? 0) > 0),
+      p('Bulk statement upload', imports ? `${plural(imports, 'statement')} imported: CSV, Excel .xls and .xlsx, OFX, MT940; duplicates skipped` : 'CSV, Excel .xls and .xlsx, OFX, MT940, several files at once', '/banking/imports', imports > 0),
       p('Payment processing', `${plural(batches, 'NEFT batch')} · ${plural(chequePayments, 'cheque payment')}`, '/purchases/payment-batches', batches + chequePayments > 0),
     ],
     receivables: [
       p('Customer balances and ageing', `${plural(customers, 'customer')}, aged by days overdue`, '/reports/ar-ageing', v.inv > 0),
       p('Collections', `${plural(followUps, 'follow-up')} · ${plural(reminders, 'reminder')}`, '/sales/collections', followUps + reminders > 0),
+      p('Credit notes: apply, refund, void', `${plural(Number(v.cn), 'credit note')}${cnApplications ? `, ${plural(cnApplications, 'application')} to invoices` : ''}`, '/sales/credit-notes', v.cn > 0),
       p('Balance confirmations', plural(confirmationsC, 'confirmation'), '/accountant/balance-confirmations', confirmationsC > 0),
     ],
     payables: [
       p('Supplier balances and ageing', `${plural(vendors, 'supplier')}, aged by days overdue`, '/reports/ap-ageing', v.bill > 0),
       p('MSME 45-day watch', plural(msme, 'MSME supplier'), '/purchases/msme-tracker', msme > 0),
+      p('Duplicate bill detection', 'A supplier\'s bill number is refused a second time; look-alikes flagged while typing', '/purchases/bills/new', v.bill > 0),
       p('Balance confirmations', plural(confirmationsV, 'confirmation'), '/accountant/balance-confirmations', confirmationsV > 0),
     ],
     assets: [
       p('Asset register', assets ? `${plural(assets, 'asset')}, cost ${inr(assetCost)}` : 'No assets yet', '/accountant/fixed-assets', assets > 0),
+      p('Disposal', disposals ? `${plural(disposals, 'asset')} sold or scrapped, gain or loss posted` : 'Sell or scrap: depreciation to the day, gain or loss posted', '/accountant/fixed-assets', disposals > 0),
       p('Depreciation', depRuns ? `${plural(depRuns, 'run')} to ${day(lastDep?.at)}; written down to ${inr(assetNet)}` : 'Schedule II, monthly or yearly', '/accountant/fixed-assets', depRuns > 0),
     ],
     payroll: [
       p('Employee records', plural(employees, 'employee'), '/payroll/employees', employees > 0),
       p('Payroll processing', payrollRuns ? `${plural(payrollRuns, 'month')} posted, latest ${monthOf(lastRun?.p)}` : 'No month posted yet', '/payroll/runs', payrollRuns > 0),
       p('Leave', plural(leave, 'leave entry'), '/payroll/leave', leave > 0),
+      p('Statutory registers', `PF, ESI, PT, LWF and TDS by employee${statutoryPaid ? `; ${plural(statutoryPaid, 'due')} paid` : ''}`, '/payroll/statutory', payrollRuns > 0),
     ],
     gst: [
       p('GST returns', filings ? `${plural(filings, 'return')} filed${lastFiled?.p ? `, GSTR-3B to ${monthOf(lastFiled.p)}` : ''}` : 'GSTR-1, 3B, 9 prepared from the books', '/gst/compliance-calendar', filings > 0),
       p('E-invoicing (IRN)', plural(irns, 'IRN'), '/gst/einvoices', irns > 0),
       p('TDS / TCS', `TDS on ${plural(tdsDocs, 'bill')}`, '/gst/tds-tcs', tdsDocs > 0),
       p('Tax reporting', `${plural(itcRecon, 'GSTR-2B line')} reconciled`, '/gst/itc-reconciliation', itcRecon > 0),
+      p('Return filing status', filings ? `${plural(filings, 'return')} filed; every return by month, with its ARN` : 'Every return by month: filed, overdue or due', '/gst/return-status', filings > 0),
     ],
     budgets: [
       p('Budgets', `${plural(budgets, 'budget')} for ${fyLabel}`, '/accountant/budgets', budgets > 0),
-      p('Variance analysis', budget ? `${inr(budget.totals.actualPaise)} spent of ${inr(budget.totals.budgetPaise)} budgeted` : 'Budget against actual, with the variance', '/accountant/budgets', !!budget),
+      p('Variance analysis', budget ? `Budget to date ${inr(budget.totals.budgetToDatePaise)}; variance ${inr(Math.abs(budget.totals.varianceToDatePaise))} ${budget.totals.varianceToDatePaise >= 0 ? 'favourable' : 'adverse'}, month by month` : 'Budget against actual: variance in rupees and per cent, month by month', '/accountant/budgets', !!budget),
       p('Cost centres', `${plural(costCentres, 'cost centre')}, profit by each`, '/accountant/cost-centres', costCentres > 0),
     ],
     reporting: [
@@ -257,13 +272,14 @@ export async function checklist(ex: Executor, orgId: number): Promise<ChecklistA
       p('Balance sheet', 'Schedule III, with the previous year', '/reports/balance-sheet'),
       p('Profit and loss', 'Schedule III, monthly or yearly', '/reports/profit-and-loss'),
       p('Cash flow and fund flow', 'Indirect method; sources and uses', '/reports/cash-flow'),
+      p('Custom filters and saved reports', 'Basis, branch and comparison on the statements; party filters on ageing; saved views', '/reports/profit-and-loss'),
     ],
     integration: [
       p('API', plural(apiKeys, 'live key'), '/settings?tab=developer', apiKeys > 0),
       p('ERP (webhooks)', plural(webhooks, 'webhook'), '/settings?tab=developer', webhooks > 0),
       p('BI (Power BI, Excel)', apiKeys ? 'Live tables over the API key' : 'Live tables, once a key is made', '/settings?tab=developer', apiKeys > 0),
       p('Tally', tally ? plural(tally, 'live connector') : 'Import, export and live connector', '/tally'),
-      p('Payroll', 'Built in; or imported as journals', '/payroll/runs', payrollRuns > 0),
+      p('Payroll', 'Posted to the ledger; PF, ESI, PT and LWF dues paid against their payables', '/payroll/statutory', payrollRuns > 0),
     ],
   };
 

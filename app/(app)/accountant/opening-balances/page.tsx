@@ -1,5 +1,6 @@
 'use client';
 
+import { useRouter } from 'next/navigation';
 // Opening balances — where the books start.
 //
 // A business does not begin the day it starts using accounting software. What
@@ -21,6 +22,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { PageHeader } from '@/components/shared/page-header';
+import { ModuleMenu } from '@/components/shared/module-menu';
+import { DropdownMenuItem } from '@/components/ui/dropdown-menu';
 import { Money } from '@/components/shared/money';
 import { JournalEntryTable } from '@/components/shared/journal-table';
 import { AsyncPage, LoadingRows } from '@/components/shared/async-state';
@@ -42,12 +45,18 @@ export default function OpeningBalancesPage() {
   const state = useApi<OpeningSummaryResponse>(() => openingBalances.summary(), []);
   const entries = useApi<JournalResponse>(() => journal.list({ sourceType: 'opening', limit: 50 }), []);
   const refresh = () => { void state.refetch(); void entries.refetch(); };
+  const router = useRouter();
 
   return (
     <>
       <PageHeader
         title="Opening balances"
         description="Where the books start: everything the business already owned and owed on day one."
+        actions={
+          <ModuleMenu slug="opening-balances" onRefresh={refresh}>
+            <DropdownMenuItem onClick={() => router.push('/import/opening-bills')}>Import Unpaid Opening Invoices and Bills</DropdownMenuItem>
+          </ModuleMenu>
+        }
       />
       <AsyncPage state={state} loading={<LoadingRows rows={10} />}>
         {(s) => (

@@ -10,7 +10,7 @@
 // straight back in on the Import page — into this book or another.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { ArrowLeft, DatabaseBackup, Download, FileArchive, FileJson, FileSpreadsheet, FileText, FileType, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -55,6 +55,11 @@ export default function ExportPage() {
   const state = useApi<{ modules: ModuleInfo[] }>(() => api.get('/api/export'), []);
   const canBackup = usePermission('settings', 'view');
   const [module, setModule] = useState('contacts');
+  // Export ▸ on a list opens this page set to its records (?module=invoices).
+  useEffect(() => {
+    const want = new URLSearchParams(window.location.search).get('module');
+    if (want) setModule(want);
+  }, []);
   const [format, setFormat] = useState<Format>('csv');
   const [period, setPeriod] = useState<Period>('all');
   const [from, setFrom] = useState(`${fyStart()}-04-01`);

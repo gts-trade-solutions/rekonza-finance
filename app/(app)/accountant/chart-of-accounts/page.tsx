@@ -21,6 +21,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
 import { PageHeader } from '@/components/shared/page-header';
+import { ModuleMenu } from '@/components/shared/module-menu';
 import { Money } from '@/components/shared/money';
 import { AsyncPage } from '@/components/shared/async-state';
 import { Field } from '@/components/shared/form-bits';
@@ -120,7 +121,7 @@ export default function ChartOfAccountsPage() {
       <PageHeader
         title="Chart of Accounts"
         description="The list of buckets every rupee gets sorted into. Everything in the app ultimately lands in one of these."
-        actions={
+        actions={<>{
           canCreate && (
             <Dialog open={open} onOpenChange={setOpen}>
               <DialogTrigger asChild>
@@ -180,6 +181,7 @@ export default function ChartOfAccountsPage() {
               </DialogContent>
             </Dialog>
           )
+        }<ModuleMenu slug="accounts" onRefresh={() => void state.refetch()} /></>
         }
       />
 

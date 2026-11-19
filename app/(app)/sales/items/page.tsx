@@ -333,9 +333,9 @@ export default function ItemsPage() {
                   <DropdownMenuSub>
                     <DropdownMenuSubTrigger>Import</DropdownMenuSubTrigger>
                     <DropdownMenuSubContent className="min-w-48">
-                      <DropdownMenuItem onClick={() => router.push('/settings/import')}>Import Items</DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => router.push('/import/items')}>Import Items</DropdownMenuItem>
                       {/* Opening stock comes in on the item rows: their opening quantity and rate. */}
-                      <DropdownMenuItem onClick={() => router.push('/settings/import')}>Import Opening Stock</DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => router.push('/import/items')}>Import Opening Stock</DropdownMenuItem>
                     </DropdownMenuSubContent>
                   </DropdownMenuSub>
                 )}

@@ -4,7 +4,7 @@ import { route, body, query, asId, notFound } from '@/lib/server/http';
 import { logAudit, auditMeta, snapshot, changesBetween, describeChanges } from '@/lib/server/audit';
 import { toPaiseFromSql } from '@/lib/server/money-sql';
 import {
-  addAsset, addCost, assetRegister, disposeAsset, ensureAssetClasses, itDepreciation, listAssetClasses,
+  addAsset, addCost, assetDisposals, assetRegister, disposeAsset, ensureAssetClasses, itDepreciation, listAssetClasses,
   listRuns, minimumGstOnSale, nextRunFrom, previewDepreciation, putToUse, recordVerification, reverseLatestRun,
   runDepreciation, saveAssetClass, setItOpening,
 } from '@/lib/server/services/fixed-assets';
@@ -24,7 +24,8 @@ const lastFy = () => {
 export const GET = route(
   async ({ orgId, req }) => {
     const q = query(req, z.object({
-      view: z.enum(['register', 'runs', 'it', 'asset', 'preview', 'sale-advice']).default('register'),
+      view: z.enum(['register', 'runs', 'it', 'asset', 'preview', 'sale-advice', 'disposals']).default('register'),
+      from: DATE.optional(),
       id: z.string().optional(),
       branchId: z.string().optional(),
       to: DATE.optional(),
@@ -35,6 +36,10 @@ export const GET = route(
     await transaction((trx) => ensureAssetClasses(trx, orgId));
 
     switch (q.view) {
+      case 'disposals': {
+        const fyFrom = `${lastFy()}-04-01`;
+        return { rows: await assetDisposals(db, orgId, q.from ?? fyFrom, q.to ?? new Date().toISOString().slice(0, 10)) };
+      }
       case 'runs': {
         const branches = await db.selectFrom('branches').select(['id', 'name']).where('org_id', '=', orgId).where('is_active', '=', 1).execute();
         const next = await Promise.all(branches.map(async (b) => ({ branchId: asId(b.id), branchName: b.name, from: await nextRunFrom(db, orgId, b.id) })));

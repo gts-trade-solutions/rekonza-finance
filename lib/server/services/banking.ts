@@ -44,8 +44,14 @@ export interface StatementRow {
  * month. Date, narration, reference and both amounts are enough to identify a
  * line; the running balance is excluded because banks recompute it when a
  * later correction lands, which would make the same line hash differently.
+ *
+ * Two identical lines in one statement are two real transactions (two ₹2,000
+ * ATM withdrawals on one day, with no reference): the second is counted as
+ * the line's second occurrence, so it is kept, and a later statement that
+ * repeats both is still recognised line for line. The first occurrence hashes
+ * as it always has, so lines imported before this still match.
  */
-function fingerprint(accountId: number, row: StatementRow): string {
+function fingerprint(accountId: number, row: StatementRow, occurrence = 0): string {
   return createHash('sha256')
     .update(
       [
@@ -55,6 +61,7 @@ function fingerprint(accountId: number, row: StatementRow): string {
         row.reference?.trim().toLowerCase() ?? '',
         row.depositPaise ?? 0,
         row.withdrawalPaise ?? 0,
+        ...(occurrence ? [`#${occurrence}`] : []),
       ].join('|'),
     )
     .digest('hex');
@@ -130,9 +137,13 @@ export async function importStatement(
   const seen = new Set(existing.map((r) => r.dedupe_hash));
 
   const fresh: { row: StatementRow; hash: string }[] = [];
+  const times = new Map<string, number>();
   for (const row of rows) {
-    const hash = fingerprint(bankAccountId, row);
-    // Also guard within the file itself: a statement can repeat a line.
+    // The how-many-th time this same line appears in this file (see fingerprint).
+    const base = fingerprint(bankAccountId, row);
+    const n = times.get(base) ?? 0;
+    times.set(base, n + 1);
+    const hash = n ? fingerprint(bankAccountId, row, n) : base;
     if (seen.has(hash)) continue;
     seen.add(hash);
     fresh.push({ row, hash });

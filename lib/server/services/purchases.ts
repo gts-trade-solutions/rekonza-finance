@@ -41,7 +41,8 @@ import { toPaiseFromSql, toSqlFromPaise } from '../money-sql';
 import { assertApproved, ruleFor, submitForApproval } from './approvals';
 import { allocateOrgNumber, postEntry, reverseEntry, type DraftLine } from '../ledger/posting';
 import { CODE, accountIds, requireAccount } from '../ledger/chart-of-accounts';
-import { ApiError, badRequest, notFound } from '../http';
+import { ApiError, badRequest, conflict, notFound } from '../http';
+import { findBillDuplicates } from './bill-duplicates';
 import { atRate, foreignOf, fyLabelFor } from './sales';
 import { removeLandedCost } from './landed-cost';
 
@@ -148,6 +149,12 @@ export async function createBill(
     .select(['id', 'display_name', 'state_code', 'gst_treatment', 'gstin', 'pan', 'pan_status', 'tds_section'])
     .where('id', '=', input.vendorId).where('org_id', '=', orgId).executeTakeFirst();
   if (!vendor) throw notFound('That vendor does not exist.');
+  // A supplier's bill number is entered once (bill-duplicates.ts): the second
+  // time is refused by name, before anything is posted or paid.
+  const twin = (await findBillDuplicates(trx, orgId, { vendorId: input.vendorId, vendorInvoiceNo: input.vendorInvoiceNo })).exact;
+  if (twin) {
+    throw conflict(`Bill ${input.vendorInvoiceNo} from ${twin.vendorName} is already in your books as ${twin.internalNo}, dated ${twin.date}. A supplier's bill is entered once: open that one, or void it first if it was wrong.`);
+  }
 
   // A composition dealer cannot charge GST, so there is no tax on the bill and
   // nothing to claim — treating it as taxable would invent a credit.
