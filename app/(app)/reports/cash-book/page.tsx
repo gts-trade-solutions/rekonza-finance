@@ -81,8 +81,10 @@ export default function CashBookPage() {
         </div>
       )}
     >
-      <AsyncPage state={state} loading={<LoadingRows rows={10} />}>
-        {(d) => !d ? <p className="text-sm text-muted-foreground">Add a cash or bank account first.</p> : (
+      <AsyncPage state={state} loading={<LoadingRows rows={10} />} empty={
+        <p className="text-sm text-muted-foreground" data-slot="cash-book-empty">Add a cash or bank account first (Banking → Add account).</p>
+      }>
+        {(d) => !d ? null : (
           <div className="space-y-4">
             <Card className="flex flex-wrap items-center gap-x-6 gap-y-1 p-4 text-sm">
               <span>Opening <Money value={d.openingPaise} className="font-medium" /></span>

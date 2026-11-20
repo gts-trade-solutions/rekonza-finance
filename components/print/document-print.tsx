@@ -17,6 +17,7 @@ import { stateTaxLabel } from '@/lib/tax/gst';
 import { cn } from '@/lib/utils';
 import { isPrintLanguage, PRINT_LANGUAGES, type PrintLanguage } from '@/lib/print-languages';
 import { printPage } from '@/lib/output-guard';
+import { useDocumentTitle } from '@/lib/use-document-title';
 import type { PrintDoc, PrintKind, PrintParty } from '@/lib/print-doc';
 import { layoutFor } from '@/lib/print-template';
 import { addressLines, placeName, SheetLang, taxRows, zohoWords, ZohoSheet, type Ribbon, type SheetModel, type SheetParty } from '@/components/print/zoho-sheet';
@@ -52,6 +53,7 @@ export function DocumentPrintView({ doc, shared = false, back, actions }: {
   const [copy, setCopy] = useState(doc.copies[0]);
   const [lang, setLang] = useState<PrintLanguage | ''>(isPrintLanguage(doc.seller.printLanguage) ? doc.seller.printLanguage : '');
   const shown = copy === 'all' ? doc.copies : [copy];
+  useDocumentTitle(doc.number);
 
   return (
     <div className="space-y-4">

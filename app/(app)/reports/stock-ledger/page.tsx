@@ -28,7 +28,8 @@ const qty = (n: number) => (n ? n.toLocaleString('en-IN', { maximumFractionDigit
 export default function StockLedgerPage() {
   const [range, setRange] = useReportRange();
   const items = useAppStore((s) => s.items);
-  const options = useMemo(() => items.filter((i) => i.kind === 'goods').map((i) => ({ value: i.id, label: i.name, sublabel: i.sku ?? undefined })), [items]);
+  // Only an item kept in stock (Track inventory ticked) has a ledger.
+  const options = useMemo(() => items.filter((i) => i.kind === 'goods' && i.trackInventory).map((i) => ({ value: i.id, label: i.name, sublabel: i.sku ?? undefined })), [items]);
   const [itemId, setItemId] = useState('');
   const pick = itemId || options[0]?.value || '';
   const state = useApi<Ledger | null>(
@@ -54,8 +55,12 @@ export default function StockLedgerPage() {
         ]);
       }}
     >
-      <AsyncPage state={state}>
-        {(d) => !d ? <p className="text-sm text-muted-foreground">No stocked items yet.</p> : (
+      <AsyncPage state={state} empty={
+        <p className="text-sm text-muted-foreground" data-slot="stock-ledger-empty">
+          No item is kept in stock yet. Tick <span className="font-medium">Track inventory</span> on a goods item (Items → the item → Edit) and its movements show here.
+        </p>
+      }>
+        {(d) => !d ? null : (
           <ReportTable>
             <thead className="bg-muted/40 text-xs text-muted-foreground">
               <tr>

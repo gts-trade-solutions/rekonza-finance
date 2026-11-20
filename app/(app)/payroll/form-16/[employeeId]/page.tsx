@@ -13,6 +13,7 @@ import { useApi } from '@/lib/api/use-api';
 import { formatINR } from '@/lib/money';
 import { cn } from '@/lib/utils';
 import { printPage } from '@/lib/output-guard';
+import { useDocumentTitle } from '@/lib/use-document-title';
 
 interface Form16 {
   form: string; fyStart: number; assessmentYear: string;
@@ -41,6 +42,7 @@ export default function Form16Page({ params }: { params: Promise<{ employeeId: s
 function Form16View({ employeeId }: { employeeId: string }) {
   const fy = Number(useSearchParams().get('fy'));
   const state = useApi(() => api.get<Form16>('/api/payroll/form16', { fy, employeeId }), [fy, employeeId]);
+  useDocumentTitle(state.data ? `Form 16 ${state.data.employee.name} AY ${state.data.assessmentYear}` : null);
   return (
     <AsyncPage state={state} loading={<LoadingRows rows={10} />}>
       {(f) => {

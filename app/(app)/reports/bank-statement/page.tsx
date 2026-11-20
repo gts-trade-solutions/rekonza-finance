@@ -118,7 +118,9 @@ export default function BankStatementPage() {
       {accounts.length === 0 ? (
         <Card className="p-6 text-sm text-muted-foreground">Add a bank account under Banking first.</Card>
       ) : (
-        <AsyncPage state={state} loading={<LoadingRows rows={5} />}>
+        <AsyncPage state={state} loading={<LoadingRows rows={5} />} empty={
+          <p className="text-sm text-muted-foreground" data-slot="bank-statement-empty">Add a bank account first (Banking → Add account).</p>
+        }>
           {(d) => d && (
             <Card className="max-w-4xl p-6" data-slot="bank-statement">
               <div className="mb-3 text-center">

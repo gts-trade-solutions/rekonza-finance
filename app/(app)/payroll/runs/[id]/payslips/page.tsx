@@ -14,10 +14,12 @@ import { cn } from '@/lib/utils';
 import type { Run } from '../page';
 import { Payslip, monthName } from '@/components/payroll/payslip';
 import { printPage } from '@/lib/output-guard';
+import { useDocumentTitle } from '@/lib/use-document-title';
 
 export default function PayslipsPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const state = useApi<Run>(() => api.get(`/api/payroll/runs/${id}`), [id]);
+  useDocumentTitle(state.data ? `Payslips ${monthName(state.data.month)}` : null);
   return (
     <AsyncPage state={state} loading={<LoadingRows rows={8} />}>
       {(run) => (

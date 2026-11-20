@@ -24,6 +24,7 @@ import { stateName, stateTaxLabel } from '@/lib/tax/gst';
 import { cn } from '@/lib/utils';
 import { isPrintLanguage, PRINT_LANGUAGES, type PrintLanguage } from '@/lib/print-languages';
 import { printPage } from '@/lib/output-guard';
+import { useDocumentTitle } from '@/lib/use-document-title';
 import { DEFAULT_TEMPLATE, layoutFor } from '@/lib/print-template';
 import { addressLines, SheetLang, taxRows, termsLabel, zohoWords, ZohoSheet, type Ribbon, type SheetLine, type SheetModel } from '@/components/print/zoho-sheet';
 
@@ -184,6 +185,8 @@ export function PrintView({ inv, shared = false }: { inv: InvoiceDetail; shared?
   const [copy, setCopy] = useState('original');
   const [lang, setLang] = useState<PrintLanguage | ''>(isPrintLanguage(inv.seller.printLanguage) ? inv.seller.printLanguage : '');
   const shown = copy === 'all' ? copies : copies.filter((c) => c.key === copy);
+  // Saved as PDF, the file is named after the invoice, as Zoho's is.
+  useDocumentTitle(inv.number);
   // PDF/Print on the invoice opens this page with ?print=1: print once the logo has loaded.
   useEffect(() => {
     if (shared || new URLSearchParams(window.location.search).get('print') !== '1') return;

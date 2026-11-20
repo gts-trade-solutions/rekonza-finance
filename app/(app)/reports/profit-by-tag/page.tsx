@@ -39,8 +39,10 @@ export default function ProfitByTagPage() {
         downloadCsv(`profit-by-${d.tag}.csv`, [[d.tag, 'Income', 'Expense', 'Profit'], ...d.rows.map((r) => [r.option, toRupees(r.incomePaise), toRupees(r.expensePaise), toRupees(r.profitPaise)])]);
       }}
     >
-      <AsyncPage state={state}>
-        {(d) => !d ? <p className="text-sm text-muted-foreground">No reporting tags yet. Add them under Settings → Reporting tags.</p> : (
+      <AsyncPage state={state} empty={tags.loading ? undefined : (
+        <p className="text-sm text-muted-foreground" data-slot="profit-by-tag-empty">No reporting tags yet. Add them under Settings → Reporting tags, then pick one on invoices and bills.</p>
+      )}>
+        {(d) => !d ? null : (
           <ReportTable>
             <thead className="bg-muted/40 text-xs text-muted-foreground">
               <tr><th className="px-3 py-2 text-left font-medium">{d.tag}</th><th className="px-3 py-2 text-right font-medium">Income</th><th className="px-3 py-2 text-right font-medium">Expense</th><th className="px-3 py-2 text-right font-medium">Profit</th></tr>

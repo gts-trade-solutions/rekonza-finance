@@ -12,7 +12,10 @@ import { AsyncPage } from '@/components/shared/async-state';
 import { api } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
 
-type Status = 'active' | 'expired' | 'signed_out' | 'idle' | 'revoked';
+// Why a session ended, as the server records it (sessions.end_reason). A reason
+// this list does not know yet still shows, by its own name, instead of breaking the page.
+type Status = 'active' | 'expired' | 'signed_out' | 'idle' | 'revoked' | 'session_limit'
+  | 'password_changed' | 'password_reset' | 'mfa_reset' | 'disabled' | (string & {});
 interface SignIns {
   scope: 'organization' | 'self';
   sessions: {
@@ -26,13 +29,22 @@ const when = (iso: string | null) => (iso
   ? new Date(iso).toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })
   : '—');
 
-const STATUS: Record<Status, { label: string; tone: string }> = {
+const RED = 'border-red-500/40 text-red-700 dark:text-red-300';
+const AMBER = 'border-amber-500/40 text-amber-700 dark:text-amber-300';
+const STATUS: Record<string, { label: string; tone: string }> = {
   active: { label: 'Active', tone: 'border-emerald-500/40 text-emerald-700 dark:text-emerald-300' },
   signed_out: { label: 'Signed out', tone: 'text-muted-foreground' },
-  idle: { label: 'Idle sign-out', tone: 'border-amber-500/40 text-amber-700 dark:text-amber-300' },
-  revoked: { label: 'Ended', tone: 'border-red-500/40 text-red-700 dark:text-red-300' },
+  idle: { label: 'Idle sign-out', tone: AMBER },
+  revoked: { label: 'Ended', tone: RED },
   expired: { label: 'Expired', tone: 'text-muted-foreground' },
+  session_limit: { label: 'Too many sign-ins', tone: AMBER },
+  password_changed: { label: 'Password changed', tone: 'text-muted-foreground' },
+  password_reset: { label: 'Password reset', tone: AMBER },
+  mfa_reset: { label: 'Two-step reset', tone: AMBER },
+  disabled: { label: 'User switched off', tone: RED },
 };
+export const statusOf = (s: string) =>
+  STATUS[s] ?? { label: s ? s.charAt(0).toUpperCase() + s.slice(1).replace(/_/g, ' ') : 'Ended', tone: 'text-muted-foreground' };
 
 /** "Chrome on Windows" from a user-agent string: enough to recognise a device. */
 function device(ua: string | null): string {
@@ -95,7 +107,7 @@ export function SignInsPanel() {
                         <td className="whitespace-nowrap px-4 py-2 text-xs">{when(s.startedAt)}</td>
                         <td className="whitespace-nowrap px-4 py-2 text-xs">{when(s.lastSeenAt)}</td>
                         <td className="px-4 py-2">
-                          <Badge variant="outline" className={`text-[10px] ${STATUS[s.status].tone}`}>{STATUS[s.status].label}</Badge>
+                          <Badge variant="outline" className={`text-[10px] ${statusOf(s.status).tone}`}>{statusOf(s.status).label}</Badge>
                           {s.endedAt && <p className="mt-0.5 text-[11px] text-muted-foreground">{when(s.endedAt)}</p>}
                         </td>
                         <td className="px-4 py-2 text-right">

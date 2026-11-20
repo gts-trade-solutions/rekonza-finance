@@ -65,12 +65,20 @@ export function AsyncPage<T>({
   state,
   children,
   loading,
+  empty,
 }: {
   state: { data: T | null; loading: boolean; error: string | null; refetch: () => void };
   children: (data: T) => ReactNode;
   loading?: ReactNode;
+  /**
+   * What to show when the load finished with nothing to show (no account to
+   * pick, no tag yet). Without it a null result keeps the loading rows up, so a
+   * page that can answer "nothing here" must say what instead.
+   */
+  empty?: ReactNode;
 }) {
   if (state.error) return <LoadFailed message={state.error} onRetry={state.refetch} />;
+  if (!state.loading && state.data == null && empty !== undefined) return <>{empty}</>;
   if (state.loading || !state.data) return <>{loading ?? <LoadingRows />}</>;
   return <>{children(state.data)}</>;
 }

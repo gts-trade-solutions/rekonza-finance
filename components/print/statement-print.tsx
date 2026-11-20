@@ -12,6 +12,7 @@ import type { PartyStatement } from '@/lib/api/client';
 import { statementWords } from '@/components/shared/party-statement';
 import { stateName } from '@/lib/tax/gst';
 import { printPage } from '@/lib/output-guard';
+import { useDocumentTitle } from '@/lib/use-document-title';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const day = (iso: string) => {
@@ -26,6 +27,8 @@ const bal = (paise: number) =>
 
 export function StatementPrint({ s, backHref, bare = false }: { s: PartyStatement; backHref: string; bare?: boolean }) {
   const w = statementWords(s.side);
+  // One of many (bulk statements) leaves the page's name to the page.
+  useDocumentTitle(bare ? null : `Statement - ${s.party.name}`);
   return (
     <div className={bare ? 'break-after-page' : 'space-y-4'}>
       <div className={bare ? 'hidden' : 'flex flex-wrap items-center justify-between gap-2 no-print'}>

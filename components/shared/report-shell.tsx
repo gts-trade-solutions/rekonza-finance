@@ -19,6 +19,7 @@ import {
 import { downloadWorkbook } from '@/lib/xlsx';
 import { toDelimited } from '@/lib/delimited';
 import { allowOutput, printPage } from '@/lib/output-guard';
+import { useDocumentTitle } from '@/lib/use-document-title';
 
 export type { DateRange } from '@/lib/date-range';
 
@@ -179,6 +180,8 @@ export function ReportShell({
   dataDates?: string[];
 }) {
   const s = useAppStore();
+  // Printed to PDF, the file is named after the report and its period.
+  useDocumentTitle(range ? `${title} ${asOfOnly ? `as at ${range.to}` : `${range.from} to ${range.to}`}` : title);
 
   return (
     <>
