@@ -50,7 +50,7 @@ export type ReportKind =
   | 'bills'
   | 'balance-sheet' | 'profit-loss' | 'day-book' | 'ledger' | 'register' | 'list-of-accounts' | 'other';
 
-export type ReportFormat = 'Excel' | 'HTML' | 'XML' | 'ASCII' | 'SDF' | 'CSV' | 'PDF' | 'picture';
+export type ReportFormat = 'Excel' | 'HTML' | 'XML' | 'JSON' | 'ASCII' | 'SDF' | 'CSV' | 'PDF' | 'picture';
 
 /** One row of a report: debit and credit in paise, both positive. */
 export interface ReportLine {
@@ -199,8 +199,8 @@ const FILE_NAMES: [RegExp, ReportKind, string][] = [
   [/^stk\s*sum|^stock\s*summ/i, 'stock-summary', 'Stock Summary'],
   [/^bills?\s*rec|^billsrec/i, 'bills-receivable', 'Bills Receivable'],
   [/^bills?\s*pay|^billspay/i, 'bills-payable', 'Bills Payable'],
-  [/^bal\s*sheet|^balance\s*sheet/i, 'balance-sheet', 'Balance Sheet'],
-  [/^prof\s*loss|^profit/i, 'profit-loss', 'Profit & Loss'],
+  [/^bal\s*sheet|^balance\s*sheet|^b\s*sheet/i, 'balance-sheet', 'Balance Sheet'],
+  [/^prof\s*loss|^profit|^p\s*&?\s*l\b|^pandl/i, 'profit-loss', 'Profit & Loss'],
   [/^day\s*book|^daybook/i, 'day-book', 'Day Book'],
   [/^ledger/i, 'ledger', 'Ledger'],
 ];
@@ -772,6 +772,113 @@ function fromHtml(html: string): TallyReport | null {
   // The title first, as Excel has it, so the grid reader finds it.
   if (g.title && !g.grid.slice(0, 5).some((r) => kindOfTitle(cellText(r[0])))) g.grid.unshift([{ v: g.title }]);
   return readTallyReportGrid(g.grid, 'HTML');
+}
+
+// ── JSON (a report exported with File Format JSON) ──────────────────────────
+//
+// Tally writes a report to JSON as its XML, nested the way the report is: a
+// group's rows sit inside it, under "grpexplosion", so the groups need no
+// working out.
+//
+//   { "dspaccbody": { "dspaccline": [
+//       { "dspaccname": { "dspdispname": "Current Liabilities" },
+//         "dspaccinfo": [ { "dspcldramt": { "dspcldramta": -2880.00 }, "dspclcramt": { "dspclcramta": 127710.00 } } ],
+//         "grpexplosion": { "dspaccline": [ … ] } } ] } }
+//
+// The Stock Summary has "dspstkinfo" in each line; the Balance Sheet "bsbody".
+// (Masters and vouchers, and a Day Book, come as "tallymessage": lib/tally/json.)
+
+type J = string | number | boolean | null | J[] | { [k: string]: J };
+type JO = { [k: string]: J };
+const isJO = (v: J | undefined): v is JO => !!v && typeof v === 'object' && !Array.isArray(v);
+const first = (v: J | undefined): JO | undefined => (Array.isArray(v) ? v.find(isJO) : isJO(v) ? v : undefined);
+const asList = (v: J | undefined): JO[] => (Array.isArray(v) ? v.filter(isJO) : isJO(v) ? [v] : []);
+const scalar = (v: J | undefined): string | number | null => (typeof v === 'string' || typeof v === 'number' ? v : null);
+
+/** The first value under a key of this name, searched a few levels down. */
+function findKey(v: J, key: string, depth = 0): J | undefined {
+  if (depth > 6 || !v || typeof v !== 'object') return undefined;
+  if (!Array.isArray(v) && key in v) return v[key];
+  for (const x of Array.isArray(v) ? v : Object.values(v)) {
+    const hit = findKey(x, key, depth + 1);
+    if (hit !== undefined) return hit;
+  }
+  return undefined;
+}
+
+/** A report Tally exported as JSON. Null when the text is not one (its masters and vouchers are read by lib/tally/json). */
+export function readTallyReportJson(text: string): TallyReport | null {
+  let root: J;
+  try {
+    root = JSON.parse(text.replace(/^﻿/, '')) as J;
+  } catch {
+    return null;
+  }
+  if (!root || typeof root !== 'object' || findKey(root, 'tallymessage') !== undefined) return null;
+
+  const body = findKey(root, 'dspaccbody');
+  if (body !== undefined) {
+    const lines: ReportLine[] = [];
+    let tb = false;
+    let stock = false;
+    const walk = (rows: JO[], depth: number) => {
+      for (const row of rows) {
+        const name = String(scalar(first(row.dspaccname)?.dspdispname) ?? '').trim();
+        const info = first(row.dspaccinfo);
+        const stk = first(first(row.dspstkinfo)?.dspstkcl);
+        const line: ReportLine = { name, dr: 0, cr: 0, depth };
+        if (info) {
+          tb = true;
+          line.dr = mag(scalar(first(info.dspcldramt)?.dspcldramta) ?? '');
+          line.cr = mag(scalar(first(info.dspclcramt)?.dspclcramta) ?? '');
+        }
+        if (stk) {
+          stock = true;
+          const q = quantity(scalar(stk.dspclqty) ?? '');
+          const value = -paise(figure(scalar(stk.dspclamta) ?? '') ?? 0); // stock, a debit, written negative
+          line.dr = Math.max(value, 0);
+          line.cr = Math.max(-value, 0);
+          line.qty = q?.qty ?? 0;
+          line.unit = q?.unit ?? null;
+        }
+        if (name) lines.push(line);
+        // What is under a group: any part of the line that holds lines of its own ("grpexplosion").
+        for (const [k, v] of Object.entries(row)) {
+          if (k === 'dspaccname' || k === 'dspaccinfo' || k === 'dspstkinfo') continue;
+          for (const part of asList(v)) if ('dspaccline' in part) walk(asList(part.dspaccline), depth + 1);
+        }
+      }
+    };
+    walk(asList(first(body)?.dspaccline ?? (isJO(body) ? body.dspaccline : undefined)), 0);
+    if (stock) return finish(base('stock-summary', 'Stock Summary', 'JSON', null, null), lines, []);
+    if (tb) return finish(base('trial-balance', 'Trial Balance', 'JSON', null, null), lines, []);
+    return base('other', 'report', 'JSON', null, null);
+  }
+  if (findKey(root, 'billfixed') !== undefined) {
+    const bills: TallyBill[] = [];
+    const visit = (v: J, depth = 0): void => {
+      if (depth > 8 || !v || typeof v !== 'object') return;
+      if (Array.isArray(v)) { v.forEach((x) => visit(x, depth + 1)); return; }
+      const fixed = first(v.billfixed);
+      if (fixed) {
+        const party = String(scalar(fixed.billparty) ?? '').trim();
+        if (party) {
+          bills.push({
+            party, ref: String(scalar(fixed.billref) ?? '').trim(), date: tallyDay(scalar(fixed.billdate)),
+            due: tallyDay(scalar(v.billdue) ?? null), amountPaise: -paise(figure(scalar(v.billcl) ?? '') ?? 0),
+          });
+        }
+        return;
+      }
+      Object.values(v).forEach((x) => visit(x, depth + 1));
+    };
+    visit(root);
+    return finish(base('bills', 'Bills outstanding', 'JSON', null, null), [], bills);
+  }
+  if (findKey(root, 'bsbody') !== undefined || findKey(root, 'bsname') !== undefined) return base('balance-sheet', 'Balance Sheet', 'JSON', null, null);
+  if (findKey(root, 'plbody') !== undefined || findKey(root, 'plamt') !== undefined) return base('profit-loss', 'Profit & Loss', 'JSON', null, null);
+  if (findKey(root, 'dspperiod') !== undefined) return base('other', 'month-by-month report', 'JSON', null, null);
+  return null;
 }
 
 // ── Entry points ────────────────────────────────────────────────────────────

@@ -39,7 +39,7 @@ import { parseTallyFiles, readTallyFile, summariseTallyFile } from '@/lib/tally/
 import { isTallyJson, tallyJsonToXml } from '@/lib/tally/json';
 import { readStyledXlsx, type StyledCell } from '@/lib/tally/xlsx';
 import {
-  combineTallyReports, readTallyReportGrid, readTallyReportText, tallyMastersXml, tallyReportPicture, type TallyReport,
+  combineTallyReports, readTallyReportGrid, readTallyReportJson, readTallyReportText, tallyMastersXml, tallyReportPicture, type TallyReport,
 } from '@/lib/tally/reports';
 import { tallySampleXml } from '@/lib/tally/sample';
 import { isTallyDataFile, isTallyExportFile, unzipEntry, zipEntries } from '@/lib/tally/data-files';
@@ -112,8 +112,10 @@ async function readTallyBlob(name: string, blob: Blob): Promise<ReadAs> {
   if (['iif'].includes(e)) return { as: 'other' };
   const text = await readTallyFile(blob);
   if (e === 'json' || /^\s*[{[]/.test(text.slice(0, 20))) {
+    // Masters, vouchers or a Day Book ("tallymessage"), or a report saved as JSON (Trial Balance, Stock Summary…).
     if (isTallyJson(text)) return { as: 'xml', xml: tallyJsonToXml(text) };
-    return { as: 'other' };
+    const report = readTallyReportJson(text);
+    return report ? { as: 'report', report } : { as: 'other' };
   }
   if (/^\s*</.test(text) && isInterchange(text)) return { as: 'xml', xml: text };
   const report = readTallyReportText(text, name);
@@ -272,7 +274,7 @@ export function TallyFileImport({ onOtherFiles }: {
           <ol className="list-decimal space-y-1.5 pl-5 text-xs leading-relaxed text-muted-foreground" data-slot="tally-export-steps">
             <li><span className="font-medium text-foreground">Masters</span> (ledgers, groups, stock items, their balances and unpaid bills): in TallyPrime, <kbd className="rounded border bg-muted px-1">Alt+E</kbd> Export → <em>Masters</em>, with <kbd className="rounded border bg-muted px-1">C</kbd> Configure: Type of master <em>All Masters</em>, <em>Export closing balance as opening balance</em> Yes, File Format <em>XML (Data Interchange)</em> or <em>JSON (Data Exchange)</em>.</li>
             <li><span className="font-medium text-foreground">Vouchers</span> (sales, purchases, receipts, payments, contra, journals): <kbd className="rounded border bg-muted px-1">Alt+E</kbd> Export → <em>Transactions</em>, the period to bring, XML or JSON. Or open the <em>Day Book</em>, set its period with <kbd className="rounded border bg-muted px-1">Alt+F2</kbd> and export it with <kbd className="rounded border bg-muted px-1">Alt+E</kbd> → <em>Current</em>, XML or JSON.</li>
-            <li><span className="font-medium text-foreground">Or the reports</span>, in Excel, XML, HTML or ASCII: the <em>Trial Balance</em> (<kbd className="rounded border bg-muted px-1">Alt+F5</kbd> Detailed, and <kbd className="rounded border bg-muted px-1">F12</kbd> <em>Expand all levels</em> Yes), the <em>Stock Summary</em>, and <em>Bills Receivable</em> and <em>Bills Payable</em>, all as at the day before these books start.</li>
+            <li><span className="font-medium text-foreground">Or the reports</span>, in Excel, JSON, XML, HTML or ASCII: the <em>Trial Balance</em> (<kbd className="rounded border bg-muted px-1">Alt+F5</kbd> Detailed, and <kbd className="rounded border bg-muted px-1">F12</kbd> <em>Expand all levels</em> Yes), the <em>Stock Summary</em>, and <em>Bills Receivable</em> and <em>Bills Payable</em>, all as at the day before these books start.</li>
             <li>Tally.ERP 9: the same from <em>Display</em>, with <kbd className="rounded border bg-muted px-1">Alt+E</kbd>; its SDF and Excel files are read too.</li>
           </ol>
           <p className="text-xs text-muted-foreground">

@@ -13,7 +13,7 @@ import path from 'node:path';
 import { isTallyJson, tallyJsonToXml } from '../../lib/tally/json';
 import { readStyledXlsx, unitOfFormat } from '../../lib/tally/xlsx';
 import {
-  buildTree, combineTallyReports, figure, readTallyReportGrid, readTallyReportText, tallyDay, tallyMastersXml, tallyReportPicture,
+  buildTree, combineTallyReports, figure, readTallyReportGrid, readTallyReportJson, readTallyReportText, tallyDay, tallyMastersXml, tallyReportPicture,
   type ReportLine, type TallyReport,
 } from '../../lib/tally/reports';
 import { parseTallyFiles, summariseTallyFile } from '../../lib/tally/xml';
@@ -60,6 +60,49 @@ test('the Trial Balance with every level shown reads the same from ASCII, XML, S
     assert.equal(r.openingStockPaise, 7445000, f);
   }
   assert.equal(read('tb-all.html').asAt, '2027-03-31');
+});
+
+test('reports saved as JSON: the Trial Balance nested by group, the Stock Summary, the Balance Sheet named', () => {
+  // The Trial Balance as Tally wrote it: Sundry Debtors shows a total with no ledger under it (a ledger Tally
+  // would not list in this test company), so it cannot come in as it is.
+  const raw = text('tb-all.json');
+  const asIs = readTallyReportJson(raw);
+  assert.ok(asIs);
+  assert.equal(asIs.kind, 'trial-balance');
+  assert.equal(asIs.format, 'JSON');
+  assert.match(asIs.problem ?? '', /only the total of Sundry Debtors/);
+
+  // Without that line (and its ₹59,000 out of Current Assets), every ledger comes in under its group.
+  const doc = JSON.parse(raw);
+  const assets = doc.dspaccbody.dspaccline.find((l: { dspaccname: { dspdispname: string } }) => l.dspaccname.dspdispname === 'Current Assets');
+  assets.grpexplosion.dspaccline = assets.grpexplosion.dspaccline.filter((l: { dspaccname: { dspdispname: string } }) => l.dspaccname.dspdispname !== 'Sundry Debtors');
+  assets.dspaccinfo[0].dspcldramt.dspcldramta = -258000;
+  const r = readTallyReportJson(JSON.stringify(doc));
+  assert.ok(r);
+  assert.equal(r.problem, null, r.problem ?? '');
+  assert.deepEqual(balances(r), LEDGERS);
+  const parent = Object.fromEntries(r.masters.ledgers.map((l) => [l.name, l.parent]));
+  for (const [l, p] of Object.entries(PARENTS)) assert.equal(parent[l], p, `${l} under ${p}`);
+  assert.equal(r.masters.groups.get('Office Expenses'), 'Indirect Expenses');
+  assert.equal(r.openingStockPaise, 7445000);
+
+  // Condensed: the groups alone, nothing under them.
+  for (const l of doc.dspaccbody.dspaccline) delete l.grpexplosion;
+  assert.match(readTallyReportJson(JSON.stringify(doc))?.problem ?? '', /groups only/);
+
+  const stock = readTallyReportJson(text('stock.json'));
+  assert.ok(stock);
+  assert.deepEqual(stock.masters.stockItems.map((s) => `${s.name}|${s.qty}|${s.unit}|${s.valuePaise}`),
+    ['Brake Pad Set|35|Nos|2975000', 'Engine Oil 5W30|55|Nos|2310000', 'Wheel Bearing|50|Nos|3125000']);
+  assert.equal(stock.closingStockPaise, 8410000);
+
+  assert.equal(readTallyReportJson(text('balance-sheet.json'))?.kind, 'balance-sheet');
+  // A Day Book saved as JSON is its vouchers, read as masters and vouchers are.
+  assert.equal(readTallyReportJson(text('daybook.json')), null);
+  assert.ok(isTallyJson(text('daybook.json')));
+  assert.equal(parseTallyFiles([tallyJsonToXml(text('daybook.json'))]).vouchers.length > 0, true);
+  assert.equal(readTallyReportJson('{"invoices":[]}'), null);
+  assert.equal(tallyReportPicture('BSheet.pdf')?.kind, 'balance-sheet');
 });
 
 test('a Trial Balance that shows only groups, or one level of them, is refused with how to export it', () => {
