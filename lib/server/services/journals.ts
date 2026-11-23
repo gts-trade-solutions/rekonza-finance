@@ -28,7 +28,7 @@ import { ApiError, badRequest, conflict, notFound } from '../http';
 import { applyAllocations } from './payments';
 import { ruleFor } from './approvals';
 import { ageing } from '../reports/statements';
-import { plain, recordDeletion, unlinkDocument } from './doc-delete';
+import { bankLineMatched, plain, recordDeletion, unlinkDocument } from './doc-delete';
 import { dayLabel } from '../../date-range';
 
 export interface JournalLineInput {
@@ -170,6 +170,9 @@ async function journalForChange(trx: Trx, orgId: number, entryId: number) {
   if (e.reversal_of_entry_id) throw new ApiError(409, `Entry #${e.entry_no} is itself a reversal. Post a new journal to correct it.`, 'locked_document');
   const by = await trx.selectFrom('journal_entries').select('entry_no').where('org_id', '=', orgId).where('reversal_of_entry_id', '=', entryId).executeTakeFirst();
   if (by) throw new ApiError(409, `Entry #${e.entry_no} has already been reversed by #${by.entry_no}.`, 'locked_document');
+  if (await bankLineMatched(trx, orgId, 'journal_entry', entryId)) {
+    throw new ApiError(409, `Entry #${e.entry_no} is matched to a bank statement line. Unmatch it in Banking first.`, 'locked_document');
+  }
   return e;
 }
 

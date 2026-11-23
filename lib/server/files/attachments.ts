@@ -216,7 +216,14 @@ export async function attachmentRow(ex: Executor, orgId: number, fileId: number)
 
 export async function readAttachment(ex: Executor, orgId: number, fileId: number) {
   const row = await attachmentRow(ex, orgId, fileId);
-  return { row, bytes: await fileStore().get(row.storage_key) };
+  // A row whose bytes are gone from storage (a copied database, a lost disk) is a missing file, not a server fault.
+  const bytes = await fileStore().get(row.storage_key).catch((e: unknown) => {
+    if ((e as { code?: string })?.code === 'ENOENT' || /no such file|not found|ENOENT/i.test(String((e as Error)?.message ?? e))) {
+      throw notFound(`The stored copy of ${row.filename} is missing. Upload it again.`);
+    }
+    throw e;
+  });
+  return { row, bytes };
 }
 
 /**

@@ -45,7 +45,7 @@ import { ApiError, badRequest, conflict, notFound } from '../http';
 import { findBillDuplicates } from './bill-duplicates';
 import { atRate, foreignOf, fyLabelFor } from './sales';
 import { removeLandedCost } from './landed-cost';
-import { plain, recordDeletion, reverseForChange, unlinkDocument } from './doc-delete';
+import { bankLineMatched, plain, recordDeletion, reverseForChange, unlinkDocument } from './doc-delete';
 
 export interface BillLineInput {
   itemId?: number | null;
@@ -726,10 +726,8 @@ async function expenseBlocker(trx: Trx, orgId: number, e: { id: number; number: 
     const inv = await trx.selectFrom('invoices').select('number').where('id', '=', e.billed_invoice_id).executeTakeFirst();
     return `${e.number} has been re-charged to the customer on ${inv?.number ?? 'an invoice'}. Take it off that invoice first.`;
   }
-  if (e.journal_entry_id) {
-    const matched = await trx.selectFrom('bank_transactions').select('id').where('org_id', '=', orgId)
-      .where('matched_type', '=', 'journal_entry').where('matched_id', '=', e.journal_entry_id).where('status', '=', 'matched').executeTakeFirst();
-    if (matched) return `${e.number} is matched to a bank statement line. Unmatch it in Banking first.`;
+  if (await bankLineMatched(trx, orgId, 'expense', e.id) || (e.journal_entry_id && await bankLineMatched(trx, orgId, 'journal_entry', e.journal_entry_id))) {
+    return `${e.number} is matched to a bank statement line. Unmatch it in Banking first.`;
   }
   return null;
 }

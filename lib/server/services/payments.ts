@@ -25,7 +25,7 @@ import { ApiError, badRequest, notFound } from '../http';
 import { fyLabelFor } from './sales';
 import { checkCashPayment, checkCashReceipt, checkSegregation } from './guards';
 import { voidReason, voidStamp } from './void-reason';
-import { plain, recordDeletion, reverseForChange, unlinkDocument } from './doc-delete';
+import { bankLineMatched, plain, recordDeletion, reverseForChange, unlinkDocument } from './doc-delete';
 
 export type PaymentMode =
   | 'cash' | 'cheque' | 'neft' | 'rtgs' | 'imps' | 'upi' | 'card' | 'netbanking' | 'other';
@@ -653,9 +653,7 @@ export async function voidPayment(
 /** Why a payment cannot be edited or deleted now: what still rests on it. */
 async function paymentBlocker(trx: Trx, orgId: number, p: { id: number; number: string; status: string }): Promise<string | null> {
   if (p.status === 'void') return `${p.number} is void.`;
-  const matched = await trx.selectFrom('bank_transactions').select('id').where('org_id', '=', orgId)
-    .where('matched_type', '=', 'payment').where('matched_id', '=', p.id).where('status', '=', 'matched').executeTakeFirst();
-  if (matched) return `${p.number} is matched to a bank statement line. Unmatch it in Banking first.`;
+  if (await bankLineMatched(trx, orgId, 'payment', p.id)) return `${p.number} is matched to a bank statement line. Unmatch it in Banking first.`;
   const batch = await trx.selectFrom('payment_batch_lines').select('id').where('payment_id', '=', p.id).executeTakeFirst();
   if (batch) return `${p.number} was paid in a bank payment batch. Change it there.`;
   const adjusted = await trx.selectFrom('advance_tax_adjustments').select('id').where('payment_id', '=', p.id).executeTakeFirst();
