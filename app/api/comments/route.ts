@@ -9,11 +9,17 @@ import { logAudit, auditMeta } from '@/lib/server/audit';
 // kept as written; there is no editing it afterwards.
 
 const TARGETS = {
-  invoice: 'sales', estimate: 'sales', sales_order: 'sales', credit_note: 'sales', contact: 'sales',
+  invoice: 'sales', estimate: 'sales', sales_order: 'sales', credit_note: 'sales', challan: 'sales', contact: 'sales',
   bill: 'purchases', purchase_order: 'purchases', expense: 'purchases', vendor_credit: 'purchases',
   payment: 'sales', journal_entry: 'accountant', project: 'projects',
 } as const;
 type Target = keyof typeof TARGETS;
+/**
+ * The same record as the audit trail names it elsewhere: a sales order's and a
+ * credit note's creation and edits are logged under their route names
+ * ("sales-order", "credit-note"), so its history gathers both.
+ */
+const ALSO: Partial<Record<Target, string[]>> = { sales_order: ['sales-order'], credit_note: ['credit-note'] };
 const TARGET = z.enum(Object.keys(TARGETS) as [Target, ...Target[]]);
 
 /** A contact is both sides': either sales or purchasing may read and comment on it. */
@@ -27,7 +33,7 @@ export const GET = route(async ({ orgId, role, req }) => {
     db.selectFrom('comments').selectAll().where('org_id', '=', orgId).where('target_type', '=', q.targetType).where('target_id', '=', q.targetId)
       .orderBy('created_at', 'desc').limit(200).execute(),
     db.selectFrom('audit_log').select(['id', 'action', 'actor_name', 'detail', 'reason', 'created_at'])
-      .where('org_id', '=', orgId).where('target_type', '=', q.targetType).where('target_id', '=', String(q.targetId))
+      .where('org_id', '=', orgId).where('target_type', 'in', [q.targetType, ...(ALSO[q.targetType] ?? [])]).where('target_id', '=', String(q.targetId))
       .orderBy('id', 'desc').limit(200).execute(),
   ]);
   return {

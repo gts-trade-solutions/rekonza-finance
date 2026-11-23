@@ -23,6 +23,7 @@ const TONES: Record<string, Tone> = {
   draft: 'neutral',
 
   approved: 'progress',
+  confirmed: 'progress',
   sent: 'progress',
   open: 'progress',
   issued: 'progress',

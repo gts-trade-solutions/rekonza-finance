@@ -25,6 +25,19 @@ export const mapLines = (lines: z.infer<typeof LineInput>[]) =>
 
 export const DATE = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Give the date as yyyy-mm-dd.');
 
+/** What Zoho's forms add to every one of these documents (migration 121). */
+const ID = z.union([z.string(), z.number()]).nullish();
+const ZOHO = {
+  referenceNumber: z.string().trim().max(100).nullish(),
+  salespersonId: ID,
+  terms: z.string().max(5000).nullish(),
+};
+
+/** The Zoho fields of a body, as the services take them. */
+export function zohoInput(input: { referenceNumber?: string | null; salespersonId?: string | number | null; terms?: string | null }) {
+  return { referenceNumber: input.referenceNumber ?? null, salespersonId: toNum(input.salespersonId || null), terms: input.terms ?? null };
+}
+
 export const CreateInput = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('estimate'),
@@ -37,6 +50,8 @@ export const CreateInput = z.discriminatedUnion('kind', [
     notes: z.string().nullish(),
     status: z.enum(['draft', 'sent']).optional(),
     voucherTypeId: z.union([z.string(), z.number()]).nullish(),
+    projectId: ID,
+    ...ZOHO,
   }),
   z.object({
     kind: z.literal('sales-order'),
@@ -49,6 +64,10 @@ export const CreateInput = z.discriminatedUnion('kind', [
     notes: z.string().nullish(),
     sourceEstimateId: z.union([z.string(), z.number()]).nullish(),
     voucherTypeId: z.union([z.string(), z.number()]).nullish(),
+    paymentTerms: z.string().max(30).nullish(),
+    deliveryMethod: z.string().max(100).nullish(),
+    status: z.enum(['draft', 'open']).optional(),
+    ...ZOHO,
   }),
   z.object({
     kind: z.literal('challan'),
@@ -60,6 +79,9 @@ export const CreateInput = z.discriminatedUnion('kind', [
     placeOfSupply: z.string().length(2).optional(),
     notes: z.string().nullish(),
     voucherTypeId: z.union([z.string(), z.number()]).nullish(),
+    referenceNumber: ZOHO.referenceNumber,
+    terms: ZOHO.terms,
+    status: z.enum(['draft', 'open']).optional(),
   }),
   z.object({
     kind: z.literal('credit-note'),
@@ -74,6 +96,7 @@ export const CreateInput = z.discriminatedUnion('kind', [
     placeOfSupply: z.string().length(2).optional(),
     notes: z.string().nullish(),
     voucherTypeId: z.union([z.string(), z.number()]).nullish(),
+    ...ZOHO,
   }),
   z.object({
     kind: z.literal('retainer'),
@@ -97,16 +120,19 @@ export function toSalesDocInput(input: SalesDocBody, branch: number): SalesDocIn
         branchId: branch, customerId, date: input.date, expiryDate: input.expiryDate,
         lines: mapLines(input.lines), placeOfSupply: input.placeOfSupply,
         notes: input.notes, status: input.status, voucherTypeId: toNum(input.voucherTypeId),
+        ...zohoInput(input), projectId: toNum(input.projectId || null),
       } };
     case 'sales-order':
       return { kind: 'sales-order', input: {
         branchId: branch, customerId, date: input.date, expectedShipDate: input.expectedShipDate ?? null,
         lines: mapLines(input.lines), placeOfSupply: input.placeOfSupply, notes: input.notes, voucherTypeId: toNum(input.voucherTypeId),
+        ...zohoInput(input), paymentTerms: input.paymentTerms ?? null, deliveryMethod: input.deliveryMethod ?? null, status: input.status,
       } };
     case 'challan':
       return { kind: 'challan', input: {
         branchId: branch, customerId, date: input.date, challanType: input.challanType,
         lines: mapLines(input.lines), placeOfSupply: input.placeOfSupply, notes: input.notes, voucherTypeId: toNum(input.voucherTypeId),
+        referenceNumber: input.referenceNumber ?? null, terms: input.terms ?? null, status: input.status,
       } };
     case 'credit-note':
       return { kind: 'credit-note', input: {
@@ -114,6 +140,7 @@ export function toSalesDocInput(input: SalesDocBody, branch: number): SalesDocIn
         againstInvoiceId: toNum(input.againstInvoiceId), applyImmediately: input.applyImmediately,
         warehouseId: toNum(input.warehouseId),
         lines: mapLines(input.lines), placeOfSupply: input.placeOfSupply, notes: input.notes, voucherTypeId: toNum(input.voucherTypeId),
+        ...zohoInput(input),
       } };
     default:
       throw new Error('A retainer invoice is not edited here.');

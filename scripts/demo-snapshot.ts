@@ -148,6 +148,11 @@ const ROWS = [
   { api: '/api/bills?limit=500', screen: '/purchases/bills/[id]' },
   // Inactive ones too, as the item list's "All Items" shows them.
   { api: '/api/items?archived=true', screen: '/sales/items/[id]' },
+  // Quotes, sales orders, challans and credit notes open beside their list as
+  // Zoho's do (2026-11-23); their Edit forms are the record's sub-page.
+  ...(['estimates', 'sales-orders', 'challans', 'credit-notes'] as const).map((p, i) => ({
+    api: `/api/sales-documents?kind=${(['estimate', 'sales-order', 'challan', 'credit-note'] as const)[i]}&limit=500`, screen: `/sales/${p}/[id]`,
+  })),
   // Printed copies, opened from a row's "⋯" menu, which leaves no link on the page to follow.
   ...['estimate', 'sales-order', 'challan', 'credit-note', 'retainer'].map((k) => ({ api: `/api/sales-documents?kind=${k}`, screen: `/print/${k}/[id]` })),
   ...['purchase-order', 'vendor-credit'].map((k) => ({ api: `/api/purchase-documents?kind=${k}`, screen: `/print/${k}/[id]` })),

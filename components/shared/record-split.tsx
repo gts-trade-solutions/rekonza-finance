@@ -39,11 +39,12 @@ import { Money } from '@/components/shared/money';
 import { StatusBadge } from '@/components/shared/status-badge';
 import { InvoiceStatus } from '@/components/shared/invoice-status';
 import { usePermission } from '@/lib/store/hooks';
-import { bills, contacts, invoices, items, projects, type ContactRow, type ItemRow } from '@/lib/api/client';
+import { bills, contacts, invoices, items, projects, salesDocuments, type ContactRow, type ItemRow, type SalesDocRow } from '@/lib/api/client';
+import { SALES_DOC, VIEWS, zohoDay, zohoStatus, type SalesDocKindZ } from '@/components/sales/sales-docs';
 import { useForceNavCollapsed } from '@/components/layout/nav-state';
 import { claimListSearch, releaseListSearch } from '@/components/layout/page-context';
 
-export type SplitKind = 'invoice' | 'bill' | 'customer' | 'vendor' | 'project' | 'item';
+export type SplitKind = 'invoice' | 'bill' | 'customer' | 'vendor' | 'project' | 'item' | SalesDocKindZ;
 
 interface SplitRow {
   id: string;
@@ -210,7 +211,38 @@ function ItemBulk({ picked, openId, done }: { picked: SplitRow[]; openId: string
   );
 }
 
-const day = (d: string) => new Date(`${d.slice(0, 10)}T00:00:00`).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+/** "28 May 2026", as Zoho's column dates a record ("Sep", not the browser's "Sept"). */
+const day = (d: string) => zohoDay(d);
+
+/** A quote's, order's, challan's or credit note's column: its views and sorts are its list's. */
+function salesDocSplit(kind: SalesDocKindZ) {
+  const info = SALES_DOC[kind];
+  const raw = (r: SplitRow) => r.raw as SalesDocRow;
+  return {
+    label: info.plural,
+    base: info.base,
+    newHref: `${info.base}/new`,
+    module: 'sales' as const,
+    keepNav: true,
+    redClose: true,
+    load: async () => (await salesDocuments.list(kind, { limit: 300 })).documents.map((d): SplitRow => ({
+      id: d.id,
+      title: d.customerName,
+      amount: d.totalPaise,
+      sub: `${d.number} • ${day(d.date)}`,
+      status: <StatusBadge status={zohoStatus(kind, d)} />,
+      search: `${d.number} ${d.customerName} ${d.reference ?? ''}`.toLowerCase(),
+      raw: d,
+    })),
+    views: VIEWS[kind].map((v) => ({ value: v.value, title: v.value === 'all' ? `All ${info.viewNoun}` : `${v.label} ${info.viewNoun}`, keep: (r: SplitRow) => v.keep(zohoStatus(kind, raw(r))) })),
+    sorts: [
+      { key: 'date', label: 'Date', value: (r: SplitRow) => raw(r).date },
+      { key: 'number', label: 'Number', value: (r: SplitRow) => raw(r).number },
+      { key: 'customer', label: 'Customer Name', value: (r: SplitRow) => r.title.toLowerCase() },
+      { key: 'amount', label: 'Amount', value: (r: SplitRow) => r.amount ?? 0 },
+    ],
+  };
+}
 
 const CONFIG: Record<SplitKind, {
   label: string;
@@ -225,6 +257,8 @@ const CONFIG: Record<SplitKind, {
   keepNav?: boolean;
   /** Zoho's contact rows: the name, then the amount with the status beside it. */
   amountBelow?: boolean;
+  /** The X stays Zoho's red beside a transaction even where the sidebar stays open (quotes, orders, challans, credit notes). */
+  redClose?: boolean;
 }> = {
   invoice: {
     label: 'Invoices',
@@ -325,6 +359,13 @@ const CONFIG: Record<SplitKind, {
       { key: 'rate', label: 'Rate', value: (r) => r.amount ?? 0 },
     ],
   },
+  // Zoho keeps the sidebar open beside a quote, sales order, challan or credit
+  // note (recorded 2026-11-23), its column showing the customer, the amount,
+  // the number and date, and the status as Zoho words it.
+  estimate: salesDocSplit('estimate'),
+  'sales-order': salesDocSplit('sales-order'),
+  challan: salesDocSplit('challan'),
+  'credit-note': salesDocSplit('credit-note'),
   project: {
     label: 'Projects',
     base: '/projects',
@@ -582,7 +623,7 @@ function SplitFrame({ kind, id, children }: { kind: SplitKind; id: string; child
           aria-label={`Close and go back to ${cfg.label}`}
           title="Close"
           // Zoho's X is red beside a transaction (an invoice, a bill) and dark grey beside an item, customer or vendor.
-          className={cn('absolute right-4 top-4 z-20 grid size-8 place-items-center rounded hover:bg-muted no-print', cfg.keepNav ? 'text-[#5f6380]' : 'text-[#d6141d]')}
+          className={cn('absolute right-4 top-4 z-20 grid size-8 place-items-center rounded hover:bg-muted no-print', cfg.keepNav && !cfg.redClose ? 'text-[#5f6380]' : 'text-[#d6141d]')}
           data-slot="split-close"
         >
           <X className="size-5" strokeWidth={1.8} />

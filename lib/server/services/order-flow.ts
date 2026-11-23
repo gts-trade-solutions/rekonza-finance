@@ -86,6 +86,7 @@ async function loadOrder(trx: Trx, orgId: number, soId: number) {
   if (!so) throw notFound('That sales order does not exist.');
   if (so.status === 'cancelled') throw conflict(`Sales order ${so.number} was cancelled.`);
   if (so.status === 'closed') throw conflict(`Sales order ${so.number} is closed.`);
+  if (so.status === 'draft') throw conflict(`Sales order ${so.number} is a draft: mark it as confirmed first.`);
   const lines = await trx.selectFrom('sales_order_lines')
     .select(['id', 'line_no', 'item_id', 'description', 'hsn_sac', 'qty', 'qty_delivered', 'qty_invoiced', 'uqc', 'rate', 'discount_pct', 'gst_rate_pct'])
     .where('sales_order_id', '=', soId).orderBy('line_no').execute();
@@ -213,6 +214,7 @@ export async function invoiceFromChallan(
     .where('id', '=', challanId).where('org_id', '=', orgId).forUpdate().executeTakeFirst();
   if (!dc) throw notFound('That delivery challan does not exist.');
   if (dc.status === 'cancelled' || dc.status === 'returned') throw conflict(`Challan ${dc.number} is ${dc.status}.`);
+  if (dc.status === 'draft') throw conflict(`Challan ${dc.number} is a draft: mark it as open first.`);
   if (dc.challan_type === 'job_work') {
     throw conflict(`Challan ${dc.number} sent goods for job work. They come back; they are not sold, so there is nothing to invoice.`);
   }

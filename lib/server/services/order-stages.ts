@@ -37,6 +37,7 @@ async function orderOf(trx: Trx, orgId: number, soId: number) {
   if (!so) throw notFound('That sales order does not exist.');
   if (so.status === 'cancelled') throw conflict(`Sales order ${so.number} was cancelled.`);
   if (so.status === 'closed') throw conflict(`Sales order ${so.number} is closed.`);
+  if (so.status === 'draft') throw conflict(`Sales order ${so.number} is a draft: mark it as confirmed first.`);
   return so;
 }
 

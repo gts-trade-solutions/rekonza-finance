@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { CreateInput, DATE, mapLines, toNum } from '@/lib/server/sales-doc-input';
+import { CreateInput, DATE, mapLines, toNum, zohoInput } from '@/lib/server/sales-doc-input';
 import { sql } from 'kysely';
 import { db, transaction } from '@/lib/server/db';
 import { route, body, query, asId, badRequest } from '@/lib/server/http';
@@ -10,6 +10,7 @@ import {
   createRetainer, createSalesOrder, refundCreditNote, applyCreditNote, salesOrderFromEstimate, voidCreditNote,
 } from '@/lib/server/services/sales-documents';
 import { challanFromSalesOrder, invoiceFromChallan, invoiceFromSalesOrder } from '@/lib/server/services/order-flow';
+import { salesDocLinks } from '@/lib/server/services/sales-doc-links';
 import { raiseProforma, setOrderStage, STAGE_LABEL } from '@/lib/server/services/order-stages';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -78,6 +79,8 @@ export const GET = route(
       : sql`, NULL AS expiry, d.amount AS subtotal, d.description AS converted_to_type, NULL AS converted_to_id, d.applied_amount AS applied`;
 
     const totalCol = q.kind === 'retainer' ? sql`d.amount` : sql`d.total`;
+    // Zoho's Reference# column (migration 121); a retainer has none.
+    const refCol = q.kind === 'retainer' ? sql`NULL` : sql`d.reference_number`;
     // What the customer has actually settled. Only invoice-like documents have
     // one; a quote or a challan is nobody's debt.
     const paidCol =
@@ -89,8 +92,9 @@ export const GET = route(
       customer_name: string; total: string; subtotal: string; expiry: string | null;
       converted_to_type: string | null; converted_to_id: number | null;
       applied: string | null; paid: string | null; linked_number?: string | null;
+      reference: string | null; created_at: Date | string | null;
     }>`
-      SELECT d.id, d.number, ${dateCol} AS dt, d.status, d.customer_id,
+      SELECT d.id, d.number, ${dateCol} AS dt, d.status, d.customer_id, ${refCol} AS reference, d.created_at,
              c.display_name AS customer_name, ${totalCol} AS total, ${paidCol} AS paid ${extra}
         FROM ${t} d
         JOIN contacts c ON c.id = d.customer_id
@@ -109,13 +113,15 @@ export const GET = route(
       statusCounts.all += Number(c.n);
     }
 
-    const links = q.kind === 'challan' || q.kind === 'sales-order' ? await linksFor(orgId, q.kind, rows.map((r) => r.id)) : null;
+    const links = q.kind === 'challan' || q.kind === 'sales-order' ? await salesDocLinks(orgId, q.kind, rows.map((r) => r.id)) : null;
 
     return {
       kind: q.kind,
       documents: rows.map((r) => ({
         id: asId(r.id),
         number: r.number,
+        reference: r.reference ?? null,
+        createdAt: r.created_at ? new Date(r.created_at).toISOString() : null,
         date: String(r.dt).slice(0, 10),
         status: r.status,
         customerId: asId(r.customer_id),
@@ -159,6 +165,7 @@ export const POST = route(
             branchId: branch, customerId, date: input.date, expiryDate: input.expiryDate,
             lines: mapLines(input.lines), placeOfSupply: input.placeOfSupply,
             notes: input.notes, status: input.status, voucherTypeId: toNum(input.voucherTypeId),
+            ...zohoInput(input), projectId: toNum(input.projectId || null),
           });
         case 'sales-order':
           return createSalesOrder(trx, orgId, user.userId, {
@@ -166,11 +173,13 @@ export const POST = route(
             expectedShipDate: input.expectedShipDate ?? null,
             lines: mapLines(input.lines), placeOfSupply: input.placeOfSupply,
             notes: input.notes, sourceEstimateId: toNum(input.sourceEstimateId), voucherTypeId: toNum(input.voucherTypeId),
+            ...zohoInput(input), paymentTerms: input.paymentTerms ?? null, deliveryMethod: input.deliveryMethod ?? null, status: input.status,
           });
         case 'challan':
           return createChallan(trx, orgId, user.userId, {
             branchId: branch, customerId, date: input.date, challanType: input.challanType,
             lines: mapLines(input.lines), placeOfSupply: input.placeOfSupply, notes: input.notes, voucherTypeId: toNum(input.voucherTypeId),
+            referenceNumber: input.referenceNumber ?? null, terms: input.terms ?? null, status: input.status,
           });
         case 'credit-note':
           return createCreditNote(trx, orgId, user.userId, {
@@ -179,6 +188,7 @@ export const POST = route(
             applyImmediately: input.applyImmediately,
             warehouseId: toNum(input.warehouseId),
             lines: mapLines(input.lines), placeOfSupply: input.placeOfSupply, notes: input.notes, voucherTypeId: toNum(input.voucherTypeId),
+            ...zohoInput(input),
           });
         case 'retainer':
           return createRetainer(trx, orgId, user.userId, {
@@ -422,57 +432,3 @@ export const PATCH = route(
   },
   { permission: { module: 'sales', action: 'edit' } },
 );
-
-/**
- * What a challan or an order list row shows beside its number: the products on
- * it, the invoices raised from it, and for a challan the order it came from;
- * for an order its stage (proforma, work in process, ready for delivery).
- */
-async function linksFor(orgId: number, kind: 'challan' | 'sales-order', ids: number[]) {
-  const out = new Map<number, {
-    items: { name: string; qty: number; uqc: string | null }[];
-    invoices: { id: string; number: string }[];
-    salesOrder?: { id: string; number: string } | null;
-    stage?: string; proformaNumber?: string | null;
-  }>();
-  if (!ids.length) return out;
-  for (const id of ids) out.set(id, { items: [], invoices: [] });
-
-  const lines = kind === 'challan'
-    ? await db.selectFrom('challan_lines as l').leftJoin('items as i', 'i.id', 'l.item_id')
-      .select(['l.challan_id as doc', 'l.description', 'i.name', 'l.qty', 'l.uqc'])
-      .where('l.org_id', '=', orgId).where('l.challan_id', 'in', ids).orderBy('l.line_no').execute()
-    : await db.selectFrom('sales_order_lines as l').leftJoin('items as i', 'i.id', 'l.item_id')
-      .select(['l.sales_order_id as doc', 'l.description', 'i.name', 'l.qty', 'l.uqc'])
-      .where('l.org_id', '=', orgId).where('l.sales_order_id', 'in', ids).orderBy('l.line_no').execute();
-  for (const l of lines) out.get(l.doc)?.items.push({ name: l.name ?? l.description ?? 'Item', qty: Number(l.qty), uqc: l.uqc });
-
-  // Invoices raised from it; an order's include those raised from its challans.
-  const direct = await db.selectFrom('invoices').select(['id', 'number', 'source_doc_id'])
-    .where('org_id', '=', orgId).where('source_doc_type', '=', kind === 'challan' ? 'challan' : 'sales_order')
-    .where('source_doc_id', 'in', ids).where('status', '<>', 'void').orderBy('id').execute();
-  for (const inv of direct) out.get(inv.source_doc_id!)?.invoices.push({ id: asId(inv.id), number: inv.number });
-
-  if (kind === 'challan') {
-    const dcs = await db.selectFrom('delivery_challans as d').leftJoin('sales_orders as so', 'so.id', 'd.source_so_id')
-      .leftJoin('invoices as inv', (j) => j.onRef('inv.id', '=', 'd.invoice_id').on('inv.status', '<>', 'void'))
-      .select(['d.id', 'so.id as so_id', 'so.number as so_number', 'inv.id as inv_id', 'inv.number as inv_number'])
-      .where('d.org_id', '=', orgId).where('d.id', 'in', ids).execute();
-    for (const d of dcs) {
-      const o = out.get(d.id);
-      if (!o) continue;
-      o.salesOrder = d.so_id ? { id: asId(d.so_id), number: d.so_number! } : null;
-      // Sent with the invoice an order raised when it was made ready for delivery.
-      if (d.inv_id && !o.invoices.some((i) => i.id === asId(d.inv_id!))) o.invoices.push({ id: asId(d.inv_id), number: d.inv_number! });
-    }
-  } else {
-    const viaChallan = await db.selectFrom('invoices as inv').innerJoin('delivery_challans as d', 'd.id', 'inv.source_doc_id')
-      .select(['inv.id', 'inv.number', 'd.source_so_id'])
-      .where('inv.org_id', '=', orgId).where('inv.source_doc_type', '=', 'challan').where('d.source_so_id', 'in', ids)
-      .where('inv.status', '<>', 'void').orderBy('inv.id').execute();
-    for (const inv of viaChallan) out.get(inv.source_so_id!)?.invoices.push({ id: asId(inv.id), number: inv.number });
-    const sos = await db.selectFrom('sales_orders').select(['id', 'stage', 'proforma_number']).where('org_id', '=', orgId).where('id', 'in', ids).execute();
-    for (const so of sos) { const o = out.get(so.id); if (o) { o.stage = so.stage; o.proformaNumber = so.proforma_number; } }
-  }
-  return out;
-}

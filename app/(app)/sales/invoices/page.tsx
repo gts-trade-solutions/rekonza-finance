@@ -159,7 +159,7 @@ export default function InvoicesPage() {
               <NewSplitButton href="/sales/invoices/new" more={[
                 { label: 'New Invoice', href: '/sales/invoices/new' },
                 { label: 'New Recurring Invoice', href: '/sales/recurring?new=1' },
-                { label: 'New Credit Note', href: '/sales/credit-notes?new=1' },
+                { label: 'New Credit Note', href: '/sales/credit-notes/new' },
               ]} />
             )}
           </>
