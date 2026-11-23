@@ -15,7 +15,7 @@ import 'server-only';
 // is the government's record, and comes from whichever is set up:
 //
 //   1. the GSP (GST_API_*), through the GST system's own taxpayer search;
-//   2. a GSTIN lookup service (GSTIN_LOOKUP_URL …): ClearTax, Masters India,
+//   2. a GSTIN lookup service (GSTIN_LOOKUP_URL …): gstinapi.in, ClearTax, Masters India,
 //      Vayana, Signzy and others answer in the GST system's own format
 //      (lgnm, tradeNam, rgdt, pradr …), found wherever it sits in their reply;
 //   3. for the incorporation date, a company (MCA) lookup service
@@ -129,21 +129,30 @@ const pick = (o: Record<string, unknown>, ...keys: string[]) => {
 export function fromGstRecord(reply: unknown, base: PartyDetails, source: DetailsSource): PartyDetails | null {
   const d = findWith(reply, ['lgnm', 'tradeNam', 'legalName', 'legal_name']);
   if (!d) return null;
-  const addrHolder = findWith(d.pradr ?? d, ['bnm', 'bno', 'st', 'loc', 'pncd', 'pincode']);
+  // The portal's pradr.addr, or a service's own structured address (gstinapi.in's
+  // address_details: building_number, building_name, street, locality …), or a single line.
+  const structured = (d.address_details ?? d.addressDetails ?? d.principal_address ?? null) as Record<string, unknown> | null;
+  const addrHolder = structured && typeof structured === 'object'
+    ? structured
+    : findWith(d.pradr ?? d, ['bnm', 'bno', 'st', 'loc', 'pncd', 'pincode']);
   const a = (addrHolder?.addr ?? addrHolder) as Record<string, unknown> | null;
-  const line = a ? [pick(a, 'bno'), pick(a, 'flno'), pick(a, 'bnm'), pick(a, 'st'), pick(a, 'loc')].filter(Boolean).join(', ') || pick(a, 'address', 'adr') : null;
+  const line = a
+    ? [pick(a, 'bno', 'building_number', 'door_number'), pick(a, 'flno', 'floor', 'floor_number'), pick(a, 'bnm', 'building_name'),
+        pick(a, 'st', 'street', 'road'), pick(a, 'loc', 'locality', 'location', 'area'), pick(a, 'landmark')].filter(Boolean).join(', ')
+      || pick(a, 'address', 'adr') || pick(d, 'address', 'adr')
+    : null;
   return {
     ...base,
     legalName: pick(d, 'lgnm', 'legalName', 'legal_name') ?? base.legalName,
     tradeName: pick(d, 'tradeNam', 'tradeName', 'trade_name') ?? base.tradeName,
     status: pick(d, 'sts', 'status', 'gstinStatus') ?? base.status,
     taxpayerType: pick(d, 'dty', 'taxpayerType', 'taxpayer_type') ?? base.taxpayerType,
-    constitution: pick(d, 'ctb', 'constitutionOfBusiness', 'constitution') ?? base.constitution,
+    constitution: pick(d, 'ctb', 'constitutionOfBusiness', 'constitution', 'business_constitution', 'constitution_of_business') ?? base.constitution,
     registeredOn: isoDate(pick(d, 'rgdt', 'registrationDate', 'registration_date', 'dateOfRegistration')) ?? base.registeredOn,
     cancelledOn: isoDate(pick(d, 'cxdt', 'cancellationDate', 'cancellation_date')) ?? base.cancelledOn,
     address: a ? {
-      line, city: pick(a, 'city', 'dst', 'loc'), district: pick(a, 'dst', 'district'),
-      stateCode: base.gstin.slice(0, 2), pincode: pick(a, 'pncd', 'pincode', 'pin'),
+      line, city: pick(a, 'city', 'dst', 'loc') ?? pick(d, 'city', 'district'), district: pick(a, 'dst', 'district') ?? pick(d, 'district'),
+      stateCode: base.gstin.slice(0, 2), pincode: pick(a, 'pncd', 'pincode', 'pin') ?? pick(d, 'pincode', 'pncd'),
     } : base.address,
     fromPortal: true, source,
   };

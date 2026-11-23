@@ -117,6 +117,46 @@ test('a lookup service’s reply, in the GST system’s format, fills the name, 
   assert.equal(calls.length, 1);
 });
 
+test('gstinapi.in, as its documentation shows it, fills the name, address, constitution and dates', async () => {
+  setEnv({
+    GSTIN_LOOKUP_URL: 'https://www.gstinapi.in/v1/gstin/{gstin}?include=profile',
+    GSTIN_LOOKUP_KEY: 'gak_test',
+    GSTIN_LOOKUP_HEADERS: '{"x-api-key":"{key}"}',
+  });
+  const calls = standIn({
+    success: true, gstin: COMPANY, credits_remaining: 74, response_ms: 312,
+    data: {
+      gstin: COMPANY, legal_name: 'RACE INNOVATIONS PRIVATE LIMITED', trade_name: 'RACE AUTO INDIA', status: 'Active',
+      taxpayer_type: 'Regular', business_constitution: 'Private Limited Company', registration_date: '2017-07-01', cancellation_date: null,
+      state_code: '29', address: '12, MG ROAD, BENGALURU, KARNATAKA, 560001', city: 'Bengaluru', district: 'Bengaluru Urban', pincode: '560001',
+      address_details: { building_number: '12', building_name: 'Prestige Tower', floor: '3rd Floor', street: 'MG Road', locality: 'Ashok Nagar',
+        district: 'Bengaluru Urban', city: 'Bengaluru', state: 'Karnataka', landmark: null, pincode: '560001' },
+    },
+  });
+  const p = await lookupParty(COMPANY, null);
+  assert.equal(calls[0].url, `https://www.gstinapi.in/v1/gstin/${COMPANY}?include=profile`);
+  assert.equal((calls[0].init.headers as Record<string, string>)['x-api-key'], 'gak_test');
+  assert.equal(p.legalName, 'RACE INNOVATIONS PRIVATE LIMITED');
+  assert.equal(p.tradeName, 'RACE AUTO INDIA');
+  assert.equal(p.status, 'Active');
+  assert.equal(p.constitution, 'Private Limited Company');
+  assert.equal(p.registeredOn, '2017-07-01');
+  assert.equal(p.address?.line, '12, 3rd Floor, Prestige Tower, MG Road, Ashok Nagar');
+  assert.equal(p.address?.city, 'Bengaluru');
+  assert.equal(p.address?.district, 'Bengaluru Urban');
+  assert.equal(p.address?.pincode, '560001');
+  assert.equal(p.address?.stateCode, '29');
+  assert.equal(p.source, 'lookup-service');
+});
+
+test('a service with only a one-line address still fills the line, city and PIN', () => {
+  const base = gstinFacts(COMPANY);
+  const p = fromGstRecord({ data: { legal_name: 'X LTD', address: '5, Anna Salai, Chennai 600002', city: 'Chennai', pincode: '600002' } }, base, 'lookup-service');
+  assert.equal(p?.address?.line, '5, Anna Salai, Chennai 600002');
+  assert.equal(p?.address?.city, 'Chennai');
+  assert.equal(p?.address?.pincode, '600002');
+});
+
 test('a service set to POST sends the body with the number in it', async () => {
   setEnv({ GSTIN_LOOKUP_URL: 'https://lookup.test/search', GSTIN_LOOKUP_BODY: '{"gstin":"{gstin}","token":"{key}"}', GSTIN_LOOKUP_KEY: 'abc' });
   const calls = standIn([{ legal_name: 'Raj Firm', status: 'Active', registration_date: '2019-04-01' }]);
