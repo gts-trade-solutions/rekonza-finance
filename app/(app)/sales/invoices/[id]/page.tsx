@@ -11,15 +11,16 @@ import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { useState } from 'react';
 import {
-  Ban, ChevronDown, Copy, FileText, Loader2, MoreHorizontal, Pencil, Printer, Receipt, Send, Sparkles, Trash2, Wallet,
+  Ban, ChevronDown, FileText, Loader2, MoreHorizontal, Pencil, Printer, Receipt, Sparkles, Trash2, Wallet,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
-  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
@@ -41,12 +42,16 @@ import { invoices as invoiceApi, type InvoiceDetail } from '@/lib/api/client';
 import { useApi, useApiAction } from '@/lib/api/use-api';
 import { formatINR } from '@/lib/money';
 import { VoidedNote } from '@/components/shared/voided-note';
-import { SendInvoice } from '@/components/sales/send-invoice';
+import { InvoiceSendMenu, InvoiceShare, invoiceIsSent } from '@/components/sales/invoice-send-share';
 import { InvoiceDocument, invoiceFormat, invoiceModel } from '@/components/print/invoice-print';
 import { ribbonFor } from '@/components/print/zoho-sheet';
 import { refreshSplitList } from '@/components/shared/record-split';
 import { TemplatePreview } from '@/components/settings/template-gallery';
 import { DEFAULT_TEMPLATE, INVOICE_FORMAT_LABEL, layoutForInvoice, templateInfo, templatesOf, type TemplateKey } from '@/lib/print-template';
+
+/** A draft paid is marked as sent first (Zoho's "Invoice status will be changed to 'Sent'"); this browser can skip the warning. */
+const SKIP_PAY_WARNING = 'rekonza-skip-draft-payment-warning';
+const paymentHref = (inv: InvoiceDetail) => `/sales/payments/new?customer=${inv.customer.id}&invoice=${inv.id}`;
 
 const d = (s: string) =>
   new Date(s).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
@@ -69,6 +74,19 @@ export default function InvoiceDetailPage() {
   const [deleting, setDeleting] = useState(false);
   const [deleteReason, setDeleteReason] = useState('');
   const removeIt = useApiAction(invoiceApi.remove);
+  const [tab, setTab] = useState('journal');
+  const [sendMode, setSendMode] = useState<null | 'now' | 'schedule'>(null);
+  const [payWarning, setPayWarning] = useState(false);
+  const [skipPayWarning, setSkipPayWarning] = useState(false);
+  // Mark as sent: the ⋯ item, and the first step of Send, Share and paying a draft.
+  const markSentFor = async (id: string) => {
+    if (await send.run(id)) { await state.refetch(); return true; }
+    toast.error('Not marked as sent', { description: send.error ?? undefined });
+    return false;
+  };
+  const payDraft = async (inv: InvoiceDetail) => {
+    if (await markSentFor(inv.id)) router.push(paymentHref(inv));
+  };
 
   return (
     <AsyncPage state={state}>
@@ -80,6 +98,7 @@ export default function InvoiceDetailPage() {
         // cancel the IRN while the 24-hour window is open, a credit note after.
         const irnLive = inv.einvoice.status === 'submitted';
         const cancelUntil = inv.einvoice.cancelUntil ?? null;
+        const markSent = () => markSentFor(inv.id);
 
         return (
           <>
@@ -93,7 +112,9 @@ export default function InvoiceDetailPage() {
                       <Link href={`/sales/invoices/${inv.id}/edit`} data-slot="edit-invoice"><Pencil className="size-3.5" /> Edit</Link>
                     </Button>
                   )}
-                  {inv.status !== 'draft' && inv.status !== 'void' && <SendInvoice inv={inv} onSent={() => void state.refetch()} />}
+                  {/* Zoho's bar: Edit · Send ▾ · Share · PDF/Print ▾ · Record Payment · ⋯ */}
+                  <InvoiceSendMenu inv={inv} markSent={markSent} onChanged={() => void state.refetch()} mode={sendMode} setMode={setSendMode} />
+                  <InvoiceShare inv={inv} markSent={markSent} onChanged={() => void state.refetch()} />
                   <DropdownMenu>
                     <DropdownMenuTrigger className="inline-flex h-8 items-center gap-1.5 rounded-[3px] border px-3 text-[13px] transition-colors hover:bg-accent" data-slot="pdf-print">
                       <Printer className="size-3.5" /> PDF/Print <ChevronDown className="size-3" />
@@ -101,82 +122,103 @@ export default function InvoiceDetailPage() {
                     <DropdownMenuContent align="start">
                       <DropdownMenuItem onClick={() => router.push(`/sales/invoices/${inv.id}/print?print=1`)}>PDF</DropdownMenuItem>
                       <DropdownMenuItem onClick={() => router.push(`/sales/invoices/${inv.id}/print?print=1`)} data-slot="print-link">Print</DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => router.push(`/sales/invoices/${inv.id}/print?as=delivery-note`)} data-slot="print-delivery-note">Print Delivery Note</DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => router.push(`/sales/invoices/${inv.id}/print?as=packing-slip`)} data-slot="print-packing-slip">Print Packing Slip</DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenu>
-                  {canCreate && inv.status !== 'draft' && inv.status !== 'void' && inv.balancePaise > 0 && (
-                    <Button variant="outline" size="sm" asChild className="gap-1.5">
-                      <Link href={`/sales/payments/new?customer=${inv.customer.id}&invoice=${inv.id}`} data-slot="record-payment"><Wallet className="size-3.5" /> Record Payment</Link>
-                    </Button>
+                  {canCreate && inv.status !== 'void' && inv.balancePaise > 0 && (
+                    invoiceIsSent(inv) ? (
+                      <Button variant="outline" size="sm" asChild className="gap-1.5">
+                        <Link href={paymentHref(inv)} data-slot="record-payment"><Wallet className="size-3.5" /> Record Payment</Link>
+                      </Button>
+                    ) : (
+                      <Button variant="outline" size="sm" className="gap-1.5" data-slot="record-payment" onClick={() => {
+                        // Zoho warns that a draft becomes Sent when it is paid; "Do not show this again" is kept in this browser.
+                        if (localStorage.getItem(SKIP_PAY_WARNING) === '1') void payDraft(inv);
+                        else setPayWarning(true);
+                      }}><Wallet className="size-3.5" /> Record Payment</Button>
+                    )
                   )}
-                  {canCreate && !inv.debitNote && (
-                    <Button variant="outline" size="sm" asChild className="gap-1.5">
-                      <Link href={`/sales/invoices/new?clone=${inv.id}`} data-slot="clone-invoice"><Copy className="size-3.5" /> Clone</Link>
-                    </Button>
-                  )}
-                  {(canEdit && inv.status !== 'void') || (canVoid && !irnLive && inv.amountPaidPaise === 0) ? (
-                    <DropdownMenu>
-                      <DropdownMenuTrigger aria-label="More actions" className="grid size-9 place-items-center rounded-[3px] border transition-colors hover:bg-accent">
-                        <MoreHorizontal className="size-4" />
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        {inv.status !== 'void' && <DropdownMenuItem
+                  <DropdownMenu>
+                    <DropdownMenuTrigger aria-label="More actions" data-slot="invoice-more" className="grid size-9 place-items-center rounded-[3px] border transition-colors hover:bg-accent">
+                      <MoreHorizontal className="size-4" />
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="min-w-52">
+                      {canEdit && !invoiceIsSent(inv) && inv.status !== 'void' && (
+                        <DropdownMenuItem onClick={() => void markSent().then((ok) => { if (ok) toast.success(`${inv.number} marked as sent`); })} data-slot="mark-sent">Mark As Sent</DropdownMenuItem>
+                      )}
+                      {canCreate && !inv.debitNote && (
+                        <DropdownMenuItem onClick={() => router.push(`/sales/recurring?invoice=${inv.id}`)} data-slot="make-recurring">Make Recurring</DropdownMenuItem>
+                      )}
+                      {canCreate && inv.status !== 'draft' && inv.status !== 'void' && !inv.debitNote && (
+                        <DropdownMenuItem onClick={() => router.push(`/sales/credit-notes/new?invoice=${inv.id}`)} data-slot="create-credit-note">Create Credit Note</DropdownMenuItem>
+                      )}
+                      {canFileGst && inv.status !== 'draft' && inv.status !== 'void' && inv.supplyKind !== 'service' && (
+                        <DropdownMenuItem onClick={() => router.push(`/gst/eway-bills?invoice=${inv.id}`)} data-slot="add-eway-bill">Add e-Way Bill Details</DropdownMenuItem>
+                      )}
+                      {canCreate && !inv.debitNote && (
+                        <DropdownMenuItem onClick={() => router.push(`/sales/invoices/new?clone=${inv.id}`)} data-slot="clone-invoice">Clone</DropdownMenuItem>
+                      )}
+                      {canEdit && !irnLive && inv.status !== 'void' && (
+                        <DropdownMenuItem onClick={() => setVoiding(true)} data-slot="void-invoice">Void</DropdownMenuItem>
+                      )}
+                      {inv.journalEntryId && (
+                        <DropdownMenuItem onClick={() => { setTab('journal'); setTimeout(() => document.getElementById('invoice-tabs')?.scrollIntoView({ behavior: 'smooth' }), 50); }} data-slot="view-journal">View Journal</DropdownMenuItem>
+                      )}
+                      {canVoid && !irnLive && inv.amountPaidPaise === 0 && (
+                        <DropdownMenuItem onClick={() => setDeleting(true)} className="text-destructive focus:text-destructive" data-slot="delete-invoice">Delete</DropdownMenuItem>
+                      )}
+                      <DropdownMenuItem onClick={() => router.push('/settings/invoice-print')} data-slot="invoice-preferences">Invoice Preferences</DropdownMenuItem>
+                      {/* Rekonza's own, beyond Zoho's menu: the e-invoice and a bad debt. */}
+                      {((irnLive && cancelUntil && canFileGst) || (canVoid && invoiceIsSent(inv) && inv.status !== 'void' && inv.balancePaise > 0)) && <DropdownMenuSeparator />}
+                      {irnLive && cancelUntil && canFileGst && (
+                        <DropdownMenuItem onClick={() => setCancellingIrn(true)} data-slot="cancel-einvoice-item">
+                          <Ban className="mr-2 size-4" /> Cancel e-invoice
+                        </DropdownMenuItem>
+                      )}
+                      {canVoid && invoiceIsSent(inv) && inv.status !== 'void' && inv.balancePaise > 0 && (
+                        <DropdownMenuItem
                           onClick={async () => {
-                            if (await send.run(inv.id)) {
-                              toast.success(`${inv.number} marked sent`);
+                            const why = window.prompt(
+                              `Write off the ₹${(inv.balancePaise / 100).toLocaleString('en-IN')} still owed on ${inv.number} as a bad debt? ` +
+                                'It is charged to Bad Debts Written Off and the invoice is closed. Give the reason.',
+                            );
+                            if (!why) return;
+                            try {
+                              await invoiceApi.writeOff(inv.id, why);
+                              toast.success(`${inv.number} written off`);
                               await state.refetch();
-                            } else if (send.error) toast.error(send.error);
+                            } catch (e) {
+                              toast.error('Not written off', { description: e instanceof Error ? e.message : String(e) });
+                            }
                           }}
                         >
-                          <Send className="mr-2 size-4" /> Mark as sent
-                        </DropdownMenuItem>}
-                        {!irnLive && inv.status !== 'void' && (
-                          <DropdownMenuItem onClick={() => setVoiding(true)}>
-                            <Ban className="mr-2 size-4" /> Void invoice
-                          </DropdownMenuItem>
-                        )}
-                        {canVoid && !irnLive && inv.amountPaidPaise === 0 && (
-                          <DropdownMenuItem onClick={() => setDeleting(true)} className="text-destructive focus:text-destructive" data-slot="delete-invoice">
-                            <Trash2 className="mr-2 size-4" /> Delete
-                          </DropdownMenuItem>
-                        )}
-                        {irnLive && cancelUntil && canFileGst && (
-                          <DropdownMenuItem onClick={() => setCancellingIrn(true)} data-slot="cancel-einvoice-item">
-                            <Ban className="mr-2 size-4" /> Cancel e-invoice
-                          </DropdownMenuItem>
-                        )}
-                        {irnLive && !cancelUntil && (
-                          <DropdownMenuItem onClick={() => router.push('/sales/credit-notes')}>
-                            <FileText className="mr-2 size-4" /> Reverse with a credit note
-                          </DropdownMenuItem>
-                        )}
-                        {canVoid && inv.status !== 'draft' && inv.status !== 'void' && inv.balancePaise > 0 && (
-                          <DropdownMenuItem
-                            onClick={async () => {
-                              const why = window.prompt(
-                                `Write off the ₹${(inv.balancePaise / 100).toLocaleString('en-IN')} still owed on ${inv.number} as a bad debt? ` +
-                                  'It is charged to Bad Debts Written Off and the invoice is closed. Give the reason.',
-                              );
-                              if (!why) return;
-                              try {
-                                await invoiceApi.writeOff(inv.id, why);
-                                toast.success(`${inv.number} written off`);
-                                await state.refetch();
-                              } catch (e) {
-                                toast.error('Not written off', { description: e instanceof Error ? e.message : String(e) });
-                              }
-                            }}
-                          >
-                            <Ban className="mr-2 size-4" /> Write off as bad debt
-                          </DropdownMenuItem>
-                        )}
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  ) : null}
+                          <Ban className="mr-2 size-4" /> Write off as bad debt
+                        </DropdownMenuItem>
+                      )}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 </>
               }
             />
 
-            <WhatsNext inv={inv} canCreate={canCreate} canEdit={canEdit} onMarkSent={async () => {
+            <Dialog open={payWarning} onOpenChange={setPayWarning}>
+              <DialogContent className="sm:max-w-md" data-slot="draft-payment-warning">
+                <DialogHeader>
+                  <DialogTitle>Record Payment</DialogTitle>
+                  <DialogDescription>Invoice status will be changed to &apos;Sent&apos; once the payment is recorded.</DialogDescription>
+                </DialogHeader>
+                <label className="flex items-center gap-2 text-[13px]">
+                  <Checkbox checked={skipPayWarning} onCheckedChange={(v) => setSkipPayWarning(v === true)} /> Do not show this again
+                </label>
+                <DialogFooter>
+                  <Button onClick={() => { if (skipPayWarning) localStorage.setItem(SKIP_PAY_WARNING, '1'); setPayWarning(false); void payDraft(inv); }}>OK</Button>
+                  <Button variant="outline" onClick={() => setPayWarning(false)}>Cancel</Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+
+            <WhatsNext inv={inv} canCreate={canCreate} canEdit={canEdit} onSend={() => setSendMode('now')} onMarkSent={async () => {
               if (await send.run(inv.id)) {
                 toast.success(`${inv.number} marked sent`);
                 await state.refetch();
@@ -203,7 +245,7 @@ export default function InvoiceDetailPage() {
             <TagsPanel entity="invoice" id={inv.id} canEdit={canEdit} />
             <Attachments targetType="invoice" targetId={inv.id} canEdit={canEdit} title="Signed copies, proof of delivery and other files" />
 
-            <Tabs defaultValue="journal">
+            <Tabs value={tab} onValueChange={setTab} id="invoice-tabs">
               <TabsList>
                 <TabsTrigger value="journal">Journal</TabsTrigger>
                 <TabsTrigger value="payments">Payments ({inv.payments.length})</TabsTrigger>
@@ -384,11 +426,11 @@ export default function InvoiceDetailPage() {
 }
 
 /** Zoho's "WHAT'S NEXT?" line: what to do with the invoice now. */
-function WhatsNext({ inv, canCreate, canEdit, onMarkSent }: {
-  inv: InvoiceDetail; canCreate: boolean; canEdit: boolean; onMarkSent: () => void;
+function WhatsNext({ inv, canCreate, canEdit, onSend, onMarkSent }: {
+  inv: InvoiceDetail; canCreate: boolean; canEdit: boolean; onSend: () => void; onMarkSent: () => void;
 }) {
   if (inv.status === 'void' || inv.balancePaise <= 0) return null;
-  const draft = inv.status === 'draft';
+  const draft = !invoiceIsSent(inv);
   const partly = !draft && inv.amountPaidPaise > 0;
   const text = draft
     ? 'Send this Invoice to your customer or mark it as Sent.'
@@ -401,6 +443,7 @@ function WhatsNext({ inv, canCreate, canEdit, onMarkSent }: {
       <span className="font-semibold uppercase">What&apos;s next?</span>
       <span className="text-muted-foreground">{text}</span>
       <span className="ml-auto flex gap-2">
+        {draft && canCreate && <Button size="sm" onClick={onSend} data-slot="whats-next-send">Send Invoice</Button>}
         {draft && canEdit && <Button size="sm" variant="outline" onClick={onMarkSent}>Mark As Sent</Button>}
         {!draft && canCreate && (
           <Button size="sm" asChild><Link href={`/sales/payments/new?customer=${inv.customer.id}&invoice=${inv.id}`}>Record Payment</Link></Button>

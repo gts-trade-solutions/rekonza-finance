@@ -17,7 +17,8 @@
 // is valid, an extension in the 8 hours either side of expiry, cancellation in
 // the first 24 hours — and the server checks the same rules again.
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { Ban, CalendarClock, Loader2, MoreHorizontal, Truck } from 'lucide-react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
@@ -69,6 +70,18 @@ export default function EwayBillsPage() {
   const [cancelFor, setCancelFor] = useState<EwayBillRow | null>(null);
 
   const generate = useApiAction(gst.generateEwayBill);
+
+  // ?invoice=<id>: arrived from an invoice's ⋯ → "Add e-Way Bill Details" (Zoho's): open its window.
+  const forInvoice = useSearchParams().get('invoice');
+  const [opened, setOpened] = useState(false);
+  useEffect(() => {
+    if (!forInvoice || opened || !state.data) return;
+    setOpened(true);
+    const row = state.data.ewayBills.find((r) => r.docKind === 'invoice' && r.docId === forInvoice);
+    if (!row) toast.info('That invoice is not listed here', { description: 'It carries no goods that need an e-way bill, or it is not issued yet.' });
+    else if (row.status === 'generated') toast.info(`${row.number} already has e-way bill ${row.ewayBillNo ?? ''}`.trim());
+    else setTarget(row);
+  }, [forInvoice, opened, state.data]);
 
   const rows = state.data?.ewayBills ?? [];
   const generated = rows.filter((r) => r.status === 'generated');

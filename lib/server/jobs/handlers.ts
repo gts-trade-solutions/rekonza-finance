@@ -15,6 +15,7 @@ import { ApiError } from '../http';
 import { logAudit } from '../audit';
 import { registerInvoice } from '../integrations/gst/einvoice-service';
 import { generateEwayBill, type EwayBillDocument, type TransportInput } from '../integrations/gst/eway-service';
+import { emailInvoice } from '../mail/documents';
 import type { ClaimedJob, JobOutcome } from './queue';
 
 export type JobHandler = (job: ClaimedJob) => Promise<unknown>;
@@ -53,6 +54,20 @@ export const HANDLERS: Record<string, JobHandler> = {
       detail: `E-way bill ${result.ewayBillNo} generated via ${result.provider} on automatic retry ${job.attempts}`,
     });
     return { ewayBillNo: result.ewayBillNo };
+  },
+
+  // An invoice emailed at the time it was scheduled for (Zoho's Schedule Email),
+  // to the people and with the message chosen then. A voided invoice is not sent.
+  'mail.invoice': async (job) => {
+    const p = job.payload as { invoiceId: number; to?: string[]; cc?: string[]; message?: string | null; baseUrl?: string };
+    const sent = await emailInvoice(job.org_id, job.created_by_user_id, Number(p.invoiceId), {
+      to: p.to, cc: p.cc, message: p.message ?? null, baseUrl: p.baseUrl,
+    });
+    await logAudit({
+      orgId: job.org_id, actorUserId: job.created_by_user_id, actorName: 'Scheduled email', action: 'send',
+      targetType: 'invoice', targetId: Number(p.invoiceId), detail: `Emailed as scheduled to ${sent.to.join(', ')}`,
+    });
+    return { to: sent.to };
   },
 };
 

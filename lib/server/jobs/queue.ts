@@ -18,8 +18,9 @@ import { sql } from 'kysely';
 import { db, type Executor, type Trx } from '../db';
 import { ApiError } from '../http';
 
-export type JobKind = 'einvoice.register' | 'ewb.generate';
-export const JOB_KINDS: JobKind[] = ['einvoice.register', 'ewb.generate'];
+// mail.invoice: Zoho's "Schedule Email" — an invoice emailed at the time chosen (run_after).
+export type JobKind = 'einvoice.register' | 'ewb.generate' | 'mail.invoice';
+export const JOB_KINDS: JobKind[] = ['einvoice.register', 'ewb.generate', 'mail.invoice'];
 
 /** Minutes before each retry: the first after the failure a person saw, then after each failed retry. */
 export const RETRY_DELAYS_MIN = [2, 10, 30] as const;

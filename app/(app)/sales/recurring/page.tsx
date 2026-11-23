@@ -11,10 +11,10 @@
 // so the GST, the numbering and the posting are identical.
 
 import { FoldNav } from '@/components/layout/nav-state';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { localDay } from '@/lib/selectors';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { Bell, Mail, Play, Plus, Repeat, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card } from '@/components/ui/card';
@@ -33,7 +33,8 @@ import { Money } from '@/components/shared/money';
 import { EmptyState } from '@/components/shared/empty-state';
 import { AsyncPage } from '@/components/shared/async-state';
 import { Field, MoneyInput } from '@/components/shared/form-bits';
-import { recurringInvoices, type RecurringInvoiceRow } from '@/lib/api/client';
+import { invoices as invoiceApi, recurringInvoices, type RecurringInvoiceRow } from '@/lib/api/client';
+import { RECURRING_FROM_FORM } from '@/lib/recurring-handoff';
 import { useApi, useApiAction } from '@/lib/api/use-api';
 import { useAppStore } from '@/lib/store';
 import { usePermission } from '@/lib/store/hooks';
@@ -58,6 +59,10 @@ const TERMS = [
 const today = () => localDay(new Date());
 const short = (d: string | null) => (d ? new Date(d).toLocaleDateString('en-IN') : '—');
 
+interface SourceLine { itemId: string | null; description: string | null; qty: number; ratePaise: number; gstRatePct: number; hsnSac: string | null }
+/** What a new profile starts from: an invoice (Make Recurring) or the unsaved invoice form. */
+interface RecurringSource { label: string; lines: SourceLine[] }
+
 const BLANK = {
   name: '', customerId: '', frequency: 'monthly', startDate: today(),
   paymentTerms: 'net_30', autoSend: false,
@@ -68,11 +73,44 @@ export default function RecurringPage() {
   const router = useRouter();
   const canCreate = usePermission('sales', 'create');
   const items = useAppStore((s) => s.items);
+  const customers = useAppStore((s) => s.contacts);
 
   const state = useApi<{ profiles: RecurringInvoiceRow[] }>(() => recurringInvoices.list(), []);
 
   const [open, setOpen] = useState(false);
   const [f, setF] = useState(BLANK);
+  // ?invoice=<id>: Zoho's "Make Recurring" on an invoice — the profile starts as that invoice, every line of it.
+  const fromId = useSearchParams().get('invoice');
+  // ?from=form: the New Invoice form's own "Make Recurring", carried over unsaved.
+  const fromForm = useSearchParams().get('from') === 'form';
+  // ?new=1: the invoice list's New ▾ → New Recurring Invoice.
+  const startNew = useSearchParams().get('new') === '1';
+  useEffect(() => { if (startNew) setOpen(true); }, [startNew]);
+  const [source, setSource] = useState<RecurringSource | null>(null);
+  useEffect(() => {
+    if (fromForm) {
+      try {
+        const saved = JSON.parse(sessionStorage.getItem(RECURRING_FROM_FORM) ?? 'null') as { customerId: string; paymentTerms: string; lines: SourceLine[] } | null;
+        sessionStorage.removeItem(RECURRING_FROM_FORM);
+        if (!saved) return;
+        const name = customers.find((c) => c.id === saved.customerId)?.displayName;
+        setSource({ label: 'the invoice form', lines: saved.lines });
+        setF({ ...BLANK, name: name ? `${name} – recurring` : '', customerId: saved.customerId, paymentTerms: saved.paymentTerms || BLANK.paymentTerms });
+        setOpen(true);
+      } catch { /* nothing carried over */ }
+      return;
+    }
+    if (!fromId) return;
+    let live = true;
+    invoiceApi.get(fromId).then((inv) => {
+      if (!live) return;
+      setSource({ label: inv.number, lines: inv.lines.map((l) => ({ itemId: l.itemId, description: l.description ?? l.itemName ?? null, qty: l.qty, ratePaise: l.ratePaise, gstRatePct: l.gstRatePct, hsnSac: l.hsnSac })) });
+      setF({ ...BLANK, name: `${inv.customer.name} – ${inv.number}`, customerId: inv.customer.id, paymentTerms: inv.paymentTerms ?? BLANK.paymentTerms });
+      setOpen(true);
+    }).catch((e) => toast.error('That invoice could not be read', { description: e instanceof Error ? e.message : String(e) }));
+    return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fromId, fromForm]);
 
   const create = useApiAction(recurringInvoices.create);
   const run = useApiAction(recurringInvoices.run);
@@ -82,11 +120,16 @@ export default function RecurringPage() {
   const busy = run.busy || toggle.busy || auto.busy || remove.busy;
 
   const save = async () => {
-    if (!f.name.trim() || !f.customerId || f.rate <= 0) {
+    if (!f.name.trim() || !f.customerId || (!source && f.rate <= 0)) {
       toast.error('Name the profile, pick a customer, and set a rate.');
       return;
     }
     const picked = items.find((i) => i.id === f.itemId);
+    // From an invoice: its lines as they are, at the rates it was billed at.
+    const fromLines = source?.lines.map((l) => ({
+      itemId: l.itemId, description: l.description ?? f.name.trim(), qty: l.qty,
+      ratePaise: l.ratePaise, gstRatePct: l.gstRatePct, hsnSac: l.hsnSac,
+    }));
     const done = await create.run({
       name: f.name.trim(),
       customerId: f.customerId,
@@ -94,7 +137,7 @@ export default function RecurringPage() {
       startDate: f.startDate,
       paymentTerms: f.paymentTerms,
       autoSend: f.autoSend,
-      lines: [{
+      lines: fromLines ?? [{
         itemId: f.itemId || null,
         description: picked?.name ?? f.name.trim(),
         qty: f.qty,
@@ -112,6 +155,7 @@ export default function RecurringPage() {
     });
     setOpen(false);
     setF(BLANK);
+    setSource(null);
     state.refetch();
   };
 
@@ -210,6 +254,14 @@ export default function RecurringPage() {
                       />
                     </Field>
                   </div>
+                  {source ? (
+                    <div className="rounded-md border bg-muted/40 p-3 text-[13px]" data-slot="recurring-from-invoice">
+                      <p className="font-medium">{source.lines.length} line{source.lines.length === 1 ? '' : 's'} from {source.label}</p>
+                      <ul className="mt-1 space-y-0.5 text-muted-foreground">
+                        {source.lines.map((l, i) => <li key={i}>{(l.itemId && items.find((x) => x.id === l.itemId)?.name) || l.description} · {l.qty} × <Money value={l.ratePaise} /></li>)}
+                      </ul>
+                    </div>
+                  ) : (<>
                   <Field label="Item" hint="Optional — leave blank to bill the profile name as a single line">
                     <Combobox
                       options={itemOptions({ items } as never)}
@@ -241,6 +293,9 @@ export default function RecurringPage() {
                     <Field label="Rate" required>
                       <MoneyInput valuePaise={f.rate} onChangePaise={(p) => setF({ ...f, rate: p })} />
                     </Field>
+                  </div>
+                  </>)}
+                  <div className="grid grid-cols-3 gap-4">
                     <Field label="Terms">
                       <Combobox
                         options={TERMS}

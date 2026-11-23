@@ -45,6 +45,7 @@ import { cn } from '@/lib/utils';
 import { formatINR, roundToRupee, toRupees } from '@/lib/money';
 import type { SupplyKind } from '@/lib/types';
 import { CostCentrePicker } from '@/components/forms/cost-centre-picker';
+import { RECURRING_FROM_FORM } from '@/lib/recurring-handoff';
 import { GodownPicker } from '@/components/forms/godown-picker';
 
 export type InvoiceVariant = 'invoice' | 'receipt' | 'debit_note';
@@ -363,10 +364,11 @@ export function InvoiceForm({ variant = 'invoice', editing }: {
   const valid = !!customerId && lines.some((l) => l.qty > 0 && l.ratePaise > 0) && (!foreign || rate > 0);
 
   const save = async (mode: 'draft' | 'send') => {
+    // Zoho's messages, in Zoho's order: the customer first, then the items.
+    if (!customerId) { toast.error('Select a customer.'); return; }
+    if (!lines.some((l) => l.itemId || l.description.trim())) { toast.error('Enter the valid item name or description.'); return; }
     if (!valid) {
-      toast.error('Add a customer and at least one item', {
-        description: 'An invoice needs a customer and one line with a quantity and rate.',
-      });
+      toast.error(foreign && !(rate > 0) ? 'Enter the exchange rate.' : 'Enter a quantity and rate for at least one item.');
       return;
     }
     if (markPaid && mode === 'draft') {
@@ -513,7 +515,7 @@ export function InvoiceForm({ variant = 'invoice', editing }: {
           variant="ghost"
           size="icon-sm"
           aria-label="Invoice preferences"
-          onClick={() => toast.info('Invoice preferences', { description: 'Numbering, templates and defaults live in Settings.' })}
+          onClick={() => router.push('/settings/invoice-print')}
         >
           <Settings2 className="size-4" />
         </Button>
@@ -541,6 +543,19 @@ export function InvoiceForm({ variant = 'invoice', editing }: {
           <Button variant="ghost" onClick={() => router.push(ed ? `/sales/invoices/${ed.id}` : v.back)} disabled={!!saving}>
             Cancel
           </Button>
+          {/* Zoho's "Make Recurring": this form becomes a recurring profile instead of an invoice. */}
+          {!ed && variant === 'invoice' && (
+            <Button variant="link" className="px-1" data-slot="form-make-recurring" disabled={!!saving} onClick={() => {
+              sessionStorage.setItem(RECURRING_FROM_FORM, JSON.stringify({
+                customerId, paymentTerms,
+                lines: lines.filter((l) => l.qty > 0 && (l.itemId || l.description.trim())).map((l) => ({
+                  itemId: l.itemId || null, description: l.description || null, qty: l.qty,
+                  ratePaise: l.ratePaise, gstRatePct: l.gstRatePct, hsnSac: l.hsnSac || null,
+                })),
+              }));
+              router.push('/sales/recurring?from=form');
+            }}>Make Recurring</Button>
+          )}
         </>
       }
       footerSummary={

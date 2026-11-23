@@ -9,6 +9,7 @@
 // and the summary tiles come back describing the same filtered set — so the
 // figures above the table always describe the table.
 
+import { NewSplitButton } from '@/components/shared/new-split-button';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useMemo, useState } from 'react';
@@ -155,9 +156,11 @@ export default function InvoicesPage() {
             <Refreshing active={state.refreshing} />
             <SavedViews list="invoices" current={{ status: filter, range }} onApply={(v) => { setFilter(String(v.status ?? 'all')); if (v.range) setRange(v.range as RangeValue); }} />
             {canCreate && (
-              <Button size="sm" asChild className="gap-1.5">
-                <Link href="/sales/invoices/new"><Plus className="size-4" /> New invoice</Link>
-              </Button>
+              <NewSplitButton href="/sales/invoices/new" more={[
+                { label: 'New Invoice', href: '/sales/invoices/new' },
+                { label: 'New Recurring Invoice', href: '/sales/recurring?new=1' },
+                { label: 'New Credit Note', href: '/sales/credit-notes/new' },
+              ]} />
             )}
           </>
         }<ModuleMenu slug="invoices" onRefresh={() => void state.refetch()} /></>
