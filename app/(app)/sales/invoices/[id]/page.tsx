@@ -151,7 +151,7 @@ export default function InvoiceDetailPage() {
                         <DropdownMenuItem onClick={() => router.push(`/sales/recurring?invoice=${inv.id}`)} data-slot="make-recurring">Make Recurring</DropdownMenuItem>
                       )}
                       {canCreate && inv.status !== 'draft' && inv.status !== 'void' && !inv.debitNote && (
-                        <DropdownMenuItem onClick={() => router.push(`/sales/credit-notes/new?invoice=${inv.id}`)} data-slot="create-credit-note">Create Credit Note</DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => router.push(`/sales/credit-notes?invoice=${inv.id}`)} data-slot="create-credit-note">Create Credit Note</DropdownMenuItem>
                       )}
                       {canFileGst && inv.status !== 'draft' && inv.status !== 'void' && inv.supplyKind !== 'service' && (
                         <DropdownMenuItem onClick={() => router.push(`/gst/eway-bills?invoice=${inv.id}`)} data-slot="add-eway-bill">Add e-Way Bill Details</DropdownMenuItem>

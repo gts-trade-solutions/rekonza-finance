@@ -11,7 +11,8 @@
 // decision — and that is the only version that touches the bank.
 
 import { FoldNav } from '@/components/layout/nav-state';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { localDay } from '@/lib/selectors';
 import { FileMinus, Plus, Undo2 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -95,6 +96,25 @@ export default function CreditNotesPage() {
       toast.error('That credit note could not be loaded', { description: e instanceof Error ? e.message : String(e) });
     }
   };
+
+  // ?invoice=<id>: an invoice's ⋯ → "Create Credit Note" (Zoho's) starts the note
+  // against it; ?new=1: the invoice list's New ▾ → New Credit Note.
+  const params = useSearchParams();
+  const startFor = params.get('invoice');
+  const startNew = params.get('new') === '1';
+  useEffect(() => {
+    if (startNew) setOpen(true);
+    if (!startFor) return;
+    let live = true;
+    invoicesApi.get(startFor).then((inv) => {
+      if (!live) return;
+      setCustomerId(inv.customer.id);
+      setInvoiceId(inv.id);
+      setGstRate(inv.lines[0]?.gstRatePct ?? 18);
+      setOpen(true);
+    }).catch((e) => toast.error('That invoice could not be read', { description: e instanceof Error ? e.message : String(e) }));
+    return () => { live = false; };
+  }, [startFor, startNew]);
 
   const save = async () => {
     if (!customerId || amount <= 0) {
