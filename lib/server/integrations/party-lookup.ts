@@ -35,7 +35,20 @@ export type DetailsSource = 'gst-system' | 'lookup-service' | 'number';
 export interface PartyDetails extends TaxpayerDetails {
   pan: string;
   source: DetailsSource;
+  /**
+   * Why only the number's own facts came back when a lookup service is set up:
+   * it refused (no lookups left, a bad key), did not answer, or today's
+   * allowance of paid lookups is used up. Said beside the GSTIN box.
+   */
+  notice?: string;
 }
+
+/**
+ * Asked before a paid lookup, never before one answered from the twelve-hour
+ * store: null to go ahead (and count it), or why not. Each lookup costs the
+ * business money, and the sign-up page asks without anyone signed in.
+ */
+export type PaidLookupCheck = () => Promise<string | null>;
 
 /** The PAN's fourth letter: the kind of holder. */
 const PAN_KIND: Record<string, string> = {
@@ -72,13 +85,18 @@ type Fetcher = (url: string, init: RequestInit) => Promise<Response>;
 const realFetch: Fetcher = (url, init) => fetch(url, { ...init, signal: AbortSignal.timeout(10_000) });
 let fetcher: Fetcher = realFetch;
 /** For tests: answer the services without the network. */
-export function setLookupFetcher(f: Fetcher | null) { fetcher = f ?? realFetch; cache.clear(); }
+export function setLookupFetcher(f: Fetcher | null) { fetcher = f ?? realFetch; cache.clear(); failed.clear(); }
 
 const cache = new Map<string, { at: number; value: unknown }>();
 const KEEP_MS = 12 * 3600_000;
+// A refusal is kept for half a minute: the prefill dialog and then the form's
+// own GSTIN box both ask, and the second must give the same reason, not spend
+// another of the day's lookups on a service that has just said no.
+const failed = new Map<string, { at: number; error: ApiError }>();
+const KEEP_FAILED_MS = 30_000;
 
 /** Call a configured service: URL, headers and body templates filled with the number and the key. */
-async function callService(prefix: 'GSTIN_LOOKUP' | 'COMPANY_LOOKUP', vars: Record<string, string>): Promise<unknown> {
+async function callService(prefix: 'GSTIN_LOOKUP' | 'COMPANY_LOOKUP', vars: Record<string, string>, mayPay?: PaidLookupCheck): Promise<unknown> {
   const template = process.env[`${prefix}_URL`]?.trim();
   if (!template) return null;
   const all = { ...vars, key: process.env[`${prefix}_KEY`]?.trim() ?? '' };
@@ -90,16 +108,32 @@ async function callService(prefix: 'GSTIN_LOOKUP' | 'COMPANY_LOOKUP', vars: Reco
   const key = `${prefix} ${url} ${body ?? ''}`;
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < KEEP_MS) return hit.value;
+  const lastFailure = failed.get(key);
+  if (lastFailure && Date.now() - lastFailure.at < KEEP_FAILED_MS) throw lastFailure.error;
+  const refused = mayPay ? await mayPay() : null;
+  if (refused) throw new ApiError(429, refused, 'lookup_allowance');
   let headers: Record<string, string> = { accept: 'application/json' };
   const rawHeaders = process.env[`${prefix}_HEADERS`]?.trim();
   if (rawHeaders) {
     try { headers = { ...headers, ...JSON.parse(fill(rawHeaders, false)) as Record<string, string> }; } catch { /* a malformed setting is ignored, not fatal */ }
   }
-  const res = await fetcher(url, body
-    ? { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body }
-    : { method: 'GET', headers });
+  const fail = (error: ApiError) => { failed.set(key, { at: Date.now(), error }); return error; };
+  let res: Response;
+  try {
+    res = await fetcher(url, body
+      ? { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body }
+      : { method: 'GET', headers });
+  } catch {
+    throw fail(new ApiError(504, 'The lookup service did not answer in time.', 'lookup_failed'));
+  }
   if (res.status === 404) return null;
-  if (!res.ok) throw new ApiError(502, `The lookup service answered ${res.status}. Check its key and how many lookups are left.`, 'lookup_failed');
+  if (!res.ok) {
+    const why = res.status === 401 || res.status === 403 ? 'refused its key'
+      : res.status === 402 ? 'has no lookups left: buy more from the service'
+      : res.status === 429 ? 'is out of lookups or busy'
+      : 'could not answer';
+    throw fail(new ApiError(502, `The lookup service ${why} (it answered ${res.status}).`, 'lookup_failed'));
+  }
   const value = await res.json().catch(() => null);
   cache.set(key, { at: Date.now(), value });
   return value;
@@ -158,14 +192,24 @@ export function fromGstRecord(reply: unknown, base: PartyDetails, source: Detail
   };
 }
 
-/** Everything known about a GSTIN: the number, then the GSP, then a lookup service. */
-export async function lookupParty(raw: string, viaGsp: ((gstin: string) => Promise<TaxpayerDetails>) | null): Promise<PartyDetails> {
+/**
+ * Everything known about a GSTIN: the number, then the GSP, then a lookup service.
+ * A lookup service that refuses, fails or is over today's allowance still leaves
+ * the state and PAN filled, with the reason as `notice`, rather than nothing.
+ */
+export async function lookupParty(raw: string, viaGsp: ((gstin: string) => Promise<TaxpayerDetails>) | null, mayPay?: PaidLookupCheck): Promise<PartyDetails> {
   const base = gstinFacts(raw);
   if (viaGsp) {
     const t = await viaGsp(base.gstin);
     return { ...base, ...t, pan: base.pan, registeredOn: isoDate(t.registeredOn) ?? t.registeredOn, constitution: t.constitution ?? base.constitution, source: 'gst-system' };
   }
-  const reply = await callService('GSTIN_LOOKUP', { gstin: base.gstin });
+  let reply: unknown;
+  try {
+    reply = await callService('GSTIN_LOOKUP', { gstin: base.gstin }, mayPay);
+  } catch (err) {
+    const why = err instanceof ApiError ? err.message : 'The lookup service did not answer in time.';
+    return { ...base, notice: `${why} Only the state and PAN were filled: type the name and address, or try again later.` };
+  }
   if (reply == null) return base;
   return fromGstRecord(reply, base, 'lookup-service') ?? base;
 }

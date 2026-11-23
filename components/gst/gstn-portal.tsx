@@ -407,6 +407,8 @@ export interface GstinDetails {
   pan: string;
   /** Where the details came from: the GST system (GSP), a lookup service, or only the number itself. */
   source?: 'gst-system' | 'lookup-service' | 'number';
+  /** Why a lookup service that is set up gave only the number's facts: out of lookups, a bad key, no answer, today's allowance. */
+  notice?: string;
 }
 
 /** A company's details from its CIN (integrations/party-lookup.ts). */
@@ -439,7 +441,8 @@ export function GstinNumberOnlyNote({ details, gstin, publicPage = false }: {
       <span>
         {publicPage
           ? 'Only the state and PAN could be read from the GSTIN. Type the business name yourself.'
-          : 'Only the state and PAN were filled. The name and address need a GSTIN lookup service: see Settings → System health.'}
+          : details.notice
+            ?? 'Only the state and PAN were filled. The name and address need a GSTIN lookup service: see Settings → System health.'}
       </span>
     </p>
   );
@@ -487,6 +490,8 @@ export function GstinLookupButton({ gstin, onFound, className, auto = true, endp
       // A number-only answer is said under the box by GstinNumberOnlyNote, every time.
       if (d.fromPortal) {
         toast.success(`Found ${d.legalName ?? d.gstin}`, { description: [d.taxpayerType, d.status, d.registeredOn ? `registered ${d.registeredOn}` : null].filter(Boolean).join(' · ') });
+      } else if (d.notice) {
+        toast.warning('The GSTIN lookup did not fetch the name and address', { description: d.notice });
       }
       found.current(d);
     } catch (e) {

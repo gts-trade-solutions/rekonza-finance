@@ -22,7 +22,7 @@ import { encryptionAvailable } from '../crypto';
 import { connectionFor, readSession, runPortalCall, toApiError, writeSession, type PortalConnection, type PortalSession } from './index';
 import { PortalAuthFailed } from './provider';
 import { GstnReturnsProvider, gstnConfigFromEnv, retPeriod } from './gstn-returns';
-import { gstinFacts, lookupParty, type PartyDetails } from '../party-lookup';
+import { gstinFacts, lookupParty, type PartyDetails, type PaidLookupCheck } from '../party-lookup';
 import { standinReturns, type ReturnsContext, type ReturnsProvider, type ReturnsSession, type ReturnType } from './returns-provider';
 import { gstr1PortalFile } from '../../gst/gstr1-json';
 import { gstr3bForm, gstr3bPortalJson } from '../../gst/gstr3b-form';
@@ -423,9 +423,9 @@ export async function fetchGstr2bFromPortal(orgId: number, branchId: number, mon
  * system through the GSP, or else a GSTIN lookup service
  * (integrations/party-lookup.ts). Public data: it needs no taxpayer session.
  */
-export async function lookupGstin(gstin: string, ipUser?: string): Promise<PartyDetails> {
+export async function lookupGstin(gstin: string, ipUser?: string, mayPay?: PaidLookupCheck): Promise<PartyDetails> {
   const g = gstinFacts(gstin).gstin;
-  return wrap(`the details of ${g}`, () => lookupParty(g, gspReady() ? (x) => gstnProvider().searchTaxpayer({ ipUser }, x) : null));
+  return wrap(`the details of ${g}`, () => lookupParty(g, gspReady() ? (x) => gstnProvider().searchTaxpayer({ ipUser }, x) : null, mayPay));
 }
 
 export async function trackFilings(orgId: number, branchId: number, fy: string, ipUser?: string) {

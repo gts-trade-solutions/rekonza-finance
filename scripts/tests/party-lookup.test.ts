@@ -178,13 +178,67 @@ test('a service set to POST sends the body with the number in it', async () => {
 test('a number the service does not know falls back to the number; a failing service says so', async () => {
   setEnv({ GSTIN_LOOKUP_URL: 'https://lookup.test/{gstin}' });
   standIn({ error: 'not found' }, 404);
-  assert.equal((await lookupParty(COMPANY, null)).source, 'number');
+  const unknown = await lookupParty(COMPANY, null);
+  assert.equal(unknown.source, 'number');
+  assert.equal(unknown.notice, undefined, 'a number the GST system does not know is no failure');
   setLookupFetcher(null);
-  standIn({ error: 'quota' }, 429);
-  await assert.rejects(lookupParty(PROPRIETOR, null), /answered 429/);
+  // Out of lookups: the state and PAN still fill, and the reason is said.
+  const quota = standIn({ error: 'quota' }, 429);
+  const out = await lookupParty(PROPRIETOR, null);
+  assert.equal(out.source, 'number');
+  assert.equal(out.pan, 'ABCPK1234L');
+  assert.equal(out.address?.stateCode, '33');
+  assert.match(out.notice ?? '', /out of lookups or busy \(it answered 429\)\. Only the state and PAN were filled/);
+  // The prefill dialog and then the form's GSTIN box both ask: the second, straight
+  // after, gets the same reason without asking the service or spending the allowance.
+  let counted = 0;
+  const again = await lookupParty(PROPRIETOR, null, async () => { counted += 1; return null; });
+  assert.equal(quota.length, 1, 'a refusal is kept for half a minute');
+  assert.equal(counted, 0);
+  assert.equal(again.notice, out.notice);
+  setLookupFetcher(null);
+  standIn({ error: 'Insufficient credits' }, 402);
+  assert.match((await lookupParty(PROPRIETOR, null)).notice ?? '', /no lookups left/, 'after that, the service is asked again');
+  setLookupFetcher(null);
+  standIn({ error: 'Invalid API key' }, 401);
+  assert.match((await lookupParty(PROPRIETOR, null)).notice ?? '', /refused its key/);
+  setLookupFetcher(null);
+  setLookupFetcher(async () => { throw new DOMException('The operation timed out.', 'TimeoutError'); });
+  assert.match((await lookupParty(PROPRIETOR, null)).notice ?? '', /did not answer in time/);
   setLookupFetcher(null);
   standIn({ message: 'ok but empty' });
   assert.equal((await lookupParty(FIRM, null)).source, 'number', 'a reply with no taxpayer in it changes nothing');
+});
+
+test('a paid lookup asks the day’s allowance first; a kept answer does not', async () => {
+  setEnv({ GSTIN_LOOKUP_URL: 'https://lookup.test/{gstin}' });
+  const calls = standIn({ lgnm: 'Allowed Co' });
+  let asked = 0;
+  const allow = async () => { asked += 1; return null; };
+  assert.equal((await lookupParty(COMPANY, null, allow)).legalName, 'Allowed Co');
+  assert.equal((await lookupParty(COMPANY, null, allow)).legalName, 'Allowed Co', 'the same number again is kept');
+  assert.equal(asked, 1, 'only the lookup that is paid for is counted');
+  assert.equal(calls.length, 1);
+  // Over the allowance: the service is not asked, and the number still fills.
+  let refusedAsked = 0;
+  const refuse = async () => { refusedAsked += 1; return 'Today’s 2 GSTIN lookups for this company are used up.'; };
+  const d = await lookupParty(FIRM, null, refuse);
+  assert.equal(refusedAsked, 1);
+  assert.equal(calls.length, 1, 'nothing is spent past the allowance');
+  assert.equal(d.source, 'number');
+  assert.equal(d.pan, 'AAFFR1234B');
+  assert.match(d.notice ?? '', /^Today’s 2 GSTIN lookups for this company are used up\. Only the state and PAN were filled/);
+});
+
+test('the GST system’s own search is not counted against the lookup allowance', async () => {
+  setEnv({ GSTIN_LOOKUP_URL: 'https://lookup.test/{gstin}' });
+  let asked = 0;
+  const d = await lookupParty(PROPRIETOR, async (gstin) => ({
+    gstin, legalName: 'Via GSP', tradeName: null, status: 'Active', taxpayerType: 'Regular', constitution: null,
+    registeredOn: null, cancelledOn: null, address: null, fromPortal: true,
+  }), async () => { asked += 1; return 'no'; });
+  assert.equal(d.legalName, 'Via GSP');
+  assert.equal(asked, 0);
 });
 
 test('the GST system, when connected, is asked before any service', async () => {

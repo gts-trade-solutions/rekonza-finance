@@ -5,6 +5,7 @@ import { hasPermission } from '@/lib/rbac';
 import { auditMeta } from '@/lib/server/audit';
 import { lookupGstin } from '@/lib/server/integrations/gst/returns-service';
 import { gstinFacts } from '@/lib/server/integrations/party-lookup';
+import { companyLookups } from '@/lib/server/integrations/lookup-allowance';
 import { snapshotMode } from '@/lib/demo-snapshot';
 
 // A GSTIN's registered details from the GST system — legal and trade name,
@@ -14,10 +15,11 @@ import { snapshotMode } from '@/lib/demo-snapshot';
 
 const Query = z.object({ gstin: z.string().trim().min(15).max(15) });
 
-const live = route(async ({ role, req }) => {
+const live = route(async ({ role, req, orgId }) => {
   const q = query(req, Query);
   if (!['sales', 'purchases', 'gst'].some((m) => hasPermission(role, m, 'view'))) throw forbidden('Your role cannot look up GSTINs.');
-  return lookupGstin(q.gstin, auditMeta(req).ip ?? undefined);
+  // A paid lookup counts against the company's day (integrations/lookup-allowance.ts).
+  return lookupGstin(q.gstin, auditMeta(req).ip ?? undefined, companyLookups(orgId));
 });
 
 // The online demo has no book and is open to anyone, so it answers with what
