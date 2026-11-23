@@ -3,6 +3,7 @@
 // The dialogs behind the fixed-asset register: adding an asset, an asset's
 // own page with what can be done to it, and a class of assets.
 
+import { FoldNav } from '@/components/layout/nav-state';
 import { useEffect, useMemo, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -87,6 +88,7 @@ export function AddAssetDialog({ open, classes, onClose, onDone }: {
       <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>Add an asset</DialogTitle>
+          <FoldNav />
           <DialogDescription>Where its cost came from decides what is posted. Bought on a bill already entered, nothing is posted twice.</DialogDescription>
         </DialogHeader>
         <div className="max-h-[65vh] space-y-4 overflow-y-auto pr-1 thin-scroll">

@@ -10,6 +10,7 @@
 // invoice and no money ever moves. Refunding one in cash is a separate, later
 // decision — and that is the only version that touches the bank.
 
+import { FoldNav } from '@/components/layout/nav-state';
 import { useState } from 'react';
 import { localDay } from '@/lib/selectors';
 import { FileMinus, Plus, Undo2 } from 'lucide-react';
@@ -201,6 +202,7 @@ export default function CreditNotesPage() {
               <DialogContent>
                 <DialogHeader>
                   <DialogTitle>{editing ? `Edit credit note ${editing.number}` : 'New credit note'}</DialogTitle>
+                  <FoldNav />
                   <DialogDescription>
                     Leave the invoice blank to leave the credit on the customer&apos;s account for next time.
                   </DialogDescription>

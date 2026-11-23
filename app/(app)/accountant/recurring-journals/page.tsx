@@ -12,6 +12,7 @@
 // into a closed month would be worse than no automation at all.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { FoldNav } from '@/components/layout/nav-state';
 import { useState } from 'react';
 import { CalendarClock, Play, Plus, Repeat, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -153,6 +154,7 @@ export default function RecurringJournalsPage() {
               <DialogContent>
                 <DialogHeader>
                   <DialogTitle>New recurring journal</DialogTitle>
+                  <FoldNav />
                   <DialogDescription>
                     Two accounts and one amount. The same entry posts each period, worded identically.
                   </DialogDescription>

@@ -4,6 +4,7 @@
 // run uses up its components and adds the finished item at their cost that
 // day plus the overhead absorbed.
 
+import { FoldNav } from '@/components/layout/nav-state';
 import { useState } from 'react';
 import { Factory, Loader2, Plus, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -174,6 +175,7 @@ function ProduceDialog({ open, boms, onClose, onSave }: { open: boolean; boms: B
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Record production</DialogTitle>
+          <FoldNav />
           <DialogDescription>The components are taken out of stock and the finished item added, at their cost today plus the overhead.</DialogDescription>
         </DialogHeader>
         <div className="grid gap-3 sm:grid-cols-2">

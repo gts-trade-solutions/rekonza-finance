@@ -13,7 +13,7 @@ import { AssistantLauncher } from '@/components/ai/assistant-launcher';
 import { OutputGuard } from '@/components/layout/output-guard';
 import { OfflineSync } from '@/components/layout/offline-sync';
 import { ReasonPrompt } from '@/components/layout/reason-prompt';
-import { useNavCollapsed } from '@/components/layout/nav-state';
+import { isEntryPage, useForceNavCollapsed, useNavCollapsed } from '@/components/layout/nav-state';
 import { SettingsTopbar, isSettingsMode } from '@/components/settings/all-settings';
 import { usePathname } from 'next/navigation';
 import { cn } from '@/lib/utils';
@@ -25,10 +25,13 @@ import { cn } from '@/lib/utils';
  * header run edge to edge (globals.css, "Zoho list pages").
  */
 function Shell({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname();
+  // A transaction's entry form folds the sidebar to the rail while it is open.
+  useForceNavCollapsed(isEntryPage(pathname));
   const folded = useNavCollapsed();
   // Zoho's settings are a mode of their own: a white "All Settings" header in
   // place of the top bar, and no sidebar (components/settings/all-settings.tsx).
-  const settings = isSettingsMode(usePathname());
+  const settings = isSettingsMode(pathname);
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-background print:block print:h-auto print:overflow-visible">
       {settings ? <SettingsTopbar /> : <Topbar />}

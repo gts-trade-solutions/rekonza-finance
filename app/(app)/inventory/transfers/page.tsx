@@ -3,6 +3,7 @@
 // Stock transfers between godowns: dispatched, in transit, received. Moving
 // goods changes where they are, not what they cost.
 
+import { FoldNav } from '@/components/layout/nav-state';
 import { useState } from 'react';
 import { ArrowRight, Loader2, Plus, Trash2, Truck } from 'lucide-react';
 import { toast } from 'sonner';
@@ -127,6 +128,7 @@ function NewTransfer({ open, warehouses, onClose, onDone }: { open: boolean; war
       <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>Transfer stock</DialogTitle>
+          <FoldNav />
           <DialogDescription>Between godowns of one GST registration. To a different GSTIN it is a supply: raise a tax invoice.</DialogDescription>
         </DialogHeader>
         <div className="grid gap-3 sm:grid-cols-3">

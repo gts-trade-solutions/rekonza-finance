@@ -9,6 +9,7 @@
 // disappears from our GSTR-2B — holding on to it produces a mismatch the
 // department asks about, with interest.
 
+import { FoldNav } from '@/components/layout/nav-state';
 import { useState } from 'react';
 import { FileMinus, Plus, Undo2 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -173,6 +174,7 @@ export default function VendorCreditsPage() {
               <DialogContent>
                 <DialogHeader>
                   <DialogTitle>New vendor credit</DialogTitle>
+                  <FoldNav />
                   <DialogDescription>
                     Leave the bill blank to keep the credit on the supplier&apos;s account for next time.
                   </DialogDescription>

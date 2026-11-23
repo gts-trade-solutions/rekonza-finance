@@ -11,6 +11,7 @@
 // inventory asset and lands in write-offs. Most stock screens skip that, and
 // skipping it leaves the balance sheet carrying inventory that is not there.
 
+import { FoldNav } from '@/components/layout/nav-state';
 import { useState } from 'react';
 import { ClipboardList, Plus } from 'lucide-react';
 import { toast } from 'sonner';
@@ -157,6 +158,7 @@ export default function StockAdjustmentsPage() {
               <DialogContent>
                 <DialogHeader>
                   <DialogTitle>Adjust stock</DialogTitle>
+                  <FoldNav />
                   <DialogDescription>
                     A negative quantity writes stock off and posts the loss. A positive one corrects it upward.
                   </DialogDescription>

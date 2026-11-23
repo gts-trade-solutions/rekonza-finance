@@ -9,6 +9,7 @@
 // become income. Booking it as income on the day it arrives would overstate
 // both the profit and the GST due on it.
 
+import { FoldNav } from '@/components/layout/nav-state';
 import { useState } from 'react';
 import { localDay } from '@/lib/selectors';
 import { HandCoins, Info, Plus } from 'lucide-react';
@@ -163,6 +164,7 @@ export default function RetainersPage() {
               <DialogContent>
                 <DialogHeader>
                   <DialogTitle>New service invoice</DialogTitle>
+                  <FoldNav />
                   <DialogDescription>
                     Bill an advance. It is held as a liability until the work behind it is delivered.
                   </DialogDescription>

@@ -43,3 +43,16 @@ test('no screen is listed twice under one group, and every link is an app addres
   }
   for (const i of ALL_NAV_ITEMS) assert.match(i.href, /^\//, i.label);
 });
+
+test('entering a transaction folds the sidebar; a master’s form and the lists do not', async () => {
+  const { isEntryPage } = await import('../../components/layout/nav-state');
+  for (const p of [
+    '/sales/invoices/new', '/sales/invoices/42/edit', '/sales/debit-notes/new', '/sales/sales-receipts/new',
+    '/sales/payments/new', '/purchases/bills/new', '/purchases/payments/new', '/purchases/expenses/new',
+    '/accountant/journals/new', '/sales/estimates/7/edit',
+  ]) assert.equal(isEntryPage(p), true, p);
+  for (const p of [
+    '/sales/invoices', '/sales/invoices/42', '/sales/customers/new', '/sales/customers/3/edit', '/sales/items/new',
+    '/purchases/vendors/new', '/purchases/vendors/9/edit', '/analytics/new', '/dashboard', '/sales/invoices/new-ish', null, '',
+  ]) assert.equal(isEntryPage(p), false, String(p));
+});

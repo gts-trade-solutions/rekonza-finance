@@ -8,6 +8,7 @@
 // Booking a withdrawal as an expense is one of the commonest ways a set of
 // books ends up overstating costs.
 
+import { FoldNav } from '@/components/layout/nav-state';
 import { useState } from 'react';
 import { ArrowLeftRight, ArrowRight, Plus } from 'lucide-react';
 import { toast } from 'sonner';
@@ -111,6 +112,7 @@ export default function TransfersPage() {
               <DialogContent>
                 <DialogHeader>
                   <DialogTitle>New transfer</DialogTitle>
+                  <FoldNav />
                   <DialogDescription>Between your own bank, cash or card accounts.</DialogDescription>
                 </DialogHeader>
                 <div className="space-y-4">

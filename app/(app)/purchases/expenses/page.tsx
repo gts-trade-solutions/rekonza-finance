@@ -7,6 +7,7 @@
 // ledger and banking screens have not migrated and their rows reference the old
 // ids — so a page that needs the server's ids asks for them directly.
 
+import { FoldNav } from '@/components/layout/nav-state';
 import { useMemo, useState } from 'react';
 import { Loader2, Pencil, Plus, Receipt, Tags, Trash2, Wallet } from 'lucide-react';
 import { TagsPanel } from '@/components/shared/tags-panel';
@@ -272,6 +273,7 @@ export default function ExpensesPage() {
                 </DialogTrigger>
                 <DialogContent>
                   <DialogHeader><DialogTitle>{editing ? `Edit expense ${editing.number}` : 'Record expense'}</DialogTitle></DialogHeader>
+                  <FoldNav />
                   <div className="grid gap-4 sm:grid-cols-2">
                     <Field label="Date" required className="sm:col-span-2">
                       <Input type="date" value={f.date || today()} onChange={(e) => setF({ ...f, date: e.target.value })} data-slot="expense-date" />

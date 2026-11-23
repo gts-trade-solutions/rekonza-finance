@@ -6,6 +6,7 @@
 // "Run now" or, when set, on its date by the scheduler. Nothing is caught up:
 // a profile more than a period behind is left for someone to look at.
 
+import { FoldNav } from '@/components/layout/nav-state';
 import { useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Play, Plus, Repeat, Trash2 } from 'lucide-react';
@@ -189,6 +190,7 @@ export default function RecurringPurchasesPage() {
         <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle>{kind === 'bill' ? 'New recurring bill' : 'New recurring expense'}</DialogTitle>
+            <FoldNav />
             <DialogDescription>
               {kind === 'bill'
                 ? 'Each run raises a bill from the vendor, with a placeholder for their bill number to replace when their bill arrives.'

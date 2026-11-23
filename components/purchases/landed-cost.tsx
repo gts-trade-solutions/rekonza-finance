@@ -5,6 +5,7 @@
 // by quantity, by value or by hand, into their stock value. Shown on a bill
 // with stock lines; each line's cost per unit includes what it carries.
 
+import { FoldNav } from '@/components/layout/nav-state';
 import { useMemo, useState } from 'react';
 import { Loader2, Plus, Trash2, Truck } from 'lucide-react';
 import { toast } from 'sonner';
@@ -153,6 +154,7 @@ function AllocateDialog({ billId, data, onDone }: { billId: string; data: Data; 
       <DialogContent className="max-w-xl">
         <DialogHeader>
           <DialogTitle>Add landed cost</DialogTitle>
+          <FoldNav />
           <DialogDescription>Choose a charge — a line with no item on a bill, such as freight or customs clearing — and spread it over these goods.</DialogDescription>
         </DialogHeader>
         {data.charges.length === 0 ? (

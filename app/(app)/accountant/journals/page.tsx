@@ -7,6 +7,7 @@
 // again on arrival. An entry that does not balance is not a warning to be
 // dismissed; it is an entry that cannot exist.
 
+import { FoldNav } from '@/components/layout/nav-state';
 import { useEffect, useState } from 'react';
 import { BookOpen, CalendarClock, Clock, LayoutTemplate, Loader2, Pencil, Plus, Trash2, Undo2 } from 'lucide-react';
 import Link from 'next/link';
@@ -316,6 +317,7 @@ export default function JournalsPage() {
               <DialogContent className="max-w-3xl">
                 <DialogHeader>
                   <DialogTitle>{editing ? `Edit journal #${editing.entryNo}` : 'New journal entry'}</DialogTitle>
+                  <FoldNav />
                   <DialogDescription>
                     Each line is one-sided — either a debit or a credit. The two columns must agree before this
                     can be saved.

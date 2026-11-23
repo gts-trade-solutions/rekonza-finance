@@ -13,6 +13,7 @@
 // discount percentage applied to every line, printed with each. The items
 // offered are the ones the customer buys (goods, services or both).
 
+import { FoldNav } from '@/components/layout/nav-state';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { localDay } from '@/lib/selectors';
 import { ListPlus, Plus, Search, Trash2 } from 'lucide-react';
@@ -275,6 +276,7 @@ export function QuickDocumentDialog({
       <DialogContent className="sm:max-w-5xl" data-slot={editId ? `edit-${kind}` : `new-${kind}`}>
         <DialogHeader>
           <DialogTitle>{editId ? `Edit ${editDoc?.number ?? ''}` : title}</DialogTitle>
+          <FoldNav />
           <DialogDescription>{description}</DialogDescription>
         </DialogHeader>
         <div className="max-h-[70vh] space-y-4 overflow-y-auto pr-1 thin-scroll">

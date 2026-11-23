@@ -6,6 +6,7 @@
 // deductions against what was deposited for it and by when. A deduction with
 // no challan behind it is what TRACES sends a default notice about.
 
+import { FoldNav } from '@/components/layout/nav-state';
 import { useState } from 'react';
 import { AlertTriangle, CheckCircle2, Download, Plus } from 'lucide-react';
 import { toast } from 'sonner';
@@ -236,6 +237,7 @@ export function TdsQuarterReturn() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Record a challan</DialogTitle>
+            <FoldNav />
             <DialogDescription>
               From the challan receipt (ITNS 281). The BSR code, date and serial number are what the return and TRACES match on.
             </DialogDescription>

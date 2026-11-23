@@ -61,6 +61,23 @@ export function toggleNav() {
   setNavCollapsed(!folded);
 }
 
+// Entering a transaction folds it too, as the client asked on 2026-11-23 ("when
+// ledgering the sidebar should minimized"): the entry gets the room. The pages
+// that are an entry form are matched here; entry windows over a list put
+// <FoldNav /> inside them. Masters (customers, vendors, items) keep it open, as
+// Zoho keeps it open beside them.
+const ENTRY_MODULES = [
+  'sales/(?:invoices|estimates|sales-orders|challans|credit-notes|debit-notes|sales-receipts|payments|recurring|retainers)',
+  'purchases/(?:bills|expenses|purchase-orders|vendor-credits|payments|recurring|goods-receipts|bills-of-entry)',
+  'accountant/(?:journals|recurring-journals)',
+  'inventory/(?:adjustments|transfers|production)',
+  'banking/(?:transfers|cheques)',
+].join('|');
+const ENTRY_PAGE = new RegExp(`^/(?:${ENTRY_MODULES})/(?:new|[^/]+/edit)/?$`);
+
+/** A page that is a transaction's entry form: a new one, or an edit. */
+export const isEntryPage = (path: string | null | undefined) => !!path && ENTRY_PAGE.test(path);
+
 /** Folds the sidebar while the calling screen is mounted (the split record view). */
 export function useForceNavCollapsed(active = true) {
   useEffect(() => {
@@ -73,4 +90,14 @@ export function useForceNavCollapsed(active = true) {
       emit();
     };
   }, [active]);
+}
+
+/**
+ * Folds the sidebar for as long as it is on screen: put it inside an entry
+ * window (a new expense, journal, quote …). A closed window's content is gone,
+ * and the sidebar opens again with it.
+ */
+export function FoldNav(): null {
+  useForceNavCollapsed(true);
+  return null;
 }

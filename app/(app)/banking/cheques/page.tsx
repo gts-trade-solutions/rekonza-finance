@@ -15,6 +15,7 @@
 // What this screen answers is the question the ledger cannot: what is due to
 // land next week, and what has bounced.
 
+import { FoldNav } from '@/components/layout/nav-state';
 import { useMemo, useState } from 'react';
 import { FileClock, Plus } from 'lucide-react';
 import { toast } from 'sonner';
@@ -263,6 +264,7 @@ export default function ChequesPage() {
               <DialogContent>
                 <DialogHeader>
                   <DialogTitle>Record a cheque</DialogTitle>
+                  <FoldNav />
                   <DialogDescription>
                     Nothing posts to the ledger here. Record the payment against the invoice or bill it settles,
                     with this cheque number as the reference, and the two link — so a return can reverse it.

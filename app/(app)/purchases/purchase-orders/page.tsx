@@ -7,6 +7,7 @@
 // order to a bill is the moment the debt becomes real and the ledger hears
 // about it.
 
+import { FoldNav } from '@/components/layout/nav-state';
 import { useEffect, useState } from 'react';
 import { ArrowRight, ClipboardList, PackageCheck, Plus } from 'lucide-react';
 import { toast } from 'sonner';
@@ -178,6 +179,7 @@ export default function PurchaseOrdersPage() {
               <DialogContent>
                 <DialogHeader>
                   <DialogTitle>New purchase order</DialogTitle>
+                  <FoldNav />
                   <DialogDescription>
                     Rates default to what you normally pay for the item, not what you sell it for.
                   </DialogDescription>

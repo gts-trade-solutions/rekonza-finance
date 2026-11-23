@@ -7,6 +7,7 @@
 // is then raised from the note: its quantity cannot exceed what was received,
 // and a price above the order's holds it from payment until it is accepted.
 
+import { FoldNav } from '@/components/layout/nav-state';
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { ArrowRight, Ban, PackageCheck, Plus } from 'lucide-react';
@@ -205,6 +206,7 @@ export default function GoodsReceiptsPage() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Receive goods</DialogTitle>
+            <FoldNav />
             <DialogDescription>
               For a delivery with no purchase order. Goods ordered on one are received from Purchase orders, so the
               order keeps count.

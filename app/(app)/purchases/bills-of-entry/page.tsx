@@ -4,6 +4,7 @@
 // ordinary bill with no GST; what customs charged goes here — duty as a cost,
 // IGST and cess as input credit, claimed in GSTR-3B 4(A)(1).
 
+import { FoldNav } from '@/components/layout/nav-state';
 import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import { Plus, Ship } from 'lucide-react';
@@ -117,6 +118,7 @@ export default function BillsOfEntryPage() {
         <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle>Record a bill of entry</DialogTitle>
+            <FoldNav />
             <DialogDescription>From the bill of entry and the duty paid on ICEGATE. The supplier&rsquo;s invoice goes in as a bill.</DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 sm:grid-cols-2">

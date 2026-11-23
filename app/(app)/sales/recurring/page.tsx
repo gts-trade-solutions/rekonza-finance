@@ -10,6 +10,7 @@
 // Running a profile goes through the same createInvoice as a hand-typed sale,
 // so the GST, the numbering and the posting are identical.
 
+import { FoldNav } from '@/components/layout/nav-state';
 import { useState } from 'react';
 import { localDay } from '@/lib/selectors';
 import Link from 'next/link';
@@ -170,6 +171,7 @@ export default function RecurringPage() {
               <DialogContent>
                 <DialogHeader>
                   <DialogTitle>New recurring invoice</DialogTitle>
+                  <FoldNav />
                   <DialogDescription>
                     The rate is stored as you set it here. It will not move when the catalogue price does — a
                     contract is a contract.
