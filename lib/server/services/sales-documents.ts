@@ -132,6 +132,31 @@ interface BaseDocInput {
   number?: string;
   /** Numbered in a voucher type's own series. */
   voucherTypeId?: number | null;
+  /** Zoho's Reference#: the customer's PO number or anything else to quote back. */
+  referenceNumber?: string | null;
+  salespersonId?: number | null;
+  /** Zoho's Terms & Conditions, printed under the notes. */
+  terms?: string | null;
+}
+
+/** A salesperson and a project named on a document must be this business's own. */
+async function checkPeople(trx: Trx, orgId: number, input: { salespersonId?: number | null; projectId?: number | null }) {
+  if (input.salespersonId) {
+    const u = await trx.selectFrom('users').select('id').where('id', '=', input.salespersonId).where('org_id', '=', orgId).executeTakeFirst();
+    if (!u) throw badRequest('That salesperson is not one of this business’s users.');
+  }
+  if (input.projectId) {
+    const p = await trx.selectFrom('projects').select('id').where('id', '=', input.projectId).where('org_id', '=', orgId).executeTakeFirst();
+    if (!p) throw badRequest('That project does not exist.');
+  }
+}
+
+/** The fields every one of these documents shares with Zoho's form, as stored. */
+function zohoFields(input: { referenceNumber?: string | null; terms?: string | null }) {
+  return {
+    reference_number: input.referenceNumber?.trim() || null,
+    terms: input.terms?.trim() || null,
+  };
 }
 
 export interface CreatedDocument {
@@ -171,6 +196,8 @@ async function writeDocument(
 export interface CreateEstimateInput extends BaseDocInput {
   expiryDate: string;
   status?: 'draft' | 'sent';
+  /** Zoho's Project Name: the project the quote is for. */
+  projectId?: number | null;
 }
 
 /**
@@ -187,6 +214,7 @@ export async function createEstimate(
   /** Rewrite this document in place (updateSalesDocument): same row, same number. */
   opts: { replace?: { id: number; number: string } } = {},
 ): Promise<CreatedDocument> {
+  await checkPeople(trx, orgId, input);
   const ctx = await partyContext(trx, orgId, input.branchId, input.customerId, input.placeOfSupply, input.date);
   const costed = await costLines(trx, orgId, ctx.supplyType, input.lines, 'sale_price', input.date);
   const { rounded } = roundToRupee(costed.tax.taxablePaise + totalTaxPaise(costed.tax));
@@ -213,6 +241,9 @@ export async function createEstimate(
       cess: toSqlFromPaise(costed.tax.cessPaise),
       total: toSqlFromPaise(rounded),
       notes: input.notes ?? null,
+      ...zohoFields(input),
+      salesperson_id: input.salespersonId ?? null,
+      project_id: input.projectId ?? null,
       created_by_user_id: userId,
     };
   const id = await writeDocument(trx, orgId, 'estimates', 'estimate_lines', 'estimate_id', values, opts.replace);
@@ -252,6 +283,11 @@ export interface CreateSalesOrderInput extends BaseDocInput {
   sourceEstimateId?: number | null;
   /** An export: the IGST of the estimate it comes from (true paid, false under the LUT). */
   exportFromSource?: boolean;
+  /** Zoho's Payment Terms (net_30 …) and Delivery Method (by road, courier …). */
+  paymentTerms?: string | null;
+  deliveryMethod?: string | null;
+  /** Zoho's Save as Draft; otherwise the order is confirmed (open). An edit keeps its status. */
+  status?: 'draft' | 'open';
 }
 
 /**
@@ -270,6 +306,7 @@ export async function createSalesOrder(
   /** Rewrite this document in place (updateSalesDocument): same row, same number. */
   opts: { replace?: { id: number; number: string } } = {},
 ): Promise<CreatedDocument> {
+  await checkPeople(trx, orgId, input);
   const ctx = await partyContext(trx, orgId, input.branchId, input.customerId, input.placeOfSupply, input.date, { fromSource: input.exportFromSource });
   const costed = await costLines(trx, orgId, ctx.supplyType, input.lines, 'sale_price', input.date);
   const { rounded } = roundToRupee(costed.tax.taxablePaise + totalTaxPaise(costed.tax));
@@ -288,7 +325,7 @@ export async function createSalesOrder(
       expected_ship_date: input.expectedShipDate ?? null,
       place_of_supply: ctx.placeOfSupply,
       supply_type: ctx.supplyType,
-      status: 'open',
+      status: input.status ?? 'open',
       subtotal: toSqlFromPaise(costed.tax.taxablePaise),
       cgst: toSqlFromPaise(costed.tax.cgstPaise),
       sgst: toSqlFromPaise(costed.tax.sgstPaise),
@@ -297,6 +334,11 @@ export async function createSalesOrder(
       total: toSqlFromPaise(rounded),
       invoiced_amount: toSqlFromPaise(0),
       source_estimate_id: input.sourceEstimateId ?? null,
+      notes: input.notes ?? null,
+      ...zohoFields(input),
+      salesperson_id: input.salespersonId ?? null,
+      payment_terms: input.paymentTerms ?? null,
+      delivery_method: input.deliveryMethod?.trim() || null,
       created_by_user_id: userId,
     };
   const id = await writeDocument(trx, orgId, 'sales_orders', 'sales_order_lines', 'sales_order_id', values, opts.replace, ['invoiced_amount', 'source_estimate_id']);
@@ -349,6 +391,10 @@ export interface CreateChallanInput {
   notes?: string | null;
   number?: string;
   voucherTypeId?: number | null;
+  referenceNumber?: string | null;
+  terms?: string | null;
+  /** Zoho's Save as Draft; otherwise open. An edit keeps its status. */
+  status?: 'draft' | 'open';
   lines: { itemId?: number | null; description?: string | null; hsnSac?: string | null; qty: number; uqc?: string | null; ratePaise?: Paise }[];
 }
 
@@ -415,9 +461,10 @@ export async function createChallan(
       challan_date: input.date,
       challan_type: input.challanType ?? 'other',
       place_of_supply: ctx.placeOfSupply,
-      status: 'open',
+      status: input.status ?? 'open',
       total: toSqlFromPaise(total),
       notes: input.notes ?? null,
+      ...zohoFields(input),
       created_by_user_id: userId,
     };
   const id = await writeDocument(trx, orgId, 'delivery_challans', 'challan_lines', 'challan_id', values, opts.replace);
@@ -478,6 +525,7 @@ export async function createCreditNote(
     throw badRequest('A credit note needs a reason — it is reported in GSTR-1.');
   }
 
+  await checkPeople(trx, orgId, input);
   const ctx = await partyContext(trx, orgId, input.branchId, input.customerId, input.placeOfSupply, input.date, { againstInvoiceId: input.againstInvoiceId });
   const costed = await costLines(trx, orgId, ctx.supplyType, input.lines, 'sale_price', input.date);
   const { rounded } = roundToRupee(costed.tax.taxablePaise + totalTaxPaise(costed.tax));
@@ -552,6 +600,9 @@ export async function createCreditNote(
       cess: toSqlFromPaise(costed.tax.cessPaise),
       total: toSqlFromPaise(rounded),
       applied_amount: toSqlFromPaise(0),
+      notes: input.notes ?? null,
+      ...zohoFields(input),
+      salesperson_id: input.salespersonId ?? null,
       created_by_user_id: userId,
     };
   let id: number;

@@ -1147,12 +1147,30 @@ export interface SalesDocListResponse {
 /** Sales documents Zoho lets you edit and delete from their lists. */
 export type EditableSalesKind = 'estimate' | 'sales-order' | 'challan' | 'credit-note';
 
+/** A quote, order, challan or credit note: as saved (for Edit) and as its record shows it (services/sales-doc-record.ts). */
 export interface EditableSalesDoc {
+  kind?: EditableSalesKind;
   id: string; number: string; status: string; date: string | null;
-  branchId: string; customerId: string; placeOfSupply: string | null; notes: string | null;
+  branchId: string; customerId: string; customerName?: string | null; placeOfSupply: string | null; supplyType?: string | null; notes: string | null;
+  terms?: string | null; referenceNumber?: string | null;
+  salespersonId?: string | null; salespersonName?: string | null; projectId?: string | null; projectName?: string | null;
+  paymentTerms?: string | null; deliveryMethod?: string | null;
   expiryDate: string | null; expectedShipDate: string | null; challanType: string | null; reason: string | null;
   againstInvoiceId: string | null; warehouseId: string | null; appliedPaise: number;
-  lines: { itemId: string | null; description: string | null; hsnSac: string | null; qty: number; uqc: string | null; ratePaise: number; discountPct: number; gstRatePct: number }[];
+  stage?: string | null; proformaNumber?: string | null;
+  subtotalPaise?: number; cgstPaise?: number; sgstPaise?: number; igstPaise?: number; cessPaise?: number; totalPaise?: number;
+  invoicedPaise?: number; balancePaise?: number | null; journalEntryId?: string | null;
+  createdAt?: string | null; createdByName?: string | null;
+  convertedTo?: { type: string; id: string; number: string } | null;
+  sourceEstimate?: { id: string; number: string } | null;
+  salesOrder?: { id: string; number: string } | null;
+  againstInvoice?: { id: string; number: string } | null;
+  invoices?: { id: string; number: string }[];
+  challans?: { id: string; number: string }[];
+  lines: {
+    itemId: string | null; itemName?: string | null; sku?: string | null; description: string | null; hsnSac: string | null;
+    qty: number; uqc: string | null; ratePaise: number; discountPct: number; gstRatePct: number; amountPaise?: number;
+  }[];
 }
 
 export interface ExpenseDetail {
@@ -1179,9 +1197,9 @@ export const salesDocuments = {
       '/api/sales-documents',
       input,
     ),
-  convert: (kind: 'estimate' | 'sales-order', id: string, date: string, dueDate: string) =>
-    api.patch<{ invoiceId: string; number: string; totalPaise: number }>('/api/sales-documents', {
-      action: 'convert', kind, id, date, dueDate,
+  convert: (kind: 'estimate' | 'sales-order', id: string, date: string, dueDate: string, status?: 'draft' | 'approved') =>
+    api.patch<{ invoiceId: string; number: string; totalPaise: number; heldForApproval?: boolean }>('/api/sales-documents', {
+      action: 'convert', kind, id, date, dueDate, status,
     }),
   /** Quotation → Sales Order. */
   toOrder: (id: string, date: string) =>
@@ -2139,7 +2157,7 @@ export const contactPersons = {
   save: (contactId: string, persons: ContactPerson[]) => api.put<{ ok: true }>(`/api/contacts/${contactId}/persons`, { persons }),
 };
 
-export type CommentTarget = 'invoice' | 'estimate' | 'sales_order' | 'credit_note' | 'contact' | 'bill' | 'purchase_order' | 'expense' | 'vendor_credit' | 'payment' | 'journal_entry' | 'project';
+export type CommentTarget = 'invoice' | 'estimate' | 'sales_order' | 'credit_note' | 'challan' | 'contact' | 'bill' | 'purchase_order' | 'expense' | 'vendor_credit' | 'payment' | 'journal_entry' | 'project';
 export const comments = {
   list: (targetType: CommentTarget, targetId: string) => api.get<{
     comments: { id: string; author: string; body: string; at: string }[];

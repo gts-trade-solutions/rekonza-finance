@@ -117,6 +117,9 @@ function withRoundOff(totals: { label: string; paise: number }[], total: number)
 
 const ORIGINAL = ['Original'];
 
+/** Zoho's "Reference#" among the facts beside the parties, when one was given. */
+const refFact = (r: string | null) => (r ? [{ label: 'Reference#', value: r }] : []);
+
 /** A document as it prints. Throws not found for one outside the organisation. */
 export async function printableDocument(
   ex: Executor, orgId: number, kind: PrintKind, id: number,
@@ -140,13 +143,14 @@ export async function printableDocument(
         placeOfSupply: d.place_of_supply, taxColumns: cols,
         facts: [
           { label: 'Quote no.', value: d.number }, { label: 'Quote date', value: day(date) }, { label: 'Valid until', value: day(d.expiry_date) },
+          ...refFact(d.reference_number),
           // The same discount on every line is an offer on the whole quote: said so at the top.
           ...(lines.length && Number(lines[0].discount_pct) > 0 && lines.every((l) => Number(l.discount_pct) === Number(lines[0].discount_pct))
             ? [{ label: 'Special offer', value: `${Number(lines[0].discount_pct)}% off` }] : []),
         ],
         lines: lines.map(taxedLine),
         totals: withRoundOff(taxTotals(cols, p(d.subtotal), { cgst: p(d.cgst), sgst: p(d.sgst), igst: p(d.igst), cess: p(d.cess) }), p(d.total)),
-        totalLabel: 'Total', totalPaise: p(d.total), after: [], allocations: null, notes: d.notes, terms: null,
+        totalLabel: 'Total', totalPaise: p(d.total), after: [], allocations: null, notes: d.notes, terms: d.terms,
       };
     }
     case 'sales-order': {
@@ -184,12 +188,14 @@ export async function printableDocument(
         facts: [
           { label: 'Order no.', value: d.number }, { label: 'Order date', value: day(date) },
           ...(d.expected_ship_date ? [{ label: 'Expected shipment', value: day(d.expected_ship_date) }] : []),
+          ...refFact(d.reference_number),
+          ...(d.delivery_method ? [{ label: 'Delivery method', value: d.delivery_method }] : []),
         ],
         lines: lines.map(taxedLine),
         totals: withRoundOff(taxTotals(cols, p(d.subtotal), { cgst: p(d.cgst), sgst: p(d.sgst), igst: p(d.igst), cess: p(d.cess) }), p(d.total)),
         totalLabel: 'Total', totalPaise: p(d.total),
         after: p(d.invoiced_amount) ? [{ label: 'Invoiced', paise: p(d.invoiced_amount) }] : [],
-        allocations: null, notes: null, terms: null,
+        allocations: null, notes: d.notes, terms: d.terms,
       };
     }
     case 'challan': {
@@ -226,11 +232,12 @@ export async function printableDocument(
         seller, party, partyId: asId(d.customer_id), shipTo: ship, placeOfSupply: d.place_of_supply, taxColumns: 'none',
         facts: [
           { label: 'Challan no.', value: d.number }, { label: 'Challan date', value: day(date) },
+          ...refFact(d.reference_number),
           ...(order ? [{ label: 'Sales order', value: order.number }] : []),
           ...(invoiced.length ? [{ label: invoiced.length > 1 ? 'Invoices' : 'Invoice no.', value: invoiced.map((i) => i.number).join(', ') }] : []),
         ],
         lines: lines.map((l) => singleLineWith(l.description?.trim() || l.item_name || null, l.hsn_sac, Number(l.qty), l.uqc, p(l.rate), p(l.line_total))),
-        totals: [], totalLabel: 'Value of goods', totalPaise: total, after: [], allocations: null, notes: d.notes, terms: null,
+        totals: [], totalLabel: 'Value of goods', totalPaise: total, after: [], allocations: null, notes: d.notes, terms: d.terms,
       };
     }
     case 'credit-note': {
@@ -254,12 +261,13 @@ export async function printableDocument(
         facts: [
           { label: 'Credit note no.', value: d.number }, { label: 'Date', value: day(date) },
           ...(against ? [{ label: 'Original invoice', value: `${against.number}, ${day(against.invoice_date)}` }] : []),
+          ...refFact(d.reference_number),
         ],
         lines: lines.map(taxedLine),
         totals: withRoundOff(taxTotals(cols, p(d.subtotal), { cgst: p(d.cgst), sgst: p(d.sgst), igst: p(d.igst), cess: p(d.cess) }), p(d.total)),
         totalLabel: 'Credit total', totalPaise: p(d.total),
         after: applied ? [{ label: d.status === 'refunded' ? 'Refunded or applied' : 'Applied', paise: applied }, { label: 'Credit remaining', paise: p(d.total) - applied }] : [],
-        allocations: null, notes: null, terms: null,
+        allocations: null, notes: d.notes, terms: d.terms,
       };
     }
     case 'retainer': {
