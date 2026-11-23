@@ -243,17 +243,17 @@ test('refuses an invoice with no lines', async () => {
   assert.equal(res.status, 400);
 });
 
-test('refuses an HSN code that is not on the approved list', async () => {
+test('refuses a malformed HSN code (Zoho checks the digits, not a list)', async () => {
   const res = await call('/api/invoices', {
     cookie: admin,
     method: 'POST',
     body: JSON.stringify({
       branchId: ids.branch, customerId: ids.customerIntra, date: '2026-08-07', dueDate: '2026-09-06',
-      lines: [{ description: 'Something', hsnSac: '1234', qty: 1, ratePaise: 10000, gstRatePct: 18 }],
+      lines: [{ description: 'Something', hsnSac: '12345', qty: 1, ratePaise: 10000, gstRatePct: 18 }],
     }),
   });
   assert.equal(res.status, 400);
-  assert.match(res.body.error, /not on the approved list/);
+  assert.match(res.body.error, /4, 6 or 8 digits/);
 });
 
 test('resolves GST from the two states and posts a balanced entry', async () => {

@@ -36,6 +36,7 @@ import { Money } from '@/components/shared/money';
 import { EmptyState } from '@/components/shared/empty-state';
 import { AsyncPage } from '@/components/shared/async-state';
 import { api, hsnCodes, items, type HsnCodeRow, type ItemRow } from '@/lib/api/client';
+import { checkHsnCode, isHsnDigits, type HsnDigits } from '@/lib/tax/hsn';
 import { downloadCsv } from '@/components/shared/report-shell';
 import { downloadFilesZip, type Sheet } from '@/lib/xlsx';
 import { ExportDialog, ExportViewDialog, type ExportModule } from '@/components/shared/export-dialog';
@@ -55,16 +56,18 @@ const SORTS: { key: SortKey; label: string; value: (r: ItemRow) => string | numb
   { key: 'rate', label: 'Rate', value: (r) => r.salePricePaise },
 ];
 
-/** What is wrong with an item's HSN or SAC, if anything (Zoho's "Validate HSN/SAC"). */
-function hsnProblem(r: ItemRow, approved: Map<string, HsnCodeRow>): string | null {
+/**
+ * What is wrong with an item's HSN or SAC, if anything (Zoho's "Validate HSN/SAC"):
+ * its format, its length against Settings → Items, goods against services, and,
+ * for a saved code, a GST rate that disagrees with it.
+ */
+function hsnProblem(r: Pick<ItemRow, 'hsnSac' | 'kind' | 'gstRatePct'>, saved: Map<string, Pick<HsnCodeRow, 'gstRatePct'>>, digits: HsnDigits = 4): string | null {
   const code = r.hsnSac ?? '';
   if (!code) return r.kind === 'service' ? 'No SAC' : 'No HSN code';
-  if (r.kind === 'service' && !/^99\d{4}$/.test(code)) return `${code} is not a SAC: a SAC is six digits starting 99`;
-  if (r.kind === 'goods' && !/^\d{4}(\d{2}){0,2}$/.test(code)) return `${code} is not an HSN code: 4, 6 or 8 digits`;
-  if (r.kind === 'goods' && code.startsWith('99')) return `${code} is a SAC, but this is goods`;
-  const a = approved.get(code);
-  if (!a) return `${code} is not on your approved codes`;
-  if (a.gstRatePct !== r.gstRatePct) return `GST ${r.gstRatePct}% on the item, ${a.gstRatePct}% on the code`;
+  const check = checkHsnCode(code, { digits, kind: r.kind === 'service' ? 'service' : 'goods' });
+  if (!check.ok) return check.problem;
+  const a = saved.get(code);
+  if (a && a.gstRatePct !== r.gstRatePct) return `GST ${r.gstRatePct}% on the item, ${a.gstRatePct}% on the saved code`;
   return null;
 }
 
@@ -239,9 +242,13 @@ export default function ItemsPage() {
 
   const validateHsn = async () => {
     try {
-      const { hsnCodes: codes } = await hsnCodes.list({ activeOnly: true });
-      const approved = new Map(codes.map((c) => [c.code, c]));
-      setChecking(active.map((item) => ({ item, problem: hsnProblem(item, approved) })).filter((x): x is { item: ItemRow; problem: string } => !!x.problem));
+      const [{ hsnCodes: codes }, policies] = await Promise.all([
+        hsnCodes.list({ activeOnly: true }),
+        api.get<{ hsn?: { digits?: number } }>('/api/settings/policies').catch(() => ({ hsn: { digits: 4 } })),
+      ]);
+      const saved = new Map(codes.map((c) => [c.code, c]));
+      const digits: HsnDigits = isHsnDigits(policies.hsn?.digits) ? policies.hsn.digits : 4;
+      setChecking(active.map((item) => ({ item, problem: hsnProblem(item, saved, digits) })).filter((x): x is { item: ItemRow; problem: string } => !!x.problem));
     } catch (e) {
       toast.error('The codes could not be read', { description: e instanceof Error ? e.message : String(e) });
     }
@@ -460,7 +467,7 @@ export default function ItemsPage() {
           <DialogHeader>
             <DialogTitle>Validate HSN/SAC</DialogTitle>
             <DialogDescription>
-              {checking?.length ? `${checking.length} of ${active.length} active items need their code looked at before GSTR-1.` : `All ${active.length} active items carry a valid, approved code at its rate.`}
+              {checking?.length ? `${checking.length} of ${active.length} active items need their code looked at before GSTR-1.` : `All ${active.length} active items carry a valid HSN or SAC.`}
             </DialogDescription>
           </DialogHeader>
           {!!checking?.length && (

@@ -155,7 +155,20 @@ export function termsForDays(days: number): string {
 }
 
 /**
- * The organisation's approved HSN / SAC codes, narrowed to what this document
+ * A code typed by hand (any HSN/SAC is accepted, as in Zoho) stays visible in
+ * the picker, beside the saved ones it is not among.
+ */
+export function withTypedCode(options: ComboboxOption[], code: string | null | undefined): ComboboxOption[] {
+  const c = (code ?? '').trim();
+  if (!c || options.some((o) => o.value === c)) return options;
+  return [{ value: c, label: c, sublabel: 'Typed code (not in your saved codes)' }, ...options];
+}
+
+/** Only the digits of what was typed into a code picker, at most eight. */
+export const typedCode = (q: string) => q.replace(/\D/g, '').slice(0, 8);
+
+/**
+ * The organisation's saved HSN / SAC codes, narrowed to what this document
  * is for. `supplyKind` of 'both' offers everything, grouped so goods and
  * services stay visually separate.
  *

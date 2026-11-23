@@ -35,6 +35,7 @@ export async function invoiceDetail(orgId: number, id: number) {
       'invoices.doc_kind', 'invoices.against_invoice_id', 'invoices.note_reason', 'invoices.paid_at_sale',
       'invoices.created_at', 'invoices.eway_bill_no',
       'invoices.export_lut_arn', 'invoices.export_shipping_bill_no', 'invoices.export_shipping_bill_date', 'invoices.export_port_code',
+      'invoices.export_country',
       sql<string | null>`(SELECT JSON_OBJECT('name', vt.name, 'heading', vt.print_heading, 'terms', vt.print_terms, 'showUpi', vt.print_show_upi, 'showBank', vt.print_show_bank) FROM voucher_types vt WHERE vt.id = invoices.voucher_type_id)`.as('voucher_print'),
       'invoices.approval_status', 'invoices.rejection_reason', 'invoices.submitted_by_user_id',
       'invoices.voided_at', 'invoices.void_reason',
@@ -170,6 +171,7 @@ export async function invoiceDetail(orgId: number, id: number) {
       shippingBillNo: inv.export_shipping_bill_no,
       shippingBillDate: inv.export_shipping_bill_date ? String(inv.export_shipping_bill_date).slice(0, 10) : null,
       portCode: inv.export_port_code,
+      countryCode: inv.export_country,
     } : null,
     customer: {
       id: asId(inv.customer_id),

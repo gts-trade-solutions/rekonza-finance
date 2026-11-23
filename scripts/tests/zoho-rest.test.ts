@@ -154,10 +154,10 @@ test('portal: a link opens one contact only, lapses when withdrawn; a customer a
 });
 
 test('PDF templates: a stored template is read safely; old layouts map to Zoho templates; anything wrong falls back', () => {
-  assert.deepEqual(readTemplate(null), { layout: 'standard', accent: null, showLogo: true, showSignature: true, footer: null, byDoc: {}, added: {} });
+  assert.deepEqual(readTemplate(null), { layout: 'standard', accent: null, showLogo: true, showSignature: true, footer: null, byDoc: {}, added: {}, byFormat: {}, titles: {} });
   // The three layouts before Zoho's gallery, and the old default ink, which nobody chose.
   assert.deepEqual(readTemplate(JSON.stringify({ layout: 'modern', accent: '#1d4ed8', showLogo: false, footer: ' CIN U12345TN2020PTC000001 ' })),
-    { layout: 'minimalist', accent: '#1d4ed8', showLogo: false, showSignature: true, footer: 'CIN U12345TN2020PTC000001', byDoc: {}, added: {} });
+    { layout: 'minimalist', accent: '#1d4ed8', showLogo: false, showSignature: true, footer: 'CIN U12345TN2020PTC000001', byDoc: {}, added: {}, byFormat: {}, titles: {} });
   assert.equal(readTemplate({ layout: 'classic', accent: '#0f172a' }).layout, 'standard');
   assert.equal(readTemplate({ layout: 'classic', accent: '#0f172a' }).accent, null);
   assert.equal(readTemplate({ layout: 'compact' }).layout, 'compact');

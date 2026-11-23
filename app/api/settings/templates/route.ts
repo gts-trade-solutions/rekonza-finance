@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { db, transaction } from '@/lib/server/db';
 import { route, body } from '@/lib/server/http';
 import { logAudit, auditMeta } from '@/lib/server/audit';
-import { readTemplate, templateInfo, TEMPLATE_DOCS, TEMPLATE_KEYS, type TemplateDoc, type TemplateKey } from '@/lib/print-template';
+import { formatTitle, INVOICE_FORMAT_LABEL, INVOICE_FORMATS, layoutForInvoice, readTemplate, templateInfo, TEMPLATE_DOCS, TEMPLATE_KEYS, type TemplateDoc, type TemplateKey } from '@/lib/print-template';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Settings → PDF Templates, as in Zoho Books: which of the twelve templates
@@ -57,6 +57,9 @@ const TemplateInput = z.object({
   footer: z.string().trim().max(300).nullish().transform((v) => v || null),
   byDoc: z.record(z.string(), Key).default({}),
   added: z.record(z.string(), z.array(Key).max(12)).default({}),
+  // Goods, services and export invoices: each format's template and title.
+  byFormat: z.partialRecord(z.enum(INVOICE_FORMATS), Key).default({}),
+  titles: z.partialRecord(z.enum(INVOICE_FORMATS), z.string().trim().max(60)).default({}),
 });
 
 export const PUT = route(
@@ -71,6 +74,12 @@ export const PUT = route(
       const a: TemplateKey = old.byDoc[doc] ?? old.layout;
       const b: TemplateKey = next.byDoc[doc] ?? next.layout;
       if (a !== b) changes.push(`${doc}: ${templateInfo(a).name} → ${templateInfo(b).name}`);
+    }
+    for (const f of INVOICE_FORMATS) {
+      const a = layoutForInvoice(old, f);
+      const b = layoutForInvoice(next, f);
+      if (a !== b) changes.push(`${INVOICE_FORMAT_LABEL[f]}: ${templateInfo(a).name} → ${templateInfo(b).name}`);
+      if (formatTitle(old, f) !== formatTitle(next, f)) changes.push(`${INVOICE_FORMAT_LABEL[f]} title "${formatTitle(old, f)}" → "${formatTitle(next, f)}"`);
     }
     if (old.accent !== next.accent) changes.push(`colour ${old.accent ?? 'template'} → ${next.accent ?? 'template'}`);
     if (old.showLogo !== next.showLogo) changes.push(next.showLogo ? 'logo on' : 'logo off');

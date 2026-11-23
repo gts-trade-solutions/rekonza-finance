@@ -42,10 +42,10 @@ import { useApi, useApiAction } from '@/lib/api/use-api';
 import { formatINR } from '@/lib/money';
 import { VoidedNote } from '@/components/shared/voided-note';
 import { SendInvoice } from '@/components/sales/send-invoice';
-import { InvoiceDocument, invoiceModel } from '@/components/print/invoice-print';
+import { InvoiceDocument, invoiceFormat, invoiceModel } from '@/components/print/invoice-print';
 import { ribbonFor } from '@/components/print/zoho-sheet';
 import { TemplatePreview } from '@/components/settings/template-gallery';
-import { DEFAULT_TEMPLATE, layoutFor, templateInfo, templatesOf, type TemplateKey } from '@/lib/print-template';
+import { DEFAULT_TEMPLATE, INVOICE_FORMAT_LABEL, layoutForInvoice, templateInfo, templatesOf, type TemplateKey } from '@/lib/print-template';
 
 const d = (s: string) =>
   new Date(s).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
@@ -389,8 +389,10 @@ function TemplateLine({ inv, canEdit, onChanged }: { inv: InvoiceDetail; canEdit
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const t = inv.seller.template ?? DEFAULT_TEMPLATE;
-  const current = layoutFor(t, 'invoice', inv.printTemplate);
-  const byDefault = layoutFor(t, 'invoice');
+  // Its format's template (goods, services or export) unless this invoice has one of its own.
+  const format = invoiceFormat(inv);
+  const current = layoutForInvoice(t, format, inv.printTemplate);
+  const byDefault = layoutForInvoice(t, format);
   const choices = [...new Set([...templatesOf(t, 'invoice'), current])];
   const model = invoiceModel(inv, null);
   const choose = async (key: TemplateKey) => {
@@ -409,7 +411,7 @@ function TemplateLine({ inv, canEdit, onChanged }: { inv: InvoiceDetail; canEdit
   return (
     <>
       <p className="mx-auto mt-3 max-w-[210mm] text-right text-[13px]" data-slot="pdf-template-line">
-        PDF Template : &apos;{templateInfo(current).name}&apos;{' '}
+        <span className="text-muted-foreground" data-slot="invoice-format-name">{INVOICE_FORMAT_LABEL[format]} · </span>PDF Template : &apos;{templateInfo(current).name}&apos;{' '}
         {canEdit && <button type="button" className="text-link hover:underline" onClick={() => setOpen(true)} data-slot="pdf-template-change">Change</button>}
       </p>
       <Dialog open={open} onOpenChange={setOpen}>

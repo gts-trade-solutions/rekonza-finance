@@ -448,8 +448,8 @@ function SettingsPage() {
                 <div className="min-w-0 flex-1">
                   <h3 className="text-sm font-semibold">HSN &amp; SAC codes</h3>
                   <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                    The approved code list your team may pick from on invoice lines. Nothing outside it can be
-                    entered — the server rejects it — which is what keeps GSTR-1 from bouncing on an invalid code.
+                    Codes you use often, with their GST rate: picking one fills the rate on items and invoice lines.
+                    Any valid code can be typed; the digits it needs are set in Settings → Items.
                   </p>
                 </div>
                 <Button variant="outline" size="sm" asChild>

@@ -92,6 +92,12 @@ export interface SheetModel {
   qr: string | null;
   signatory: string | null;
   footer: string | null;
+  /** The code column's heading: "HSN" on a goods invoice, "SAC" on a service one; "HSN/SAC" when mixed. */
+  hsnLabel?: string;
+  /** Services: quantities print without a unit. */
+  unitless?: boolean;
+  /** The currency the amounts are in (an export priced in dollars); rupees when absent. */
+  currency?: string | null;
 }
 
 /** A payment-terms code as Zoho prints it: "net_30" is "Net 30". */
@@ -164,8 +170,23 @@ export function L({ t, block = false }: { t: string; block?: boolean }) {
 
 /** Amounts in a table: the ₹ belongs to the totals, not every cell. */
 const n2 = (paise: number) => (paise / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-/** A total: "₹1,856.00", or "(-) ₹200.00" for a payment taken off. */
-const rupees = (paise: number) => `${paise < 0 ? '(-) ' : ''}₹${n2(Math.abs(paise))}`;
+/** A total: "₹1,856.00", or "(-) ₹200.00" for a payment taken off; "$1,200.00" on a dollar invoice. */
+const rupees = (paise: number, symbol = '₹') => `${paise < 0 ? '(-) ' : ''}${symbol}${n2(Math.abs(paise))}`;
+
+/** The sign a currency prints with: ₹, $, €, or the code itself where there is no sign. */
+export function currencySymbol(code: string | null | undefined): string {
+  if (!code || code === 'INR') return '₹';
+  try {
+    const sign = new Intl.NumberFormat('en-IN', { style: 'currency', currency: code, currencyDisplay: 'narrowSymbol' })
+      .formatToParts(0).find((x) => x.type === 'currency')?.value;
+    return sign && sign !== code ? sign : `${code} `;
+  } catch {
+    return `${code} `;
+  }
+}
+
+/** A total in the document's own currency. */
+const money = (m: SheetModel, paise: number) => rupees(paise, currencySymbol(m.currency));
 const qtyText = (q: number | null) => (q === null ? '' : q.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 3 }));
 const pct = (v: number) => `${Number.isInteger(v) ? v : v.toFixed(2).replace(/0+$/, '')}%`;
 
@@ -313,7 +334,7 @@ function BalanceTop({ align = 'right' }: { align?: 'left' | 'right' }) {
   return (
     <div className={cn('mt-5', align === 'right' ? 'text-right' : 'text-left')} data-slot="sheet-balance-top">
       <p className="text-[10px] font-bold"><L t={m.balance.label} /></p>
-      <p className="text-[14px] font-bold">{rupees(m.balance.paise)}</p>
+      <p className="text-[14px] font-bold">{money(m, m.balance.paise)}</p>
     </div>
   );
 }
@@ -379,7 +400,7 @@ function Items({ variant }: { variant: TableVariant }) {
           ) : (
             <th rowSpan={rows} className={th('text-left')} style={thBox}><L t={grand ? 'Item & Description' : variant === 'grid' ? 'Item' : 'Item & Description'} /></th>
           )}
-          {hsn && <th rowSpan={rows} className={th('text-left')} style={thBox}>HSN/SAC</th>}
+          {hsn && <th rowSpan={rows} className={th('text-left')} style={thBox}>{m.hsnLabel ?? 'HSN/SAC'}</th>}
           {qty && !grand && <th rowSpan={rows} className={th('text-right')} style={thBox}><L t="Qty" /></th>}
           {qty && !grand && <th rowSpan={rows} className={th('text-right')} style={thBox}><L t="Rate" /></th>}
           {discount && <th rowSpan={rows} className={th('text-right')} style={thBox}><L t="Discount" /></th>}
@@ -412,13 +433,13 @@ function Items({ variant }: { variant: TableVariant }) {
               <td className="px-2 py-[7px]" style={tdStyle}>
                 <p className={variant === 'grid' ? '' : 'font-medium'}>{l.name}</p>
                 {l.description && <p className="whitespace-pre-line text-[10.5px]" style={{ color: GREY }}>{l.description}</p>}
-                {variant === 'grid' && l.hsn && !hsn && <p className="text-[10px]" style={{ color: GREY }}>HSN: {l.hsn}</p>}
+                {variant === 'grid' && l.hsn && !hsn && <p className="text-[10px]" style={{ color: GREY }}>{m.hsnLabel ?? 'HSN'}: {l.hsn}</p>}
               </td>
             )}
             {hsn && <td className="px-2 py-[7px]" style={tdStyle}>{l.hsn}</td>}
             {qty && !grand && (
               <td className="whitespace-nowrap px-2 py-[7px] text-right tabular-nums" style={tdStyle}>
-                {qtyText(l.qty)}{l.unit && <span className="block text-[10px]" style={{ color: GREY }}>{l.unit}</span>}
+                {qtyText(l.qty)}{l.unit && !m.unitless && <span className="block text-[10px]" style={{ color: GREY }}>{l.unit}</span>}
               </td>
             )}
             {qty && !grand && <td className="px-2 py-[7px] text-right tabular-nums" style={tdStyle}>{l.ratePaise === null ? '' : n2(l.ratePaise)}</td>}
@@ -467,12 +488,12 @@ function Totals({ variant = 'standard', className }: { variant?: TotalsVariant; 
           <td className={cn(pad, 'pr-4 text-right')} style={variant === 'basic' ? { color: accent } : label}>
             <L t={variant === 'basic' ? m.totalLabel.toUpperCase() : m.totalLabel} />
           </td>
-          <td className={cn(pad, 'pr-2 text-right tabular-nums')} style={variant === 'basic' ? { color: accent } : undefined}>{rupees(m.totalPaise)}</td>
+          <td className={cn(pad, 'pr-2 text-right tabular-nums')} style={variant === 'basic' ? { color: accent } : undefined}>{money(m, m.totalPaise)}</td>
         </tr>
         {m.after.map((a) => (
           <tr key={a.label} style={cell ? { border: cell } : undefined}>
             <td className={cn(pad, 'pr-4 text-right')} style={label}><L t={a.label} /></td>
-            <td className={cn(pad, 'pr-2 text-right tabular-nums')} style={{ color: a.paise < 0 ? '#d0383e' : undefined }}>{rupees(a.paise)}</td>
+            <td className={cn(pad, 'pr-2 text-right tabular-nums')} style={{ color: a.paise < 0 ? '#d0383e' : undefined }}>{money(m, a.paise)}</td>
           </tr>
         ))}
         {m.balanceRow && (
@@ -487,7 +508,7 @@ function Totals({ variant = 'standard', className }: { variant?: TotalsVariant; 
             data-slot="sheet-balance-due"
           >
             <td className={cn(variant === 'grid' ? 'py-[3px]' : 'py-[9px]', 'pr-4 text-right')}><L t={m.balanceRow.label} /></td>
-            <td className={cn(variant === 'grid' ? 'py-[3px]' : 'py-[9px]', 'pr-2 text-right tabular-nums')}>{rupees(m.balanceRow.paise)}</td>
+            <td className={cn(variant === 'grid' ? 'py-[3px]' : 'py-[9px]', 'pr-2 text-right tabular-nums')}>{money(m, m.balanceRow.paise)}</td>
           </tr>
         )}
       </tbody>
@@ -624,7 +645,7 @@ function Japanese({ seals }: { seals: boolean }) {
           <ShipTo />
           <Facts align="left" />
           <div className="flex w-56 justify-between border-b pb-1 font-bold" style={{ borderColor: INK }} data-slot="sheet-total-top">
-            <span><L t={m.totalLabel} /></span><span>{rupees(m.totalPaise)}</span>
+            <span><L t={m.totalLabel} /></span><span>{money(m, m.totalPaise)}</span>
           </div>
         </div>
         <div className="w-60 space-y-3">
@@ -796,7 +817,7 @@ function Minimalist() {
           <div className="py-3 pl-4">
             {m.balance && (
               <div className="flex justify-between border px-3 py-2 font-semibold" style={{ borderColor: accent, color: accent }} data-slot="sheet-balance-top">
-                <span><L t={m.balance.label} /></span><span>{rupees(m.balance.paise)}</span>
+                <span><L t={m.balance.label} /></span><span>{money(m, m.balance.paise)}</span>
               </div>
             )}
           </div>
@@ -833,7 +854,7 @@ function Grand() {
       </div>
       <div className="px-[34px] print:px-0">
         {m.balance && (
-          <p className="py-2 text-right text-[13px] font-semibold uppercase" data-slot="sheet-balance-top"><L t={m.balance.label} /> {rupees(m.balance.paise)}</p>
+          <p className="py-2 text-right text-[13px] font-semibold uppercase" data-slot="sheet-balance-top"><L t={m.balance.label} /> {money(m, m.balance.paise)}</p>
         )}
         <Irn />
         {(m.endorsement || m.headings.length > 0) && (

@@ -13,9 +13,11 @@ import { cn } from '@/lib/utils';
 import { stateTaxLabel } from '@/lib/tax/gst';
 import type { PdfTemplateSettings } from '@/lib/api/client';
 import {
-  TEMPLATE_GALLERY, TEMPLATE_GROUPS, type PrintTemplate, type TemplateDoc, type TemplateGroup, type TemplateKey,
+  DEFAULT_FORMAT_TITLE, TEMPLATE_GALLERY, TEMPLATE_GROUPS,
+  type InvoiceFormat, type PrintTemplate, type TemplateDoc, type TemplateGroup, type TemplateKey,
 } from '@/lib/print-template';
 import { addressLines, taxRows, zohoWords, ZohoSheet, type SheetModel } from '@/components/print/zoho-sheet';
+import { foreignWords } from '@/lib/invoice-format';
 
 /** What each kind is called on paper, and its number. */
 const SAMPLE_TITLE: Record<TemplateDoc, [string, string, string]> = {
@@ -33,28 +35,90 @@ const SAMPLE_TITLE: Record<TemplateDoc, [string, string, string]> = {
 };
 
 const SAMPLE_LINES = [
-  { name: 'Brochure Design', description: 'Brochure Design Single Sided Color', hsn: '998391', rate: 300_00 },
-  { name: 'Web Design Packages(Template) - Basic', description: 'Custom Themes for your business. Inclusive of 10 hours of marketing and annual training', hsn: '998314', rate: 250_00 },
-  { name: 'Print Ad - Basic - Color', description: 'Print Ad 1/8 size Color', hsn: '998361', rate: 80_00 },
+  { name: 'Brochure Design', description: 'Brochure Design Single Sided Color', hsn: '998391', rate: 300_00, qty: 1, unit: 'Nos' },
+  { name: 'Web Design Packages(Template) - Basic', description: 'Custom Themes for your business. Inclusive of 10 hours of marketing and annual training', hsn: '998314', rate: 250_00, qty: 1, unit: 'Nos' },
+  { name: 'Print Ad - Basic - Color', description: 'Print Ad 1/8 size Color', hsn: '998361', rate: 80_00, qty: 1, unit: 'Nos' },
+];
+
+/** A goods invoice's sample: HSN codes, quantities and units. */
+const GOODS_LINES = [
+  { name: 'TMT Steel Bar 12mm', description: 'Fe 500D, 12 m length', hsn: '72142090', rate: 620_00, qty: 25, unit: 'NOS' },
+  { name: 'Portland Cement 53 Grade', description: '50 kg bag', hsn: '25232930', rate: 395_00, qty: 40, unit: 'BAG' },
+  { name: 'Binding Wire', description: '18 gauge, annealed', hsn: '72172000', rate: 78_00, qty: 15, unit: 'KGS' },
+];
+
+/** An export's sample: priced in dollars, under a letter of undertaking. */
+const EXPORT_LINES = [
+  { name: 'Brake Pad Set - Front', description: 'For passenger cars, OE grade', hsn: '87083000', rate: 18_50, qty: 200, unit: 'SET' },
+  { name: 'Clutch Plate Assembly', description: '228 mm, 24 splines', hsn: '87089300', rate: 42_00, qty: 60, unit: 'NOS' },
 ];
 
 /** Zoho's sample document, with the business's own name, logo, address and GSTIN at the top. */
-export function sampleModel(b: PdfTemplateSettings['business'], doc: TemplateDoc): SheetModel {
-  const [title, numberLabel, number] = SAMPLE_TITLE[doc];
+export function sampleModel(b: PdfTemplateSettings['business'], doc: TemplateDoc, format?: InvoiceFormat, formatTitleText?: string): SheetModel {
+  const [baseTitle, numberLabel, number] = SAMPLE_TITLE[doc];
+  const invoiceFormat = doc === 'invoice' ? format ?? null : null;
+  const title = invoiceFormat ? formatTitleText ?? DEFAULT_FORMAT_TITLE[invoiceFormat] : baseTitle;
+  const exporting = invoiceFormat === 'export';
   const state = b.stateCode ?? '33';
-  const lines = SAMPLE_LINES.map((l) => {
-    const half = Math.round(l.rate * 0.09);
+  const source = invoiceFormat === 'goods' ? GOODS_LINES : exporting ? EXPORT_LINES : SAMPLE_LINES;
+  const lines = source.map((l) => {
+    const taxable = l.rate * l.qty;
+    // An export under LUT carries no IGST; anything else here is 18% split CGST and SGST.
+    const half = exporting ? 0 : Math.round(taxable * 0.09);
     return {
-      name: l.name, description: l.description, hsn: l.hsn, qty: 1, unit: 'Nos', ratePaise: l.rate, discountPct: 0,
-      taxablePaise: l.rate, gstRatePct: 18, cgstPaise: half, sgstPaise: half, igstPaise: 0, cessPaise: 0, amountPaise: l.rate + 2 * half,
+      name: l.name, description: l.description, hsn: l.hsn, qty: l.qty, unit: l.unit, ratePaise: l.rate, discountPct: 0,
+      taxablePaise: taxable, gstRatePct: exporting ? 0 : 18, cgstPaise: half, sgstPaise: half, igstPaise: 0, cessPaise: 0, amountPaise: taxable + 2 * half,
     };
   });
   const sub = lines.reduce((s, l) => s + l.taxablePaise, 0);
   const total = lines.reduce((s, l) => s + l.amountPaise, 0);
   const stateTax = stateTaxLabel(state);
   const payments = doc === 'payment-received' || doc === 'payment-made';
+  if (exporting) {
+    return {
+      title, numberLabel, number, copyLabel: null, stamp: null,
+      endorsement: 'Supply meant for export under letter of undertaking without payment of integrated tax',
+      headings: [],
+      hsnLabel: 'HSN', currency: 'USD',
+      seller: {
+        name: b.name, logoUrl: b.logoUrl,
+        lines: addressLines(b.address, b.city, b.pincode, b.stateCode),
+        gstin: b.gstin, extra: [b.phone, b.email].filter(Boolean).length ? [[b.phone, b.email].filter(Boolean).join(' · ')] : [],
+      },
+      billTo: { label: 'Bill To', name: 'Atlas Auto Parts LLC', lines: ['4120 Commerce Blvd', 'Houston TX 77002', 'United States'], gstin: null },
+      shipTo: null,
+      facts: [
+        { label: 'Invoice Date', value: '15 Nov 2026' },
+        { label: 'Terms', value: 'Net 45' },
+        { label: 'Due Date', value: '30 Dec 2026' },
+        { label: 'Country Of Destination', value: 'United States' },
+        { label: 'Place Of Supply', value: 'Foreign Country (96)' },
+        { label: 'Port Code', value: 'INMAA1' },
+        { label: 'Shipping Bill#', value: '7765432' },
+        { label: 'Shipping Bill Date', value: '16 Nov 2026' },
+        { label: 'Export Type', value: 'Without payment of IGST (LUT)' },
+        { label: 'Currency', value: 'USD' },
+      ],
+      balance: { label: 'Balance Due', paise: total },
+      date: '15 Nov 2026',
+      taxColumns: 'none',
+      stateTax,
+      lines,
+      subTotalPaise: sub,
+      totals: [{ label: 'IGST (Nil, under LUT)', paise: 0 }],
+      totalLabel: 'Total',
+      totalPaise: total,
+      after: [],
+      balanceRow: { label: 'Balance Due', paise: total },
+      words: foreignWords(total, 'USD'),
+      notes: 'Thanks for your business.',
+      terms: 'Payment by wire transfer within 45 days of the bill of lading.',
+      payment: null, extra: null, irn: null, qr: null, signatory: b.signatoryName, footer: null,
+    };
+  }
   return {
     title, numberLabel, number, copyLabel: null, stamp: null, endorsement: null, headings: [],
+    ...(invoiceFormat ? { hsnLabel: invoiceFormat === 'goods' ? 'HSN' : 'SAC', unitless: invoiceFormat === 'services' } : {}),
     seller: {
       name: b.name, logoUrl: b.logoUrl,
       lines: addressLines(b.address, b.city, b.pincode, b.stateCode),
@@ -65,7 +129,7 @@ export function sampleModel(b: PdfTemplateSettings['business'], doc: TemplateDoc
     facts: payments
       ? [{ label: 'Payment Date', value: '15 Nov 2026' }, { label: 'Payment Mode', value: 'Bank Transfer' }]
       : [
-          { label: `${title.replace(/^Tax /, '')} Date`, value: '15 Nov 2026' },
+          { label: `${invoiceFormat ? 'Invoice' : baseTitle.replace(/^Tax /, '')} Date`, value: '15 Nov 2026' },
           { label: 'Terms', value: 'Due on Receipt' },
           { label: 'Due Date', value: '15 Nov 2026' },
           { label: 'P.O.#', value: '321014' },

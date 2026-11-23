@@ -50,6 +50,7 @@ const Input = z.object({
     autoDepreciation: z.boolean(),
     timesheetApproval: z.boolean(),
   }).partial().optional(),
+  hsn: z.object({ digits: z.union([z.literal(4), z.literal(6), z.literal(8)]) }).optional(),
   password: z.object({
     minLength: z.number().int().min(8).max(64),
     expiryDays: z.number().int().min(0).max(365),

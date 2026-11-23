@@ -1,4 +1,6 @@
 import 'server-only';
+import { checkHsnCode } from '../../tax/hsn';
+import { getPolicies } from './org-settings';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Costing a document's lines.
@@ -99,10 +101,11 @@ export async function costLines(
     : [];
   const itemById = new Map(items.map((i) => [i.id, i]));
 
-  // Only the organisation's approved HSN/SAC codes may reach a line. GSTR-1
-  // Table 12 is validated against the official master, and one bad code bounces
-  // the whole return — so this is checked on the server, not only in the picker.
-  const [approved, history] = await Promise.all([
+  // Any properly formed HSN/SAC of the digits the business prints may reach a
+  // line, as in Zoho (Settings → Items); a malformed one is stopped here, on the
+  // server, because one bad code bounces the whole GSTR-1. The saved codes
+  // (Settings → HSN and SAC codes) still lend a line their rate and cess.
+  const [approved, history, policies] = await Promise.all([
     trx
       .selectFrom('hsn_codes')
       .select(['code', 'kind', 'gst_rate_pct', 'cess_rate_pct'])
@@ -110,8 +113,8 @@ export async function costLines(
       .where('is_active', '=', 1)
       .execute(),
     hsnRateHistory(trx, orgId),
+    getPolicies(trx, orgId),
   ]);
-  const approvedCodes = new Set(approved.map((h) => h.code));
   // Cess is decided by what the goods are, so it lives on the code, not the item.
   const codeBy = new Map(approved.map((h) => [h.code, {
     gstRatePct: Number(h.gst_rate_pct),
@@ -124,11 +127,9 @@ export async function costLines(
     if (l.itemId && !item) throw badRequest(`Line ${idx + 1} refers to an item that does not exist.`);
 
     const hsn = l.hsnSac ?? item?.hsn_sac ?? null;
-    if (hsn && !approvedCodes.has(hsn)) {
-      throw badRequest(
-        `Line ${idx + 1} uses HSN/SAC ${hsn}, which is not on the approved list. ` +
-          'An admin can add it under Settings → HSN & SAC Codes.',
-      );
+    if (hsn) {
+      const check = checkHsnCode(hsn, { digits: policies.hsn.digits });
+      if (!check.ok) throw badRequest(`Line ${idx + 1}: ${check.problem}`);
     }
     if (l.qty <= 0) throw badRequest(`Line ${idx + 1} needs a quantity above zero.`);
 

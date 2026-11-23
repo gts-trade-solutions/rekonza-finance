@@ -1,7 +1,12 @@
 'use client';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// HSN & SAC — the organisation's approved code list.
+// HSN & SAC — the organisation's saved codes (suggestions with their rates).
+//
+// Since Zoho's HSN setting (Settings → Items), any properly formed code of the
+// digits the business prints is accepted; this list only offers the codes used
+// often, so picking one fills its GST rate and cess. The notes below are the
+// history of why the list began as a restriction.
 //
 // Every taxable line on an invoice must carry one of these, and nothing else.
 // The reason is GSTR-1 Table 12: the portal validates each code against the
@@ -291,7 +296,7 @@ export default function HsnCodesPage() {
     <>
       <PageHeader
         title="HSN & SAC Codes"
-        description="The only codes your team can put on an invoice. Curated here so nothing invalid ever reaches a GST return."
+        description="Saved codes with their GST rate: suggestions on items and invoice lines. Any valid code can still be typed (Settings → Items)."
         actions={
           <>
             <Button variant="outline" size="sm" asChild>
@@ -420,10 +425,10 @@ export default function HsnCodesPage() {
       <Card className="flex items-start gap-3 border-primary/30 bg-primary/5 p-4">
         <Boxes className="mt-0.5 size-4 shrink-0 text-primary" />
         <p className="text-xs leading-relaxed text-muted-foreground">
-          Sales users cannot type a code that is not on this list — the invoice picker offers these and nothing
-          else, and the server rejects any line that carries something different. Disabling a code hides it from
-          new documents but leaves every invoice that already used it exactly as filed, because a posted document
-          must always report the code it was filed under.
+          These are suggestions, as in Zoho: picking a saved code fills its GST rate and cess on items and invoice lines.
+          Any other properly formed code can still be typed; how many digits it needs is set in{' '}
+          <Link href="/settings/items" className="text-link hover:underline">Settings → Items</Link>. Disabling a code hides it
+          from the suggestions but leaves every invoice that already used it exactly as filed.
         </p>
       </Card>
 
