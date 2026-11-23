@@ -456,7 +456,13 @@ export async function seedDemoDocuments(trx: Trx, ids: IdMap): Promise<Documents
       org_id: ids.orgId,
       name: r.name,
       priority: i + 1,
+      // Zoho's rule form: withdrawals, any criterion, recorded as an Expense into the account.
+      apply_to: 'withdrawals',
+      match_mode: 'any',
       conditions: JSON.stringify([{ field: 'narration', op: 'contains', value: r.contains }]),
+      record_as: 'expense',
+      reference_mode: 'statement',
+      account_scope: 'all',
       action_account_id: ids.accounts[r.code],
       auto_confirm: r.auto ? 1 : 0,
       is_active: 1,

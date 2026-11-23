@@ -33,7 +33,8 @@ function NewPaymentInner() {
   const [customerId, setCustomerId] = useState(params.get('customer') ?? '');
   const [date, setDate] = useState(today());
   const [mode, setMode] = useState<PaymentMode>('neft');
-  const [bankAccountId, setBankAccountId] = useState('');
+  // Opened from a bank account's Add Transaction (?bank=), the money goes through that account.
+  const [bankAccountId, setBankAccountId] = useState(params.get('bank') ?? '');
   const [reference, setReference] = useState('');
   const [tdsPaise, setTdsPaise] = useState(0);
   const [chargesPaise, setChargesPaise] = useState(0);

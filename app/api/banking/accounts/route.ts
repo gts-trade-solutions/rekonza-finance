@@ -1,62 +1,42 @@
 import { z } from 'zod';
 import { db, transaction } from '@/lib/server/db';
-import { route, body, asId } from '@/lib/server/http';
-import { bankBalances, createBankAccount } from '@/lib/server/services/banking';
+import { route, body, query, asId } from '@/lib/server/http';
 import { logAudit, auditMeta } from '@/lib/server/audit';
+import { accountsWithFigures } from '@/lib/server/services/bank-overview';
+import { addBankAccount } from '@/lib/server/services/bank-accounts';
+import { AccountInput, accountJson } from '@/lib/server/bank-account-input';
+
+// The bank, card and cash accounts: Zoho's "Active Accounts ▾" (active,
+// inactive or all), with what the books hold, what the bank last said and how
+// many statement lines wait. An account limited to some users (Zoho's "Users")
+// is listed only for them, and for admins.
+
+const ListQuery = z.object({ status: z.enum(['active', 'inactive', 'all']).default('active') });
 
 export const GET = route(
-  async ({ orgId }) => {
-    const [accounts, balances] = await Promise.all([
-      db.selectFrom('bank_accounts')
-        .select(['id', 'kind', 'name', 'bank_name', 'account_last4', 'ifsc',
-                 'ledger_account_id', 'opening_balance', 'is_primary', 'feed_connected'])
-        .where('org_id', '=', orgId).where('is_active', '=', 1)
-        .orderBy('is_primary', 'desc').orderBy('name').execute(),
-      db.transaction().execute((trx) => bankBalances(trx, orgId)),
-    ]);
-    const byId = new Map(balances.map((b) => [b.id, b]));
-
-    return {
-      accounts: accounts.map((a) => ({
-        id: asId(a.id),
-        kind: a.kind,
-        name: a.name,
-        bankName: a.bank_name,
-        accountLast4: a.account_last4,
-        ifsc: a.ifsc,
-        ledgerAccountId: asId(a.ledger_account_id),
-        isPrimary: !!a.is_primary,
-        // Automatic feeds need a licensed aggregator; always false for now.
-        feedConnected: !!a.feed_connected,
-        balancePaise: byId.get(a.id)?.balancePaise ?? 0,
-        unmatchedCount: byId.get(a.id)?.unmatched ?? 0,
-      })),
-    };
+  async ({ orgId, user, role, req }) => {
+    const q = query(req, ListQuery);
+    const accounts = await accountsWithFigures(db, orgId, { status: q.status, viewer: { userId: user.userId, role } });
+    return { accounts: accounts.map(accountJson) };
   },
   { permission: { module: 'banking', action: 'view' } },
 );
 
-const CreateInput = z.object({
-  kind: z.enum(['bank', 'card', 'cash', 'wallet']),
-  name: z.string().min(1, 'Give the account a name.'),
-  bankName: z.string().nullish(),
-  accountLast4: z.string().max(4).nullish(),
-  ifsc: z.string().max(15).nullish(),
-  openingBalancePaise: z.number().int().optional(),
-  openingDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullish(),
-});
-
 export const POST = route(
   async ({ orgId, user, req }) => {
-    const input = await body(req, CreateInput);
+    const input = await body(req, AccountInput);
     const created = await transaction(async (trx) =>
-      createBankAccount(trx, orgId, user.userId, input),
+      addBankAccount(trx, orgId, user.userId, {
+        ...input,
+        accountNumber: input.accountNumber ?? input.accountLast4 ?? null,
+        userIds: input.userIds?.map(Number) ?? null,
+      }),
     );
 
     await logAudit({
       orgId, actorUserId: user.userId, actorName: user.name,
       action: 'create', targetType: 'bank_account', targetId: created.id,
-      targetLabel: input.name, detail: `Added ${input.kind} account ${input.name}`,
+      targetLabel: input.name.trim(), detail: `Added ${input.kind} account ${input.name.trim()}`,
       ...auditMeta(req),
     });
 

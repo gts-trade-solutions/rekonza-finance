@@ -62,9 +62,11 @@ export async function acceptSuggestions(
  * Excluded lines are kept but left out of reconciliation: a duplicate the
  * bank itself printed twice, a line belonging to another business.
  */
-export async function setExcluded(trx: Trx, orgId: number, ids: number[], excluded: boolean): Promise<number> {
+export async function setExcluded(trx: Trx, orgId: number, ids: number[], excluded: boolean, reason?: string | null): Promise<number> {
   const from: Status = excluded ? 'unmatched' : 'excluded';
-  const r = await trx.updateTable('bank_transactions').set({ status: excluded ? 'excluded' : 'unmatched' })
+  // Zoho's REASON column under Excluded: what the person said, or that a person did it.
+  const why = excluded ? (reason?.trim() || 'Excluded manually').slice(0, 255) : null;
+  const r = await trx.updateTable('bank_transactions').set({ status: excluded ? 'excluded' : 'unmatched', exclude_reason: why })
     .where('org_id', '=', orgId).where('id', 'in', ids).where('status', '=', from).executeTakeFirst();
   return Number(r.numUpdatedRows);
 }

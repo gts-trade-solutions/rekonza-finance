@@ -4,10 +4,10 @@ import { db, transaction } from '@/lib/server/db';
 import { route, body, query, asId } from '@/lib/server/http';
 import { toPaiseFromSql } from '@/lib/server/money-sql';
 import {
-  categoriseTransaction, matchToPayment, unmatchTransaction, applyRules, matchInvoicePayments, matchEnteredPayments,
+  categoriseTransaction, matchToPayment, unmatchTransaction, applyRules, matchInvoicePayments, matchEnteredPayments, applyRecognized,
 } from '@/lib/server/services/banking';
 import { acceptSuggestions, bulkCategorise, deleteLines, setExcluded, suggestCategories } from '@/lib/server/services/bank-bulk';
-import { bestMatchesFor, categoriseAs, matchLine } from '@/lib/server/services/bank-match';
+import { bestMatchesFor, categoriseAs, matchLine, matchLinesTogether } from '@/lib/server/services/bank-match';
 import { BANK_CATEGORIES } from '@/lib/bank-categories';
 import { logAudit, auditMeta } from '@/lib/server/audit';
 
@@ -20,6 +20,8 @@ const ListQuery = z.object({
   importId: z.string().optional(),
   /** Also suggest a category for each uncategorised line, learnt from past ones (bank-bulk.ts). */
   suggest: z.enum(['1']).optional(),
+  /** Zoho's pills on an account's uncategorised lines: those with a Best Match, or those a rule Recognized. */
+  view: z.enum(['best', 'recognized']).optional(),
   limit: z.coerce.number().int().min(1).max(500).default(200),
   offset: z.coerce.number().int().min(0).default(0),
 });
@@ -38,6 +40,7 @@ export const GET = route(
     if (q.from) base = base.where('bank_transactions.txn_date', '>=', q.from);
     if (q.to) base = base.where('bank_transactions.txn_date', '<=', q.to);
     if (q.importId) base = base.where('bank_transactions.import_batch_id', '=', Number(q.importId));
+    if (q.view === 'recognized') base = base.where('bank_transactions.applied_rule_id', 'is not', null);
 
     const [rows, counts] = await Promise.all([
       base
@@ -46,6 +49,7 @@ export const GET = route(
           'bank_transactions.reference', 'bank_transactions.deposit', 'bank_transactions.withdrawal',
           'bank_transactions.status', 'bank_transactions.matched_type', 'bank_transactions.matched_id',
           'bank_transactions.applied_rule_id', 'bank_transactions.bank_account_id',
+          'bank_transactions.running_balance', 'bank_transactions.exclude_reason',
           'bank_accounts.name as bank_name',
         ])
         .orderBy('bank_transactions.txn_date', 'desc')
@@ -63,9 +67,21 @@ export const GET = route(
 
     // Zoho's "match found" on a row: each unmatched line's confident matches
     // in the books (bank-match.ts). Offered, never applied without a click.
-    const unmatchedRows = rows.filter((r) => r.status === 'unmatched');
-    const best = await bestMatchesFor(db, orgId, unmatchedRows.map((r) => r.id));
+    const allUnmatched = rows.filter((r) => r.status === 'unmatched');
+    const best = await bestMatchesFor(db, orgId, allUnmatched.map((r) => r.id));
     const suggestions = Object.fromEntries([...best].map(([id, list]) => [String(id), list]));
+    const unmatchedRows = q.view === 'best' ? allUnmatched.filter((r) => (best.get(r.id)?.length ?? 0) > 0) : allUnmatched;
+    const shown = q.view === 'best' ? unmatchedRows : rows;
+
+    // Zoho's RECOGNIZED TRANSACTIONS column: what the rule would record the line as, and where.
+    const ruleIds = [...new Set(shown.map((r) => r.applied_rule_id).filter((x): x is number => x != null))];
+    const rules = ruleIds.length
+      ? await db.selectFrom('bank_rules as r').leftJoin('accounts as a', 'a.id', 'r.action_account_id')
+          .leftJoin('bank_accounts as o', 'o.id', 'r.other_bank_account_id')
+          .select(['r.id', 'r.name', 'r.record_as', 'r.auto_confirm', 'a.name as account_name', 'o.name as other_name'])
+          .where('r.id', 'in', ruleIds).where('r.org_id', '=', orgId).execute()
+      : [];
+    const ruleBy = new Map(rules.map((r) => [r.id, r]));
 
     const categories = q.suggest
       ? await suggestCategories(db, orgId, unmatchedRows.map((r) => ({ id: r.id, narration: r.narration, inflow: toPaiseFromSql(r.deposit) > 0 })))
@@ -73,7 +89,7 @@ export const GET = route(
 
     return {
       ...(categories ? { categorySuggestions: Object.fromEntries([...categories].map(([id, c]) => [String(id), c])) } : {}),
-      transactions: rows.map((r) => ({
+      transactions: shown.map((r) => ({
         id: asId(r.id),
         date: r.txn_date,
         narration: r.narration,
@@ -84,6 +100,13 @@ export const GET = route(
         matchedType: r.matched_type,
         matchedId: r.matched_id ? asId(r.matched_id) : null,
         suggestedRuleId: r.applied_rule_id ? asId(r.applied_rule_id) : null,
+        recognizedBy: r.applied_rule_id && ruleBy.get(r.applied_rule_id) ? {
+          ruleName: ruleBy.get(r.applied_rule_id)!.name,
+          recordAs: ruleBy.get(r.applied_rule_id)!.record_as,
+          accountName: ruleBy.get(r.applied_rule_id)!.account_name ?? ruleBy.get(r.applied_rule_id)!.other_name ?? null,
+        } : null,
+        runningBalancePaise: r.running_balance == null ? null : toPaiseFromSql(r.running_balance),
+        excludeReason: r.exclude_reason,
         bankAccountId: asId(r.bank_account_id),
         bankName: r.bank_name,
       })),
@@ -134,7 +157,15 @@ const ActionInput = z.discriminatedUnion('action', [
     action: z.literal('accept_suggestions'),
     picks: z.array(z.object({ transactionId: z.string(), accountId: z.string() })).min(1).max(500),
   }),
-  z.object({ action: z.literal('exclude'), transactionIds: z.array(z.string()).min(1).max(500) }),
+  z.object({ action: z.literal('exclude'), transactionIds: z.array(z.string()).min(1).max(500), reason: z.string().max(255).nullish() }),
+  /** Zoho's Multi-Select & Match: several lines that together are one transaction in the books. */
+  z.object({
+    action: z.literal('match_lines'),
+    transactionIds: z.array(z.string()).min(2).max(50),
+    target: z.object({ type: z.enum(['payment', 'expense', 'transfer', 'journal']), id: z.string() }),
+  }),
+  /** Recognized lines: record each as its rule says (Zoho's Categorize on a recognised line). */
+  z.object({ action: z.literal('apply_rules'), transactionIds: z.array(z.string()).min(1).max(500) }),
   z.object({ action: z.literal('include'), transactionIds: z.array(z.string()).min(1).max(500) }),
   z.object({ action: z.literal('delete'), transactionIds: z.array(z.string()).min(1).max(500) }),
   // Zoho's Match: one line to one or more things in the books (bank-match.ts).
@@ -182,6 +213,24 @@ export const POST = route(
       return { matched };
     }
 
+    if (input.action === 'match_lines') {
+      const ids = input.transactionIds.map(Number);
+      const r = await transaction((trx) => matchLinesTogether(trx, orgId, user.userId, ids, { type: input.target.type, id: Number(input.target.id) }));
+      await logAudit({
+        orgId, actorUserId: user.userId, actorName: user.name, action: 'match', targetType: 'bank_txn', targetId: ids[0],
+        targetLabel: `${ids.length} bank lines`, detail: `Matched together to ${input.target.type} ${input.target.id}`, ...auditMeta(req),
+      });
+      return r;
+    }
+    if (input.action === 'apply_rules') {
+      const ids = input.transactionIds.map(Number);
+      const r = await transaction((trx) => applyRecognized(trx, orgId, user.userId, ids));
+      await logAudit({
+        orgId, actorUserId: user.userId, actorName: user.name, action: 'match', targetType: 'bank_txn', targetId: ids[0],
+        targetLabel: `${ids.length} bank line(s)`, detail: `Recognized lines categorised by their rules: ${r.applied} done, ${r.skipped} left`, ...auditMeta(req),
+      });
+      return r;
+    }
     if (input.action === 'bulk_categorise' || input.action === 'accept_suggestions' || input.action === 'exclude' || input.action === 'include' || input.action === 'delete') {
       const ids = input.action === 'accept_suggestions' ? input.picks.map((x) => Number(x.transactionId)) : input.transactionIds.map(Number);
       const action = input.action;
@@ -195,7 +244,7 @@ export const POST = route(
           return { categorised: await acceptSuggestions(trx, orgId, user.userId, input.picks.map((x) => ({ id: Number(x.transactionId), accountId: Number(x.accountId) }))) };
         }
         if (input.action === 'delete') return deleteLines(trx, orgId, ids);
-        return { changed: await setExcluded(trx, orgId, ids, input.action === 'exclude') };
+        return { changed: await setExcluded(trx, orgId, ids, input.action === 'exclude', input.action === 'exclude' ? input.reason : null) };
       });
       await logAudit({
         orgId, actorUserId: user.userId, actorName: user.name,

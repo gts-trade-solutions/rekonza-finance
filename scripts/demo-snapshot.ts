@@ -74,12 +74,38 @@ const DIALOGS = [
   { list: '/api/contacts?kind=vendor', detail: `/api/contacts/[id]/statement?side=vendor&from=${new Date().toISOString().slice(0, 8)}01&to=${new Date().toISOString().slice(0, 10)}&filter=outstanding` },
   { list: '/api/contacts?kind=vendor', detail: '/api/files?targetType=contact&targetId=[id]' },
   { list: '/api/contacts?kind=vendor', detail: '/api/portal-access?contactId=[id]&side=vendor' },
+  // Banking: an account's Edit form, and a transaction rule's.
+  { list: '/api/banking/accounts?status=all', detail: '/api/banking/accounts/[id]' },
+  { list: '/api/banking/rules', detail: '/api/banking/rules/[id]' },
   // Banking: a bank line's panel — Match Transactions (best and possible
   // matches), Categorize Manually, and what a matched line is matched to.
   { list: '/api/banking/transactions?status=all&limit=500', detail: '/api/banking/transactions/[id]' },
   // Edit, from a row's ⋯ or a record's toolbar: each document as saved, which the edit window opens with.
   ...(['estimate', 'sales-order', 'challan', 'credit-note'] as const).map((k) => ({ list: `/api/sales-documents?kind=${k}`, detail: `/api/sales-documents/${k}/[id]` })),
   { list: '/api/expenses?limit=500', detail: '/api/expenses/[id]' },
+];
+
+/**
+ * Zoho's bank account pages (/banking/transactions?account_id=…): each account's
+ * tabs, visited, and the replies its pills, its All Transactions ▾ views, its
+ * Dashboard periods and its Multi-Select & Match ask for, fetched as they would be.
+ */
+const BANK_PAGES = ['Status.Uncategorized', 'Status.All', 'Status.Excluded', 'Dashboard'];
+const BANK_REPLIES = [
+  '/api/banking/accounts/[id]',
+  '/api/banking/transactions?bankAccountId=[id]&status=unmatched&limit=500',
+  '/api/banking/transactions?bankAccountId=[id]&status=unmatched&view=best&limit=500',
+  '/api/banking/transactions?bankAccountId=[id]&status=unmatched&view=recognized&limit=500',
+  '/api/banking/transactions?bankAccountId=[id]&status=excluded&limit=500',
+  '/api/banking/accounts/[id]/books',
+  '/api/banking/accounts/[id]/books?direction=in',
+  '/api/banking/accounts/[id]/books?direction=out',
+  '/api/banking/overview?account=[id]&period=30d&status=active',
+  '/api/banking/overview?account=[id]&period=12m&status=active',
+  '/api/banking/overview?account=[id]&period=30d',
+  '/api/banking/overview?account=[id]&period=12m',
+  '/api/banking/accounts/[id]/candidates?direction=in',
+  '/api/banking/accounts/[id]/candidates?direction=out',
 ];
 
 /** Edit screens reached by an address with ?edit=: each payment's, opened as its Edit button opens it. */
@@ -108,6 +134,10 @@ const ON_DEMAND = [
   '/api/saved-views?list=items',
   '/api/saved-views?list=customers',
   '/api/saved-views?list=vendors',
+  // The Banking Overview's period, scope and Active/Inactive/All Accounts menus.
+  ...['30d', '12m'].flatMap((period) => ['active', 'inactive', 'all'].map((status) => `/api/banking/overview?period=${period}&status=${status}`)),
+  '/api/banking/accounts?status=all',
+  '/api/banking/accounts?status=inactive',
 ];
 
 /** Lists whose records open from a row, and the screen each record opens on. */
@@ -268,6 +298,17 @@ async function main() {
     const rows = Array.isArray(body) ? body : (Object.values(body ?? {}).find(Array.isArray) as { id: string }[] | undefined);
     for (const row of rows ?? []) enqueue(screen.replace('[id]', String(row.id)));
   }
+  // Each bank account's page, on each of its tabs.
+  {
+    const res = await page.request.get(`${BASE}/api/banking/accounts?status=all`);
+    const body = res.ok() ? await res.json() as { accounts: { id: string }[] } : { accounts: [] };
+    for (const a of body.accounts) {
+      for (const f of BANK_PAGES) {
+        const p = `/banking/transactions?account_id=${a.id}&filter_by=${f}`;
+        if (!queued.has(p)) { queued.add(p); queue.push(p); }
+      }
+    }
+  }
   // A payment's edit screen asks for its customer's or vendor's open documents too: visit each.
   for (const { api, screen } of EDIT_PAGES) {
     const res = await page.request.get(BASE + api);
@@ -307,6 +348,15 @@ async function main() {
     for (const id of ids.slice(0, PER_KIND)) {
       await page.evaluate((url) => fetch(url).then((r) => r.text()), detail.replace('[id]', id)).catch(() => {});
     }
+  }
+
+  // What each bank account's pills, views and Multi-Select & Match ask for.
+  const bankIds = await page.evaluate(async () => {
+    const r = await fetch('/api/banking/accounts?status=all');
+    return r.ok ? ((await r.json()) as { accounts: { id: string }[] }).accounts.map((a) => a.id) : [];
+  }).catch(() => [] as string[]);
+  for (const id of bankIds) {
+    for (const u of BANK_REPLIES) await page.evaluate((x) => fetch(x).then((r) => r.text()), u.replace(/\[id\]/g, id)).catch(() => {});
   }
 
   const d = new Date();

@@ -1,267 +1,146 @@
 'use client';
 
-// Bank rules — teach the app to categorise repeating statement lines.
+// Zoho Books' Transaction Rules: the rules that recognise or categorise
+// repeating statement lines (lib/bank-rules.ts decides what a rule catches).
 //
-// Rules run in priority order and the first match wins, so a specific rule has
-// to sit above a general one. Auto-confirm is off by default on purpose: a rule
-// that silently miscategorises is worse than one that asks, because a wrong
-// account only surfaces at year end when somebody queries the figure.
+// Rules run in order and the first that catches a line wins, so a specific
+// rule has to sit above a general one. A rule only Recognizes lines unless it
+// is set to Categorize them, on purpose: a rule that silently miscategorises
+// is worse than one that asks, because a wrong account only surfaces at year
+// end when somebody queries the figure.
 
-import { useState } from 'react';
-import { Plus, ScrollText, Trash2, Zap } from 'lucide-react';
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import { ChevronLeft, MoreHorizontal, Plus, Zap } from 'lucide-react';
 import { toast } from 'sonner';
-import { Card } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
-import { Combobox } from '@/components/ui/combobox';
 import {
-  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger,
-} from '@/components/ui/dialog';
-import { PageHeader } from '@/components/shared/page-header';
-import { Field } from '@/components/shared/form-bits';
-import { EmptyState } from '@/components/shared/empty-state';
-import { AsyncPage } from '@/components/shared/async-state';
-import { accounts as accountsApi, api, type AccountRow } from '@/lib/api/client';
-import { useApi, useApiAction } from '@/lib/api/use-api';
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import { AsyncPage, LoadingRows, Refreshing } from '@/components/shared/async-state';
+import { RULE_FIELDS, opsFor, type RuleCriterion } from '@/lib/bank-rules';
+import { api, ApiError } from '@/lib/api/client';
+import { useApi } from '@/lib/api/use-api';
 import { usePermission } from '@/lib/store/hooks';
 
 interface RuleRow {
   id: string;
   name: string;
-  priority: number;
-  conditions: { field: string; op: string; value: string }[];
-  accountId: string | null;
-  accountCode: string | null;
+  applyTo: 'deposits' | 'withdrawals' | null;
+  markAs: 'recognized' | 'categorized';
+  matchMode: 'any' | 'all';
+  criteria: RuleCriterion[];
+  recordAsLabel: string;
   accountName: string | null;
-  bankAccountId: string | null;
-  bankName: string | null;
-  autoConfirm: boolean;
+  otherBankName: string | null;
+  scope: 'all' | 'banks' | 'cards' | 'custom';
+  scopeAccountIds: string[];
   isActive: boolean;
   timesApplied: number;
 }
 
-/** Control accounts get their balance from documents, never from a bank line. */
-const CONTROL_CODES = new Set(['1100', '2100']);
+const criterionText = (c: RuleCriterion) =>
+  `${RULE_FIELDS.find((f) => f.value === c.field)?.label ?? c.field} ${opsFor(c.field).find((o) => o.value === c.op)?.label ?? c.op} ${c.field === 'amount' ? `₹${c.value}` : `"${c.value}"`}`;
+const SCOPE = { all: 'All Accounts', banks: 'All Banks', cards: 'All Cards', custom: 'Chosen accounts' } as const;
 
-export default function BankRulesPage() {
+export default function TransactionRulesPage() {
+  const router = useRouter();
+  const canCreate = usePermission('banking', 'create');
   const canEdit = usePermission('banking', 'edit');
   const state = useApi<{ rules: RuleRow[] }>(() => api.get('/api/banking/rules'), []);
-  const chart = useApi<{ accounts: AccountRow[] }>(() => accountsApi.list(), []);
 
-  const [open, setOpen] = useState(false);
-  const [f, setF] = useState({ name: '', contains: '', accountId: '', autoConfirm: false });
-
-  const create = useApiAction((input: unknown) => api.post<{ id: string }>('/api/banking/rules', input));
-  const patch = useApiAction((input: unknown) =>
-    api.patch<{ matched?: number; isActive?: boolean }>('/api/banking/rules', input),
-  );
-  const remove = useApiAction((id: string) =>
-    api.delete<{ id: string }>(`/api/banking/rules?id=${encodeURIComponent(id)}`),
-  );
-  const busy = patch.busy || remove.busy;
-
-  const accountChoices = (chart.data?.accounts ?? [])
-    .filter((a) => (a.type === 'expense' || a.type === 'income') && !CONTROL_CODES.has(a.code))
-    .map((a) => ({ value: a.id, label: a.name, sublabel: `${a.code} · ${a.type}` }));
-
-  const save = async () => {
-    if (!f.name.trim() || !f.contains.trim() || !f.accountId) {
-      toast.error('Fill in the rule name, the text to match, and a category.');
-      return;
-    }
-    const done = await create.run({
-      name: f.name.trim(),
-      contains: f.contains.trim(),
-      accountId: f.accountId,
-      autoConfirm: f.autoConfirm,
-    });
-    if (!done) {
-      toast.error(create.error ?? 'The rule was not created');
-      return;
-    }
-    toast.success('Rule created', {
-      description: f.autoConfirm
-        ? 'Matching lines will be categorised without review.'
-        : 'Matching lines will be suggested for review.',
-    });
-    setOpen(false);
-    setF({ name: '', contains: '', accountId: '', autoConfirm: false });
-    state.refetch();
-  };
-
-  const runAll = async () => {
-    const done = await patch.run({ action: 'run' });
-    if (!done) {
-      toast.error(patch.error ?? 'The rules did not run');
-      return;
-    }
-    toast.success(`${done.matched ?? 0} line(s) matched`);
-    state.refetch();
-  };
-
-  const toggle = async (r: RuleRow, v: boolean) => {
-    const done = await patch.run({ action: 'toggle', id: r.id, isActive: v });
-    if (!done) {
-      toast.error(patch.error ?? 'That could not be changed');
-      return;
-    }
-    state.refetch();
-  };
-
-  const drop = async (r: RuleRow) => {
-    const done = await remove.run(r.id);
-    if (!done) {
-      toast.error(remove.error ?? 'The rule was not deleted');
-      return;
-    }
-    toast.info(`${r.name} deleted`, { description: 'Lines it already categorised are unaffected.' });
-    state.refetch();
+  const run = async (fn: () => Promise<unknown>, ok: string) => {
+    try { await fn(); toast.success(ok); await state.refetch(); }
+    catch (e) { toast.error(e instanceof ApiError ? e.message : 'That did not work.'); }
   };
 
   return (
-    <>
-      <PageHeader
-        title="Bank rules"
-        description="Teach the app to categorise repeating transactions so you never code the same fuel bill twice."
-        actions={
-          canEdit && (
-            <>
-              <Button variant="outline" size="sm" className="gap-1.5" disabled={busy} onClick={() => void runAll()}>
-                <Zap className="size-3.5" /> {patch.busy ? 'Running…' : 'Run all rules'}
-              </Button>
-              <Dialog open={open} onOpenChange={setOpen}>
-                <DialogTrigger asChild>
-                  <Button size="sm" className="gap-1.5"><Plus className="size-4" /> New rule</Button>
-                </DialogTrigger>
-                <DialogContent>
-                  <DialogHeader>
-                    <DialogTitle>New bank rule</DialogTitle>
-                    <DialogDescription>
-                      Rules run in order and the first match wins, so put specific ones above general ones.
-                    </DialogDescription>
-                  </DialogHeader>
-                  <div className="space-y-4">
-                    <Field label="Rule name" required error={create.fieldErrors.name}>
-                      <Input
-                        value={f.name}
-                        onChange={(e) => setF({ ...f, name: e.target.value })}
-                        placeholder="Rule name"
-                      />
-                    </Field>
-                    <Field
-                      label="When the narration contains"
-                      required
-                      error={create.fieldErrors.contains}
-                      hint="Match the part that never changes, not the part with a reference number in it"
-                    >
-                      <Input
-                        value={f.contains}
-                        onChange={(e) => setF({ ...f, contains: e.target.value })}
-                        placeholder="Text as it appears on the statement"
-                      />
-                    </Field>
-                    <Field label="Categorise as" required>
-                      <Combobox
-                        options={accountChoices}
-                        value={f.accountId}
-                        onChange={(v) => setF({ ...f, accountId: v })}
-                        placeholder="Select account"
-                        searchPlaceholder="Search accounts by name or code"
-                        showAvatar={false}
-                      />
-                    </Field>
-                    <div className="flex items-center justify-between gap-3 rounded-md border p-3">
-                      <div className="min-w-0">
-                        <p className="text-sm font-medium">Auto-confirm matches</p>
-                        <p className="mt-0.5 text-xs text-muted-foreground">
-                          Off means the match is suggested and you approve it. Leave it off until you have watched
-                          the rule behave for a month.
-                        </p>
-                      </div>
-                      <Switch checked={f.autoConfirm} onCheckedChange={(v) => setF({ ...f, autoConfirm: v })} />
-                    </div>
-                    {create.error && <p className="text-sm text-destructive">{create.error}</p>}
-                  </div>
-                  <DialogFooter>
-                    <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
-                    <Button onClick={save} disabled={create.busy}>
-                      {create.busy ? 'Saving…' : 'Create rule'}
-                    </Button>
-                  </DialogFooter>
-                </DialogContent>
-              </Dialog>
-            </>
-          )
-        }
-      />
+    <div className="-mx-6 -mt-5 min-h-[calc(100vh-3rem)] bg-surface" data-slot="transaction-rules">
+      <div className="flex h-[65px] items-center gap-3 border-b px-4">
+        <Button variant="outline" size="icon-sm" asChild aria-label="Back to Banking"><Link href="/banking"><ChevronLeft className="size-4" /></Link></Button>
+        <h1 className="flex-1 text-[18px] font-semibold">Transaction Rules</h1>
+        <Refreshing active={state.refreshing} />
+        {canEdit && (state.data?.rules.length ?? 0) > 0 && (
+          <Button variant="outline" size="sm" className="gap-1.5" data-slot="run-rules"
+            onClick={() => void run(async () => {
+              const r = await api.patch<{ matched: number }>('/api/banking/rules', { action: 'run' });
+              toast.info(r.matched ? `${r.matched} line${r.matched === 1 ? '' : 's'} categorised` : 'Rules run: lines they recognise are under Recognized');
+            }, 'Rules run on every uncategorized line')}>
+            <Zap className="size-3.5" /> Run rules now
+          </Button>
+        )}
+        {canCreate && <Button size="sm" className="gap-1" asChild data-slot="new-rule"><Link href="/banking/rules/new"><Plus className="size-4" /> New Rule</Link></Button>}
+      </div>
 
-      <AsyncPage state={state}>
-        {(d) =>
-          d.rules.length === 0 ? (
-            <EmptyState
-              icon={ScrollText}
-              title="No rules yet"
-              description="Create a rule to auto-categorise recurring bank lines."
-            />
-          ) : (
-            <div className="space-y-3">
-              {d.rules.map((r) => (
-                <Card key={r.id} className="flex flex-wrap items-center gap-4 p-4">
-                  <Badge variant="secondary" className="shrink-0 tabular">#{r.priority}</Badge>
-                  <div className="min-w-0 flex-1">
-                    <p className="font-medium">{r.name}</p>
-                    <p className="mt-0.5 text-xs text-muted-foreground">
-                      When narration contains{' '}
-                      {r.conditions.map((c) => (
-                        <span key={c.value} className="rounded bg-muted px-1 py-0.5 font-mono text-[10px]">
-                          {c.value}
-                        </span>
-                      ))}{' '}
-                      → categorise as{' '}
-                      <span className="font-medium text-foreground">{r.accountName ?? 'unset'}</span>
-                    </p>
-                    <p className="mt-0.5 text-xs text-muted-foreground">
-                      {r.timesApplied > 0
-                        ? `Applied to ${r.timesApplied} line(s)`
-                        : 'Has not matched anything yet'}
-                    </p>
-                  </div>
-                  {r.autoConfirm && <Badge variant="outline" className="text-[10px]">Auto-confirm</Badge>}
-                  {canEdit && (
-                    <div className="flex items-center gap-2">
-                      <Switch
-                        checked={r.isActive}
-                        disabled={busy}
-                        onCheckedChange={(v) => void toggle(r, v)}
-                      />
-                      <button
-                        type="button"
-                        aria-label={`Delete ${r.name}`}
-                        disabled={busy}
-                        onClick={() => void drop(r)}
-                        className="grid size-8 place-items-center rounded text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:opacity-40"
-                      >
-                        <Trash2 className="size-3.5" />
-                      </button>
-                    </div>
-                  )}
-                </Card>
+      <AsyncPage state={state} loading={<div className="p-5"><LoadingRows rows={5} /></div>}>
+        {(data) => data.rules.length === 0 ? (
+          <div className="grid place-items-center px-6 py-24 text-center" data-slot="rules-empty">
+            <svg width="110" height="104" viewBox="0 0 110 104" aria-hidden className="mb-6">
+              <rect x="0" y="0" width="72" height="24" rx="5" fill="#2fc17a" /><rect x="14" y="10" width="44" height="4" rx="2" fill="#fff" />
+              <path d="M22 26v52h20M22 52h20" stroke="#9ba0b5" strokeWidth="2" fill="none" />
+              <rect x="44" y="40" width="64" height="24" rx="5" fill="#b6b9c8" /><rect x="56" y="50" width="40" height="4" rx="2" fill="#fff" />
+              <rect x="44" y="70" width="64" height="24" rx="5" fill="#9ba0b5" /><rect x="56" y="80" width="40" height="4" rx="2" fill="#fff" />
+            </svg>
+            <h2 className="text-[16px] font-medium">Create rules to automatically categorize transactions</h2>
+            <p className="mt-2 max-w-md text-[13px] text-muted-foreground">Categorise multiple transactions automatically based on the account chosen and criteria you have set.</p>
+            {canCreate && <Button size="sm" className="mt-4 gap-1" asChild><Link href="/banking/rules/new"><Plus className="size-4" /> New Rule</Link></Button>}
+          </div>
+        ) : (
+          <table className="w-full text-[13px]" data-slot="rules-table">
+            <thead>
+              <tr className="border-b bg-table-head text-left text-[11px] font-semibold uppercase text-table-head-foreground">
+                <th className="px-5 py-2.5 font-semibold">Rule Name</th>
+                <th className="px-4 py-2.5 font-semibold">Apply To</th>
+                <th className="px-4 py-2.5 font-semibold">Criteria</th>
+                <th className="px-4 py-2.5 font-semibold">Record As</th>
+                <th className="px-4 py-2.5 font-semibold">Mark As</th>
+                <th className="px-4 py-2.5 text-right font-semibold">Caught</th>
+                <th className="px-4 py-2.5 font-semibold">Status</th>
+                <th className="w-12 px-4 py-2.5" />
+              </tr>
+            </thead>
+            <tbody>
+              {data.rules.map((r) => (
+                <tr key={r.id} className="border-b align-top hover:bg-row-hover" data-slot="rule-row">
+                  <td className="px-5 py-3">
+                    {canEdit ? <Link href={`/banking/rules/${r.id}/edit`} className="text-link hover:underline">{r.name}</Link> : r.name}
+                  </td>
+                  <td className="px-4 py-3">
+                    <span className="block">{r.applyTo === 'deposits' ? 'Deposits' : r.applyTo === 'withdrawals' ? 'Withdrawals' : 'Deposits and withdrawals'}</span>
+                    <span className="block text-[11px] text-muted-foreground">{r.scope === 'custom' ? `${r.scopeAccountIds.length} account${r.scopeAccountIds.length === 1 ? '' : 's'}` : SCOPE[r.scope]}</span>
+                  </td>
+                  <td className="px-4 py-3">
+                    {r.criteria.map((c, i) => (
+                      <span key={i} className="block">{i > 0 && <span className="text-[11px] uppercase text-muted-foreground">{r.matchMode === 'any' ? 'or ' : 'and '}</span>}{criterionText(c)}</span>
+                    ))}
+                  </td>
+                  <td className="px-4 py-3"><span className="block">{r.recordAsLabel}</span><span className="block text-[11px] text-muted-foreground">{r.accountName ?? r.otherBankName ?? '—'}</span></td>
+                  <td className="px-4 py-3">{r.markAs === 'categorized' ? 'Categorized' : 'Recognized'}</td>
+                  <td className="px-4 py-3 text-right tabular">{r.timesApplied}</td>
+                  <td className="px-4 py-3">
+                    <Switch checked={r.isActive} disabled={!canEdit} aria-label={r.isActive ? 'Active' : 'Inactive'} data-slot="rule-active"
+                      onCheckedChange={(v) => void run(() => api.patch('/api/banking/rules', { action: 'toggle', id: r.id, isActive: !!v }), v ? `${r.name} is on` : `${r.name} is off`)} />
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    {canEdit && (
+                      <DropdownMenu>
+                        <DropdownMenuTrigger aria-label={`More for ${r.name}`} className="text-muted-foreground outline-none hover:text-foreground"><MoreHorizontal className="size-4" /></DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem onClick={() => router.push(`/banking/rules/${r.id}/edit`)}>Edit</DropdownMenuItem>
+                          <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={() => {
+                            if (window.confirm(`Delete the rule ${r.name}? Lines it already categorised keep their category.`)) void run(() => api.delete(`/api/banking/rules?id=${r.id}`), 'Rule deleted');
+                          }}>Delete</DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    )}
+                  </td>
+                </tr>
               ))}
-            </div>
-          )
-        }
+            </tbody>
+          </table>
+        )}
       </AsyncPage>
-
-      <Card className="flex items-start gap-3 p-4">
-        <ScrollText className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-        <p className="text-xs leading-relaxed text-muted-foreground">
-          A rule cannot point at Accounts Receivable or Accounts Payable. Those balances come from invoices and
-          bills, so a statement line categorised straight into one would leave the ageing report disagreeing with
-          its own control account — match the line to the document instead.
-        </p>
-      </Card>
-    </>
+    </div>
   );
 }
