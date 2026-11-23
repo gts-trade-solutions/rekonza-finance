@@ -4,6 +4,7 @@
 // note, retainer, receipt, purchase order, vendor credit, payment advice or
 // bill (components/print/document-print.tsx), with Send and Clone beside Print.
 
+import { useEffect } from 'react';
 import { useParams, useSearchParams } from 'next/navigation';
 import { AsyncPage } from '@/components/shared/async-state';
 import { DocumentPrintView } from '@/components/print/document-print';
@@ -17,6 +18,13 @@ export default function DocumentPrintPage() {
   // A sales order as its proforma invoice.
   const as = useSearchParams().get('as');
   const state = useApi<PrintDoc>(() => api.get<PrintDoc>(`/api/print/${kind}/${id}`, as ? { as } : undefined), [kind, id, as]);
+  // ?print=1: opened from a record's PDF/Print → Print, the print dialog comes straight up, as Zoho's does.
+  const printNow = useSearchParams().get('print') === '1';
+  useEffect(() => {
+    if (!printNow || !state.data) return;
+    const t = setTimeout(() => window.print(), 600);
+    return () => clearTimeout(t);
+  }, [printNow, state.data]);
   return (
     <AsyncPage state={state}>
       {(doc) => (

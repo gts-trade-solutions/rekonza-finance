@@ -128,6 +128,10 @@ export const VIEWS: Record<SalesDocKindZ, { value: string; label: string; keep: 
   ],
 };
 
-/** "24 May 2026", as Zoho prints a date. */
-export const zohoDay = (d: string | null | undefined) =>
-  d ? new Date(`${d.slice(0, 10)}T00:00:00`).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : '-';
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+/** "24 May 2026", as Zoho prints a date ("Sep", never the browser's "Sept"). */
+export const zohoDay = (d: string | null | undefined) => {
+  if (!d) return '-';
+  const [y, m, day] = d.slice(0, 10).split('-').map(Number);
+  return y && m && day ? `${day} ${MONTHS[m - 1]} ${y}` : '-';
+};

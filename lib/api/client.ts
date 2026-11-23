@@ -1110,6 +1110,9 @@ export type SalesDocKind = 'estimate' | 'sales-order' | 'challan' | 'credit-note
 export interface SalesDocRow {
   id: string;
   number: string;
+  /** Zoho's Reference# (migration 120). */
+  reference?: string | null;
+  createdAt?: string | null;
   date: string;
   status: string;
   customerId: string;

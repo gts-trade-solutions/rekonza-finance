@@ -79,6 +79,8 @@ export const GET = route(
       : sql`, NULL AS expiry, d.amount AS subtotal, d.description AS converted_to_type, NULL AS converted_to_id, d.applied_amount AS applied`;
 
     const totalCol = q.kind === 'retainer' ? sql`d.amount` : sql`d.total`;
+    // Zoho's Reference# column (migration 120); a retainer has none.
+    const refCol = q.kind === 'retainer' ? sql`NULL` : sql`d.reference_number`;
     // What the customer has actually settled. Only invoice-like documents have
     // one; a quote or a challan is nobody's debt.
     const paidCol =
@@ -90,8 +92,9 @@ export const GET = route(
       customer_name: string; total: string; subtotal: string; expiry: string | null;
       converted_to_type: string | null; converted_to_id: number | null;
       applied: string | null; paid: string | null; linked_number?: string | null;
+      reference: string | null; created_at: Date | string | null;
     }>`
-      SELECT d.id, d.number, ${dateCol} AS dt, d.status, d.customer_id,
+      SELECT d.id, d.number, ${dateCol} AS dt, d.status, d.customer_id, ${refCol} AS reference, d.created_at,
              c.display_name AS customer_name, ${totalCol} AS total, ${paidCol} AS paid ${extra}
         FROM ${t} d
         JOIN contacts c ON c.id = d.customer_id
@@ -117,6 +120,8 @@ export const GET = route(
       documents: rows.map((r) => ({
         id: asId(r.id),
         number: r.number,
+        reference: r.reference ?? null,
+        createdAt: r.created_at ? new Date(r.created_at).toISOString() : null,
         date: String(r.dt).slice(0, 10),
         status: r.status,
         customerId: asId(r.customer_id),

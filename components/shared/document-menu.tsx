@@ -89,7 +89,7 @@ export function DeleteDocumentDialog({ kind, id, number, open, onOpenChange, onD
 }
 
 /** Sending, sharing and cloning one document; shared by the row menu and the print screen. A sales order can go as its proforma invoice. */
-function useDocumentActions(kind: PrintKind, id: string, onChanged?: () => void, proforma = false) {
+export function useDocumentActions(kind: PrintKind, id: string, onChanged?: () => void, proforma = false) {
   const noun = proforma ? 'proforma invoice' : PRINT_NOUN[kind];
   const router = useRouter();
   const area = PRINT_SIDE[kind] === 'customer' ? 'sales' : 'purchases';
