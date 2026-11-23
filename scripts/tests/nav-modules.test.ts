@@ -50,9 +50,11 @@ test('entering a transaction folds the sidebar; a master’s form and the lists 
     '/sales/invoices/new', '/sales/invoices/42/edit', '/sales/debit-notes/new', '/sales/sales-receipts/new',
     '/sales/payments/new', '/purchases/bills/new', '/purchases/payments/new', '/purchases/expenses/new',
     '/accountant/journals/new', '/sales/estimates/7/edit',
+    '/banking/new', '/banking/4/edit', '/banking/rules/new', '/banking/rules/2/edit',
   ]) assert.equal(isEntryPage(p), true, p);
   for (const p of [
     '/sales/invoices', '/sales/invoices/42', '/sales/customers/new', '/sales/customers/3/edit', '/sales/items/new',
     '/purchases/vendors/new', '/purchases/vendors/9/edit', '/analytics/new', '/dashboard', '/sales/invoices/new-ish', null, '',
+    '/banking', '/banking/rules', '/banking/transactions',
   ]) assert.equal(isEntryPage(p), false, String(p));
 });

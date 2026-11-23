@@ -35,7 +35,8 @@ function PayInner() {
   const [vendorId, setVendorId] = useState(params.get('vendor') ?? '');
   const [date, setDate] = useState(today());
   const [mode, setMode] = useState<PaymentMode>('neft');
-  const [bankAccountId, setBankAccountId] = useState('');
+  // Opened from a bank account's Add Transaction (?bank=), the money goes through that account.
+  const [bankAccountId, setBankAccountId] = useState(params.get('bank') ?? '');
   const [reference, setReference] = useState('');
   const [selected, setSelected] = useState<Record<string, number>>({});
   // Paid ahead of the bill; it stays on account until a bill is set against it.

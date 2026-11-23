@@ -18,7 +18,7 @@
 // it doubling the balance. An import can be undone while its lines are still
 // uncategorised.
 
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import Papa from 'papaparse';
 import { readXls } from '@/lib/imports/xls';
@@ -130,6 +130,11 @@ export default function BankImportsPage() {
   const canEdit = usePermission('banking', 'edit');
   const fileRef = useRef<HTMLInputElement>(null);
   const [defaultAccount, setDefaultAccount] = useState('');
+  // Import Statement from an account's page or row menu comes with that account (?account=).
+  useEffect(() => {
+    const a = new URLSearchParams(window.location.search).get('account');
+    if (a) setDefaultAccount(a);
+  }, []);
   const [queue, setQueue] = useState<QueuedFile[]>([]);
   const [mapping, setMapping] = useState<QueuedFile | null>(null);
   const [running, setRunning] = useState(false);

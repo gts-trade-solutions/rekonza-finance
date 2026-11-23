@@ -71,7 +71,8 @@ const ENTRY_MODULES = [
   'purchases/(?:bills|expenses|purchase-orders|vendor-credits|payments|recurring|goods-receipts|bills-of-entry)',
   'accountant/(?:journals|recurring-journals)',
   'inventory/(?:adjustments|transfers|production)',
-  'banking/(?:transfers|cheques)',
+  // An account's Add and Edit, and a rule's New and Edit, as well as transfers and cheques.
+  'banking(?:/(?:transfers|cheques|rules))?',
 ].join('|');
 const ENTRY_PAGE = new RegExp(`^/(?:${ENTRY_MODULES})/(?:new|[^/]+/edit)/?$`);
 

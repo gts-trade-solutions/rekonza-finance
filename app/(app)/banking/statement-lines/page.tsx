@@ -56,6 +56,11 @@ export default function StatementLinesPage() {
   const canEdit = usePermission('banking', 'edit');
   const [status, setStatus] = useState<Status>('unmatched');
   const [bankAccountId, setBankAccountId] = useState('');
+  // Zoho's Quick Categorize opens here from an account's page, on that account (?account=).
+  useEffect(() => {
+    const a = new URLSearchParams(window.location.search).get('account');
+    if (a) setBankAccountId(a);
+  }, []);
   const [importId, setImportId] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [categoryId, setCategoryId] = useState('');

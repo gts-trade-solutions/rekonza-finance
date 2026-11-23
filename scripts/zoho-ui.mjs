@@ -706,6 +706,12 @@ await page.locator('[data-slot=banking-more]').click();
 await page.waitForTimeout(300);
 check("More holds Rekonza's banking tools", (await page.locator('[data-slot=dropdown-menu-content] a').count()) >= 6);
 await page.keyboard.press('Escape');
+check('Banking Overview keeps the sidebar open, as Zoho does', (await page.locator('aside [data-slot=sidebar]').getAttribute('data-folded')) !== '1');
+if (banks.accounts[0]) {
+  await open(`/banking/transactions?account_id=${banks.accounts[0].id}`);
+  check("An account's page folds the sidebar and has Zoho's tabs", (await page.locator('aside [data-slot=sidebar]').getAttribute('data-folded')) === '1'
+    && (await page.locator('[data-slot=account-tab]').count()) >= 3 && (await page.locator('[data-slot=add-transaction]').count()) <= 1);
+}
 
 // ── I. Settings mode ───────────────────────────────────────────────────────
 await open('/settings');
