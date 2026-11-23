@@ -18,7 +18,7 @@ import {
 import { useAppStore } from '@/lib/store';
 import { api } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
-import { hsnOptions, itemOptionsFor } from '@/lib/options';
+import { hsnOptions, itemOptionsFor, typedCode, withTypedCode } from '@/lib/options';
 import { computeLineTax, GST_RATES, hsnRateOn } from '@/lib/tax/gst';
 import { formatINR, toRupees } from '@/lib/money';
 import { cn } from '@/lib/utils';
@@ -328,7 +328,7 @@ export function LineItemsEditor({
 
                   <td className="px-2 py-2">
                     <Combobox
-                      options={codes}
+                      options={withTypedCode(codes, line.hsnSac)}
                       value={line.hsnSac}
                       onChange={(v) => {
                         // Picking a code with no item behind it also sets the
@@ -343,8 +343,10 @@ export function LineItemsEditor({
                         });
                       }}
                       placeholder="Code"
-                      searchPlaceholder="Type the first digits"
-                      emptyMessage="Not on the approved list. Ask an admin to add it."
+                      searchPlaceholder="Type the code"
+                      emptyMessage="Not in your saved codes. Use it as typed below."
+                      createLabel="Use this code"
+                      onCreate={(q) => { const c = typedCode(q); if (c) update(line.key, { hsnSac: c }); }}
                       matchMode="prefix"
                       showAvatar={false}
                       clearable

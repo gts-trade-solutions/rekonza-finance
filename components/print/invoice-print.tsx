@@ -19,13 +19,16 @@ import { QRCodeSVG } from 'qrcode.react';
 import { Button } from '@/components/ui/button';
 import type { InvoiceDetail } from '@/lib/api/client';
 import { upiPayUri } from '@/lib/billing/upi';
+import { foreignWords, hsnHeading } from '@/lib/invoice-format';
 import { formatINR } from '@/lib/money';
 import { stateName, stateTaxLabel } from '@/lib/tax/gst';
 import { cn } from '@/lib/utils';
 import { isPrintLanguage, PRINT_LANGUAGES, type PrintLanguage } from '@/lib/print-languages';
 import { printPage } from '@/lib/output-guard';
 import { useDocumentTitle } from '@/lib/use-document-title';
-import { DEFAULT_TEMPLATE, layoutFor } from '@/lib/print-template';
+import { DEFAULT_TEMPLATE, formatTitle, invoiceFormatOf, layoutForInvoice, type InvoiceFormat } from '@/lib/print-template';
+import { countryName } from '@/lib/countries';
+import { LogoPrompt } from '@/components/print/logo-prompt';
 import { addressLines, SheetLang, taxRows, termsLabel, zohoWords, ZohoSheet, type Ribbon, type SheetLine, type SheetModel } from '@/components/print/zoho-sheet';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -237,6 +240,8 @@ export function PrintView({ inv, shared = false }: { inv: InvoiceDetail; shared?
         </div>
       </div>
 
+      {!shared && !inv.seller.logoUrl && <LogoPrompt />}
+
       {!shared && screenWarnings(inv).map((w) => (
         <div
           key={w.id}
@@ -262,9 +267,23 @@ export function InvoiceSheetPrint({ inv, last }: { inv: InvoiceDetail; last: boo
   return <InvoiceSheet inv={inv} copyLabel="Original for recipient" last={last} />;
 }
 
+/** Which of the three invoice formats this one prints in: goods, services or export. */
+export const invoiceFormat = (inv: Pick<InvoiceDetail, 'supplyType' | 'supplyKind'>): InvoiceFormat => invoiceFormatOf(inv.supplyType, inv.supplyKind);
+
 /** The invoice, read into the shape every Zoho template prints. */
 export function invoiceModel(inv: InvoiceDetail, copyLabel: string | null): SheetModel {
-  const { title, endorsement } = documentTitle(inv);
+  const format = invoiceFormat(inv);
+  const legal = documentTitle(inv);
+  const tpl = inv.seller.template ?? DEFAULT_TEMPLATE;
+  // A tax invoice takes its format's title (Tax Invoice, Export Invoice, or the business's own);
+  // a bill of supply, a debit note or an unregistered seller's invoice keep the name the law gives them.
+  const title = legal.title === 'Tax Invoice' && !inv.debitNote ? formatTitle(tpl, format) : legal.title;
+  const endorsement = legal.endorsement;
+  // Priced in another currency, the invoice prints in it, as Zoho prints a dollar invoice in dollars;
+  // the books' rupee figures are converted back at the invoice's own rate.
+  const fx = inv.foreign && inv.foreign.rate > 0 ? inv.foreign : null;
+  const cv = (paise: number) => (fx ? Math.round(paise / fx.rate) : paise);
+  const exp = format === 'export' ? inv.exportInfo ?? null : null;
   const e = inv.einvoice;
   // Which tax columns the table needs. A bill of supply charges no tax at all;
   // otherwise the supply type decides between the CGST + SGST pair and IGST.
@@ -272,22 +291,27 @@ export function invoiceModel(inv: InvoiceDetail, copyLabel: string | null): Shee
   const split = taxed && inv.supplyType === 'intra';
   const integrated = taxed && !split && (inv.tax.igstPaise > 0 || inv.supplyType === 'inter' || inv.supplyType === 'export_with_tax');
   const stateTax = stateTaxLabel(inv.placeOfSupply);
-  const t = inv.seller.template ?? DEFAULT_TEMPLATE;
   const lines: SheetLine[] = inv.lines.map((l) => {
     const item = l.itemName?.trim() || null;
     const text = l.description?.trim() || null;
     return {
       name: item ?? text ?? '—',
       description: item && text && text !== item ? text : null,
-      hsn: l.hsnSac, qty: l.qty, unit: l.uqc, ratePaise: l.ratePaise, discountPct: l.discountPct,
-      taxablePaise: l.taxablePaise, gstRatePct: l.gstRatePct, cgstPaise: l.cgstPaise, sgstPaise: l.sgstPaise,
-      igstPaise: l.igstPaise, cessPaise: l.cessPaise, amountPaise: l.totalPaise,
+      hsn: l.hsnSac, qty: l.qty, unit: l.uqc, ratePaise: cv(l.ratePaise), discountPct: l.discountPct,
+      taxablePaise: cv(l.taxablePaise), gstRatePct: l.gstRatePct, cgstPaise: cv(l.cgstPaise), sgstPaise: cv(l.sgstPaise),
+      igstPaise: cv(l.igstPaise), cessPaise: cv(l.cessPaise), amountPaise: cv(l.totalPaise),
     };
   });
-  const subTotal = inv.lines.reduce((s2, l) => s2 + l.taxablePaise, 0);
+  const subTotal = lines.reduce((s2, l) => s2 + l.taxablePaise, 0);
   const noun = inv.debitNote ? 'Debit Note' : 'Invoice';
+  const totalPaise = fx ? fx.totalPaise : inv.totalPaise;
+  const paidPaise = fx ? fx.paidPaise : inv.amountPaidPaise;
+  const balancePaise = fx ? Math.max(0, fx.totalPaise - fx.paidPaise) : inv.balancePaise;
   return {
     title,
+    hsnLabel: hsnHeading(inv.lines.map((l) => l.hsnSac), format),
+    unitless: format === 'services',
+    currency: fx?.currency ?? null,
     numberLabel: `${noun}#`,
     number: inv.number,
     copyLabel,
@@ -295,7 +319,8 @@ export function invoiceModel(inv: InvoiceDetail, copyLabel: string | null): Shee
     endorsement,
     headings: [
       ...(inv.voucherType?.heading ? [inv.voucherType.heading] : []),
-      ...(inv.exportInfo?.shippingBillNo
+      // The export format sets the shipping bill out among the details; any other prints it under the title.
+      ...(!exp && inv.exportInfo?.shippingBillNo
         ? [`Shipping bill ${inv.exportInfo.shippingBillNo}${inv.exportInfo.shippingBillDate ? ` dated ${day(inv.exportInfo.shippingBillDate)}` : ''}${inv.exportInfo.portCode ? `, port ${inv.exportInfo.portCode}` : ''}`]
         : []),
     ],
@@ -312,7 +337,10 @@ export function invoiceModel(inv: InvoiceDetail, copyLabel: string | null): Shee
     },
     billTo: {
       label: 'Bill To', name: inv.buyer.name,
-      lines: addressLines(inv.buyer.address, inv.buyer.city, inv.buyer.pincode, inv.buyer.stateCode),
+      // An overseas customer's address ends in their country, not GST's "Foreign Country (96)".
+      lines: exp
+        ? [...addressLines(inv.buyer.address, inv.buyer.city, inv.buyer.pincode, null), ...(exp.countryCode ? [countryName(exp.countryCode)] : [])]
+        : addressLines(inv.buyer.address, inv.buyer.city, inv.buyer.pincode, inv.buyer.stateCode),
       gstin: inv.buyer.gstin,
     },
     shipTo: inv.shipTo ? { label: 'Ship To', name: inv.buyer.name, lines: addressLines(inv.shipTo.address, inv.shipTo.city, inv.shipTo.pincode) } : null,
@@ -322,42 +350,49 @@ export function invoiceModel(inv: InvoiceDetail, copyLabel: string | null): Shee
       { label: 'Due Date', value: day(inv.dueDate) },
       ...(inv.orderNumber ? [{ label: 'P.O.#', value: inv.orderNumber }] : []),
       { label: 'Place Of Supply', value: place(inv.placeOfSupply) },
+      // Zoho's export invoice: where it goes, how it ships, and in what currency.
+      ...(exp?.countryCode ? [{ label: 'Country Of Destination', value: countryName(exp.countryCode) }] : []),
+      ...(exp?.portCode ? [{ label: 'Port Code', value: exp.portCode }] : []),
+      ...(exp?.shippingBillNo ? [{ label: 'Shipping Bill#', value: exp.shippingBillNo }] : []),
+      ...(exp?.shippingBillDate ? [{ label: 'Shipping Bill Date', value: day(exp.shippingBillDate) }] : []),
+      ...(exp ? [{ label: 'Export Type', value: inv.supplyType === 'export_lut' ? 'Without payment of IGST (LUT)' : 'With payment of IGST' }] : []),
+      ...(fx ? [{ label: 'Currency', value: fx.currency }] : []),
       ...(inv.ewayBill ? [{ label: 'E-Way Bill#', value: inv.ewayBill.number }] : []),
       ...(inv.printFields ?? []).map((f) => ({ label: f.label, value: f.value })),
-      { label: 'Reverse Charge', value: 'No' },
+      ...(exp ? [] : [{ label: 'Reverse Charge', value: 'No' }]),
     ],
-    balance: { label: 'Balance Due', paise: inv.balancePaise },
+    balance: { label: 'Balance Due', paise: balancePaise },
     date: day(inv.date),
     taxColumns: split ? 'split' : integrated ? 'integrated' : 'none',
     stateTax,
     lines,
     subTotalPaise: subTotal,
     totals: [
-      ...(inv.shippingChargePaise ? [{ label: 'Shipping Charge', paise: inv.shippingChargePaise }] : []),
-      ...taxRows(inv.lines, split, integrated, stateTax),
+      ...(inv.shippingChargePaise ? [{ label: 'Shipping Charge', paise: cv(inv.shippingChargePaise) }] : []),
+      ...taxRows(lines, split, integrated, stateTax),
       ...(inv.supplyType === 'export_lut' ? [{ label: 'IGST (Nil, under LUT)', paise: 0 }] : []),
-      ...(inv.tcsPaise ? [{ label: 'TCS', paise: inv.tcsPaise }] : []),
-      ...(inv.adjustmentPaise ? [{ label: inv.adjustmentLabel ?? 'Adjustment', paise: inv.adjustmentPaise }] : []),
-      ...(inv.roundOffPaise ? [{ label: 'Round Off', paise: inv.roundOffPaise }] : []),
+      ...(inv.tcsPaise ? [{ label: 'TCS', paise: cv(inv.tcsPaise) }] : []),
+      ...(inv.adjustmentPaise ? [{ label: inv.adjustmentLabel ?? 'Adjustment', paise: cv(inv.adjustmentPaise) }] : []),
+      ...(inv.roundOffPaise ? [{ label: 'Round Off', paise: cv(inv.roundOffPaise) }] : []),
     ],
     totalLabel: 'Total',
-    totalPaise: inv.totalPaise,
-    after: inv.amountPaidPaise > 0 ? [{ label: 'Payment Made', paise: -inv.amountPaidPaise }] : [],
-    balanceRow: { label: 'Balance Due', paise: inv.balancePaise },
-    words: zohoWords(inv.totalPaise),
+    totalPaise,
+    after: paidPaise > 0 ? [{ label: 'Payment Made', paise: -paidPaise }] : [],
+    balanceRow: { label: 'Balance Due', paise: balancePaise },
+    words: fx ? foreignWords(totalPaise, fx.currency) : zohoWords(inv.totalPaise),
     notes: inv.notes,
     terms: inv.terms || inv.voucherType?.terms || null,
     payment: <PaymentDetails inv={inv} />,
-    extra: inv.foreign ? (
-      <div>
-        <p className="text-[#6c6c6c]">Invoice currency</p>
-        <p className="font-medium">{new Intl.NumberFormat('en-IN', { style: 'currency', currency: inv.foreign.currency }).format(inv.foreign.totalPaise / 100)} at ₹{inv.foreign.rate} per {inv.foreign.currency}</p>
+    extra: fx ? (
+      <div data-slot="invoice-inr-total">
+        <p className="text-[#6c6c6c]">Total in Indian Rupees</p>
+        <p className="font-medium">{formatINR(inv.totalPaise)} at ₹{fx.rate} per {fx.currency}</p>
       </div>
     ) : null,
     irn: e.status === 'submitted' && e.irn ? <IrnBlock inv={inv} /> : null,
     qr: e.status === 'submitted' ? e.signedQr ?? null : null,
     signatory: inv.seller.signatoryName,
-    footer: t.footer,
+    footer: tpl.footer,
   };
 }
 
@@ -383,7 +418,7 @@ export function InvoiceDocument({ inv, ribbon, copyLabel = null, last = true }: 
   inv: InvoiceDetail; ribbon?: Ribbon | null; copyLabel?: string | null; last?: boolean;
 }) {
   const t = inv.seller.template ?? DEFAULT_TEMPLATE;
-  return <ZohoSheet model={invoiceModel(inv, copyLabel)} template={t} layout={layoutFor(t, 'invoice', inv.printTemplate)} ribbon={ribbon} last={last} />;
+  return <ZohoSheet model={invoiceModel(inv, copyLabel)} template={t} layout={layoutForInvoice(t, invoiceFormat(inv), inv.printTemplate)} ribbon={ribbon} last={last} />;
 }
 
 function InvoiceSheet({ inv, copyLabel, last }: { inv: InvoiceDetail; copyLabel: string; last: boolean }) {

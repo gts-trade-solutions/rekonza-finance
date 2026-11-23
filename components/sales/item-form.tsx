@@ -13,8 +13,8 @@
 // bar at the foot.
 //
 // What Rekonza keeps that Zoho's form has not (its features, unchanged) comes
-// in Zoho's look in the same places: the HSN/SAC picker over the approved
-// codes (GSTR-1 Table 12 bounces a code not on the master), local or imported,
+// in Zoho's look in the same places: the HSN/SAC picker over the saved codes
+// (any valid code may be typed, checked as Zoho's setting asks), local or imported,
 // MRP and standard cost, the stock group, valuation, a second unit, minimum
 // level, batches and serial numbers, the kit, and the picture.
 //
@@ -39,6 +39,8 @@ import { DocumentForm, FormErrors, FormRow } from '@/components/shared/form-layo
 import { ItemImageField } from '@/components/sales/item-image';
 import { ContactPicker } from '@/components/forms/quick-create';
 import { api, hsnCodes, items, type HsnCodeRow, type ItemRow } from '@/lib/api/client';
+import { checkHsnCode, hsnHeadingLabel, isHsnDigits, type HsnDigits } from '@/lib/tax/hsn';
+import { typedCode, withTypedCode } from '@/lib/options';
 import { useApi, useApiAction } from '@/lib/api/use-api';
 import { useCanSeeCosts, usePermission } from '@/lib/store/hooks';
 import { useAppStore } from '@/lib/store';
@@ -173,7 +175,6 @@ export function ItemForm({ editing, clone }: { editing?: ItemRow | null; clone?:
   const router = useRouter();
   const canSeeCosts = useCanSeeCosts();
   const canEdit = usePermission('sales', 'edit');
-  const canAddCode = usePermission('settings', 'edit');
   const homeState = useAppStore((s) => s.branches.find((b) => b.id === s.activeBranchId)?.stateCode ?? '');
   const accounts = useAppStore((s) => s.accounts);
   const byCode = (code: string) => accounts.find((a) => a.code === code)?.id ?? '';
@@ -249,26 +250,10 @@ export function ItemForm({ editing, clone }: { editing?: ItemRow | null; clone?:
     }
   };
 
-  // A code typed that is not on the approved list yet: its description and rate, to add it.
-  const [newCode, setNewCode] = useState<{ code: string; description: string; gstRatePct: number } | null>(null);
-  const [addingCode, setAddingCode] = useState(false);
-  const addCode = async () => {
-    if (!newCode) return;
-    if (!/^\d{4,8}$/.test(newCode.code)) { toast.error('An HSN or SAC code is 4 to 8 digits.'); return; }
-    if (!newCode.description.trim()) { toast.error('Describe what the code covers, as the GST tariff does.'); return; }
-    setAddingCode(true);
-    try {
-      await hsnCodes.create({ code: newCode.code, description: newCode.description.trim(), gstRatePct: newCode.gstRatePct, uqc: goods ? form.uqc || null : null });
-      await codes.refetch();
-      set({ hsnSac: newCode.code, gstRatePct: newCode.gstRatePct, description: form.description || newCode.description.trim() });
-      toast.success(`${newCode.code} added to the approved codes`, { description: 'Its rate and description are on the item.' });
-      setNewCode(null);
-    } catch (e) {
-      toast.error('The code was not added', { description: e instanceof Error ? e.message : String(e) });
-    } finally {
-      setAddingCode(false);
-    }
-  };
+  // Zoho's Settings → Items: the least digits a code must have (4, 6 or 8).
+  const policies = useApi(() => api.get<{ hsn?: { digits?: number } }>('/api/settings/policies').catch(() => ({ hsn: { digits: 4 } })), []);
+  const hsnDigits: HsnDigits = isHsnDigits(policies.data?.hsn?.digits) ? policies.data.hsn.digits : 4;
+  const hsnCheck = form.hsnSac.trim() ? checkHsnCode(form.hsnSac, { digits: hsnDigits, kind: form.kind }) : null;
 
   /** Goods ↔ service: the HSN goes, and the sales head and unit follow when still on their defaults. */
   const changeKind = (v: 'goods' | 'service') => {
@@ -426,7 +411,7 @@ export function ItemForm({ editing, clone }: { editing?: ItemRow | null; clone?:
             )}
             <FormRow label={goods ? 'HSN Code' : 'SAC'} hint="Fills the GST rate, unit and description" error={field.hsnSac}>
               <Combobox
-                options={codeOptions}
+                options={withTypedCode(codeOptions, form.hsnSac)}
                 value={form.hsnSac}
                 onChange={(v) => {
                   const picked = codes.data?.hsnCodes.find((h) => h.code === v);
@@ -437,37 +422,24 @@ export function ItemForm({ editing, clone }: { editing?: ItemRow | null; clone?:
                     description: form.description.trim() ? form.description : picked?.description ?? '',
                   });
                 }}
-                createLabel={goods ? 'Add this HSN code' : 'Add this SAC code'}
-                onCreate={(q) => setNewCode({ code: q.replace(/\D/g, '').slice(0, 8), description: '', gstRatePct: form.gstRatePct })}
-                placeholder={goods ? 'Type 8 for 8xxx…' : 'Type 99…'}
-                searchPlaceholder="Type the first digits"
+                createLabel={goods ? 'Use this HSN code' : 'Use this SAC code'}
+                onCreate={(q) => { const c = typedCode(q); if (c) set({ hsnSac: c }); }}
+                placeholder={goods ? 'Type the HSN code' : 'Type the SAC (99…)'}
+                searchPlaceholder="Type the code"
                 matchMode="prefix"
                 showAvatar={false}
                 clearable
               />
             </FormRow>
-            {newCode && (
-              <div className="space-y-2 rounded-[var(--radius-button)] border border-primary/40 bg-primary/5 p-3 sm:ml-[180px]" data-slot="new-hsn">
-                <p className="text-[13px] font-medium">{newCode.code || 'This code'} is not on the approved list yet</p>
-                {canAddCode ? (
-                  <>
-                    <div className="grid gap-2 sm:grid-cols-[110px_1fr_100px]">
-                      <Input value={newCode.code} onChange={(e) => setNewCode({ ...newCode, code: e.target.value.replace(/\D/g, '').slice(0, 8) })} placeholder="Code" className="font-mono" aria-label="HSN or SAC code" />
-                      <Input value={newCode.description} onChange={(e) => setNewCode({ ...newCode, description: e.target.value })} placeholder="What it covers, as in the GST tariff" aria-label="Code description" />
-                      <select value={String(newCode.gstRatePct)} onChange={(e) => setNewCode({ ...newCode, gstRatePct: Number(e.target.value) })} aria-label="GST rate of the code" className={selectCls}>
-                        {GST_RATES.map((r) => <option key={r} value={r}>{r}%</option>)}
-                      </select>
-                    </div>
-                    <div className="flex gap-2">
-                      <Button size="sm" onClick={() => void addCode()} disabled={addingCode}>{addingCode ? 'Adding…' : 'Add to approved codes'}</Button>
-                      <Button size="sm" variant="ghost" onClick={() => setNewCode(null)}>Cancel</Button>
-                    </div>
-                    <p className="text-[11px] text-muted-foreground">Check the rate against the GST rate schedule: GSTR-1 is validated against it.</p>
-                  </>
-                ) : (
-                  <p className="text-[12px] text-muted-foreground">Ask an admin to add it under Settings → HSN codes; only approved codes reach the GST return.</p>
-                )}
-              </div>
+            {hsnCheck && (
+              <p
+                className={cn('-mt-1 text-[12px] sm:ml-[180px]', hsnCheck.ok ? 'text-emerald-700' : 'text-destructive')}
+                data-slot={hsnCheck.ok ? 'hsn-valid' : 'hsn-invalid'}
+              >
+                {hsnCheck.ok
+                  ? `Valid ${hsnCheck.kind === 'sac' ? 'SAC' : 'HSN'} · ${hsnHeadingLabel(form.hsnSac) ?? hsnCheck.heading}`
+                  : hsnCheck.problem}
+              </p>
             )}
             <FormRow label="Tax Preference" required>
               <Select value={form.taxPref} onValueChange={(v) => set({ taxPref: v as FormState['taxPref'] })}>

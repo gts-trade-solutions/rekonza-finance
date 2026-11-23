@@ -16,7 +16,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Building2, ChevronDown, ChevronLeft, ChevronRight, CreditCard, Database, Palette, Search, Settings2, ShieldCheck, Users, Wrench, X,
+  Building2, ChevronDown, ChevronLeft, ChevronRight, CreditCard, Database, Package, Palette, Search, Settings2, ShieldCheck, Users, Wrench, X,
   type LucideIcon,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -66,6 +66,13 @@ export const SETTING_SECTIONS: { title: string; groups: SettingGroup[] }[] = [
           { label: 'Taxes', href: '/settings/tax-rates' },
           { label: 'HSN and SAC codes', href: '/settings/hsn-codes' },
           { label: 'Statutory details', tab: 'statutory' },
+        ],
+      },
+      {
+        // Zoho's module settings: Items holds the HSN Code or SAC digits.
+        title: 'Module Settings', icon: Package, tint: 'from-[#e8f3fb] text-[#1673b5]',
+        links: [
+          { label: 'Items', href: '/settings/items' },
         ],
       },
       {

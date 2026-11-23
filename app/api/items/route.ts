@@ -1,3 +1,5 @@
+import { checkHsnCode } from '@/lib/tax/hsn';
+import { getPolicies } from '@/lib/server/services/org-settings';
 import { z } from 'zod';
 import { sql } from 'kysely';
 import { db, transaction } from '@/lib/server/db';
@@ -84,32 +86,17 @@ function checkMaster(m: { uqc?: string | null; altUqc?: string | null; altFactor
 }
 
 /**
- * An HSN/SAC on an item has to be one the organisation has approved, for the
- * same reason it does on an invoice line: GSTR-1 Table 12 is validated against
- * the official master and one bad code bounces the whole return.
- *
- * The kind also has to match. SAC codes begin 99 and describe services; putting
- * one on a goods item files the supply in the wrong table.
+ * An HSN/SAC on an item, as Zoho Books checks it: digits only, a length the
+ * tariff uses, at least the digits the business prints (Settings → Items), and
+ * the right kind: a SAC (99…) on a service, an HSN on goods, so the supply is
+ * filed in the right GSTR-1 table. Any properly formed code is accepted; the
+ * saved list under Settings → HSN and SAC codes only offers suggestions.
  */
 async function checkHsn(orgId: number, hsn: string | null | undefined, kind: 'goods' | 'service' | undefined) {
   if (!hsn) return;
-  const row = await db
-    .selectFrom('hsn_codes')
-    .select(['code', 'kind', 'is_active'])
-    .where('org_id', '=', orgId)
-    .where('code', '=', hsn)
-    .executeTakeFirst();
-  if (!row || !row.is_active) {
-    throw badRequest(
-      `HSN/SAC ${hsn} is not on the approved list. An admin can add it under Settings → HSN & SAC Codes.`,
-    );
-  }
-  if (kind && ((kind === 'service') !== (row.kind === 'sac'))) {
-    throw badRequest(
-      `${hsn} is ${row.kind === 'sac' ? 'a SAC, which describes a service' : 'an HSN, which describes goods'} — ` +
-        `but this item is ${kind}.`,
-    );
-  }
+  const { hsn: setting } = await getPolicies(db, orgId);
+  const check = checkHsnCode(hsn, { digits: setting.digits, kind: kind ?? null });
+  if (!check.ok) throw badRequest(check.problem ?? `${hsn} is not an HSN or SAC.`);
 }
 
 export const POST = route(

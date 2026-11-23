@@ -71,6 +71,32 @@ export const TEMPLATE_DOC_SINGULAR: Record<TemplateDoc, string> = {
 
 export const isTemplateDoc = (v: unknown): v is TemplateDoc => typeof v === 'string' && (TEMPLATE_DOCS as readonly string[]).includes(v);
 
+/**
+ * The three invoices a business prints, each its own format as Zoho Books India
+ * sets them apart: goods (HSN, quantity and unit, triplicate), services (SAC,
+ * duplicate) and exports (the export endorsement, the invoice currency, port
+ * and shipping bill). Each has its own template and its own title.
+ */
+export const INVOICE_FORMATS = ['goods', 'services', 'export'] as const;
+export type InvoiceFormat = (typeof INVOICE_FORMATS)[number];
+
+export const INVOICE_FORMAT_LABEL: Record<InvoiceFormat, string> = {
+  goods: 'Goods Invoice', services: 'Service Invoice', export: 'Export Invoice',
+};
+
+/** What each format is called on paper until the business renames it. */
+export const DEFAULT_FORMAT_TITLE: Record<InvoiceFormat, string> = {
+  goods: 'Tax Invoice', services: 'Tax Invoice', export: 'Export Invoice',
+};
+
+export const isInvoiceFormat = (v: unknown): v is InvoiceFormat => typeof v === 'string' && (INVOICE_FORMATS as readonly string[]).includes(v);
+
+/** Which format an invoice prints in: an export by its supply type, else services or goods by what it sells. */
+export function invoiceFormatOf(supplyType: string, supplyKind: string): InvoiceFormat {
+  if (supplyType === 'export_lut' || supplyType === 'export_with_tax') return 'export';
+  return supplyKind === 'service' ? 'services' : 'goods';
+}
+
 export interface PrintTemplate {
   /** The default for any document without one of its own. */
   layout: TemplateKey;
@@ -83,10 +109,14 @@ export interface PrintTemplate {
   byDoc: Partial<Record<TemplateDoc, TemplateKey>>;
   /** The templates added to each kind's list from the gallery (its default always shows). */
   added: Partial<Record<TemplateDoc, TemplateKey[]>>;
+  /** Each invoice format's own template, where it differs from the one for invoices. */
+  byFormat: Partial<Record<InvoiceFormat, TemplateKey>>;
+  /** Each invoice format's title, where the business renamed it (Zoho's "Document Title"). */
+  titles: Partial<Record<InvoiceFormat, string>>;
 }
 
 export const DEFAULT_TEMPLATE: PrintTemplate = {
-  layout: 'standard', accent: null, showLogo: true, showSignature: true, footer: null, byDoc: {}, added: {},
+  layout: 'standard', accent: null, showLogo: true, showSignature: true, footer: null, byDoc: {}, added: {}, byFormat: {}, titles: {},
 };
 
 /** The layouts before the gallery: the old classic sheet reads best as Standard. */
@@ -111,6 +141,16 @@ export function readTemplate(v: unknown): PrintTemplate {
   }
   // The old default colour was the classic sheet's ink, not a choice anyone made.
   const accent = typeof raw.accent === 'string' && /^#[0-9a-fA-F]{6}$/.test(raw.accent) && raw.accent.toLowerCase() !== '#0f172a' ? raw.accent : null;
+  const byFormat: Partial<Record<InvoiceFormat, TemplateKey>> = {};
+  const titles: Partial<Record<InvoiceFormat, string>> = {};
+  const rawFormat = (raw.byFormat && typeof raw.byFormat === 'object' ? raw.byFormat : {}) as Record<string, unknown>;
+  const rawTitles = (raw.titles && typeof raw.titles === 'object' ? raw.titles : {}) as Record<string, unknown>;
+  for (const f of INVOICE_FORMATS) {
+    const k = keyOf(rawFormat[f]);
+    if (k) byFormat[f] = k;
+    const title = typeof rawTitles[f] === 'string' ? (rawTitles[f] as string).trim().slice(0, 60) : '';
+    if (title && title.toLowerCase() !== DEFAULT_FORMAT_TITLE[f].toLowerCase()) titles[f] = title;
+  }
   return {
     layout: keyOf(raw.layout) ?? DEFAULT_TEMPLATE.layout,
     accent,
@@ -119,6 +159,8 @@ export function readTemplate(v: unknown): PrintTemplate {
     footer: typeof raw.footer === 'string' && raw.footer.trim() ? raw.footer.trim().slice(0, 300) : null,
     byDoc,
     added,
+    byFormat,
+    titles,
   };
 }
 
@@ -126,6 +168,14 @@ export function readTemplate(v: unknown): PrintTemplate {
 export function layoutFor(t: PrintTemplate, doc: TemplateDoc, own?: string | null): TemplateKey {
   return keyOf(own) ?? t.byDoc[doc] ?? t.layout;
 }
+
+/** The template an invoice prints in: its own choice, else its format's, else the one for invoices. */
+export function layoutForInvoice(t: PrintTemplate, format: InvoiceFormat, own?: string | null): TemplateKey {
+  return keyOf(own) ?? t.byFormat[format] ?? layoutFor(t, 'invoice');
+}
+
+/** What an invoice format is called on paper. */
+export const formatTitle = (t: PrintTemplate, format: InvoiceFormat) => t.titles[format] ?? DEFAULT_FORMAT_TITLE[format];
 
 /** The templates a kind lists in settings: its default first, then those added. */
 export function templatesOf(t: PrintTemplate, doc: TemplateDoc): TemplateKey[] {

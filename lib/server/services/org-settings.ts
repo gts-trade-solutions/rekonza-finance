@@ -1,4 +1,5 @@
 import 'server-only';
+import { isHsnDigits, type HsnDigits } from '../../tax/hsn';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // A book's own policies.
@@ -92,6 +93,12 @@ export interface OrgPolicies {
    * the stock already on hand into the ledger when it switches.
    */
   stockAccounting: { method: 'periodic' | 'perpetual'; from: string | null };
+  /**
+   * HSN and SAC, as Zoho's Settings → Items asks: the least digits every code
+   * on an item or invoice must have (4 up to ₹5 crore turnover, 6 above; 8 may
+   * always be given). Any properly formed code of that length is accepted.
+   */
+  hsn: { digits: HsnDigits };
 }
 
 export const DEFAULT_CONTROLS: OrgPolicies['controls'] = {
@@ -124,6 +131,7 @@ export const DEFAULT_POLICIES: OrgPolicies = {
   controls: DEFAULT_CONTROLS,
   password: { minLength: 8, expiryDays: 0, history: 0 },
   stockAccounting: { method: 'periodic', from: null },
+  hsn: { digits: 4 },
 };
 
 // The driver hands JSON columns back already parsed, so a stored "block" arrives
@@ -136,7 +144,7 @@ function parsed(value: unknown): unknown {
 const SCOPE = 'policy';
 // stockAccounting is not here: switching it posts stock into the ledger, so only
 // services/stock-ledger.ts writes it.
-const KEYS = ['features', 'creditLimit', 'negativeStock', 'cashLimits', 'sessionIdleMinutes', 'requireMfa', 'msmeBankRatePct', 'overdueInterestPct', 'overdueGraceDays', 'stockValuation', 'signIn', 'reminders', 'recovery', 'controls', 'password'] as const;
+const KEYS = ['features', 'creditLimit', 'negativeStock', 'cashLimits', 'sessionIdleMinutes', 'requireMfa', 'msmeBankRatePct', 'overdueInterestPct', 'overdueGraceDays', 'stockValuation', 'signIn', 'reminders', 'recovery', 'controls', 'password', 'hsn'] as const;
 const ENFORCEMENTS = ['off', 'warn', 'block'];
 
 export async function getPolicies(ex: Executor, orgId: number): Promise<OrgPolicies> {
@@ -162,6 +170,11 @@ export async function getPolicies(ex: Executor, orgId: number): Promise<OrgPolic
       case 'controls': out.controls = { ...out.controls, ...(v as Partial<OrgPolicies['controls']>) }; break;
       case 'password': out.password = { ...out.password, ...(v as Partial<OrgPolicies['password']>) }; break;
       case 'stockAccounting': out.stockAccounting = { ...out.stockAccounting, ...(v as Partial<OrgPolicies['stockAccounting']>) }; break;
+      case 'hsn': {
+        const d = Number((v as { digits?: unknown } | null)?.digits);
+        if (isHsnDigits(d)) out.hsn = { digits: d };
+        break;
+      }
     }
   }
   return out;
@@ -219,6 +232,11 @@ export async function setPolicies(trx: Trx, orgId: number, userId: number | null
           .where('org_id', '=', orgId).where('password_changed_at', 'is', null).execute();
       }
       value = p;
+    }
+    if (key === 'hsn') {
+      const d = Number((patch.hsn as { digits?: unknown } | undefined)?.digits);
+      if (!isHsnDigits(d)) throw badRequest('HSN codes are printed with 4, 6 or 8 digits.');
+      value = { digits: d };
     }
     if (key === 'sessionIdleMinutes') {
       const n = Number(value);

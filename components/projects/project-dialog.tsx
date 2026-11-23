@@ -117,7 +117,7 @@ export function ProjectDialog({
               {f.billingMethod === 'task_hours' ? 'Each task below carries its own rate.' : 'Each person below carries their own rate.'}
             </p>
           )}
-          <Field label="SAC code" hint="Must be on your approved list (Settings → HSN & SAC)">
+          <Field label="SAC code" hint="A six-digit SAC beginning 99, such as 998311">
             <Input value={f.sacCode} onChange={(e) => setF({ ...f, sacCode: e.target.value.replace(/\D/g, '').slice(0, 8) })} placeholder="998311" />
           </Field>
           <Field label="GST rate">

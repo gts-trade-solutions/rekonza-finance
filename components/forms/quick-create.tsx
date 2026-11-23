@@ -39,7 +39,7 @@ import { Field, MoneyInput } from '@/components/shared/form-bits';
 import { contacts as contactsApi, items as itemsApi } from '@/lib/api/client';
 import { useApiAction } from '@/lib/api/use-api';
 import { useAppStore } from '@/lib/store';
-import { stateOptions } from '@/lib/options';
+import { stateOptions, typedCode, withTypedCode } from '@/lib/options';
 import { GST_RATES, isValidGstin, stateName } from '@/lib/tax/gst';
 import { TDS_SECTIONS } from '@/lib/tax/tds';
 import type { Contact, GstTreatment, Item, TaxPref } from '@/lib/types';
@@ -553,23 +553,20 @@ export function QuickItemDialog({
           <div className="grid gap-4 sm:grid-cols-2">
             <Field
               label={kind === 'service' ? 'SAC code' : 'HSN code'}
-              hint={
-                codeOptions.length === 0
-                  ? 'None approved yet — an admin adds them under Settings → HSN & SAC Codes'
-                  : 'Sets the GST rate'
-              }
+              hint={codeOptions.length === 0 ? 'Type the code: any HSN or SAC is accepted' : 'A saved code sets the GST rate'}
             >
               <Combobox
-                options={codeOptions}
+                options={withTypedCode(codeOptions, hsnSac)}
                 value={hsnSac}
                 onChange={pickCode}
-                placeholder={codeOptions.length ? 'Select a code' : 'No approved codes'}
-                searchPlaceholder="Type the first digits"
-                emptyMessage="Not on the approved list. Ask an admin to add it."
+                placeholder="Type or pick a code"
+                searchPlaceholder="Type the code"
+                emptyMessage="Not in your saved codes. Use it as typed below."
+                createLabel="Use this code"
+                onCreate={(q) => { const c = typedCode(q); if (c) pickCode(c); }}
                 matchMode="prefix"
                 showAvatar={false}
                 clearable
-                disabled={codeOptions.length === 0}
               />
             </Field>
             <Field label="GST rate" required>

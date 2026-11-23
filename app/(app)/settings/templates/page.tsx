@@ -26,8 +26,9 @@ import { useApi } from '@/lib/api/use-api';
 import { usePermission } from '@/lib/store/hooks';
 import { cn } from '@/lib/utils';
 import {
-  accentOf, isTemplateDoc, layoutFor, templateInfo, templatesOf, TEMPLATE_DOC_LABEL, TEMPLATE_DOC_SINGULAR, TEMPLATE_DOCS,
-  type PrintTemplate, type TemplateDoc, type TemplateKey,
+  accentOf, DEFAULT_FORMAT_TITLE, formatTitle, INVOICE_FORMAT_LABEL, INVOICE_FORMATS, isInvoiceFormat, isTemplateDoc,
+  layoutFor, layoutForInvoice, templateInfo, templatesOf, TEMPLATE_DOC_LABEL, TEMPLATE_DOC_SINGULAR, TEMPLATE_DOCS,
+  type InvoiceFormat, type PrintTemplate, type TemplateDoc, type TemplateKey,
 } from '@/lib/print-template';
 
 export default function PdfTemplatesPage() {
@@ -39,26 +40,32 @@ function Templates() {
   const params = useSearchParams();
   const want = params.get('doc');
   const doc: TemplateDoc = isTemplateDoc(want) ? want : 'invoice';
+  const wantFormat = params.get('format');
+  const format: InvoiceFormat = isInvoiceFormat(wantFormat) ? wantFormat : 'goods';
   return (
     <div className="-m-4 flex min-h-[calc(100vh-56px)] bg-surface sm:-m-6" data-slot="pdf-templates">
       <SettingsNav href="/settings/templates" />
       <AsyncPage state={state} loading={<div className="flex-1 p-6"><LoadingRows rows={6} /></div>}>
-        {(data) => <Body data={data} doc={doc} onSaved={() => void state.refetch()} />}
+        {(data) => <Body data={data} doc={doc} format={format} onSaved={() => void state.refetch()} />}
       </AsyncPage>
     </div>
   );
 }
 
-function Body({ data, doc, onSaved }: { data: PdfTemplateSettings; doc: TemplateDoc; onSaved: () => void }) {
+function Body({ data, doc, format, onSaved }: { data: PdfTemplateSettings; doc: TemplateDoc; format: InvoiceFormat; onSaved: () => void }) {
   const router = useRouter();
   const canEdit = usePermission('settings', 'edit');
   const [t, setT] = useState<PrintTemplate>(data.template);
   const [query, setQuery] = useState('');
   const [gallery, setGallery] = useState(false);
   const [editing, setEditing] = useState<TemplateKey | null>(null);
-  const model = useMemo(() => sampleModel(data.business, doc), [data.business, doc]);
-  const list = templatesOf(t, doc).filter((k) => templateInfo(k).name.toLowerCase().includes(query.trim().toLowerCase()));
-  const def = layoutFor(t, doc);
+  // Invoices come in three formats (goods, services, export), each with its own default template and title.
+  const invoice = doc === 'invoice';
+  const title = invoice ? formatTitle(t, format) : null;
+  const model = useMemo(() => sampleModel(data.business, doc, invoice ? format : undefined, title ?? undefined), [data.business, doc, invoice, format, title]);
+  const def = invoice ? layoutForInvoice(t, format) : layoutFor(t, doc);
+  const all = invoice ? [...new Set([def, ...templatesOf(t, doc)])] : templatesOf(t, doc);
+  const list = all.filter((k) => templateInfo(k).name.toLowerCase().includes(query.trim().toLowerCase()));
 
   const save = async (next: PrintTemplate, done: string) => {
     const before = t;
@@ -74,10 +81,20 @@ function Body({ data, doc, onSaved }: { data: PdfTemplateSettings; doc: Template
     }
   };
   const setDefault = (key: TemplateKey) => {
-    const byDoc = { ...t.byDoc, [doc]: key };
     // The old default stays in the list, as in Zoho.
     const added = { ...t.added, [doc]: [...new Set([...(t.added[doc] ?? []), def, key])] };
+    if (invoice) {
+      return save({ ...t, byFormat: { ...t.byFormat, [format]: key }, added }, `${templateInfo(key).name} is now the default for the ${INVOICE_FORMAT_LABEL[format].toLowerCase()}`);
+    }
+    const byDoc = { ...t.byDoc, [doc]: key };
     return save({ ...t, byDoc, added }, `${templateInfo(key).name} is now the default for ${TEMPLATE_DOC_LABEL[doc].toLowerCase()}`);
+  };
+  const saveTitle = (text: string) => {
+    const clean = text.trim();
+    const titles = { ...t.titles };
+    if (!clean || clean.toLowerCase() === DEFAULT_FORMAT_TITLE[format].toLowerCase()) delete titles[format];
+    else titles[format] = clean;
+    return save({ ...t, titles }, `The ${INVOICE_FORMAT_LABEL[format].toLowerCase()} is now titled "${clean || DEFAULT_FORMAT_TITLE[format]}"`);
   };
   const use = async (key: TemplateKey) => {
     setGallery(false);
@@ -110,6 +127,22 @@ function Body({ data, doc, onSaved }: { data: PdfTemplateSettings; doc: Template
             </Button>
           )}
         </div>
+        {invoice && (
+          <div className="border-b px-6" data-slot="invoice-formats">
+            <div className="flex gap-6 text-[13.5px]" role="tablist" aria-label="Invoice format">
+              {INVOICE_FORMATS.map((f) => (
+                <Link key={f} href={`/settings/templates?doc=invoice&format=${f}`} replace role="tab" aria-selected={f === format}
+                  className={cn('-mb-px border-b-2 py-3', f === format ? 'border-primary font-semibold text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground')}
+                  data-slot={`invoice-format-${f}`}>
+                  {INVOICE_FORMAT_LABEL[f]}
+                </Link>
+              ))}
+            </div>
+          </div>
+        )}
+        {invoice && (
+          <FormatTitle key={format} format={format} title={title ?? ''} canEdit={canEdit} onSave={saveTitle} />
+        )}
         <div className="flex flex-wrap items-center gap-3 border-b px-6 py-3">
           <div className="relative w-64">
             <Search className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
@@ -160,7 +193,7 @@ function Body({ data, doc, onSaved }: { data: PdfTemplateSettings; doc: Template
         </div>
       </div>
 
-      <TemplateGallery open={gallery} onOpenChange={setGallery} model={model} template={t} current={templatesOf(t, doc)} onUse={(k) => void use(k)} />
+      <TemplateGallery open={gallery} onOpenChange={setGallery} model={model} template={t} current={all} onUse={(k) => void use(k)} />
 
       {editing && (
         <Customize
@@ -170,6 +203,32 @@ function Body({ data, doc, onSaved }: { data: PdfTemplateSettings; doc: Template
         />
       )}
     </>
+  );
+}
+
+/** Which invoices print in a format, and the title they carry (Zoho's "Document Title"). */
+function FormatTitle({ format, title, canEdit, onSave }: { format: InvoiceFormat; title: string; canEdit: boolean; onSave: (t: string) => Promise<void> }) {
+  const [text, setText] = useState(title);
+  const [busy, setBusy] = useState(false);
+  const WHO: Record<InvoiceFormat, string> = {
+    goods: 'Invoices for goods print in this format: the HSN column, quantities with their unit, and three copies (recipient, transporter, supplier).',
+    services: 'Invoices for services print in this format: the SAC column, quantities without a unit, and two copies (recipient, supplier).',
+    export: 'Exports print in this format: the LUT or IGST endorsement, the invoice currency, the country, port code and shipping bill.',
+  };
+  return (
+    <div className="flex flex-wrap items-end gap-4 border-b bg-surface px-6 py-3" data-slot="invoice-format-title">
+      <p className="min-w-[260px] flex-1 text-[12.5px] text-muted-foreground">{WHO[format]}</p>
+      <label className="space-y-1">
+        <span className="block text-[12px] font-medium">Document Title</span>
+        <Input value={text} maxLength={60} disabled={!canEdit} onChange={(e) => setText(e.target.value)} className="h-8 w-56 text-[13px]" data-slot="format-title-input" />
+      </label>
+      {canEdit && (
+        <Button size="sm" variant="outline" disabled={busy || text.trim() === title}
+          onClick={async () => { setBusy(true); try { await onSave(text); } finally { setBusy(false); } }} data-slot="format-title-save">
+          Save title
+        </Button>
+      )}
+    </div>
   );
 }
 
