@@ -74,6 +74,18 @@ const DIALOGS = [
   { list: '/api/contacts?kind=vendor', detail: `/api/contacts/[id]/statement?side=vendor&from=${new Date().toISOString().slice(0, 8)}01&to=${new Date().toISOString().slice(0, 10)}&filter=outstanding` },
   { list: '/api/contacts?kind=vendor', detail: '/api/files?targetType=contact&targetId=[id]' },
   { list: '/api/contacts?kind=vendor', detail: '/api/portal-access?contactId=[id]&side=vendor' },
+  // Banking: a bank line's panel — Match Transactions (best and possible
+  // matches), Categorize Manually, and what a matched line is matched to.
+  { list: '/api/banking/transactions?status=all&limit=500', detail: '/api/banking/transactions/[id]' },
+  // Edit, from a row's ⋯ or a record's toolbar: each document as saved, which the edit window opens with.
+  ...(['estimate', 'sales-order', 'challan', 'credit-note'] as const).map((k) => ({ list: `/api/sales-documents?kind=${k}`, detail: `/api/sales-documents/${k}/[id]` })),
+  { list: '/api/expenses?limit=500', detail: '/api/expenses/[id]' },
+];
+
+/** Edit screens reached by an address with ?edit=: each payment's, opened as its Edit button opens it. */
+const EDIT_PAGES = [
+  { api: '/api/payments?kind=received&limit=500', screen: '/sales/payments/new?edit=[id]' },
+  { api: '/api/payments?kind=made&limit=500', screen: '/purchases/payments/new?edit=[id]' },
 ];
 
 /**
@@ -255,6 +267,16 @@ async function main() {
     const body = res.ok() ? await res.json() : null;
     const rows = Array.isArray(body) ? body : (Object.values(body ?? {}).find(Array.isArray) as { id: string }[] | undefined);
     for (const row of rows ?? []) enqueue(screen.replace('[id]', String(row.id)));
+  }
+  // A payment's edit screen asks for its customer's or vendor's open documents too: visit each.
+  for (const { api, screen } of EDIT_PAGES) {
+    const res = await page.request.get(BASE + api);
+    const body = res.ok() ? await res.json() : null;
+    const rows = Array.isArray(body) ? body : (Object.values(body ?? {}).find(Array.isArray) as { id: string }[] | undefined);
+    for (const row of (rows ?? []).slice(0, PER_KIND)) {
+      const p = screen.replace('[id]', String(row.id));
+      if (!queued.has(p)) { queued.add(p); queue.push(p); }
+    }
   }
   const started = Date.now();
   for (let i = 0; i < queue.length; i++) {

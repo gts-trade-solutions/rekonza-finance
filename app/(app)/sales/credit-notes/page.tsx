@@ -242,7 +242,8 @@ export default function CreditNotesPage() {
                   </Field>
                   <Field label="Reason" required hint="Reported in GSTR-1 — it is not optional">
                     <Combobox
-                      options={REASONS.map((r) => ({ value: r, label: r }))}
+                      // A reason typed in the customer's own words, when editing, is shown as saved, not as blank.
+                      options={[...new Set([...REASONS, reason].filter(Boolean))].map((r) => ({ value: r, label: r }))}
                       value={reason}
                       onChange={setReason}
                       showAvatar={false}
