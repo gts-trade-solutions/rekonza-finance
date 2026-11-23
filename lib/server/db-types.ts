@@ -389,6 +389,20 @@ export interface BankStatementImports {
   rows_total: Generated<number>;
 }
 
+export interface BankTransactionLinks {
+  amount: Generated<Decimal>;
+  bank_transaction_id: number;
+  category: string | null;
+  created_at: Generated<Date>;
+  created_by_match: Generated<number>;
+  created_by_user_id: number | null;
+  id: Generated<number>;
+  org_id: number;
+  refunded_payment_id: number | null;
+  target_id: number;
+  target_type: string;
+}
+
 export interface BankTransactions {
   applied_rule_id: number | null;
   bank_account_id: number;
@@ -3403,6 +3417,7 @@ export interface DB {
   bank_accounts: BankAccounts;
   bank_rules: BankRules;
   bank_statement_imports: BankStatementImports;
+  bank_transaction_links: BankTransactionLinks;
   bank_transactions: BankTransactions;
   bank_transfers: BankTransfers;
   batches: Batches;

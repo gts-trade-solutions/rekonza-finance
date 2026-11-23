@@ -385,7 +385,8 @@ export default function BankingPage() {
                   <Card className="overflow-hidden p-0">
                     <div className="divide-y">
                       {(unmatched.data?.transactions ?? []).map((t) => (
-                        <div key={t.id} className="flex items-center gap-4 p-3.5">
+                        // Opens the line in Zoho's match and categorize panel.
+                        <Link key={t.id} href={`/banking/reconcile?account=${t.bankAccountId}&line=${t.id}`} className="flex items-center gap-4 p-3.5 hover:bg-accent/40" data-slot="waiting-line">
                           <div className="min-w-0 flex-1">
                             <p className="truncate text-sm">{t.narration}</p>
                             <p className="text-xs text-muted-foreground">
@@ -397,7 +398,7 @@ export default function BankingPage() {
                             value={t.depositPaise || t.withdrawalPaise}
                             className={t.depositPaise ? 'text-emerald-600 dark:text-emerald-400' : ''}
                           />
-                        </div>
+                        </Link>
                       ))}
                     </div>
                   </Card>

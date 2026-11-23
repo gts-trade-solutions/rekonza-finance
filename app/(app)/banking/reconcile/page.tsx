@@ -1,6 +1,9 @@
 'use client';
 
-// Reconciliation: statement lines on the left, what to do with each on the right.
+// Reconciliation, as Zoho Books' banking does it: statement lines on the left,
+// and on the right Zoho's panel for the line picked — Match Transactions (Best
+// Matches, Possible Matches, a search, several at once) and Categorize
+// Manually by Zoho's categories (components/banking/bank-line-panel.tsx).
 //
 // The statement is the bank's version of events and the ledger is ours. The job
 // is finding where the two disagree, which is why a line stays outside the
@@ -17,17 +20,17 @@
 
 import { Suspense, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { ArrowDownLeft, ArrowUpRight, Check, Link2, Loader2, Undo2 } from 'lucide-react';
+import { ArrowDownLeft, ArrowUpRight, Check, Sparkles } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Combobox } from '@/components/ui/combobox';
+import { BankLinePanel, MatchedLinePanel } from '@/components/banking/bank-line-panel';
 import { PageHeader } from '@/components/shared/page-header';
 import { Money } from '@/components/shared/money';
 import { EmptyState } from '@/components/shared/empty-state';
 import { AsyncPage, LoadingRows, Refreshing } from '@/components/shared/async-state';
-import { Field } from '@/components/shared/form-bits';
 import { api } from '@/lib/api/client';
 import { useApi, useApiAction } from '@/lib/api/use-api';
 import { cn } from '@/lib/utils';
@@ -46,7 +49,10 @@ interface TxnRow {
   bankName: string;
 }
 
+/** A confident match in the books (lib/bank-match-score.ts). */
 interface Suggestion {
+  key: string;
+  type: string;
   id: string;
   number: string;
   date: string;
@@ -59,15 +65,9 @@ interface TxnResponse {
   summary: { count: number; unmatched: number; depositsPaise: number; withdrawalsPaise: number };
 }
 
-/** Accounts whose balance must come from documents, never a free-hand entry. */
-const CONTROL_ACCOUNTS = new Set([
-  '1100', // Accounts Receivable — the sum of unpaid invoices
-  '2100', // Accounts Payable — the sum of unpaid bills
-]);
-
 interface Masters {
   accounts: { id: string; code: string; name: string; type: string }[];
-  bankAccounts: { id: string; name: string }[];
+  bankAccounts: { id: string; name: string; kind?: string }[];
   contacts: { id: string; kind: string; displayName: string }[];
 }
 
@@ -75,9 +75,8 @@ function ReconcileInner() {
   const params = useSearchParams();
   const [accountId, setAccountId] = useState(params.get('account') ?? '');
   const [tab, setTab] = useState<'unmatched' | 'matched'>('unmatched');
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [categoryId, setCategoryId] = useState('');
-  const [contactId, setContactId] = useState('');
+  // A line can be opened straight from a link (the banking overview's list).
+  const [selectedId, setSelectedId] = useState<string | null>(params.get('line'));
 
   const masters = useApi<Masters>(() => api.get('/api/masters'), []);
 
@@ -103,64 +102,11 @@ function ReconcileInner() {
     [masters.data],
   );
 
-  const categoryOptions = useMemo(
-    () =>
-      (masters.data?.accounts ?? [])
-        .filter((a) => ['expense', 'income', 'asset', 'liability'].includes(a.type))
-        // Control accounts are excluded. Receivables and payables are the sum
-        // of the invoices and bills behind them, so posting to one directly
-        // makes the ageing stop agreeing with it — and the ageing is what
-        // anybody actually chases. Money moving there belongs on a document.
-        .filter((a) => !CONTROL_ACCOUNTS.has(a.code))
-        .map((a) => ({ value: a.id, label: a.name, sublabel: `${a.code} · ${a.type}` })),
-    [masters.data],
-  );
-
-  const contactOptions = useMemo(
-    () => (masters.data?.contacts ?? []).map((c) => ({ value: c.id, label: c.displayName })),
-    [masters.data],
-  );
-
   const selected = state.data?.transactions.find((t) => t.id === selectedId) ?? null;
-  const suggestions = selectedId ? (state.data?.suggestions[selectedId] ?? []) : [];
 
   const refresh = async () => {
     setSelectedId(null);
-    setCategoryId('');
-    setContactId('');
     await state.refetch();
-  };
-
-  const matchToPayment = async (paymentId: string, number: string) => {
-    if (!selected) return;
-    const ok = await act.run({ action: 'match', transactionId: selected.id, paymentId });
-    if (!ok) return toast.error(act.error ?? 'Could not match that line.');
-    toast.success(`Matched to ${number}`, {
-      description: 'Nothing new was posted — that payment was already in the books.',
-    });
-    await refresh();
-  };
-
-  const categorise = async () => {
-    if (!selected || !categoryId) return;
-    const ok = await act.run({
-      action: 'categorise',
-      transactionId: selected.id,
-      accountId: categoryId,
-      contactId: contactId || undefined,
-    });
-    if (!ok) return toast.error(act.error ?? 'Could not categorise that line.');
-    toast.success('Line categorised', { description: 'A balanced entry has been posted.' });
-    await refresh();
-  };
-
-  const unmatch = async (txnId: string) => {
-    const ok = await act.run({ action: 'unmatch', transactionId: txnId });
-    if (!ok) return toast.error(act.error ?? 'Could not unmatch that line.');
-    toast.info('Line unmatched', {
-      description: 'Any entry it posted has been reversed, not deleted.',
-    });
-    await refresh();
   };
 
   return (
@@ -207,11 +153,11 @@ function ReconcileInner() {
             data-tab={t}
             onClick={() => { setTab(t); setSelectedId(null); }}
             className={cn(
-              '-mb-px border-b-2 px-3 py-2 text-[13px] capitalize transition-colors',
+              '-mb-px border-b-2 px-3 py-2 text-[13px] transition-colors',
               tab === t ? 'border-primary font-medium text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground',
             )}
           >
-            {t}
+            {t === 'unmatched' ? 'Uncategorized' : 'Categorized'}
             {t === 'unmatched' && state.data ? (
               <span className="ml-1.5 tabular text-xs text-muted-foreground">
                 {state.data.summary.unmatched}
@@ -272,13 +218,15 @@ function ReconcileInner() {
                           </p>
                         </div>
                         {hint > 0 && tab === 'unmatched' && (
-                          <Badge variant="outline" className="shrink-0 gap-1 text-[9px]">
-                            <Link2 className="size-2.5" /> {hint} match{hint === 1 ? '' : 'es'}
+                          // Zoho's "match found" on the row: the panel offers it under Best Matches.
+                          <Badge variant="outline" className="shrink-0 gap-1 border-emerald-500/40 text-[10px] text-emerald-700 dark:text-emerald-300" data-slot="match-found">
+                            <Sparkles className="size-2.5" /> {hint === 1 ? 'Match found' : `${hint} matches found`}
                           </Badge>
                         )}
                         {tab === 'matched' && (
                           <Badge variant="secondary" className="shrink-0 text-[9px]">
-                            {t.matchedType === 'payment' ? 'Payment' : 'Categorised'}
+                            {t.matchedType === 'payment' ? 'Payment' : t.matchedType === 'multiple' ? 'Several' : t.matchedType === 'expense' ? 'Expense'
+                              : t.matchedType === 'transfer' ? 'Transfer' : 'Categorized'}
                           </Badge>
                         )}
                         <Money
@@ -291,124 +239,18 @@ function ReconcileInner() {
                 </div>
               </Card>
 
-              {/* ── What to do with it ──────────────────────────────────── */}
-              <div className="space-y-4">
+              {/* ── What to do with it: Zoho's panel ────────────────────── */}
+              <div className="space-y-4 lg:sticky lg:top-4 lg:self-start">
                 {!selected ? (
                   <Card className="p-6 text-center text-sm text-muted-foreground">
-                    Pick a line on the left to match or categorise it.
+                    Pick a line on the left to match or categorize it.
                   </Card>
-                ) : tab === 'matched' ? (
-                  <Card className="space-y-3 p-5">
-                    <p className="text-sm font-medium">{selected.narration}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {selected.matchedType === 'payment'
-                        ? 'Matched to a payment already in the books. Nothing was posted for the match itself.'
-                        : 'Categorised, which posted a journal entry.'}
-                    </p>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={act.busy}
-                      onClick={() => unmatch(selected.id)}
-                      className="gap-1.5"
-                    >
-                      {act.busy ? <Loader2 className="size-3.5 animate-spin" /> : <Undo2 className="size-3.5" />}
-                      Unmatch
-                    </Button>
-                  </Card>
+                ) : tab === 'matched' || selected.status === 'matched' ? (
+                  <MatchedLinePanel key={selected.id} lineId={selected.id} onDone={refresh} />
+                ) : masters.data ? (
+                  <BankLinePanel key={selected.id} lineId={selected.id} masters={masters.data} onDone={refresh} />
                 ) : (
-                  <>
-                    <Card className="p-5">
-                      <p className="micro-label">Selected line</p>
-                      <p className="mt-1 text-sm font-medium">{selected.narration}</p>
-                      <div className="mt-2 flex items-baseline gap-2">
-                        <Money
-                          value={selected.depositPaise || selected.withdrawalPaise}
-                          className="text-lg font-semibold"
-                        />
-                        <span className="text-xs text-muted-foreground">
-                          {selected.depositPaise ? 'received' : 'paid out'} on{' '}
-                          {new Date(selected.date).toLocaleDateString('en-IN', {
-                            day: 'numeric', month: 'short', year: 'numeric',
-                          })}
-                        </span>
-                      </div>
-                    </Card>
-
-                    {suggestions.length > 0 && (
-                      <Card className="p-5">
-                        <p className="micro-label">Already in the books</p>
-                        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                          Same amount, same account, within a week. Matching one of these posts nothing —
-                          the payment posted when it was recorded.
-                        </p>
-                        <div className="mt-3 space-y-2">
-                          {suggestions.map((sg) => (
-                            <div
-                              key={sg.id}
-                              className="flex items-center gap-3 rounded-[3px] border p-2.5"
-                            >
-                              <div className="min-w-0 flex-1">
-                                <p className="text-sm font-medium">{sg.number}</p>
-                                <p className="text-xs text-muted-foreground">
-                                  {new Date(sg.date).toLocaleDateString('en-IN', {
-                                    day: 'numeric', month: 'short', year: 'numeric',
-                                  })}
-                                </p>
-                              </div>
-                              <Money value={sg.amountPaise} className="text-sm" />
-                              <Button
-                                size="xs"
-                                disabled={act.busy}
-                                onClick={() => matchToPayment(sg.id, sg.number)}
-                              >
-                                Match
-                              </Button>
-                            </div>
-                          ))}
-                        </div>
-                      </Card>
-                    )}
-
-                    <Card className="space-y-4 p-5">
-                      <div>
-                        <p className="micro-label">Or categorise it</p>
-                        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                          For money that moved with no document behind it — a bank charge, a direct debit.
-                          This posts a new entry.
-                        </p>
-                      </div>
-                      <Field label="Account" required>
-                        <Combobox
-                          options={categoryOptions}
-                          value={categoryId}
-                          onChange={setCategoryId}
-                          placeholder="Select an account"
-                          searchPlaceholder="Search by name or code"
-                          showAvatar={false}
-                        />
-                      </Field>
-                      <Field label="Contact" hint="Optional — links the entry to a customer or vendor">
-                        <Combobox
-                          options={contactOptions}
-                          value={contactId}
-                          onChange={setContactId}
-                          placeholder="None"
-                          searchPlaceholder="Search contacts"
-                          clearable
-                        />
-                      </Field>
-                      {act.error && <p className="text-sm text-destructive">{act.error}</p>}
-                      <Button
-                        onClick={categorise}
-                        disabled={!categoryId || act.busy}
-                        className="w-full gap-1.5"
-                      >
-                        {act.busy ? <Loader2 className="size-3.5 animate-spin" /> : <Check className="size-3.5" />}
-                        Categorise and post
-                      </Button>
-                    </Card>
-                  </>
+                  <Card className="p-6"><LoadingRows rows={4} /></Card>
                 )}
               </div>
             </div>

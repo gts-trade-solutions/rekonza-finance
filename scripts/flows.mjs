@@ -160,20 +160,27 @@ await page.waitForSelector('[data-slot="bank-line"]', { timeout: 25000 });
 const beforeLines = await page.locator('[data-slot="bank-line"]').count();
 
 await page.locator('[data-slot="bank-line"]').first().click();
+await page.waitForSelector('[data-slot="bank-line-panel"]', { timeout: 25000 });
 await page.waitForTimeout(900);
 
-// Post the other side to a real expense account. Control accounts are
-// deliberately not on offer — see the note in the reconcile page.
-await page.locator('[data-slot="combobox-trigger"]').nth(1).click();
+// Zoho's Categorize Manually: Other Income for money in, Expense for money out,
+// each starting on its account. Control accounts are never on offer: money
+// reaches receivables and payables through Customer and Vendor Payment.
+await page.locator('[data-slot="bank-panel-tab"][data-tab="categorize"]').click();
+await page.waitForTimeout(400);
+const cats = await page.locator('[data-slot="category-picker"] option').evaluateAll((os) => os.map((o) => o.value));
+await page.locator('[data-slot="category-picker"]').selectOption(cats.includes('other_income') ? 'other_income' : 'expense');
+await page.waitForTimeout(400);
+await page.locator('[data-slot="categorize-form"] [data-slot="combobox-trigger"]').last().click();
 await page.waitForTimeout(500);
 const offered = await page.locator('[role="option"]').allInnerTexts();
 check('Reconcile offers accounts to categorise against', offered.length > 0);
 check('Control accounts are not offered',
   !offered.some((t) => /Accounts Receivable|Accounts Payable/.test(t)));
-await page.locator('[role="option"]', { hasText: /Bank Fees|Office Supplies|Fuel/ }).first().click();
+await page.locator('[role="option"]').first().click();
 await page.waitForTimeout(400);
 
-await page.getByRole('button', { name: /Categorise and post/i }).click();
+await page.locator('[data-slot="categorize-save"]').click();
 await page.waitForTimeout(2000);
 
 const afterLines = await page.locator('[data-slot="bank-line"]').count();
@@ -763,18 +770,20 @@ check('Reconcile lists unmatched statement lines', bankLines > 0, `${bankLines} 
 // Section headings use micro-label, which uppercases in CSS — innerText honours
 // text-transform, so these have to be matched case-insensitively.
 await page.locator('[data-slot="bank-line"]').first().click();
+await page.waitForSelector('[data-slot="bank-line-panel"]', { timeout: 25000 });
 await page.waitForTimeout(900);
 const panel = await page.locator('main').innerText();
-check('Selecting a line opens the action panel', /selected line/i.test(panel));
-check('The panel offers categorising with a posting', /categorise and post/i.test(panel));
+check('Selecting a line opens the action panel', /Match Transactions/.test(panel));
+check('The panel offers categorising with a posting', /Categorize Manually/.test(panel));
 
-// A line the books already explain should offer the match instead.
-const withMatch = page.locator('[data-slot="bank-line"]').filter({ hasText: /match/i }).first();
+// A line the books already explain should offer the match instead (Zoho's Best Matches).
+const withMatch = page.locator('[data-slot="bank-line"]').filter({ has: page.locator('[data-slot="match-found"]') }).first();
 if (await withMatch.count()) {
   await withMatch.click();
+  await page.waitForSelector('[data-slot="bank-line-panel"]', { timeout: 25000 });
   await page.waitForTimeout(900);
   const matchPanel = await page.locator('main').innerText();
-  check('A line matching an existing payment offers it', /already in the books/i.test(matchPanel));
+  check('A line matching an existing payment offers it', /Best Matches/i.test(matchPanel));
 } else {
   check('A line matching an existing payment offers it', true, 'none in this dataset');
 }
