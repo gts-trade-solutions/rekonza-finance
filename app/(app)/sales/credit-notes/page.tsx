@@ -76,22 +76,57 @@ export default function CreditNotesPage() {
 
   const create = useApiAction(salesDocuments.create);
   const [voucherTypeId, setVoucherTypeId] = useState('');
+  // Zoho's Edit: the same dialog, filled in, saved back over the credit note.
+  const [editing, setEditing] = useState<{ id: string; number: string; date: string } | null>(null);
+  const [savingEdit, setSavingEdit] = useState(false);
+  const startEdit = async (r: { id: string }) => {
+    try {
+      const d = await salesDocuments.getOne('credit-note', r.id);
+      const line = d.lines[0];
+      setEditing({ id: d.id, number: d.number, date: d.date ?? today() });
+      setCustomerId(d.customerId);
+      setInvoiceId(d.againstInvoiceId ?? '');
+      setReason(d.reason ?? REASONS[0]);
+      setAmount(line ? Math.round(line.ratePaise * line.qty) : 0);
+      setGstRate(line?.gstRatePct ?? 18);
+      setOpen(true);
+    } catch (e) {
+      toast.error('That credit note could not be loaded', { description: e instanceof Error ? e.message : String(e) });
+    }
+  };
 
   const save = async () => {
     if (!customerId || amount <= 0) {
       toast.error('Pick a customer and enter an amount.');
       return;
     }
-    const result = await create.run({
-      kind: 'credit-note',
+    const payload = {
+      kind: 'credit-note' as const,
       branchId,
       customerId,
-      date: today(),
+      date: editing?.date ?? today(),
       reason,
       againstInvoiceId: invoiceId || null,
       voucherTypeId: voucherTypeId || null,
       lines: [{ itemId: null, description: reason, qty: 1, ratePaise: amount, gstRatePct: gstRate }],
-    });
+    };
+    if (editing) {
+      setSavingEdit(true);
+      try {
+        const done = await salesDocuments.update('credit-note', editing.id, payload);
+        toast.success(`Credit note ${done.number} updated`, { description: 'Its entry was reversed and posted again; the audit trail keeps the old version.' });
+        setOpen(false);
+        setEditing(null);
+        setCustomerId('');
+        setInvoiceId('');
+        setAmount(0);
+        state.refetch();
+      } catch (e) {
+        toast.error('Not saved', { description: e instanceof Error ? e.message : String(e) });
+      } finally { setSavingEdit(false); }
+      return;
+    }
+    const result = await create.run(payload);
     if (!result) return;
 
     toast.success(`Credit note ${result.number} created`, {
@@ -159,13 +194,13 @@ export default function CreditNotesPage() {
         description="Reversing part of a sale. Revenue and the GST charged on it both come back out, and the customer owes that much less."
         actions={<>{
           canCreate && (
-            <Dialog open={open} onOpenChange={setOpen}>
+            <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v && editing) { setEditing(null); setCustomerId(''); setInvoiceId(''); setAmount(0); } }}>
               <DialogTrigger asChild>
                 <Button size="sm" className="gap-1.5"><Plus className="size-4" /> New credit note</Button>
               </DialogTrigger>
               <DialogContent>
                 <DialogHeader>
-                  <DialogTitle>New credit note</DialogTitle>
+                  <DialogTitle>{editing ? `Edit credit note ${editing.number}` : 'New credit note'}</DialogTitle>
                   <DialogDescription>
                     Leave the invoice blank to leave the credit on the customer&apos;s account for next time.
                   </DialogDescription>
@@ -234,8 +269,8 @@ export default function CreditNotesPage() {
                 </div>
                 <DialogFooter>
                   <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
-                  <Button onClick={save} disabled={create.busy}>
-                    {create.busy ? 'Saving…' : 'Create credit note'}
+                  <Button onClick={save} disabled={create.busy || savingEdit} data-slot="save-credit-note">
+                    {create.busy || savingEdit ? 'Saving…' : editing ? 'Save' : 'Create credit note'}
                   </Button>
                 </DialogFooter>
               </DialogContent>
@@ -255,7 +290,7 @@ export default function CreditNotesPage() {
           ) : (
             <DataTable
               rows={d.documents}
-              columns={[...columns, documentMenuColumn('credit-note', state.refetch)]}
+              columns={[...columns, documentMenuColumn('credit-note', state.refetch, (r) => void startEdit(r))]}
               getRowId={(r) => r.id}
               selectable
               bulkActions={(selected) => <BulkPrintButton kind="credit-note" ids={selected.map((r) => r.id)} />}

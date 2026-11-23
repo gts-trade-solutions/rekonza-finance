@@ -14,7 +14,8 @@ import 'server-only';
 // and an entry must never exist without the document that explains it.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { sql } from 'kysely';
+import { sql, type Insertable, type Updateable } from 'kysely';
+import type { DB } from '../db-types';
 import type { Trx } from '../db';
 import type { Paise, SupplyKind, SupplyType } from '../../types';
 import { computeLineTax, exportTaxFor, isExportSupply, placeOfSupplyFor, resolveSupplyType, totalTaxPaise } from '../../tax/gst';
@@ -38,6 +39,7 @@ import { CODE, accountIds, requireAccount } from '../ledger/chart-of-accounts';
 import { ApiError, badRequest, notFound } from '../http';
 import { tcsRateOn } from '../tax/rates';
 import { itemSaleAccounts } from './item-accounts';
+import { plain, recordDeletion, reverseForChange, unlinkDocument } from './doc-delete';
 
 /** '26-27' for any date in the 2026-27 financial year. */
 /** Whether every line is a service: by its item, or by a SAC (99…) code. */
@@ -223,7 +225,10 @@ export async function createInvoice(
   orgId: number,
   userId: number | null,
   input: CreateInvoiceInput,
+  /** Rewrite this invoice in place (updateInvoice): same row, same number, its payments kept. */
+  opts: { replace?: { id: number; number: string } } = {},
 ): Promise<CreatedInvoice> {
+  const replace = opts.replace ?? null;
   if (!input.lines.length) throw badRequest('An invoice needs at least one line.');
   // A customer on a price list is charged from it, on any line that names no price.
   if (!foreignOf(input) && input.lines.some((l) => l.itemId && l.ratePaise === undefined)) {
@@ -361,7 +366,7 @@ export async function createInvoice(
   const supplyKind: SupplyKind = input.supplyKind ?? costed.supplyKind;
 
   let status = input.status ?? 'draft';
-  const held = status !== 'draft' && !!input.holdForApproval && !!(await ruleFor(trx, orgId, 'invoice', rounded));
+  const held = !replace && status !== 'draft' && !!input.holdForApproval && !!(await ruleFor(trx, orgId, 'invoice', rounded));
   if (held) status = 'draft';
 
   // The book's own rules, as the sale is made: the customer's credit limit,
@@ -379,8 +384,8 @@ export async function createInvoice(
   if (status !== 'draft') warnings.push(...batchWarnings);
   // A hand-typed number has to meet the same GST rules as an allocated one;
   // until now it was only checked when GSTR-1 was built, months too late.
-  const typed = input.number?.trim();
-  if (typed) assertGstDocNumber(typed);
+  const typed = replace ? replace.number : input.number?.trim();
+  if (typed && !replace) assertGstDocNumber(typed);
   const debitNote = input.docKind === 'debit_note';
   if (debitNote) {
     if (!input.noteReason?.trim()) throw badRequest('Say why the debit note is raised: a price revised upward, goods short-billed.');
@@ -405,9 +410,7 @@ export async function createInvoice(
       prefix: series.prefix,
     }));
 
-  const inserted = await trx
-    .insertInto('invoices')
-    .values({
+  const values: Insertable<DB['invoices']> = {
       org_id: orgId,
       branch_id: input.branchId,
       cost_centre_id: input.costCentreId ?? null,
@@ -460,10 +463,22 @@ export async function createInvoice(
       // The LUT it went under, kept with it: next year's never reprints on it.
       export_lut_arn: supplyType === 'export_lut' ? lutArn : null,
       created_by_user_id: userId,
-    })
-    .executeTakeFirstOrThrow();
-  const invoiceId = Number(inserted.insertId);
-  if (series.voucherTypeId) {
+    };
+  let invoiceId: number;
+  if (replace) {
+    // An edit: the row keeps its id, number, creator and what has been paid on it.
+    const { org_id: _o, number: _n, amount_paid: _a, created_by_user_id: _c, ...changed } = values;
+    await trx.updateTable('invoices').set({
+      ...changed,
+      journal_entry_id: null,
+      currency: 'INR', exchange_rate: '1', fc_subtotal: null, fc_total: null,
+    } as Updateable<DB['invoices']>).where('id', '=', replace.id).where('org_id', '=', orgId).execute();
+    invoiceId = replace.id;
+  } else {
+    const inserted = await trx.insertInto('invoices').values(values).executeTakeFirstOrThrow();
+    invoiceId = Number(inserted.insertId);
+  }
+  if (series.voucherTypeId && !replace) {
     await trx.updateTable('invoices').set({ voucher_type_id: series.voucherTypeId }).where('id', '=', invoiceId).execute();
   }
   if (fx && foreign) {
@@ -517,6 +532,7 @@ export async function createInvoice(
   // abroad needs an IRN before it is legally valid, so the register row is
   // created up front rather than when somebody remembers to submit it.
   const einvoicing = await einvoiceApplicability(trx, orgId);
+  if (replace) await trx.deleteFrom('einvoices').where('invoice_id', '=', invoiceId).where('org_id', '=', orgId).execute();
   await trx
     .insertInto('einvoices')
     .values({
@@ -728,6 +744,155 @@ export async function voidInvoice(
   await trx.updateTable('expenses').set({ billed_invoice_id: null }).where('org_id', '=', orgId).where('billed_invoice_id', '=', invoiceId).execute();
   // So are the order and challan quantities it invoiced.
   await releaseInvoiceQuantities(trx, orgId, invoiceId);
+}
+
+/** The invoice and its lines as they stand, for the audit trail and the deleted-documents record. */
+async function invoiceSnapshot(trx: Trx, orgId: number, invoiceId: number) {
+  const head = await trx.selectFrom('invoices').selectAll().where('id', '=', invoiceId).where('org_id', '=', orgId).executeTakeFirst();
+  const lines = await trx.selectFrom('invoice_lines').selectAll().where('invoice_id', '=', invoiceId).orderBy('line_no').execute();
+  return head ? { invoice: plain(head), lines: lines.map(plain) } : null;
+}
+
+/**
+ * Why this invoice cannot be edited or deleted just now, Zoho's reasons and
+ * the law's: void, a registered IRN, an e-way bill.
+ */
+async function changeBlocker(trx: Trx, orgId: number, inv: { id: number; number: string; status: string }, what: 'edit' | 'delete') {
+  if (inv.status === 'void') {
+    return what === 'edit' ? `${inv.number} is void. Clone it to raise it again.` : null;
+  }
+  const irn = await trx.selectFrom('einvoices').select('status').where('invoice_id', '=', inv.id).where('org_id', '=', orgId).executeTakeFirst();
+  if (irn?.status === 'submitted') {
+    return `${inv.number} has a registered IRN, so the government holds it as issued. Cancel the e-invoice first ` +
+      '(possible for 24 hours after registration); after that only a credit note can change it.';
+  }
+  const ewb = await trx.selectFrom('eway_bills').select('status').where('invoice_id', '=', inv.id).where('org_id', '=', orgId)
+    .where('status', 'in', ['pending', 'generated']).executeTakeFirst();
+  if (ewb) return `${inv.number} has an e-way bill. Cancel the e-way bill first.`;
+  return null;
+}
+
+/**
+ * Edit an invoice, as Zoho Books' Edit does, draft or issued.
+ *
+ * An issued invoice's entry is reversed (on its own date, so a closed period
+ * refuses the edit) and the invoice is rewritten in place and posted again: the
+ * same number, the same row, its payments, comments and attachments kept. The
+ * audit trail gets both versions. Lines invoiced from a sales order or challan
+ * keep that link and their quantity, so the order stays right.
+ */
+export async function updateInvoice(
+  trx: Trx, orgId: number, userId: number | null, invoiceId: number, input: CreateInvoiceInput,
+): Promise<CreatedInvoice & { before: unknown }> {
+  const inv = await trx.selectFrom('invoices')
+    .select(['id', 'number', 'status', 'doc_kind', 'against_invoice_id', 'journal_entry_id', 'amount_paid', 'source_doc_type', 'source_doc_id'])
+    .where('id', '=', invoiceId).where('org_id', '=', orgId).forUpdate().executeTakeFirst();
+  if (!inv) throw notFound('Invoice not found.');
+  const blocked = await changeBlocker(trx, orgId, inv, 'edit');
+  if (blocked) throw new ApiError(409, blocked, 'locked_document');
+
+  // Lines that came from an order or challan: the same lines must still be there, at the same quantity.
+  const linked = await trx.selectFrom('invoice_lines').select(['source_line_type', 'source_line_id', 'qty', 'description'])
+    .where('invoice_id', '=', invoiceId).where('source_line_id', 'is not', null).execute();
+  for (const l of linked) {
+    const kept = input.lines.filter((_, i) => input.lineSources?.[i]?.type === l.source_line_type && input.lineSources?.[i]?.id === Number(l.source_line_id));
+    const qty = kept.reduce((t, k) => t + k.qty, 0);
+    if (Math.abs(qty - Number(l.qty)) > 1e-6) {
+      throw badRequest(`"${l.description ?? 'A line'}" was invoiced from ${l.source_line_type === 'challan' ? 'a delivery challan' : 'a sales order'}: ` +
+        'keep it at its quantity. To invoice a different quantity, delete this invoice and invoice the order again.');
+    }
+  }
+  const sources = new Set(linked.map((l) => `${l.source_line_type}|${l.source_line_id}`));
+  for (const src of input.lineSources ?? []) {
+    if (src && !sources.has(`${src.type}|${src.id}`)) throw badRequest('A line can only keep the order it was invoiced from.');
+  }
+
+  const before = await invoiceSnapshot(trx, orgId, invoiceId);
+  const issued = inv.status !== 'draft';
+  await reverseForChange(trx, orgId, inv.journal_entry_id, {
+    memo: `Invoice ${inv.number} edited: the entry as it was, reversed`, userId, module: 'sales',
+  });
+  // Unposted for a moment, so every check sees the books without the old version.
+  await trx.updateTable('invoices').set({ journal_entry_id: null, status: 'draft' }).where('id', '=', invoiceId).execute();
+  await trx.deleteFrom('serial_moves').where('org_id', '=', orgId).where('doc_type', '=', 'invoice').where('doc_id', '=', invoiceId).execute();
+  await trx.deleteFrom('invoice_lines').where('invoice_id', '=', invoiceId).execute();
+
+  // Once issued it stays issued: Zoho saves an edited sent invoice as sent, never back to a draft.
+  const status = issued ? 'approved' : input.status ?? 'draft';
+  const made = await createInvoice(trx, orgId, userId, {
+    ...input,
+    status,
+    docKind: inv.doc_kind === 'debit_note' ? 'debit_note' : 'invoice',
+    againstInvoiceId: inv.against_invoice_id,
+    sourceDocType: inv.source_doc_type as CreateInvoiceInput['sourceDocType'],
+    sourceDocId: inv.source_doc_id,
+    holdForApproval: false,
+  }, { replace: { id: invoiceId, number: inv.number } });
+
+  const paid = toPaiseFromSql(inv.amount_paid);
+  if (paid > made.totalPaise) {
+    throw new ApiError(409,
+      `₹${(paid / 100).toLocaleString('en-IN')} has already been received against ${inv.number}; the new total cannot be less. ` +
+      'Remove a payment or credit first.', 'has_payments');
+  }
+  if (issued) {
+    const was = inv.status === 'approved' ? 'approved' : 'sent';
+    await trx.updateTable('invoices')
+      .set({ status: paid <= 0 ? was : paid >= made.totalPaise ? 'paid' : 'partially_paid' })
+      .where('id', '=', invoiceId).execute();
+  }
+  return { ...made, before };
+}
+
+/**
+ * Delete an invoice, as Zoho Books' Delete does: only while nothing has been
+ * received against it and nothing else rests on it. Its entry is reversed, the
+ * order quantities it took are released, and the record of it is kept in
+ * deleted_documents so its number still counts in GSTR-1 table 13.
+ */
+export async function deleteInvoice(trx: Trx, orgId: number, userId: number | null, invoiceId: number, reason?: string | null): Promise<{ number: string }> {
+  const inv = await trx.selectFrom('invoices')
+    .select(['id', 'number', 'status', 'doc_kind', 'invoice_date', 'total', 'amount_paid', 'customer_id', 'branch_id', 'journal_entry_id'])
+    .where('id', '=', invoiceId).where('org_id', '=', orgId).forUpdate().executeTakeFirst();
+  if (!inv) throw notFound('Invoice not found.');
+  const blocked = await changeBlocker(trx, orgId, inv, 'delete');
+  if (blocked) throw new ApiError(409, blocked, 'locked_document');
+  if (toPaiseFromSql(inv.amount_paid) > 0) {
+    throw new ApiError(409, `Payments or credits are recorded against ${inv.number}. Delete or unapply them first, then delete the invoice.`, 'has_payments');
+  }
+  const refuse = (why: string): never => { throw new ApiError(409, `${inv.number} cannot be deleted: ${why}`, 'in_use'); };
+  const dn = await trx.selectFrom('invoices').select('number').where('org_id', '=', orgId).where('against_invoice_id', '=', invoiceId).where('status', '<>', 'void').executeTakeFirst();
+  if (dn) refuse(`debit note ${dn.number} corrects it. Delete or void that first.`);
+  const cn = await trx.selectFrom('credit_notes').select('number').where('org_id', '=', orgId).where('against_invoice_id', '=', invoiceId).where('status', '<>', 'void').executeTakeFirst();
+  if (cn) refuse(`credit note ${cn.number} was raised against it. Delete or void that first.`);
+  if (await trx.selectFrom('credit_note_applications').select('id').where('invoice_id', '=', invoiceId).executeTakeFirst()) refuse('a credit note was applied to it. Remove that credit first.');
+  if (await trx.selectFrom('advance_tax_adjustments').select('id').where('invoice_id', '=', invoiceId).executeTakeFirst()) refuse('an advance was adjusted against it.');
+  if (await trx.selectFrom('fixed_assets').select('id').where('disposal_invoice_id', '=', invoiceId).executeTakeFirst()) refuse('it sold a fixed asset. Undo the disposal first.');
+  if (await trx.selectFrom('invoice_interest_charges').select('id').where((eb) => eb.or([eb('invoice_id', '=', invoiceId), eb('charge_invoice_id', '=', invoiceId)])).executeTakeFirst()) refuse('overdue interest was charged on it.');
+  if (await trx.selectFrom('eway_bills').select('id').where('invoice_id', '=', invoiceId).executeTakeFirst()) refuse('an e-way bill is on record for it.');
+  if (await trx.selectFrom('payment_allocations').select('id').where('org_id', '=', orgId).where('target_type', '=', 'invoice').where('target_id', '=', invoiceId).executeTakeFirst()) refuse('a payment is applied to it.');
+  if (await trx.selectFrom('journal_allocations').select('id').where('org_id', '=', orgId).where('target_type', '=', 'invoice').where('target_id', '=', invoiceId).executeTakeFirst()) refuse('a journal entry is set against it.');
+
+  const snapshot = await invoiceSnapshot(trx, orgId, invoiceId);
+  const reversal = await reverseForChange(trx, orgId, inv.journal_entry_id, {
+    memo: `${inv.doc_kind === 'debit_note' ? 'Debit note' : 'Invoice'} ${inv.number} deleted`, userId, module: 'sales',
+  });
+  // What void releases, delete releases: hours, re-charged expenses, order and challan quantities.
+  await trx.updateTable('time_entries').set({ invoice_id: null }).where('org_id', '=', orgId).where('invoice_id', '=', invoiceId).execute();
+  await trx.updateTable('expenses').set({ billed_invoice_id: null }).where('org_id', '=', orgId).where('billed_invoice_id', '=', invoiceId).execute();
+  await releaseInvoiceQuantities(trx, orgId, invoiceId);
+  await trx.updateTable('delivery_challans').set({ invoice_id: null }).where('org_id', '=', orgId).where('invoice_id', '=', invoiceId).execute();
+  await trx.deleteFrom('serial_moves').where('org_id', '=', orgId).where('doc_type', '=', 'invoice').where('doc_id', '=', invoiceId).execute();
+  await trx.deleteFrom('payment_reminders').where('invoice_id', '=', invoiceId).execute();
+  await trx.deleteFrom('invoice_payment_links').where('invoice_id', '=', invoiceId).execute();
+  await unlinkDocument(trx, orgId, 'invoice', invoiceId);
+  await recordDeletion(trx, {
+    orgId, userId, docType: inv.doc_kind === 'debit_note' ? 'debit_note' : 'invoice', docId: invoiceId, number: inv.number,
+    date: String(inv.invoice_date).slice(0, 10), totalPaise: toPaiseFromSql(inv.total), contactId: inv.customer_id, branchId: inv.branch_id,
+    journalEntryId: inv.journal_entry_id, reversalEntryId: reversal, reason, snapshot,
+  });
+  await trx.deleteFrom('invoices').where('id', '=', invoiceId).where('org_id', '=', orgId).execute();
+  return { number: inv.number };
 }
 
 /** Mark an approved invoice as sent. Posts it first if it was still a draft. */

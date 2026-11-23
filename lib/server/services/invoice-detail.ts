@@ -137,6 +137,41 @@ export async function invoiceDetail(orgId: number, id: number) {
   const against = inv.against_invoice_id
     ? await db.selectFrom('invoices').select(['id', 'number', 'invoice_date']).where('id', '=', inv.against_invoice_id).where('org_id', '=', orgId).executeTakeFirst()
     : null;
+  // What the Edit form needs to show the invoice exactly as it was saved (PUT /api/invoices/[id]).
+  const [raw, serialRows] = await Promise.all([
+    db.selectFrom('invoices').select([
+      'salesperson_id', 'cost_centre_id', 'warehouse_id', 'tcs_code', 'voucher_type_id',
+      'ship_to_name', 'ship_to_gstin', 'ship_to_address', 'ship_to_city', 'ship_to_pincode', 'ship_to_state_code', 'ship_to_third_party',
+      'export_country', 'export_currency',
+    ]).where('id', '=', id).where('org_id', '=', orgId).executeTakeFirstOrThrow(),
+    db.selectFrom('serial_moves').innerJoin('item_serials', 'item_serials.id', 'serial_moves.serial_id')
+      .select(['serial_moves.line_id', 'item_serials.serial_no'])
+      .where('serial_moves.org_id', '=', orgId).where('serial_moves.doc_type', '=', 'invoice').where('serial_moves.doc_id', '=', id)
+      .orderBy('serial_moves.id').execute(),
+  ]);
+  const edit = {
+    salespersonId: raw.salesperson_id ? asId(raw.salesperson_id) : null,
+    costCentreId: raw.cost_centre_id ? asId(raw.cost_centre_id) : null,
+    warehouseId: raw.warehouse_id ? asId(raw.warehouse_id) : null,
+    tcsCode: raw.tcs_code,
+    voucherTypeId: raw.voucher_type_id ? asId(raw.voucher_type_id) : null,
+    exchangeRate: Number(inv.exchange_rate) || 1,
+    shipTo: raw.ship_to_state_code ? {
+      name: raw.ship_to_name, gstin: raw.ship_to_gstin, address: raw.ship_to_address, city: raw.ship_to_city,
+      pincode: raw.ship_to_pincode, stateCode: raw.ship_to_state_code, thirdParty: !!raw.ship_to_third_party,
+    } : null,
+    exportCountry: raw.export_country,
+    exportCurrency: raw.export_currency,
+    lines: lines.map((l) => ({
+      id: asId(l.id),
+      cessRatePct: Number(l.cess_rate_pct ?? 0),
+      batchId: l.batch_id ? asId(l.batch_id) : null,
+      sourceLineType: (l.source_line_type as 'sales_order' | 'challan' | null) ?? null,
+      sourceLineId: l.source_line_id ? asId(l.source_line_id) : null,
+      serials: serialRows.filter((r) => r.line_id === l.id).map((r) => r.serial_no),
+    })),
+  };
+
   return {
     id: asId(inv.id),
     number: inv.number,
@@ -286,6 +321,7 @@ export async function invoiceDetail(orgId: number, id: number) {
           retry,
         }
       : { status: 'not_applicable', irn: null },
+    edit,
     payments: payments.map((pay) => ({
       id: asId(pay.id),
       number: pay.number,

@@ -18,7 +18,7 @@ import { Money } from '@/components/shared/money';
 import { StatusBadge } from '@/components/shared/status-badge';
 import { useAppStore } from '@/lib/store';
 import { today, vendors } from '@/lib/selectors';
-import { api, ApiError, bills as billApi, type BillListResponse, openingBalances } from '@/lib/api/client';
+import { api, ApiError, bills as billApi, type BillListResponse, openingBalances, payments as paymentsApi, type PaymentDetail } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
 import { useSession } from '@/components/layout/session-provider';
 import type { PaymentMode } from '@/lib/types';
@@ -42,6 +42,25 @@ function PayInner() {
   const [advancePaise, setAdvancePaise] = useState(0);
   const [saving, setSaving] = useState(false);
   const session = useSession();
+
+  // ?edit=<id>: Zoho's Edit on a payment made, filled as saved and saved back over it.
+  const editId = params.get('edit');
+  const editState = useApi<PaymentDetail | null>(() => (editId ? paymentsApi.get(editId) : Promise.resolve(null)), [editId]);
+  const editing = editState.data;
+  const filled = useRef(false);
+  useEffect(() => {
+    if (!editing || filled.current) return;
+    filled.current = true;
+    setVendorId(editing.contactId);
+    setDate(editing.date);
+    if (editing.mode) setMode(editing.mode as PaymentMode);
+    if (editing.bankAccountId) setBankAccountId(editing.bankAccountId);
+    setReference(editing.reference ?? '');
+    setSelected(Object.fromEntries(editing.allocations
+      .filter((a) => a.targetType === 'bill' || a.targetType === 'opening')
+      .map((a) => [a.targetType === 'opening' ? `opening:${a.targetId}` : a.targetId, a.foreignAmountPaise ?? a.amountPaise])));
+    setAdvancePaise(editing.unappliedPaise);
+  }, [editing]);
 
   // Bank accounts come from the server: the payment posts against the ledger
   // account behind whichever one is chosen.
@@ -73,16 +92,28 @@ function PayInner() {
       : Promise.resolve({ documents: [] }),
     [vendorId],
   );
-  const openBills = useMemo(
-    () => [
+  const openBills = useMemo(() => {
+    const list = [
       ...(openingState.data?.documents ?? []).map((o) => ({
-        id: `opening:${o.id}`, vendorId: o.contactId, internalNo: `Opening ${o.refNo}`, vendorInvoiceNo: o.refNo,
+        id: `opening:${o.id}`, vendorId: o.contactId, internalNo: `Opening ${o.refNo}`, vendorInvoiceNo: o.refNo as string | null,
         date: o.docDate, dueDate: o.dueDate, status: 'open', isMsme: false, balancePaise: o.balancePaise, isOpening: true,
       })),
       ...(openState.data?.bills ?? []).map((b) => ({ ...b, balancePaise: b.fcBalancePaise ?? b.balancePaise, isOpening: false })),
-    ].sort((a, b) => a.dueDate.localeCompare(b.dueDate)),
-    [openState.data, openingState.data],
-  );
+    ];
+    // Editing: what this payment paid is owed again for the edit, so its bills show with that much open.
+    for (const a of editing?.allocations ?? []) {
+      if (a.targetType !== 'bill' && a.targetType !== 'opening') continue;
+      const key = a.targetType === 'opening' ? `opening:${a.targetId}` : a.targetId;
+      const paid = a.foreignAmountPaise ?? a.amountPaise;
+      const row = list.find((r) => r.id === key);
+      if (row) row.balancePaise += paid;
+      else list.push({
+        id: key, vendorId: editing!.contactId, internalNo: a.number, vendorInvoiceNo: a.number, date: editing!.date,
+        dueDate: a.dueDate ?? editing!.date, status: 'paid', isMsme: false, balancePaise: paid, isOpening: a.targetType === 'opening',
+      } as (typeof list)[number]);
+    }
+    return list.sort((a, b) => a.dueDate.localeCompare(b.dueDate));
+  }, [openState.data, openingState.data, editing]);
 
   // Arriving from a bill's "pay" action: preselect it in full.
   const preselected = useRef(false);
@@ -134,9 +165,8 @@ function PayInner() {
     }
 
     setSaving(true);
-    const created = await api
-      .post<{ id: string; number: string; unappliedPaise: number }>('/api/payments', {
-        kind: 'made',
+    const payload = {
+        kind: 'made' as const,
         branchId: session.user.branchId ?? session.branches[0]?.id,
         contactId: vendorId,
         date,
@@ -150,7 +180,10 @@ function PayInner() {
           ...(fxCurrency ? { amountPaise: 0, foreignAmountPaise: amountPaise } : { amountPaise }),
         })),
         fx: fxCurrency ? { currency: fxCurrency, rate: Number((rupeesPaid / total).toFixed(6)), foreignAmountPaise: total } : undefined,
-      })
+      };
+    const created = await (editId
+      ? paymentsApi.update(editId, { ...payload, branchId: editing?.branchId ?? payload.branchId })
+      : api.post<{ id: string; number: string; unappliedPaise: number }>('/api/payments', payload))
       .catch((err: unknown) => {
         setSaving(false);
         if (err instanceof ApiError && err.isQueued) {
@@ -167,6 +200,11 @@ function PayInner() {
     if (!created) return;
 
     toastWarnings(created);
+    if (editId) {
+      toast.success(`Payment ${created.number} updated`, { description: 'Its entry was reversed and posted again; the bills follow. The audit trail keeps the old version.' });
+      router.push('/purchases/payments');
+      return;
+    }
     toast.success(`Payment ${created.number} recorded`, {
       description: created.unappliedPaise > 0
         ? `${(created.unappliedPaise / 100).toFixed(2)} kept on account as an advance to the vendor.`
@@ -178,13 +216,13 @@ function PayInner() {
   return (
     <>
       <PageHeader
-        title="Pay vendor"
+        title={editId ? `Edit payment ${editing?.number ?? ''}` : 'Pay vendor'}
         description="Settle several bills in one payment run. Oldest due dates first."
         actions={
           <>
             <Button variant="outline" size="sm" onClick={() => router.back()}>Cancel</Button>
-            <Button size="sm" onClick={save} disabled={saving} className="gap-1.5">
-              <Banknote className="size-3.5" /> {saving ? 'Recording…' : 'Record payment'}
+            <Button size="sm" onClick={save} disabled={saving || (!!editId && !editing)} className="gap-1.5" data-slot="save-payment">
+              <Banknote className="size-3.5" /> {saving ? 'Saving…' : editId ? 'Save' : 'Record payment'}
             </Button>
           </>
         }

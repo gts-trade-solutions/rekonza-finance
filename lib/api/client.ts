@@ -340,6 +340,14 @@ export interface InvoiceDetail {
   payments: { id: string; number: string; date: string; mode: string; amountPaise: number }[];
   journalEntryId: string | null;
   journalLines: InvoiceJournalLine[];
+  /** What the Edit form needs to show it exactly as saved. */
+  edit?: {
+    salespersonId: string | null; costCentreId: string | null; warehouseId: string | null;
+    tcsCode: string | null; voucherTypeId: string | null; exchangeRate: number;
+    shipTo: { name: string | null; gstin: string | null; address: string | null; city: string | null; pincode: string | null; stateCode: string; thirdParty: boolean } | null;
+    exportCountry: string | null; exportCurrency: string | null;
+    lines: { id: string; cessRatePct: number; batchId: string | null; sourceLineType: 'sales_order' | 'challan' | null; sourceLineId: string | null; serials: string[] }[];
+  };
 }
 
 export interface InvoiceListResponse {
@@ -405,6 +413,12 @@ export const invoices = {
   /** The PDF template this one invoice prints in; null follows Settings → PDF Templates. */
   setTemplate: (id: string, template: string | null) =>
     api.post<{ id: string; template: string | null }>(`/api/invoices/${id}`, { action: 'template', template }),
+  /** Zoho's Edit: a draft or an issued invoice, rewritten in place. */
+  update: (id: string, input: unknown) =>
+    api.put<{ id: string; number: string; totalPaise: number; journalEntryId: string | null; warnings?: string[] }>(`/api/invoices/${id}`, input),
+  /** Zoho's Delete: while nothing is received against it. */
+  remove: (id: string, reason?: string) =>
+    api.delete<{ deleted: true; number: string }>(`/api/invoices/${id}${reason ? `?reason=${encodeURIComponent(reason)}` : ''}`),
 };
 
 export interface BillListItem {
@@ -528,6 +542,12 @@ export const bills = {
 };
 
 export const expenses = {
+  /** One expense as saved, for its Edit form. */
+  get: (id: string) => api.get<ExpenseDetail>(`/api/expenses/${id}`),
+  /** Zoho's Edit: its entry reversed and recorded again in place. */
+  update: (id: string, input: unknown) => api.put<{ id: string; number: string; totalPaise: number }>(`/api/expenses/${id}`, input),
+  /** Zoho's Delete: its entry reversed, the record kept. */
+  remove: (id: string, reason?: string) => api.delete<{ deleted: true; number: string }>(`/api/expenses/${id}${reason ? `?reason=${encodeURIComponent(reason)}` : ''}`),
   list: (params?: { from?: string; to?: string; accountId?: string; limit?: number }) =>
     api.get<{ expenses: ExpenseListItem[]; summary: { count: number; totalPaise: number } }>(
       '/api/expenses',
@@ -564,6 +584,10 @@ export interface PaymentListResponse {
 }
 
 export const payments = {
+  /** Zoho's Edit on a receipt or payment made: taken off what it paid, reversed, recorded again in place. */
+  update: (id: string, input: unknown) => api.put<{ id: string; number: string; unappliedPaise: number }>(`/api/payments/${id}`, input),
+  /** Zoho's Delete: what it paid is owed again. */
+  remove: (id: string, reason?: string) => api.delete<{ deleted: true; number: string }>(`/api/payments/${id}${reason ? `?reason=${encodeURIComponent(reason)}` : ''}`),
   list: (params?: {
     kind?: 'received' | 'made'; from?: string; to?: string;
     contactId?: string; limit?: number; offset?: number;
@@ -596,8 +620,17 @@ export interface PaymentDetail {
   tdsPaise: number;
   unappliedPaise: number;
   advanceGst: { ratePct: number; advancePaise: number; taxPaise: number } | null;
+  mode?: string;
+  reference?: string | null;
+  bankAccountId?: string | null;
+  branchId?: string;
+  bankChargesPaise?: number;
+  notes?: string | null;
+  currency?: string;
+  fcAmountPaise?: number | null;
   allocations: {
     id: string; targetType: string; targetId: string; number: string; amountPaise: number; appliedOn: string | null;
+    foreignAmountPaise?: number | null; dueDate?: string | null;
   }[];
 }
 
@@ -1111,7 +1144,34 @@ export interface SalesDocListResponse {
   summary: { count: number; totalPaise: number; openPaise: number };
 }
 
+/** Sales documents Zoho lets you edit and delete from their lists. */
+export type EditableSalesKind = 'estimate' | 'sales-order' | 'challan' | 'credit-note';
+
+export interface EditableSalesDoc {
+  id: string; number: string; status: string; date: string | null;
+  branchId: string; customerId: string; placeOfSupply: string | null; notes: string | null;
+  expiryDate: string | null; expectedShipDate: string | null; challanType: string | null; reason: string | null;
+  againstInvoiceId: string | null; warehouseId: string | null; appliedPaise: number;
+  lines: { itemId: string | null; description: string | null; hsnSac: string | null; qty: number; uqc: string | null; ratePaise: number; discountPct: number; gstRatePct: number }[];
+}
+
+export interface ExpenseDetail {
+  id: string; number: string; date: string; status: string;
+  branchId: string; costCentreId: string | null; accountId: string; paidThroughBankAccountId: string;
+  vendorId: string | null; amountPaise: number; gstRatePct: number; itcEligibility: 'eligible' | 'ineligible' | 'capital_goods';
+  isBillable: boolean; billableCustomerId: string | null; projectId: string | null; reference: string | null; notes: string | null;
+  mileage: { km: number; ratePaise: number } | null; billedInvoiceId: string | null; journalEntryId: string | null;
+}
+
 export const salesDocuments = {
+  /** A quote, order, challan or credit note as saved, for its Edit dialog. */
+  getOne: (kind: EditableSalesKind, id: string) => api.get<EditableSalesDoc>(`/api/sales-documents/${kind}/${id}`),
+  /** Zoho's Edit: rewritten in place, same number. */
+  update: (kind: EditableSalesKind, id: string, input: unknown) =>
+    api.put<{ id: string; number: string; totalPaise: number }>(`/api/sales-documents/${kind}/${id}`, input),
+  /** Zoho's Delete. */
+  remove: (kind: EditableSalesKind, id: string, reason?: string) =>
+    api.delete<{ deleted: true; number: string }>(`/api/sales-documents/${kind}/${id}${reason ? `?reason=${encodeURIComponent(reason)}` : ''}`),
   list: (kind: SalesDocKind, params?: { from?: string; to?: string; status?: string; customerId?: string; search?: string; limit?: number }) =>
     api.get<SalesDocListResponse>('/api/sales-documents', { kind, ...params }),
   create: (input: unknown) =>
@@ -2598,6 +2658,8 @@ export interface JournalLineRow {
   accountName: string;
   description: string | null;
   contactName: string | null;
+  contactId?: string | null;
+  costCentreId?: string | null;
   debitPaise: number;
   creditPaise: number;
 }
@@ -2627,6 +2689,8 @@ export const journal = {
   list: (params?: {
     entryId?: string; from?: string; to?: string; sourceType?: string;
     accountId?: string; search?: string; limit?: number; offset?: number;
+    /** '1' leaves out reversed entries and their reversals (edited or deleted journals). */
+    hideReversed?: '1' | '0';
   }) => api.get<JournalResponse>('/api/journal', params),
   create: (input: unknown) =>
     api.post<
@@ -2635,6 +2699,12 @@ export const journal = {
     >('/api/journal', input),
   reverse: (entryId: string, memo?: string, date?: string) =>
     api.patch<{ id: string; entryNo: number }>('/api/journal', { entryId, memo, date }),
+  /** Zoho's Edit on a manual journal: reversed on its date and posted again as corrected. */
+  update: (entryId: string, input: unknown) =>
+    api.put<{ id: string; entryNo: number; replacedEntryNo: number }>(`/api/journal/${entryId}`, input),
+  /** Zoho's Delete: reversed on its date, the record kept. */
+  remove: (entryId: string, reason?: string) =>
+    api.delete<{ deleted: true; entryNo: number }>(`/api/journal/${entryId}${reason ? `?reason=${encodeURIComponent(reason)}` : ''}`),
 };
 
 /** A journal kept to fill the journal form again (/api/journal-templates). */

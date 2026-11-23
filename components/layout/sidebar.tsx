@@ -26,7 +26,7 @@ import { BOTTOM_LEVEL, NAV_GROUPS, TOP_LEVEL, type FeatureKey, type NavGroup, ty
 import { api } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
 import { useSession } from './session-provider';
-import { setNavCollapsed, useNavChosenCollapsed, useNavCollapsed } from './nav-state';
+import { toggleNav, useNavCollapsed } from './nav-state';
 
 /** Where the "+" on a nav row goes, when that screen has a create form. */
 const CREATE_HREF: Record<string, string> = {
@@ -152,7 +152,6 @@ export function Sidebar({ onNavigate, forceExpanded = false }: { onNavigate?: ()
   const role = useAppStore((s) => s.session?.role);
   const counts = useBadgeCounts();
   const railFolded = useNavCollapsed();
-  const chosenFolded = useNavChosenCollapsed();
   // The phone drawer is always the full menu.
   const folded = railFolded && !forceExpanded;
 
@@ -289,9 +288,10 @@ export function Sidebar({ onNavigate, forceExpanded = false }: { onNavigate?: ()
           <div className={cn('flex', folded ? 'justify-center' : 'justify-end')}>
             <button
               type="button"
-              aria-label={chosenFolded ? 'Expand the menu' : 'Collapse the menu'}
-              title={chosenFolded ? 'Expand' : 'Collapse'}
-              onClick={(e) => { e.stopPropagation(); setNavCollapsed(!chosenFolded); }}
+              aria-label={folded ? 'Expand the menu' : 'Collapse the menu'}
+              title={folded ? 'Expand' : 'Collapse'}
+              onClick={(e) => { e.stopPropagation(); toggleNav(); }}
+              data-slot="nav-fold"
               className="grid h-8 w-10 place-items-center rounded-md text-sidebar-foreground/80 hover:bg-sidebar-accent"
             >
               {folded ? <ChevronsRight className="size-4" /> : <ChevronsLeft className="size-4" />}

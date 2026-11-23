@@ -21,7 +21,7 @@ import { changeReason } from './request-context';
 import { clientIp } from './client-ip';
 
 export type AuditAction =
-  | 'create' | 'update' | 'void' | 'approve' | 'send' | 'match' | 'login' | 'export' | 'import' | 'comment';
+  | 'create' | 'update' | 'delete' | 'void' | 'approve' | 'send' | 'match' | 'login' | 'export' | 'import' | 'comment';
 
 export interface AuditInput {
   orgId: number;

@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 // Estimates and quotes.
 //
 // A quote is a price somebody has been offered, nothing more. It posts nothing,
@@ -38,6 +39,8 @@ function inDays(n: number): string {
 export default function EstimatesPage() {
   const canCreate = usePermission('sales', 'create');
   const state = useApi<SalesDocListResponse>(() => salesDocuments.list('estimate'), []);
+  // Zoho's Edit from the row's menu: the same dialog, filled in.
+  const [editId, setEditId] = useState<string | null>(null);
   const setStatus = useApiAction(salesDocuments.setStatus);
   const convert = useApiAction(salesDocuments.convert);
   const order = useApiAction(salesDocuments.toOrder);
@@ -147,7 +150,7 @@ export default function EstimatesPage() {
           ) : (
             <DataTable
               rows={d.documents}
-              columns={[...columns, documentMenuColumn('estimate', state.refetch)]}
+              columns={[...columns, documentMenuColumn('estimate', state.refetch, (r) => setEditId(r.id))]}
               getRowId={(r) => r.id}
               selectable
               bulkActions={(selected) => <BulkPrintButton kind="estimate" ids={selected.map((r) => r.id)} />}
@@ -158,6 +161,22 @@ export default function EstimatesPage() {
           )
         }
       </AsyncPage>
+      {editId && (
+        <QuickDocumentDialog
+          editId={editId}
+          onEditClose={() => setEditId(null)}
+          kind="estimate"
+          title="New estimate"
+          description="Quote a price. Nothing posts until the customer accepts and it becomes an invoice."
+          buttonLabel="New estimate"
+          onCreated={state.refetch}
+          extra={(v, set) => (
+            <Field label="Valid until" hint="After this date the quote lapses">
+              <Input type="date" value={v || inDays(15)} onChange={(e) => set(e.target.value)} />
+            </Field>
+          )}
+        />
+      )}
     </>
   );
 }

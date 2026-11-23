@@ -32,7 +32,7 @@ import {
   branchOptionsForUser, customerOptions, dueDateFor, stateOptions, termsForDays,
   termsOptions, userBranches, userOptions,
 } from '@/lib/options';
-import { api, ApiError, invoices as invoiceApi, taxRates, type ExpenseListItem } from '@/lib/api/client';
+import { api, ApiError, invoices as invoiceApi, taxRates, type ExpenseListItem, type InvoiceDetail } from '@/lib/api/client';
 import type { ContactAddress } from '@/components/shared/contact-addresses';
 import { PendingAttachments, uploadPending } from '@/components/shared/attachments';
 import { useApi } from '@/lib/api/use-api';
@@ -61,45 +61,71 @@ const MODES = [
   { value: 'cheque', label: 'Cheque' }, { value: 'netbanking', label: 'Net banking' }, { value: 'other', label: 'Other' },
 ];
 
-export function InvoiceForm({ variant = 'invoice' }: { variant?: InvoiceVariant }) {
+export function InvoiceForm({ variant = 'invoice', editing }: {
+  variant?: InvoiceVariant;
+  /** Zoho's Edit: the invoice as saved, shown in the form and saved back over it (PUT). */
+  editing?: InvoiceDetail;
+}) {
   const router = useRouter();
   const s = useAppStore();
   const v = VARIANT[variant];
+  const ed = editing ?? null;
+  const edLines = ed?.edit?.lines ?? [];
+  const issuedEdit = !!ed && ed.status !== 'draft';
   const debitNote = variant === 'debit_note';
   // ?clone=<id>: a copy of an earlier invoice to start from, dated today, numbered afresh.
   const cloneId = useSearchParams().get('clone');
 
-  const [branchId, setBranchId] = useState(s.activeBranchId || s.branches[0]?.id || '');
-  const [customerId, setCustomerId] = useState('');
+  const [branchId, setBranchId] = useState(ed?.branch.id ?? (s.activeBranchId || s.branches[0]?.id || ''));
+  const [customerId, setCustomerId] = useState(ed?.customer.id ?? '');
   // Non-null while the inline "New customer" dialog is open; holds whatever
   // was typed into the picker, so the dialog opens with the name already in it.
   const [newCustomerName, setNewCustomerName] = useState<string | null>(null);
-  const [number, setNumber] = useState('');
-  const [orderNumber, setOrderNumber] = useState('');
-  const [date, setDate] = useState(today());
-  const [paymentTerms, setPaymentTerms] = useState('net_30');
-  const [dueDate, setDueDate] = useState(dueDateFor('net_30', today()));
-  const [salespersonId, setSalespersonId] = useState('');
-  const [subject, setSubject] = useState('');
-  const [placeOfSupply, setPlaceOfSupply] = useState('');
+  const [number, setNumber] = useState(ed?.number ?? '');
+  const [orderNumber, setOrderNumber] = useState(ed?.orderNumber ?? '');
+  const [date, setDate] = useState(ed?.date ?? today());
+  const [paymentTerms, setPaymentTerms] = useState(ed?.paymentTerms ?? 'net_30');
+  const [dueDate, setDueDate] = useState(ed?.dueDate ?? dueDateFor('net_30', today()));
+  const [salespersonId, setSalespersonId] = useState(ed?.edit?.salespersonId ?? '');
+  const [subject, setSubject] = useState(ed?.subject ?? '');
+  const [placeOfSupply, setPlaceOfSupply] = useState(ed?.placeOfSupply ?? '');
   // Until somebody picks a place of supply by hand, it follows the rule: the
   // customer for services, the ship-to for goods (section 10, IGST Act).
-  const [posTouched, setPosTouched] = useState(false);
-  const [ship, setShip] = useState({ on: false, name: '', address: '', city: '', pincode: '', stateCode: '', thirdParty: false, gstin: '' });
-  const [exportDetails, setExportDetails] = useState({ shippingBillNo: '', shippingBillDate: '', portCode: '' });
+  // An edited invoice keeps the place of supply it was saved with.
+  const [posTouched, setPosTouched] = useState(!!ed);
+  const edShip = ed?.edit?.shipTo ?? null;
+  const [ship, setShip] = useState(edShip
+    ? { on: true, name: edShip.name ?? '', address: edShip.address ?? '', city: edShip.city ?? '', pincode: edShip.pincode ?? '', stateCode: edShip.stateCode, thirdParty: edShip.thirdParty, gstin: edShip.gstin ?? '' }
+    : { on: false, name: '', address: '', city: '', pincode: '', stateCode: '', thirdParty: false, gstin: '' });
+  const [exportDetails, setExportDetails] = useState({
+    shippingBillNo: ed?.exportInfo?.shippingBillNo ?? '', shippingBillDate: ed?.exportInfo?.shippingBillDate ?? '', portCode: ed?.exportInfo?.portCode ?? '',
+  });
   // Priced in another currency: rates are typed in it, and the server books rupees at the rate.
-  const [currency, setCurrency] = useState('INR');
-  const [voucherTypeId, setVoucherTypeId] = useState('');
-  const [costCentreId, setCostCentreId] = useState('');
-  const [warehouseId, setWarehouseId] = useState('');
+  const [currency, setCurrency] = useState(ed?.foreign?.currency ?? 'INR');
+  const [voucherTypeId, setVoucherTypeId] = useState(ed?.edit?.voucherTypeId ?? '');
+  const [costCentreId, setCostCentreId] = useState(ed?.edit?.costCentreId ?? '');
+  const [warehouseId, setWarehouseId] = useState(ed?.edit?.warehouseId ?? '');
   const voucherTypes = useApi<{ types: { id: string; docType: string; name: string; prefix: string; isActive: boolean }[] }>(() => api.get('/api/voucher-types'), []);
   const invoiceTypes = (voucherTypes.data?.types ?? []).filter((t) => t.docType === 'INV' && t.isActive);
-  const [fxRate, setFxRate] = useState('');
+  const [fxRate, setFxRate] = useState(ed?.foreign ? String(ed.edit?.exchangeRate ?? ed.foreign.rate) : '');
   // A business that supplies only services starts on services (Settings → Organisation).
-  const [supplyKind, setSupplyKind] = useState<SupplyKind>(s.org?.trade?.supplies === 'services' ? 'service' : 'goods');
+  const [supplyKind, setSupplyKind] = useState<SupplyKind>(ed ? ed.supplyKind as SupplyKind : s.org?.trade?.supplies === 'services' ? 'service' : 'goods');
   // An export's IGST, picked by hand: true paid, false nil under the LUT. Null follows the organisation's setting.
-  const [exportChoice, setExportChoice] = useState<boolean | null>(null);
-  const [lines, setLines] = useState<EditorLine[]>([newEditorLine('l1')]);
+  const [exportChoice, setExportChoice] = useState<boolean | null>(
+    ed?.supplyType === 'export_with_tax' ? true : ed?.supplyType === 'export_lut' ? false : null,
+  );
+  const [lines, setLines] = useState<EditorLine[]>(ed
+    ? ed.lines.map((l, i) => ({
+        ...newEditorLine(`e${i}`),
+        itemId: l.itemId, description: l.description ?? '', hsnSac: l.hsnSac ?? '', qty: l.qty, uqc: l.uqc ?? '',
+        ratePaise: l.ratePaise, discountPct: l.discountPct, gstRatePct: l.gstRatePct,
+        cessRatePct: edLines[i]?.cessRatePct ?? 0,
+        batchId: edLines[i]?.batchId ?? undefined,
+        serialText: edLines[i]?.serials.length ? edLines[i].serials.join('\n') : undefined,
+      }))
+    : [newEditorLine('l1')]);
+  // A line invoiced from a sales order or challan keeps that link when edited (by its editor key).
+  const lineSources = useMemo(() => new Map(edLines.map((l, i) => [`e${i}`, l])), [edLines]);
   // ?items=a,b: the items ticked in the item list (Zoho's bulk "New Transaction → Invoice").
   const presetItems = useSearchParams().get('items');
   const [preset, setPreset] = useState(false);
@@ -110,23 +136,23 @@ export function InvoiceForm({ variant = 'invoice' }: { variant?: InvoiceVariant 
     setPreset(true);
   }, [preset, presetItems, s.items]);
   // The company's own wording when it has set some (Settings → Invoice print).
-  const [notes, setNotes] = useState(s.invoiceDefaults.notes ?? 'Thanks for your business.');
+  const [notes, setNotes] = useState(ed ? ed.notes ?? '' : s.invoiceDefaults.notes ?? 'Thanks for your business.');
   const [terms, setTerms] = useState(
-    s.invoiceDefaults.terms ?? 'Goods once sold will not be taken back. Interest @18% p.a. on overdue amounts.',
+    ed ? ed.terms ?? '' : s.invoiceDefaults.terms ?? 'Goods once sold will not be taken back. Interest @18% p.a. on overdue amounts.',
   );
-  const [shipping, setShipping] = useState(0);
-  const [adjustment, setAdjustment] = useState(0);
-  const [adjustmentLabel, setAdjustmentLabel] = useState('Adjustment');
+  const [shipping, setShipping] = useState(ed?.shippingChargePaise ?? 0);
+  const [adjustment, setAdjustment] = useState(ed?.adjustmentPaise ?? 0);
+  const [adjustmentLabel, setAdjustmentLabel] = useState(ed?.adjustmentLabel ?? 'Adjustment');
   // The TCS head this sale is collected under, if any. The rate is the book's,
   // in force on the invoice date; the server works the amount out again.
-  const [tcsCode, setTcsCode] = useState('');
+  const [tcsCode, setTcsCode] = useState(ed?.edit?.tcsCode ?? '');
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [markPaid, setMarkPaid] = useState(variant === 'receipt');
   const [paidMode, setPaidMode] = useState('cash');
   const [paidBankId, setPaidBankId] = useState('');
   const [paidRef, setPaidRef] = useState('');
-  const [againstInvoiceId, setAgainstInvoiceId] = useState('');
-  const [noteReason, setNoteReason] = useState('');
+  const [againstInvoiceId, setAgainstInvoiceId] = useState(ed?.debitNote?.against?.id ?? '');
+  const [noteReason, setNoteReason] = useState(ed?.debitNote?.reason ?? '');
   const [saving, setSaving] = useState<false | 'draft' | 'send'>(false);
 
   // Zoho shows the number that will actually be used, not a placeholder.
@@ -189,7 +215,10 @@ export function InvoiceForm({ variant = 'invoice' }: { variant?: InvoiceVariant 
     [customerId],
   );
   // A customer invoiced in their own currency brings it with them.
-  useEffect(() => { setCurrency(customer?.currency ?? 'INR'); }, [customer?.id, customer?.currency]);
+  useEffect(() => {
+    if (ed && customer?.id === ed.customer.id) return;
+    setCurrency(customer?.currency ?? 'INR');
+  }, [customer?.id, customer?.currency, ed]);
   const rate = Number(fxRate) || 0;
   /** A figure on this form, in the invoice's own currency. */
   const money = (p: number) => (foreign ? new Intl.NumberFormat('en-IN', { style: 'currency', currency }).format(p / 100) : formatINR(p));
@@ -358,10 +387,7 @@ export function InvoiceForm({ variant = 'invoice' }: { variant?: InvoiceVariant 
     // one transaction. The totals shown above are a preview of that, not the
     // source of it — a browser must never be the thing that decides what tax
     // an invoice carries.
-    const created = await api
-      .post<{ id: string; number: string; totalPaise: number; journalEntryId: string | null }>(
-        '/api/invoices',
-        {
+    const payload = {
           branchId,
           customerId,
           date,
@@ -420,9 +446,15 @@ export function InvoiceForm({ variant = 'invoice' }: { variant?: InvoiceVariant 
               cessRatePct: l.cessRatePct,
               batchId: l.batchId || undefined,
               serials: serialsOf(l),
+              sourceLineType: lineSources.get(l.key)?.sourceLineType ?? undefined,
+              sourceLineId: lineSources.get(l.key)?.sourceLineId ?? undefined,
             })),
-        },
-      )
+        };
+    // An edit goes back over the invoice it came from; the server keeps its number and payments.
+    const request = ed
+      ? invoiceApi.update(ed.id, { ...payload, number: undefined, paidAtSale: undefined, billExpenseIds: undefined })
+      : api.post<{ id: string; number: string; totalPaise: number; journalEntryId: string | null }>('/api/invoices', payload);
+    const created = await request
       .catch((err: unknown) => {
         setSaving(false);
         if (err instanceof ApiError && err.isQueued) {
@@ -442,6 +474,15 @@ export function InvoiceForm({ variant = 'invoice' }: { variant?: InvoiceVariant 
 
     if (!created) return;
     await uploadPending('invoice', created.id, pendingFiles);
+    if (ed) {
+      if (mode === 'send' && !issuedEdit) await api.post(`/api/invoices/${created.id}`, { action: 'send' }).catch(() => toast.warning('Saved, but could not mark it as sent.'));
+      toastWarnings(created);
+      toast.success(`${v.noun} ${created.number} updated`, {
+        description: issuedEdit || mode === 'send' ? 'The ledger now carries the new figures; the audit trail keeps the old ones.' : 'Still a draft: nothing is in the ledger yet.',
+      });
+      router.push(`/sales/invoices/${created.id}`);
+      return;
+    }
 
     if (mode === 'send') {
       await api.post(`/api/invoices/${created.id}`, { action: 'send' }).catch(() => {
@@ -464,7 +505,7 @@ export function InvoiceForm({ variant = 'invoice' }: { variant?: InvoiceVariant 
 
   return (
     <DocumentForm
-      title={v.title}
+      title={ed ? `Edit ${v.noun} ${ed.number}` : v.title}
       icon={<FileText className="size-5 text-muted-foreground" />}
       backHref={v.back}
       headerExtra={
@@ -479,15 +520,25 @@ export function InvoiceForm({ variant = 'invoice' }: { variant?: InvoiceVariant 
       }
       footer={
         <>
-          <Button variant="outline" onClick={() => save('draft')} disabled={!!saving} className="gap-1.5">
-            {saving === 'draft' ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
-            Save as Draft
-          </Button>
-          <Button onClick={() => save('send')} disabled={!!saving} className="gap-1.5">
-            {saving === 'send' ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />}
-            Save and Send
-          </Button>
-          <Button variant="ghost" onClick={() => router.push(v.back)} disabled={!!saving}>
+          {issuedEdit ? (
+            // An issued invoice saves as issued, as in Zoho: there is no going back to a draft.
+            <Button onClick={() => save('send')} disabled={!!saving} className="gap-1.5" data-slot="save-edit">
+              {saving ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
+              Save
+            </Button>
+          ) : (
+            <>
+              <Button variant="outline" onClick={() => save('draft')} disabled={!!saving} className="gap-1.5">
+                {saving === 'draft' ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
+                Save as Draft
+              </Button>
+              <Button onClick={() => save('send')} disabled={!!saving} className="gap-1.5">
+                {saving === 'send' ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />}
+                Save and Send
+              </Button>
+            </>
+          )}
+          <Button variant="ghost" onClick={() => router.push(ed ? `/sales/invoices/${ed.id}` : v.back)} disabled={!!saving}>
             Cancel
           </Button>
         </>
@@ -565,6 +616,8 @@ export function InvoiceForm({ variant = 'invoice' }: { variant?: InvoiceVariant 
             <Input
               value={number || nextNumber}
               onChange={(e) => setNumber(e.target.value)}
+              // An edit keeps its number: GST wants the series unbroken.
+              readOnly={!!ed}
               placeholder={debitNote ? 'Next in the DN series' : undefined}
               className="font-mono"
             />
@@ -951,7 +1004,7 @@ export function InvoiceForm({ variant = 'invoice' }: { variant?: InvoiceVariant 
             </div>
           </dl>
 
-          {!debitNote && variant !== 'receipt' && (
+          {!debitNote && variant !== 'receipt' && !ed && (
             <label className="mt-4 flex cursor-pointer items-start gap-2 border-t pt-3 text-xs">
               <Checkbox checked={markPaid} onCheckedChange={(c) => setMarkPaid(c === true)} className="mt-0.5" />
               <span className="text-muted-foreground">

@@ -17,7 +17,7 @@ import { Money } from '@/components/shared/money';
 import { StatusBadge } from '@/components/shared/status-badge';
 import { useAppStore } from '@/lib/store';
 import { customers, today } from '@/lib/selectors';
-import { api, ApiError, invoices as invoiceApi, openingBalances, type InvoiceListResponse } from '@/lib/api/client';
+import { api, ApiError, invoices as invoiceApi, openingBalances, payments as paymentsApi, type InvoiceListResponse, type PaymentDetail } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
 import { useSession } from '@/components/layout/session-provider';
 import type { PaymentMode } from '@/lib/types';
@@ -44,6 +44,29 @@ function NewPaymentInner() {
   const [advanceRate, setAdvanceRate] = useState(18);
   const [saving, setSaving] = useState(false);
   const session = useSession();
+
+  // ?edit=<id>: Zoho's Edit on a receipt. The form is filled as it was saved,
+  // and saving goes back over it (PUT /api/payments/[id]).
+  const editId = params.get('edit');
+  const editState = useApi<PaymentDetail | null>(() => (editId ? paymentsApi.get(editId) : Promise.resolve(null)), [editId]);
+  const editing = editState.data;
+  const filled = useRef(false);
+  useEffect(() => {
+    if (!editing || filled.current) return;
+    filled.current = true;
+    setCustomerId(editing.contactId);
+    setDate(editing.date);
+    if (editing.mode) setMode(editing.mode as PaymentMode);
+    if (editing.bankAccountId) setBankAccountId(editing.bankAccountId);
+    setReference(editing.reference ?? '');
+    setTdsPaise(editing.tdsPaise);
+    setChargesPaise(editing.bankChargesPaise ?? 0);
+    setSelected(Object.fromEntries(editing.allocations
+      .filter((a) => a.targetType === 'invoice' || a.targetType === 'opening')
+      .map((a) => [a.targetType === 'opening' ? `opening:${a.targetId}` : a.targetId, a.foreignAmountPaise ?? a.amountPaise])));
+    setAdvancePaise(editing.unappliedPaise);
+    if (editing.advanceGst) { setAdvanceForServices(true); setAdvanceRate(editing.advanceGst.ratePct); }
+  }, [editing]);
 
   // Bank accounts come from the server, because the payment posts against the
   // ledger account behind whichever one is picked.
@@ -76,8 +99,8 @@ function NewPaymentInner() {
       : Promise.resolve({ documents: [] }),
     [customerId],
   );
-  const openInvs = useMemo(
-    () => [
+  const openInvs = useMemo(() => {
+    const list: { id: string; number: string; dueDate: string; status: string; balancePaise: number; currency?: string }[] = [
       ...(openingState.data?.documents ?? []).map((o) => ({
         id: `opening:${o.id}`, number: `Opening ${o.refNo}`, dueDate: o.dueDate, status: 'open', balancePaise: o.balancePaise,
       })),
@@ -85,9 +108,18 @@ function NewPaymentInner() {
         id: i.id, number: i.number, dueDate: i.dueDate, status: i.status,
         balancePaise: i.fcBalancePaise ?? i.balancePaise, currency: i.currency ?? 'INR',
       })),
-    ].sort((a, b) => a.dueDate.localeCompare(b.dueDate)),
-    [openState.data, openingState.data],
-  );
+    ];
+    // Editing: what this receipt paid is owed again for the edit, so its documents show with that much open.
+    for (const a of editing?.allocations ?? []) {
+      if (a.targetType !== 'invoice' && a.targetType !== 'opening') continue;
+      const key = a.targetType === 'opening' ? `opening:${a.targetId}` : a.targetId;
+      const paid = a.foreignAmountPaise ?? a.amountPaise;
+      const row = list.find((r) => r.id === key);
+      if (row) row.balancePaise += paid;
+      else list.push({ id: key, number: a.number, dueDate: a.dueDate ?? editing!.date, status: 'paid', balancePaise: paid });
+    }
+    return list.sort((a, b) => a.dueDate.localeCompare(b.dueDate));
+  }, [openState.data, openingState.data, editing]);
 
   // Arriving from an invoice's "record payment" action: preselect it in full.
   const preselected = useRef(false);
@@ -139,9 +171,8 @@ function NewPaymentInner() {
     }
 
     setSaving(true);
-    const created = await api
-      .post<{ id: string; number: string; unappliedPaise: number }>('/api/payments', {
-        kind: 'received',
+    const payload = {
+        kind: 'received' as const,
         branchId: session.user.branchId ?? session.branches[0]?.id,
         contactId: customerId,
         date,
@@ -160,7 +191,10 @@ function NewPaymentInner() {
         })),
         fx: fxCurrency ? { currency: fxCurrency, rate: Number(impliedRate.toFixed(6)), foreignAmountPaise: foreignTotal } : undefined,
         advanceGst: advanceForServices && advancePaise > 0 ? { ratePct: advanceRate } : undefined,
-      })
+      };
+    const created = await (editId
+      ? paymentsApi.update(editId, { ...payload, branchId: editing?.branchId ?? payload.branchId })
+      : api.post<{ id: string; number: string; unappliedPaise: number }>('/api/payments', payload))
       .catch((err: unknown) => {
         setSaving(false);
         if (err instanceof ApiError && err.isQueued) {
@@ -177,6 +211,11 @@ function NewPaymentInner() {
     if (!created) return;
 
     toastWarnings(created);
+    if (editId) {
+      toast.success(`Receipt ${created.number} updated`, { description: 'Its entry was reversed and posted again; the invoices follow. The audit trail keeps the old version.' });
+      router.push('/sales/payments');
+      return;
+    }
     toast.success(`Receipt ${created.number} recorded`, {
       description:
         created.unappliedPaise > 0
@@ -189,13 +228,13 @@ function NewPaymentInner() {
   return (
     <>
       <PageHeader
-        title="Record payment received"
+        title={editId ? `Edit payment received ${editing?.number ?? ''}` : 'Record payment received'}
         description="Apply one receipt across several invoices. TDS withheld by the customer is tracked separately."
         actions={
           <>
             <Button variant="outline" size="sm" onClick={() => router.back()}>Cancel</Button>
-            <Button size="sm" onClick={save} disabled={saving} className="gap-1.5">
-              <Wallet className="size-3.5" /> Record payment
+            <Button size="sm" onClick={save} disabled={saving || (!!editId && !editing)} className="gap-1.5" data-slot="save-payment">
+              <Wallet className="size-3.5" /> {editId ? 'Save' : 'Record payment'}
             </Button>
           </>
         }

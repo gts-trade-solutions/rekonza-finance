@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { CreateInput, DATE, mapLines, toNum } from '@/lib/server/sales-doc-input';
 import { sql } from 'kysely';
 import { db, transaction } from '@/lib/server/db';
 import { route, body, query, asId, badRequest } from '@/lib/server/http';
@@ -144,87 +145,6 @@ export const GET = route(
   },
   { permission: { module: 'sales', action: 'view' } },
 );
-
-const LineInput = z.object({
-  itemId: z.union([z.string(), z.number()]).nullish(),
-  description: z.string().nullish(),
-  hsnSac: z.string().nullish(),
-  qty: z.number().positive(),
-  uqc: z.string().nullish(),
-  ratePaise: z.number().int().nonnegative().optional(),
-  discountPct: z.number().min(0).max(100).optional(),
-  gstRatePct: z.number().min(0).max(50).optional(),
-  cessRatePct: z.number().min(0).max(300).optional(),
-  /** A serial-tracked item coming back on a credit note: the number of each piece. */
-  serials: z.array(z.string().trim().min(1).max(80)).max(5000).nullish(),
-});
-
-const toNum = (v: string | number | null | undefined) => (v == null ? null : Number(v));
-const mapLines = (lines: z.infer<typeof LineInput>[]) =>
-  lines.map((l) => ({ ...l, itemId: toNum(l.itemId) }));
-
-const DATE = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Give the date as yyyy-mm-dd.');
-
-const CreateInput = z.discriminatedUnion('kind', [
-  z.object({
-    kind: z.literal('estimate'),
-    branchId: z.union([z.string(), z.number()]),
-    customerId: z.union([z.string(), z.number()]),
-    date: DATE,
-    expiryDate: DATE,
-    lines: z.array(LineInput).min(1),
-    placeOfSupply: z.string().length(2).optional(),
-    notes: z.string().nullish(),
-    status: z.enum(['draft', 'sent']).optional(),
-    voucherTypeId: z.union([z.string(), z.number()]).nullish(),
-  }),
-  z.object({
-    kind: z.literal('sales-order'),
-    branchId: z.union([z.string(), z.number()]),
-    customerId: z.union([z.string(), z.number()]),
-    date: DATE,
-    expectedShipDate: DATE.nullish(),
-    lines: z.array(LineInput).min(1),
-    placeOfSupply: z.string().length(2).optional(),
-    notes: z.string().nullish(),
-    sourceEstimateId: z.union([z.string(), z.number()]).nullish(),
-    voucherTypeId: z.union([z.string(), z.number()]).nullish(),
-  }),
-  z.object({
-    kind: z.literal('challan'),
-    branchId: z.union([z.string(), z.number()]),
-    customerId: z.union([z.string(), z.number()]),
-    date: DATE,
-    challanType: z.enum(['job_work', 'supply_on_approval', 'liquid_gas', 'other']).optional(),
-    lines: z.array(LineInput).min(1),
-    placeOfSupply: z.string().length(2).optional(),
-    notes: z.string().nullish(),
-    voucherTypeId: z.union([z.string(), z.number()]).nullish(),
-  }),
-  z.object({
-    kind: z.literal('credit-note'),
-    branchId: z.union([z.string(), z.number()]),
-    customerId: z.union([z.string(), z.number()]),
-    date: DATE,
-    reason: z.string().trim().min(1, 'GST requires a reason on every credit note.').max(200),
-    againstInvoiceId: z.union([z.string(), z.number()]).nullish(),
-    applyImmediately: z.boolean().optional(),
-    warehouseId: z.union([z.string(), z.number()]).nullish(),
-    lines: z.array(LineInput).min(1),
-    placeOfSupply: z.string().length(2).optional(),
-    notes: z.string().nullish(),
-    voucherTypeId: z.union([z.string(), z.number()]).nullish(),
-  }),
-  z.object({
-    kind: z.literal('retainer'),
-    branchId: z.union([z.string(), z.number()]),
-    customerId: z.union([z.string(), z.number()]),
-    date: DATE,
-    description: z.string().trim().min(1, 'Say what the retainer covers.').max(500),
-    amountPaise: z.number().int().positive(),
-    status: z.enum(['draft', 'sent']).optional(),
-  }),
-]);
 
 export const POST = route(
   async ({ orgId, user, branchId, req }) => {

@@ -1,7 +1,9 @@
 import { z } from 'zod';
 import { db, transaction } from '@/lib/server/db';
 import { route, body, idParam, asId, forbidden, notFound } from '@/lib/server/http';
-import { markInvoiceSent, setExportDetails, voidInvoice } from '@/lib/server/services/sales';
+import { deleteInvoice, markInvoiceSent, setExportDetails, updateInvoice, voidInvoice } from '@/lib/server/services/sales';
+import { CreateInput, toInvoiceInput } from '@/lib/server/invoice-input';
+import { queueIrns } from '@/lib/server/gst/auto-irn';
 import { writeOffInvoice } from '@/lib/server/services/journals';
 import { hasPermission } from '@/lib/rbac';
 import { logAudit, auditMeta } from '@/lib/server/audit';
@@ -115,4 +117,53 @@ export const POST = route(
     return { id: asId(id), status: inv.status };
   },
   { permission: { module: 'sales', action: 'edit' } },
+);
+
+/**
+ * Edit, as Zoho Books' Edit: a draft or an issued invoice, rewritten in place
+ * (services/sales.ts updateInvoice). An issued one's entry is reversed and
+ * posted again; the audit trail keeps both versions.
+ */
+export const PUT = route(
+  async ({ orgId, user, role, req, params }) => {
+    const id = idParam(params);
+    const input = await body(req, CreateInput);
+    const done = await transaction(async (trx) => {
+      const made = await updateInvoice(trx, orgId, user.userId, id, toInvoiceInput(input, role));
+      await logAudit({
+        trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'update',
+        targetType: 'invoice', targetId: id, targetLabel: made.number,
+        detail: `Edited ${made.number}`, payload: { before: made.before }, ...auditMeta(req),
+      });
+      return made;
+    });
+    await queueIrns(db, orgId, { invoiceId: id, userId: user.userId }).catch((err) => console.error('[auto-irn]', err));
+    return {
+      id: asId(done.id), number: done.number, totalPaise: done.totalPaise,
+      journalEntryId: done.journalEntryId ? asId(done.journalEntryId) : null, warnings: done.warnings ?? [],
+    };
+  },
+  { permission: { module: 'sales', action: 'edit' } },
+);
+
+/**
+ * Delete, as Zoho Books' Delete: while nothing is received against it. The
+ * entry is reversed and the number kept as cancelled (migration 118).
+ */
+export const DELETE = route(
+  async ({ orgId, user, req, params }) => {
+    const id = idParam(params);
+    const reason = new URL(req.url).searchParams.get('reason');
+    const done = await transaction(async (trx) => {
+      const gone = await deleteInvoice(trx, orgId, user.userId, id, reason);
+      await logAudit({
+        trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'delete',
+        targetType: 'invoice', targetId: id, targetLabel: gone.number,
+        detail: `Deleted ${gone.number}`, ...auditMeta(req),
+      });
+      return gone;
+    });
+    return { deleted: true, number: done.number };
+  },
+  { permission: { module: 'sales', action: 'void' } },
 );

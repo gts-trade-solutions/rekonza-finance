@@ -11,7 +11,7 @@ import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { useState } from 'react';
 import {
-  Ban, ChevronDown, Copy, FileText, Loader2, MoreHorizontal, Printer, Receipt, Send, Sparkles, Wallet,
+  Ban, ChevronDown, Copy, FileText, Loader2, MoreHorizontal, Pencil, Printer, Receipt, Send, Sparkles, Trash2, Wallet,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card } from '@/components/ui/card';
@@ -44,6 +44,7 @@ import { VoidedNote } from '@/components/shared/voided-note';
 import { SendInvoice } from '@/components/sales/send-invoice';
 import { InvoiceDocument, invoiceModel } from '@/components/print/invoice-print';
 import { ribbonFor } from '@/components/print/zoho-sheet';
+import { refreshSplitList } from '@/components/shared/record-split';
 import { TemplatePreview } from '@/components/settings/template-gallery';
 import { DEFAULT_TEMPLATE, layoutFor, templateInfo, templatesOf, type TemplateKey } from '@/lib/print-template';
 
@@ -65,6 +66,9 @@ export default function InvoiceDetailPage() {
   const [voiding, setVoiding] = useState(false);
   const [cancellingIrn, setCancellingIrn] = useState(false);
   const [reason, setReason] = useState('');
+  const [deleting, setDeleting] = useState(false);
+  const [deleteReason, setDeleteReason] = useState('');
+  const removeIt = useApiAction(invoiceApi.remove);
 
   return (
     <AsyncPage state={state}>
@@ -84,6 +88,11 @@ export default function InvoiceDetailPage() {
               description={`${inv.debitNote ? `Debit note${inv.debitNote.against ? ` against ${inv.debitNote.against.number}` : ''} · ` : inv.paidAtSale ? 'Sales receipt · paid at the time of sale · ' : ''}${inv.customer.name} · raised ${d(inv.date)}, due ${d(inv.dueDate)}`}
               actions={
                 <>
+                  {canEdit && inv.status !== 'void' && !irnLive && (
+                    <Button variant="outline" size="sm" asChild className="gap-1.5">
+                      <Link href={`/sales/invoices/${inv.id}/edit`} data-slot="edit-invoice"><Pencil className="size-3.5" /> Edit</Link>
+                    </Button>
+                  )}
                   {inv.status !== 'draft' && inv.status !== 'void' && <SendInvoice inv={inv} onSent={() => void state.refetch()} />}
                   <DropdownMenu>
                     <DropdownMenuTrigger className="inline-flex h-8 items-center gap-1.5 rounded-[3px] border px-3 text-[13px] transition-colors hover:bg-accent" data-slot="pdf-print">
@@ -104,13 +113,13 @@ export default function InvoiceDetailPage() {
                       <Link href={`/sales/invoices/new?clone=${inv.id}`} data-slot="clone-invoice"><Copy className="size-3.5" /> Clone</Link>
                     </Button>
                   )}
-                  {canEdit && inv.status !== 'void' && (
+                  {(canEdit && inv.status !== 'void') || (canVoid && !irnLive && inv.amountPaidPaise === 0) ? (
                     <DropdownMenu>
                       <DropdownMenuTrigger aria-label="More actions" className="grid size-9 place-items-center rounded-[3px] border transition-colors hover:bg-accent">
                         <MoreHorizontal className="size-4" />
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end">
-                        <DropdownMenuItem
+                        {inv.status !== 'void' && <DropdownMenuItem
                           onClick={async () => {
                             if (await send.run(inv.id)) {
                               toast.success(`${inv.number} marked sent`);
@@ -119,10 +128,15 @@ export default function InvoiceDetailPage() {
                           }}
                         >
                           <Send className="mr-2 size-4" /> Mark as sent
-                        </DropdownMenuItem>
-                        {!irnLive && (
+                        </DropdownMenuItem>}
+                        {!irnLive && inv.status !== 'void' && (
                           <DropdownMenuItem onClick={() => setVoiding(true)}>
                             <Ban className="mr-2 size-4" /> Void invoice
+                          </DropdownMenuItem>
+                        )}
+                        {canVoid && !irnLive && inv.amountPaidPaise === 0 && (
+                          <DropdownMenuItem onClick={() => setDeleting(true)} className="text-destructive focus:text-destructive" data-slot="delete-invoice">
+                            <Trash2 className="mr-2 size-4" /> Delete
                           </DropdownMenuItem>
                         )}
                         {irnLive && cancelUntil && canFileGst && (
@@ -135,7 +149,7 @@ export default function InvoiceDetailPage() {
                             <FileText className="mr-2 size-4" /> Reverse with a credit note
                           </DropdownMenuItem>
                         )}
-                        {canVoid && inv.status !== 'draft' && inv.balancePaise > 0 && (
+                        {canVoid && inv.status !== 'draft' && inv.status !== 'void' && inv.balancePaise > 0 && (
                           <DropdownMenuItem
                             onClick={async () => {
                               const why = window.prompt(
@@ -157,7 +171,7 @@ export default function InvoiceDetailPage() {
                         )}
                       </DropdownMenuContent>
                     </DropdownMenu>
-                  )}
+                  ) : null}
                 </>
               }
             />
@@ -313,6 +327,42 @@ export default function InvoiceDetailPage() {
                     className="gap-1.5"
                   >
                     {voidIt.busy && <Loader2 className="size-3.5 animate-spin" />} Void invoice
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+
+            <Dialog open={deleting} onOpenChange={setDeleting}>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Delete {inv.number}?</DialogTitle>
+                  <DialogDescription>
+                    The invoice is removed{inv.journalEntryId ? ' and its entry is reversed in the ledger' : ''}. Its number is
+                    reported as cancelled in GSTR-1, and the audit trail keeps a copy of it as it was.
+                  </DialogDescription>
+                </DialogHeader>
+                <Field label="Reason" hint="Optional. Kept with the record of what was deleted">
+                  <Input value={deleteReason} onChange={(e) => setDeleteReason(e.target.value)} placeholder="Raised in error" data-slot="delete-reason" />
+                </Field>
+                {removeIt.error && <p className="text-sm text-destructive" data-slot="delete-error">{removeIt.error}</p>}
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setDeleting(false)}>Cancel</Button>
+                  <Button
+                    variant="destructive"
+                    disabled={removeIt.busy}
+                    data-slot="confirm-delete"
+                    onClick={async () => {
+                      const ok = await removeIt.run(inv.id, deleteReason.trim() || undefined);
+                      if (ok) {
+                        toast.success(`${inv.number} deleted`);
+                        setDeleting(false);
+                        refreshSplitList();
+                        router.push(inv.docKind === 'debit_note' ? '/sales/debit-notes' : '/sales/invoices');
+                      }
+                    }}
+                    className="gap-1.5"
+                  >
+                    {removeIt.busy && <Loader2 className="size-3.5 animate-spin" />} Delete
                   </Button>
                 </DialogFooter>
               </DialogContent>

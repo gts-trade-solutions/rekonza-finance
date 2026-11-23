@@ -6,6 +6,7 @@ import { toPaiseFromSql } from '@/lib/server/money-sql';
 import { logAudit, auditMeta } from '@/lib/server/audit';
 import { reverseJournal } from '@/lib/server/services/journals';
 import { saveJournal } from '@/lib/server/services/held-journals';
+import { JournalInput, toJournalInput } from '@/lib/server/journal-input';
 import '@/lib/server/jobs/boot';
 
 const ListQuery = z.object({
@@ -16,6 +17,8 @@ const ListQuery = z.object({
   sourceType: z.string().optional(),
   accountId: z.string().optional(),
   search: z.string().optional(),
+  /** Leave out entries that were reversed, and their reversals: a journal edited or deleted shows only as it now stands. */
+  hideReversed: z.enum(['1', '0']).optional(),
   limit: z.coerce.number().int().min(1).max(500).default(200),
   offset: z.coerce.number().int().min(0).default(0),
 });
@@ -42,6 +45,11 @@ export const GET = route(
         : base.where('source_type', 'in', kinds);
     }
     if (q.search) base = base.where('memo', 'like', `%${q.search}%`);
+    if (q.hideReversed === '1') {
+      base = base.where('reversal_of_entry_id', 'is', null)
+        .where('id', 'not in', db.selectFrom('journal_entries as r').select('r.reversal_of_entry_id as id')
+          .where('r.org_id', '=', orgId).where('r.reversal_of_entry_id', 'is not', null) as never);
+    }
 
     // Only entries that touch the chosen account, when one is given.
     if (q.accountId) {
@@ -85,7 +93,7 @@ export const GET = route(
             'journal_lines.entry_id', 'journal_lines.line_no', 'journal_lines.debit',
             'journal_lines.credit', 'journal_lines.description',
             'accounts.id as account_id', 'accounts.code', 'accounts.name',
-            'contacts.display_name as contact_name',
+            'contacts.display_name as contact_name', 'journal_lines.contact_id', 'journal_lines.cost_centre_id',
           ])
           .where('journal_lines.entry_id', 'in', ids)
           .orderBy('journal_lines.line_no')
@@ -128,6 +136,8 @@ export const GET = route(
           accountName: l.name,
           description: l.description,
           contactName: l.contact_name,
+          contactId: l.contact_id ? asId(l.contact_id) : null,
+          costCentreId: l.cost_centre_id ? asId(l.cost_centre_id) : null,
           debitPaise: toPaiseFromSql(l.debit),
           creditPaise: toPaiseFromSql(l.credit),
         })),
@@ -141,36 +151,6 @@ export const GET = route(
   { permission: { module: 'accountant', action: 'view' } },
 );
 
-const CreateInput = z.object({
-  /** Defaults to the branch the request is acting in. */
-  branchId: z.string().optional(),
-  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use a yyyy-mm-dd date.'),
-  memo: z.string().min(1, 'Say what this entry is for.'),
-  lines: z
-    .array(
-      z.object({
-        accountId: z.string(),
-        debitPaise: z.number().int().nonnegative().optional(),
-        creditPaise: z.number().int().nonnegative().optional(),
-        description: z.string().nullish(),
-        contactId: z.string().nullish(),
-        /** The cost centre of an income or expense line. */
-        costCentreId: z.string().nullish(),
-        // Against Ref: which of the party's documents this line settles.
-        against: z.array(z.object({
-          targetType: z.enum(['invoice', 'bill', 'opening']),
-          targetId: z.string(),
-          amountPaise: z.number().int().positive(),
-        })).optional(),
-      }),
-    )
-    .min(2, 'A journal entry needs at least two lines.'),
-  /** Reverse the whole entry automatically on this date. */
-  reverseOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullish(),
-  /** Post now, keep as an optional voucher, or let the scheduler post it on its date. */
-  mode: z.enum(['post', 'optional', 'post_dated']).default('post'),
-});
-
 /**
  * Post a manual journal.
  *
@@ -180,24 +160,10 @@ const CreateInput = z.object({
  */
 export const POST = route(
   async ({ orgId, user, branchId, req }) => {
-    const input = await body(req, CreateInput);
+    const input = await body(req, JournalInput);
 
     const saved = await transaction(async (trx) =>
-      saveJournal(trx, orgId, user.userId, {
-        branchId: input.branchId ? Number(input.branchId) : branchId,
-        date: input.date,
-        memo: input.memo,
-        reverseOn: input.reverseOn ?? null,
-        lines: input.lines.map((l) => ({
-          accountId: Number(l.accountId),
-          debitPaise: l.debitPaise ?? 0,
-          creditPaise: l.creditPaise ?? 0,
-          description: l.description,
-          contactId: l.contactId ? Number(l.contactId) : null,
-          costCentreId: l.costCentreId ? Number(l.costCentreId) : null,
-          against: l.against?.map((a) => ({ ...a, targetId: Number(a.targetId) })),
-        })),
-      }, input.mode),
+      saveJournal(trx, orgId, user.userId, toJournalInput(input, branchId), input.mode),
     );
 
     if (saved.held) {

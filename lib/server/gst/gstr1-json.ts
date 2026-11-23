@@ -490,10 +490,18 @@ export async function gstr1PortalFile(
   put('txpd', advSection(adv.adjusted));
   put('hsn', hsn);
 
+  // A deleted document's number was issued all the same: it counts as cancelled (migration 118).
+  const { rows: gone } = await sql<{ doc_type: string; number: string }>`
+    SELECT d.doc_type, d.number FROM deleted_documents d
+     WHERE d.org_id = ${orgId} AND d.doc_type IN ('invoice', 'debit_note', 'credit_note') AND d.number IS NOT NULL
+       AND d.doc_date BETWEEN ${period.from} AND ${period.to}
+       ${branchFilter('d')}
+  `.execute(ex);
+  const cancelled = (type: string) => gone.filter((g) => g.doc_type === type).map((g) => ({ number: g.number, status: 'void' }));
   const docDet = [
-    { doc_num: 1, docs: seriesRanges(invoices) },
-    { doc_num: 4, docs: seriesRanges(debitNotes) },
-    { doc_num: 5, docs: seriesRanges(notes) },
+    { doc_num: 1, docs: seriesRanges([...invoices, ...cancelled('invoice')]) },
+    { doc_num: 4, docs: seriesRanges([...debitNotes, ...cancelled('debit_note')]) },
+    { doc_num: 5, docs: seriesRanges([...notes, ...cancelled('credit_note')]) },
   ].filter((d) => d.docs.length);
   if (docDet.length) file.doc_issue = { doc_det: docDet };
 

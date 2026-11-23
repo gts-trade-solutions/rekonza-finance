@@ -1,6 +1,9 @@
 import { sql } from 'kysely';
-import { db } from '@/lib/server/db';
-import { route, idParam, asId, notFound, forbidden } from '@/lib/server/http';
+import { db, transaction } from '@/lib/server/db';
+import { route, idParam, asId, notFound, forbidden, body, badRequest } from '@/lib/server/http';
+import { logAudit, auditMeta } from '@/lib/server/audit';
+import { deletePayment, updatePayment } from '@/lib/server/services/payments';
+import { PaymentInput, toPaymentInput } from '@/lib/server/payment-input';
 import { hasPermission } from '@/lib/rbac';
 import { toPaiseFromSql } from '@/lib/server/money-sql';
 
@@ -19,6 +22,7 @@ export const GET = route(async ({ orgId, role, params }) => {
       'payments.advance_cgst', 'payments.advance_sgst', 'payments.advance_igst',
       'contacts.display_name as contact_name', 'contacts.legal_name as contact_legal_name',
       'payments.mode', 'payments.reference', 'payments.bank_account_id',
+      'payments.bank_charges', 'payments.notes', 'payments.currency', 'payments.fc_amount', 'payments.branch_id',
     ])
     .where('payments.id', '=', id).where('payments.org_id', '=', orgId)
     .executeTakeFirst();
@@ -26,9 +30,14 @@ export const GET = route(async ({ orgId, role, params }) => {
   if (!hasPermission(role, p.kind === 'received' ? 'sales' : 'purchases', 'view')) throw forbidden('You cannot see this payment.');
 
   const allocations = await sql<{
-    id: number; target_type: string; target_id: number; amount: string; applied_on: string | null; doc_number: string | null;
+    id: number; target_type: string; target_id: number; amount: string; fc_amount: string | null; applied_on: string | null; doc_number: string | null; due_date: string | null;
   }>`
-    SELECT a.id, a.target_type, a.target_id, a.amount, a.applied_on,
+    SELECT a.id, a.target_type, a.target_id, a.amount, a.fc_amount, a.applied_on,
+           CASE a.target_type
+             WHEN 'invoice'  THEN (SELECT due_date FROM invoices WHERE id = a.target_id)
+             WHEN 'bill'     THEN (SELECT due_date FROM bills WHERE id = a.target_id)
+             WHEN 'opening'  THEN (SELECT due_date FROM opening_documents WHERE id = a.target_id)
+           END AS due_date,
            CASE a.target_type
              WHEN 'invoice'  THEN (SELECT number FROM invoices WHERE id = a.target_id)
              WHEN 'bill'     THEN (SELECT COALESCE(vendor_invoice_no, internal_no) FROM bills WHERE id = a.target_id)
@@ -53,6 +62,13 @@ export const GET = route(async ({ orgId, role, params }) => {
     payeeName: p.contact_legal_name || p.contact_name,
     mode: p.mode,
     reference: p.reference,
+    /** What the Edit form needs to show it as saved. */
+    bankAccountId: p.bank_account_id ? asId(p.bank_account_id) : null,
+    branchId: asId(p.branch_id),
+    bankChargesPaise: toPaiseFromSql(p.bank_charges),
+    notes: p.notes,
+    currency: p.currency,
+    fcAmountPaise: p.fc_amount == null ? null : toPaiseFromSql(p.fc_amount),
     bankName: p.bank_account_id ? (await db.selectFrom('bank_accounts').select('name').where('id', '=', p.bank_account_id).executeTakeFirst())?.name ?? null : null,
     amountPaise: toPaiseFromSql(p.amount),
     tdsPaise: toPaiseFromSql(p.tds_amount),
@@ -66,7 +82,54 @@ export const GET = route(async ({ orgId, role, params }) => {
       targetId: asId(a.target_id),
       number: a.doc_number ?? `#${a.target_id}`,
       amountPaise: toPaiseFromSql(a.amount),
+      foreignAmountPaise: a.fc_amount == null ? null : toPaiseFromSql(a.fc_amount),
+      dueDate: a.due_date ? String(a.due_date).slice(0, 10) : null,
       appliedOn: a.applied_on ? String(a.applied_on).slice(0, 10) : null,
     })),
   };
+});
+
+/** Receipts belong to sales and payments made to purchases; the right to act is that area's. */
+async function kindOf(orgId: number, id: number, role: Parameters<typeof hasPermission>[0], action: 'edit' | 'void') {
+  const p = await db.selectFrom('payments').select(['kind']).where('id', '=', id).where('org_id', '=', orgId).executeTakeFirst();
+  if (!p) throw notFound('Payment not found.');
+  if (!hasPermission(role, p.kind === 'received' ? 'sales' : 'purchases', action)) {
+    throw forbidden(action === 'edit' ? 'Your role cannot change this payment.' : 'Your role cannot delete this payment.');
+  }
+  return p.kind;
+}
+
+/** Zoho's Edit on a payment: taken off what it paid, reversed, and recorded again in place. */
+export const PUT = route(async ({ orgId, user, role, req, params }) => {
+  const id = idParam(params);
+  const input = await body(req, PaymentInput);
+  const kind = await kindOf(orgId, id, role, 'edit');
+  if (input.kind !== kind) throw badRequest('A receipt stays a receipt, and a payment made stays one.');
+  const done = await transaction(async (trx) => {
+    const made = await updatePayment(trx, orgId, user.userId, id, toPaymentInput(input));
+    await logAudit({
+      trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'update',
+      targetType: kind === 'received' ? 'payment_received' : 'payment_made', targetId: id, targetLabel: made.number,
+      detail: `Edited ${made.number}`, payload: { before: made.before }, ...auditMeta(req),
+    });
+    return made;
+  });
+  return { id: asId(done.id), number: done.number, unappliedPaise: done.unappliedPaise, journalEntryId: asId(done.journalEntryId), warnings: done.warnings ?? [] };
+});
+
+/** Zoho's Delete on a payment: what it paid is owed again; its entry is reversed. */
+export const DELETE = route(async ({ orgId, user, role, req, params }) => {
+  const id = idParam(params);
+  const kind = await kindOf(orgId, id, role, 'void');
+  const reason = new URL(req.url).searchParams.get('reason');
+  const done = await transaction(async (trx) => {
+    const gone = await deletePayment(trx, orgId, user.userId, id, reason);
+    await logAudit({
+      trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'delete',
+      targetType: kind === 'received' ? 'payment_received' : 'payment_made', targetId: id, targetLabel: gone.number,
+      detail: `Deleted ${gone.number}`, ...auditMeta(req),
+    });
+    return gone;
+  });
+  return { deleted: true, number: done.number };
 });

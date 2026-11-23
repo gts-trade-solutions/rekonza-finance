@@ -28,6 +28,7 @@ import { ApiError, badRequest, conflict, notFound } from '../http';
 import { applyAllocations } from './payments';
 import { ruleFor } from './approvals';
 import { ageing } from '../reports/statements';
+import { plain, recordDeletion, unlinkDocument } from './doc-delete';
 import { dayLabel } from '../../date-range';
 
 export interface JournalLineInput {
@@ -147,6 +148,57 @@ export async function reverseJournal(
     await trx.updateTable('journal_allocations').set({ reversed: 1 }).where('entry_id', '=', entryId).execute();
   }
   return reversal;
+}
+
+// ── Edit and delete a journal, as Zoho Books has them ────────────────────────
+// A posted entry is never changed (db/protect). Zoho's Edit on a manual journal
+// is therefore the entry reversed on its own date and the corrected one posted;
+// Delete is the reversal alone, with the record of it kept (migration 118).
+// The journals list leaves such pairs out unless asked to show them.
+
+/** Entries that stand on their own; a document's entry goes with its document. */
+export const JOURNAL_EDITABLE = new Set(['manual', 'opening', 'opening_balance', 'reclassification', 'recurring', 'doubtful_debts', 'tally_import', 'fx_revaluation']);
+
+async function journalForChange(trx: Trx, orgId: number, entryId: number) {
+  const e = await trx.selectFrom('journal_entries')
+    .select(['id', 'entry_no', 'entry_date', 'memo', 'source_type', 'reversal_of_entry_id', 'branch_id', 'total_debit'])
+    .where('id', '=', entryId).where('org_id', '=', orgId).forUpdate().executeTakeFirst();
+  if (!e) throw notFound('That journal entry does not exist.');
+  if (!JOURNAL_EDITABLE.has(e.source_type)) {
+    throw new ApiError(409, `Entry #${e.entry_no} was posted by ${e.source_type.replace(/_/g, ' ')}. Edit or delete that document instead; its entry follows it.`, 'locked_document');
+  }
+  if (e.reversal_of_entry_id) throw new ApiError(409, `Entry #${e.entry_no} is itself a reversal. Post a new journal to correct it.`, 'locked_document');
+  const by = await trx.selectFrom('journal_entries').select('entry_no').where('org_id', '=', orgId).where('reversal_of_entry_id', '=', entryId).executeTakeFirst();
+  if (by) throw new ApiError(409, `Entry #${e.entry_no} has already been reversed by #${by.entry_no}.`, 'locked_document');
+  return e;
+}
+
+async function journalSnapshot(trx: Trx, entryId: number) {
+  const lines = await trx.selectFrom('journal_lines').selectAll().where('entry_id', '=', entryId).orderBy('line_no').execute();
+  const allocations = await trx.selectFrom('journal_allocations').selectAll().where('entry_id', '=', entryId).execute();
+  return { lines: lines.map(plain), allocations: allocations.map(plain) };
+}
+
+/** Edit a manual journal: reversed on its own date, the corrected one posted. */
+export async function editJournal(trx: Trx, orgId: number, userId: number | null, entryId: number, input: ManualJournalInput) {
+  const e = await journalForChange(trx, orgId, entryId);
+  const before = { entry: plain(e), ...(await journalSnapshot(trx, entryId)) };
+  await reverseJournal(trx, orgId, userId, entryId, { memo: `Journal #${e.entry_no} edited: the entry as it was, reversed` });
+  const entry = await postManualJournal(trx, orgId, userId, { ...input, sourceType: e.source_type });
+  return { entry, before, replacedEntryNo: e.entry_no };
+}
+
+/** Delete a manual journal: reversed on its own date; the record of it kept. */
+export async function deleteJournal(trx: Trx, orgId: number, userId: number | null, entryId: number, reason?: string | null) {
+  const e = await journalForChange(trx, orgId, entryId);
+  const snapshot = { entry: plain(e), ...(await journalSnapshot(trx, entryId)) };
+  const reversal = await reverseJournal(trx, orgId, userId, entryId, { memo: `Journal #${e.entry_no} deleted` });
+  await unlinkDocument(trx, orgId, 'journal_entry', entryId);
+  await recordDeletion(trx, {
+    orgId, userId, docType: 'journal', docId: entryId, number: `#${e.entry_no}`, date: String(e.entry_date).slice(0, 10),
+    totalPaise: toPaiseFromSql(e.total_debit), branchId: e.branch_id, journalEntryId: entryId, reversalEntryId: reversal.id, reason, snapshot,
+  });
+  return { entryNo: e.entry_no, reversalNo: reversal.entryNo };
 }
 
 async function openingKind(ex: Executor, id: number): Promise<'received' | 'made'> {

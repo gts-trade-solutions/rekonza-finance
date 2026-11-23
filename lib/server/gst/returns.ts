@@ -137,6 +137,14 @@ export async function gstr1(ex: Executor, orgId: number, month: string, branchId
   const issued = invoiceRows.rows.filter((r) => r.status !== 'draft');
   const live = issued.filter((r) => r.status !== 'void');
   const cancelled = issued.filter((r) => r.status === 'void');
+  // A deleted invoice's number was issued too: it counts as cancelled (migration 118).
+  const { rows: [goneRow] } = await sql<{ n: number }>`
+    SELECT COUNT(*) AS n FROM deleted_documents
+     WHERE org_id = ${orgId} AND doc_type IN ('invoice', 'debit_note') AND number IS NOT NULL
+       AND doc_date BETWEEN ${period.from} AND ${period.to}
+       ${branchId ? sql`AND branch_id = ${branchId}` : sql``}
+  `.execute(ex);
+  const deletedCount = Number(goneRow?.n ?? 0);
 
   const b2b: Gstr1Row[] = [];
   const b2cl: Gstr1Row[] = [];
@@ -322,8 +330,8 @@ export async function gstr1(ex: Executor, orgId: number, month: string, branchId
       // The invoice series; debit notes run in a series of their own.
       from: issued.find((r) => r.doc_kind !== 'debit_note')?.number ?? '—',
       to: issued.findLast((r) => r.doc_kind !== 'debit_note')?.number ?? '—',
-      total: issued.length,
-      cancelled: cancelled.length,
+      total: issued.length + deletedCount,
+      cancelled: cancelled.length + deletedCount,
     },
     issues,
     invoiceCount: live.length,

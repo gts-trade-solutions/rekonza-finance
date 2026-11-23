@@ -8,6 +8,7 @@
 // gained a column.
 
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { Plus, Wallet } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -28,6 +29,7 @@ import { useApi } from '@/lib/api/use-api';
 import { ApplyPaymentDialog } from '@/components/shared/apply-payment-dialog';
 
 export function PaymentsList({ kind }: { kind: 'received' | 'made' }) {
+  const router = useRouter();
   const isReceipt = kind === 'received';
   const canCreate = usePermission(isReceipt ? 'sales' : 'purchases', 'create');
   const canEdit = usePermission(isReceipt ? 'sales' : 'purchases', 'edit');
@@ -184,7 +186,7 @@ export function PaymentsList({ kind }: { kind: 'received' | 'made' }) {
 
               <DataTable
                 rows={data.payments}
-                columns={[...columns, documentMenuColumn(isReceipt ? 'payment-received' : 'payment-made', () => void state.refetch())]}
+                columns={[...columns, documentMenuColumn(isReceipt ? 'payment-received' : 'payment-made', () => void state.refetch(), (r) => router.push(`${isReceipt ? '/sales/payments/new' : '/purchases/payments/new'}?edit=${r.id}`))]}
                 getRowId={(r) => r.id}
                 selectable
                 bulkActions={(selected) => <BulkPrintButton kind={isReceipt ? 'payment-received' : 'payment-made'} ids={selected.map((r) => r.id)} />}

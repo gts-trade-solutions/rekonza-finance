@@ -45,6 +45,7 @@ import { ApiError, badRequest, conflict, notFound } from '../http';
 import { findBillDuplicates } from './bill-duplicates';
 import { atRate, foreignOf, fyLabelFor } from './sales';
 import { removeLandedCost } from './landed-cost';
+import { plain, recordDeletion, reverseForChange, unlinkDocument } from './doc-delete';
 
 export interface BillLineInput {
   itemId?: number | null;
@@ -580,6 +581,8 @@ export async function createExpense(
   orgId: number,
   userId: number | null,
   input: CreateExpenseInput,
+  /** Rewrite this expense in place (updateExpense): same row, same number. */
+  opts: { replace?: { id: number; number: string } } = {},
 ): Promise<{ id: number; number: string; totalPaise: Paise; journalEntryId: number; warnings?: string[] }> {
   if (input.mileage) {
     const { km, ratePaise } = input.mileage;
@@ -631,14 +634,12 @@ export async function createExpense(
   const cgst = half;
   const sgst = taxTotal - half;
 
-  const number = await allocateOrgNumber(trx, orgId, 'EXP', fyLabelFor(input.date), 'EXP');
+  const number = opts.replace?.number ?? await allocateOrgNumber(trx, orgId, 'EXP', fyLabelFor(input.date), 'EXP');
 
   const itcEligibility = (await registrationOn(trx, orgId, input.date)) === 'regular' ? input.itcEligibility ?? 'eligible' : 'ineligible';
   const eligible = itcEligibility === 'eligible' || itcEligibility === 'capital_goods';
 
-  const inserted = await trx
-    .insertInto('expenses')
-    .values({
+  const expenseValues = {
       org_id: orgId,
       branch_id: input.branchId,
       cost_centre_id: input.costCentreId ?? null,
@@ -661,11 +662,17 @@ export async function createExpense(
       notes: input.notes ?? null,
       mileage_km: input.mileage ? String(input.mileage.km) : null,
       mileage_rate: input.mileage ? toSqlFromPaise(input.mileage.ratePaise) : null,
-      status: 'recorded',
+      status: 'recorded' as const,
       created_by_user_id: userId,
-    })
-    .executeTakeFirstOrThrow();
-  const expenseId = Number(inserted.insertId);
+    };
+  let expenseId: number;
+  if (opts.replace) {
+    const { org_id: _o, number: _n, created_by_user_id: _c, ...changed } = expenseValues;
+    await trx.updateTable('expenses').set({ ...changed, gst_rate_pct: String(changed.gst_rate_pct), journal_entry_id: null }).where('id', '=', opts.replace.id).where('org_id', '=', orgId).execute();
+    expenseId = opts.replace.id;
+  } else {
+    expenseId = Number((await trx.insertInto('expenses').values(expenseValues).executeTakeFirstOrThrow()).insertId);
+  }
 
   const acc = await accountIds(trx, orgId);
   const draft: DraftLine[] = [];
@@ -708,4 +715,52 @@ export async function createExpense(
     .where('id', '=', expenseId).execute();
 
   return { id: expenseId, number, totalPaise: input.amountPaise, journalEntryId: entry.id, warnings };
+}
+
+
+// ── Edit and delete an expense, as Zoho Books has them ───────────────────────
+
+async function expenseBlocker(trx: Trx, orgId: number, e: { id: number; number: string; status: string; billed_invoice_id: number | null; journal_entry_id: number | null }) {
+  if (e.status === 'void') return `${e.number} is void.`;
+  if (e.billed_invoice_id) {
+    const inv = await trx.selectFrom('invoices').select('number').where('id', '=', e.billed_invoice_id).executeTakeFirst();
+    return `${e.number} has been re-charged to the customer on ${inv?.number ?? 'an invoice'}. Take it off that invoice first.`;
+  }
+  if (e.journal_entry_id) {
+    const matched = await trx.selectFrom('bank_transactions').select('id').where('org_id', '=', orgId)
+      .where('matched_type', '=', 'journal_entry').where('matched_id', '=', e.journal_entry_id).where('status', '=', 'matched').executeTakeFirst();
+    if (matched) return `${e.number} is matched to a bank statement line. Unmatch it in Banking first.`;
+  }
+  return null;
+}
+
+/** Edit an expense, as Zoho Books' Edit: its entry is reversed and it is recorded again in place. */
+export async function updateExpense(trx: Trx, orgId: number, userId: number | null, expenseId: number, input: CreateExpenseInput) {
+  const e = await trx.selectFrom('expenses').select(['id', 'number', 'status', 'billed_invoice_id', 'journal_entry_id'])
+    .where('id', '=', expenseId).where('org_id', '=', orgId).forUpdate().executeTakeFirst();
+  if (!e) throw notFound('Expense not found.');
+  const blocked = await expenseBlocker(trx, orgId, e);
+  if (blocked) throw new ApiError(409, blocked, 'locked_document');
+  const before = plain(await trx.selectFrom('expenses').selectAll().where('id', '=', expenseId).executeTakeFirstOrThrow());
+  await reverseForChange(trx, orgId, e.journal_entry_id, { memo: `Expense ${e.number} edited: the entry as it was, reversed`, userId, module: 'purchases' });
+  const made = await createExpense(trx, orgId, userId, input, { replace: { id: expenseId, number: e.number } });
+  return { ...made, before };
+}
+
+/** Delete an expense, as Zoho Books' Delete: its entry is reversed and the record of it kept (migration 118). */
+export async function deleteExpense(trx: Trx, orgId: number, userId: number | null, expenseId: number, reason?: string | null) {
+  const e = await trx.selectFrom('expenses').selectAll().where('id', '=', expenseId).where('org_id', '=', orgId).forUpdate().executeTakeFirst();
+  if (!e) throw notFound('Expense not found.');
+  const blocked = e.status === 'void' ? null : await expenseBlocker(trx, orgId, e);
+  if (blocked) throw new ApiError(409, blocked, 'locked_document');
+  const reversal = e.status === 'void' ? null
+    : await reverseForChange(trx, orgId, e.journal_entry_id, { memo: `Expense ${e.number} deleted`, userId, module: 'purchases' });
+  await unlinkDocument(trx, orgId, 'expense', expenseId);
+  await recordDeletion(trx, {
+    orgId, userId, docType: 'expense', docId: expenseId, number: e.number, date: String(e.expense_date).slice(0, 10),
+    totalPaise: toPaiseFromSql(e.total), contactId: e.vendor_id, branchId: e.branch_id,
+    journalEntryId: e.journal_entry_id, reversalEntryId: reversal, reason, snapshot: { expense: plain(e) },
+  });
+  await trx.deleteFrom('expenses').where('id', '=', expenseId).where('org_id', '=', orgId).execute();
+  return { number: e.number };
 }

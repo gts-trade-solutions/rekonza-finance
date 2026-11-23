@@ -114,7 +114,7 @@ function shown(v: unknown): string {
 }
 
 const PAGE = 300;
-const ACTIONS = ['create', 'update', 'approve', 'void', 'send', 'match', 'import', 'export', 'login'];
+const ACTIONS = ['create', 'update', 'delete', 'approve', 'void', 'send', 'match', 'import', 'export', 'login'];
 
 export default function AuditTrailPage() {
   const canExport = usePermission('accountant', 'export');

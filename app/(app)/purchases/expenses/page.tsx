@@ -8,7 +8,7 @@
 // ids — so a page that needs the server's ids asks for them directly.
 
 import { useMemo, useState } from 'react';
-import { Plus, Receipt, Tags, Wallet } from 'lucide-react';
+import { Loader2, Pencil, Plus, Receipt, Tags, Trash2, Wallet } from 'lucide-react';
 import { TagsPanel } from '@/components/shared/tags-panel';
 import { CustomFieldsPanel } from '@/components/shared/custom-fields-panel';
 import { toast } from 'sonner';
@@ -21,7 +21,7 @@ import { Switch } from '@/components/ui/switch';
 import { Combobox } from '@/components/ui/combobox';
 import { ContactPicker } from '@/components/forms/quick-create';
 import {
-  Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger,
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger,
 } from '@/components/ui/dialog';
 import { PageHeader } from '@/components/shared/page-header';
 import { ModuleMenu } from '@/components/shared/module-menu';
@@ -62,6 +62,8 @@ const BLANK = {
   km: 0,
   ratePerKm: 0,
   itcEligibility: 'eligible' as 'eligible' | 'ineligible' | 'capital_goods',
+  // Zoho asks the date; today unless changed.
+  date: '',
 };
 
 export default function ExpensesPage() {
@@ -73,6 +75,32 @@ export default function ExpensesPage() {
   const [f, setF] = useState(BLANK);
   const [costCentreId, setCostCentreId] = useState('');
   const [tagging, setTagging] = useState<ExpenseListItem | null>(null);
+  // Zoho's Edit and Delete on an expense.
+  const canEdit = usePermission('purchases', 'edit');
+  const canDelete = usePermission('purchases', 'void');
+  const [editing, setEditing] = useState<{ id: string; number: string } | null>(null);
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [deleting, setDeleting] = useState<ExpenseListItem | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const startEdit = async (r: ExpenseListItem) => {
+    try {
+      const e = await expenseApi.get(r.id);
+      setEditing({ id: e.id, number: e.number });
+      setF({
+        ...BLANK,
+        accountId: e.accountId, vendorId: e.vendorId ?? '', paidThroughId: e.paidThroughBankAccountId,
+        amount: e.mileage ? 0 : e.amountPaise, gst: e.gstRatePct, notes: e.notes ?? '', reference: e.reference ?? '',
+        billable: e.isBillable, billTo: e.billableCustomerId ?? '', projectId: e.projectId ?? '',
+        mileage: !!e.mileage, km: e.mileage?.km ?? 0, ratePerKm: e.mileage?.ratePaise ?? 0,
+        itcEligibility: e.itcEligibility, date: e.date,
+      });
+      setCostCentreId(e.costCentreId ?? '');
+      setOpen(true);
+    } catch (err) {
+      toast.error('That expense could not be loaded', { description: err instanceof Error ? err.message : String(err) });
+    }
+  };
 
   const state = useApi(
     () =>
@@ -113,9 +141,9 @@ export default function ExpensesPage() {
       return;
     }
 
-    const created = await create.run({
+    const payload = {
       branchId: session.user.branchId ?? session.branches[0]?.id,
-      date: today(),
+      date: f.date || today(),
       accountId: f.accountId,
       paidThroughBankAccountId: f.paidThroughId,
       // What was entered is what was actually paid; the server extracts the GST
@@ -131,7 +159,22 @@ export default function ExpensesPage() {
       reference: f.reference || undefined,
       notes: f.notes || undefined,
       costCentreId: costCentreId || undefined,
-    });
+    };
+    if (editing) {
+      setSavingEdit(true);
+      try {
+        const done = await expenseApi.update(editing.id, payload);
+        toast.success(`Expense ${done.number} updated`, { description: 'Its entry was reversed and posted again; the audit trail keeps the old version.' });
+        setOpen(false);
+        setEditing(null);
+        setF({ ...BLANK, paidThroughId: f.paidThroughId });
+        await state.refetch();
+      } catch (err) {
+        toast.error('Not saved', { description: err instanceof Error ? err.message : String(err) });
+      } finally { setSavingEdit(false); }
+      return;
+    }
+    const created = await create.run(payload);
 
     if (!created) {
       if (create.wasQueued()) { setOpen(false); setF(BLANK); return; }
@@ -194,6 +237,24 @@ export default function ExpensesPage() {
     },
     { key: 'total', header: 'Total paid', align: 'right', sortValue: (r) => r.totalPaise, cell: (r) => <Money value={r.totalPaise} /> },
     { key: 'tags', header: '', sortValue: () => 0, cell: (r) => <Button size="icon-sm" variant="ghost" aria-label={`Tags and details for ${r.number}`} onClick={() => setTagging(r)}><Tags className="size-3.5" /></Button> },
+    {
+      key: 'change', header: '', align: 'right', sortValue: () => 0,
+      cell: (r) => (
+        <div className="flex justify-end gap-0.5">
+          {canEdit && (
+            <Button size="icon-sm" variant="ghost" aria-label={`Edit ${r.number}`} onClick={() => void startEdit(r)} data-slot="edit-expense">
+              <Pencil className="size-3.5" />
+            </Button>
+          )}
+          {canDelete && (
+            <Button size="icon-sm" variant="ghost" aria-label={`Delete ${r.number}`} className="text-destructive hover:text-destructive"
+              onClick={() => { setDeleteError(null); setDeleting(r); }} data-slot="delete-expense">
+              <Trash2 className="size-3.5" />
+            </Button>
+          )}
+        </div>
+      ),
+    },
   ];
 
   return (
@@ -205,13 +266,16 @@ export default function ExpensesPage() {
           <>
             <Refreshing active={state.refreshing} />
             {canCreate && (
-              <Dialog open={open} onOpenChange={setOpen}>
+              <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v && editing) { setEditing(null); setF({ ...BLANK, paidThroughId: f.paidThroughId }); } }}>
                 <DialogTrigger asChild>
                   <Button size="sm" className="gap-1.5"><Plus className="size-4" /> New expense</Button>
                 </DialogTrigger>
                 <DialogContent>
-                  <DialogHeader><DialogTitle>Record expense</DialogTitle></DialogHeader>
+                  <DialogHeader><DialogTitle>{editing ? `Edit expense ${editing.number}` : 'Record expense'}</DialogTitle></DialogHeader>
                   <div className="grid gap-4 sm:grid-cols-2">
+                    <Field label="Date" required className="sm:col-span-2">
+                      <Input type="date" value={f.date || today()} onChange={(e) => setF({ ...f, date: e.target.value })} data-slot="expense-date" />
+                    </Field>
                     <label className="flex items-center justify-between gap-3 rounded-md border p-3 text-sm sm:col-span-2">
                       <span>Mileage<span className="block text-xs text-muted-foreground">A journey claimed by the kilometre: the distance times the rate, with no GST.</span></span>
                       <Switch checked={f.mileage} onCheckedChange={(v) => setF({ ...f, mileage: v })} data-slot="mileage-switch" />
@@ -313,8 +377,8 @@ export default function ExpensesPage() {
                   {create.error && <p className="text-sm text-destructive">{create.error}</p>}
                   <DialogFooter>
                     <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
-                    <Button onClick={save} disabled={create.busy}>
-                      {create.busy ? 'Recording…' : 'Record expense'}
+                    <Button onClick={save} disabled={create.busy || savingEdit} data-slot="save-expense">
+                      {create.busy || savingEdit ? 'Saving…' : editing ? 'Save' : 'Record expense'}
                     </Button>
                   </DialogFooter>
                 </DialogContent>
@@ -363,6 +427,33 @@ export default function ExpensesPage() {
           )
         }
       </AsyncPage>
+      <Dialog open={!!deleting} onOpenChange={(o) => { if (!o) setDeleting(null); }}>
+        <DialogContent data-slot="delete-expense-dialog">
+          <DialogHeader>
+            <DialogTitle>Delete expense {deleting?.number}?</DialogTitle>
+            <DialogDescription>It is removed and its entry is reversed in the ledger. The audit trail keeps a copy of it as it was.</DialogDescription>
+          </DialogHeader>
+          {deleteError && <p className="text-sm text-destructive" data-slot="delete-expense-error">{deleteError}</p>}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleting(null)}>Cancel</Button>
+            <Button variant="destructive" disabled={deleteBusy} className="gap-1.5" data-slot="confirm-delete-expense"
+              onClick={async () => {
+                if (!deleting) return;
+                setDeleteBusy(true); setDeleteError(null);
+                try {
+                  await expenseApi.remove(deleting.id);
+                  toast.success(`Expense ${deleting.number} deleted`);
+                  setDeleting(null);
+                  await state.refetch();
+                } catch (err) {
+                  setDeleteError(err instanceof Error ? err.message : String(err));
+                } finally { setDeleteBusy(false); }
+              }}>
+              {deleteBusy && <Loader2 className="size-3.5 animate-spin" />} Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <Dialog open={!!tagging} onOpenChange={(o) => !o && setTagging(null)}>
         <DialogContent className="max-w-lg">
           <DialogHeader><DialogTitle>{tagging?.number}: tags and details</DialogTitle></DialogHeader>

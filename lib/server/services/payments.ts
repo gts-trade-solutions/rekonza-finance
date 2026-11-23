@@ -14,7 +14,8 @@ import 'server-only';
 // end up quietly absorbed into whichever invoice was nearest.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { sql } from 'kysely';
+import { sql, type Updateable } from 'kysely';
+import type { DB } from '../db-types';
 import type { Trx } from '../db';
 import type { Paise } from '../../types';
 import { toPaiseFromSql, toSqlFromPaise } from '../money-sql';
@@ -24,6 +25,7 @@ import { ApiError, badRequest, notFound } from '../http';
 import { fyLabelFor } from './sales';
 import { checkCashPayment, checkCashReceipt, checkSegregation } from './guards';
 import { voidReason, voidStamp } from './void-reason';
+import { plain, recordDeletion, reverseForChange, unlinkDocument } from './doc-delete';
 
 export type PaymentMode =
   | 'cash' | 'cheque' | 'neft' | 'rtgs' | 'imps' | 'upi' | 'card' | 'netbanking' | 'other';
@@ -190,8 +192,11 @@ async function recordPayment(
   userId: number | null,
   input: RecordPaymentInput,
   kind: 'received' | 'made',
+  /** Rewrite this payment in place (updatePayment): same row, same number. */
+  opts: { replace?: { id: number; number: string } } = {},
 ): Promise<{ id: number; number: string; unappliedPaise: Paise; journalEntryId: number; warnings?: string[] }> {
   if (input.amountPaise <= 0) throw badRequest('A payment needs an amount above zero.');
+  const replace = opts.replace ?? null;
 
   const contact = await trx
     .selectFrom('contacts').select(['id', 'display_name', 'bill_wise'])
@@ -262,11 +267,9 @@ async function recordPayment(
   // Org-wide, matching uq_pay_org_number. A receipt is an internal document;
   // unlike an invoice it carries no per-registration numbering obligation.
   const prefix = kind === 'received' ? 'RCPT' : 'PAY';
-  const number = await allocateOrgNumber(trx, orgId, prefix, fyLabelFor(input.date), prefix);
+  const number = replace ? replace.number : await allocateOrgNumber(trx, orgId, prefix, fyLabelFor(input.date), prefix);
 
-  const inserted = await trx
-    .insertInto('payments')
-    .values({
+  const values = {
       org_id: orgId,
       branch_id: input.branchId,
       number,
@@ -284,12 +287,24 @@ async function recordPayment(
         currency: fx.currency, exchange_rate: String(fx.rate), fc_amount: toSqlFromPaise(fx.foreignAmountPaise),
         fx_difference: toSqlFromPaise(fxDifference),
       } : {}),
-      status: 'cleared',
+      status: 'cleared' as const,
       notes: input.notes ?? null,
       created_by_user_id: userId,
-    })
-    .executeTakeFirstOrThrow();
-  const paymentId = Number(inserted.insertId);
+    };
+  let paymentId: number;
+  if (replace) {
+    // An edit: the row keeps its id, number and creator; a currency and advance GST it no longer has are cleared.
+    const { org_id: _o, number: _n, created_by_user_id: _c, ...changed } = values;
+    await trx.updateTable('payments').set({
+      currency: 'INR', exchange_rate: '1', fc_amount: null, fx_difference: '0',
+      advance_gst: 0, advance_rate_pct: null, advance_pos: null, advance_amount: '0', advance_cgst: '0', advance_sgst: '0', advance_igst: '0',
+      ...changed, journal_entry_id: null,
+    } as Updateable<DB['payments']>).where('id', '=', replace.id).where('org_id', '=', orgId).execute();
+    paymentId = replace.id;
+  } else {
+    const inserted = await trx.insertInto('payments').values(values).executeTakeFirstOrThrow();
+    paymentId = Number(inserted.insertId);
+  }
 
   // A cheque in the register with this number, from this party, is the paper
   // this payment came on. Linking the two is what lets a bounce later undo the
@@ -631,6 +646,81 @@ export async function voidPayment(
   }
 
   await trx.updateTable('payments').set({ status: 'void', ...voidStamp(why, userId) }).where('id', '=', paymentId).execute();
+}
+
+// ── Edit and delete, as Zoho Books has them ──────────────────────────────────
+
+/** Why a payment cannot be edited or deleted now: what still rests on it. */
+async function paymentBlocker(trx: Trx, orgId: number, p: { id: number; number: string; status: string }): Promise<string | null> {
+  if (p.status === 'void') return `${p.number} is void.`;
+  const matched = await trx.selectFrom('bank_transactions').select('id').where('org_id', '=', orgId)
+    .where('matched_type', '=', 'payment').where('matched_id', '=', p.id).where('status', '=', 'matched').executeTakeFirst();
+  if (matched) return `${p.number} is matched to a bank statement line. Unmatch it in Banking first.`;
+  const batch = await trx.selectFrom('payment_batch_lines').select('id').where('payment_id', '=', p.id).executeTakeFirst();
+  if (batch) return `${p.number} was paid in a bank payment batch. Change it there.`;
+  const adjusted = await trx.selectFrom('advance_tax_adjustments').select('id').where('payment_id', '=', p.id).executeTakeFirst();
+  if (adjusted) return `GST on ${p.number}, taken as an advance, has been adjusted against an invoice. Unapply it first.`;
+  return null;
+}
+
+/** Take a payment off everything it settled and reverse its entry: the first half of an edit or a delete. */
+async function unpostPayment(trx: Trx, orgId: number, userId: number | null, p: { id: number; number: string; kind: string; contact_id: number; journal_entry_id: number | null }, memo: string) {
+  const allocations = await trx.selectFrom('payment_allocations').select(['target_type', 'target_id', 'amount', 'fc_amount'])
+    .where('payment_id', '=', p.id).execute();
+  const undo = allocations.map((a) => ({
+    targetType: a.target_type as AllocationTarget, targetId: a.target_id, amountPaise: toPaiseFromSql(a.amount),
+    foreignAmountPaise: a.fc_amount === null ? undefined : toPaiseFromSql(a.fc_amount),
+  }));
+  await applyAllocations(trx, orgId, undo, -1, { kind: p.kind as 'received' | 'made', contactId: p.contact_id });
+  await moveForeignPaid(trx, undo, -1);
+  await trx.deleteFrom('payment_allocations').where('payment_id', '=', p.id).execute();
+  await trx.updateTable('cheques').set({ payment_id: null }).where('org_id', '=', orgId).where('payment_id', '=', p.id).execute();
+  return reverseForChange(trx, orgId, p.journal_entry_id, { memo, userId, module: p.kind === 'received' ? 'sales' : 'purchases' });
+}
+
+async function paymentSnapshot(trx: Trx, orgId: number, paymentId: number) {
+  const head = await trx.selectFrom('payments').selectAll().where('id', '=', paymentId).where('org_id', '=', orgId).executeTakeFirst();
+  const allocations = await trx.selectFrom('payment_allocations').selectAll().where('payment_id', '=', paymentId).execute();
+  return head ? { payment: plain(head), allocations: allocations.map(plain) } : null;
+}
+
+/**
+ * Edit a payment received or made, as Zoho Books' Edit: amount, date, mode,
+ * account, reference and the documents it pays. It comes off everything it
+ * settled, its entry is reversed, and it is recorded again in place with the
+ * same number.
+ */
+export async function updatePayment(trx: Trx, orgId: number, userId: number | null, paymentId: number, input: RecordPaymentInput) {
+  const p = await trx.selectFrom('payments').select(['id', 'number', 'kind', 'status', 'contact_id', 'journal_entry_id'])
+    .where('id', '=', paymentId).where('org_id', '=', orgId).forUpdate().executeTakeFirst();
+  if (!p) throw notFound('Payment not found.');
+  const blocked = await paymentBlocker(trx, orgId, p);
+  if (blocked) throw new ApiError(409, blocked, 'locked_document');
+  const before = await paymentSnapshot(trx, orgId, paymentId);
+  await unpostPayment(trx, orgId, userId, p, `${p.number} edited: the entry as it was, reversed`);
+  const made = await recordPayment(trx, orgId, userId, input, p.kind as 'received' | 'made', { replace: { id: paymentId, number: p.number } });
+  return { ...made, before };
+}
+
+/** Delete a payment, as Zoho Books' Delete: the documents it paid are owed again. */
+export async function deletePayment(trx: Trx, orgId: number, userId: number | null, paymentId: number, reason?: string | null) {
+  const p = await trx.selectFrom('payments').select(['id', 'number', 'kind', 'status', 'contact_id', 'journal_entry_id', 'payment_date', 'amount', 'branch_id'])
+    .where('id', '=', paymentId).where('org_id', '=', orgId).forUpdate().executeTakeFirst();
+  if (!p) throw notFound('Payment not found.');
+  const blocked = p.status === 'void' ? null : await paymentBlocker(trx, orgId, p);
+  if (blocked) throw new ApiError(409, blocked, 'locked_document');
+  const snapshot = await paymentSnapshot(trx, orgId, paymentId);
+  // A void payment was already taken off its documents and reversed.
+  const reversal = p.status === 'void' ? null : await unpostPayment(trx, orgId, userId, p, `${p.number} deleted`);
+  await unlinkDocument(trx, orgId, p.kind === 'received' ? 'payment_received' : 'payment_made', paymentId);
+  await unlinkDocument(trx, orgId, 'payment', paymentId);
+  await recordDeletion(trx, {
+    orgId, userId, docType: p.kind === 'received' ? 'payment_received' : 'payment_made', docId: paymentId, number: p.number,
+    date: String(p.payment_date).slice(0, 10), totalPaise: toPaiseFromSql(p.amount), contactId: p.contact_id, branchId: p.branch_id,
+    journalEntryId: p.journal_entry_id, reversalEntryId: reversal, reason, snapshot,
+  });
+  await trx.deleteFrom('payments').where('id', '=', paymentId).where('org_id', '=', orgId).execute();
+  return { number: p.number, kind: p.kind };
 }
 
 // ── Applying an advance later ────────────────────────────────────────────────

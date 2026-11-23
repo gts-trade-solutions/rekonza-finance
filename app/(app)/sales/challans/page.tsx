@@ -70,6 +70,8 @@ export default function ChallansPage() {
   const router = useRouter();
   const canCreate = usePermission('sales', 'create');
   const state = useApi<SalesDocListResponse>(() => salesDocuments.list('challan'), []);
+  // Zoho's Edit from the row's menu: the same dialog, filled in.
+  const [editId, setEditId] = useState<string | null>(null);
   // When goods sent on a challan are sold, the sale is invoiced from it: all
   // of them, or the part the customer kept.
   const [invoicing, setInvoicing] = useState<SalesDocRow | null>(null);
@@ -127,7 +129,7 @@ export default function ChallansPage() {
           ) : (
             <DataTable
               rows={d.documents}
-              columns={[...columns, documentMenuColumn('challan', state.refetch)]}
+              columns={[...columns, documentMenuColumn('challan', state.refetch, (r) => setEditId(r.id))]}
               getRowId={(r) => r.id}
               selectable
               bulkActions={(selected) => <BulkPrintButton kind="challan" ids={selected.map((r) => r.id)} />}
@@ -138,6 +140,27 @@ export default function ChallansPage() {
           )
         }
       </AsyncPage>
+      {editId && (
+        <QuickDocumentDialog
+          editId={editId}
+          onEditClose={() => setEditId(null)}
+          kind="challan"
+          title="New delivery challan"
+          description="Move goods without selling them. No tax is charged and nothing posts — ownership has not changed."
+          buttonLabel="New challan"
+          onCreated={state.refetch}
+          extra={(v, set) => (
+            <Field label="Purpose" hint="Why the goods are leaving">
+              <Combobox
+                options={TYPE_OPTIONS}
+                value={v || 'other'}
+                onChange={set}
+                showAvatar={false}
+              />
+            </Field>
+          )}
+        />
+      )}
 
       <LinePickDialog
         open={!!invoicing}

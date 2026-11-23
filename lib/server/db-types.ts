@@ -1036,6 +1036,24 @@ export interface CustomRoles {
   updated_at: Generated<Date>;
 }
 
+export interface DeletedDocuments {
+  branch_id: number | null;
+  contact_id: number | null;
+  deleted_at: Generated<Date>;
+  deleted_by_user_id: number | null;
+  doc_date: ColumnType<string, string, string> | null;
+  doc_id: number;
+  doc_type: string;
+  id: Generated<number>;
+  journal_entry_id: number | null;
+  number: string | null;
+  org_id: number;
+  reason: string | null;
+  reversal_entry_id: number | null;
+  snapshot: Json;
+  total: Decimal | null;
+}
+
 export interface DeliveryChallans {
   branch_id: number;
   challan_date: ColumnType<string, string, string>;
@@ -3419,6 +3437,7 @@ export interface DB {
   custom_field_values: CustomFieldValues;
   custom_fields: CustomFields;
   custom_roles: CustomRoles;
+  deleted_documents: DeletedDocuments;
   delivery_challans: DeliveryChallans;
   depreciation_lines: DepreciationLines;
   depreciation_runs: DepreciationRuns;

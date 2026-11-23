@@ -8,7 +8,7 @@
 // dismissed; it is an entry that cannot exist.
 
 import { useEffect, useState } from 'react';
-import { BookOpen, CalendarClock, Clock, LayoutTemplate, Plus, Trash2, Undo2 } from 'lucide-react';
+import { BookOpen, CalendarClock, Clock, LayoutTemplate, Loader2, Pencil, Plus, Trash2, Undo2 } from 'lucide-react';
 import Link from 'next/link';
 import { toast } from 'sonner';
 import { Card } from '@/components/ui/card';
@@ -63,16 +63,40 @@ export default function JournalsPage() {
 
   // Manual and opening entries only. Everything else on this ledger was posted
   // by a document, and belongs on that document's screen rather than here.
+  // An edited or deleted journal shows only as it now stands, as in Zoho: the
+  // reversed entry and its reversal stay in the ledger, out of this list unless asked for.
+  const [showReversed, setShowReversed] = useState(false);
   const state = useApi<JournalResponse>(
-    () => journal.list({ sourceType: 'manual,opening,write_off,doubtful_debts,reclassification', limit: 300 }),
-    [],
+    () => journal.list({ sourceType: 'manual,opening,write_off,doubtful_debts,reclassification', limit: 300, hideReversed: showReversed ? '0' : '1' }),
+    [showReversed],
   );
+  const canEdit = usePermission('accountant', 'edit');
+  const canDelete = usePermission('accountant', 'void');
+  // Zoho's Edit: the form filled with the entry; saving reverses it and posts the corrected one.
+  const [editing, setEditing] = useState<JournalEntryRow | null>(null);
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [deleting, setDeleting] = useState<JournalEntryRow | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const chart = useApi<{ accounts: AccountRow[] }>(() => accountsApi.list(), []);
   const held = useApi(() => heldJournals.list(), []);
   const [mode, setMode] = useState<SaveMode>('post');
 
   const [open, setOpen] = useState(false);
   const [date, setDate] = useState(today());
+  const startEdit = (r: JournalEntryRow) => {
+    setEditing(r);
+    setDate(String(r.date).slice(0, 10));
+    setMemo(r.memo ?? '');
+    setReverseOn('');
+    setMode('post');
+    const filled = r.lines.map((l, i) => ({
+      ...emptyRow(`e${i}`), accountId: l.accountId, debit: l.debitPaise, credit: l.creditPaise,
+      description: l.description ?? '', contactId: l.contactId ?? '', costCentreId: l.costCentreId ?? '',
+    }));
+    setRows(filled.length >= 2 ? filled : [...filled, emptyRow('r2')]);
+    setOpen(true);
+  };
   const [memo, setMemo] = useState('');
   const [reverseOn, setReverseOn] = useState('');
   const [rows, setRows] = useState<DraftRow[]>([emptyRow('r1'), emptyRow('r2')]);
@@ -146,7 +170,7 @@ export default function JournalsPage() {
       toast.error('Say whose account it is', { description: 'A line on Receivables or Payables needs the customer or vendor, or it will not show against anyone.' });
       return;
     }
-    const result = await create.run({
+    const payload = {
       date,
       memo: memo.trim(),
       reverseOn: reverseOn || null,
@@ -167,7 +191,23 @@ export default function JournalsPage() {
               : undefined,
           };
         }),
-    });
+    };
+    if (editing) {
+      setSavingEdit(true);
+      try {
+        const done = await journal.update(editing.id, { ...payload, mode: 'post' });
+        toast.success(`Journal #${done.replacedEntryNo} updated`, { description: `Posted as #${done.entryNo}; the old entry was reversed on its own date. The audit trail keeps both.` });
+        setOpen(false);
+        setEditing(null);
+        setRows([emptyRow('r1'), emptyRow('r2')]);
+        setMemo('');
+        state.refetch();
+      } catch (e) {
+        toast.error('Not saved', { description: e instanceof Error ? e.message : String(e) });
+      } finally { setSavingEdit(false); }
+      return;
+    }
+    const result = await create.run(payload);
     if (!result) {
       if (create.wasQueued()) { setRows([emptyRow('r1'), emptyRow('r2')]); setMemo(''); setOpen(false); return; }
       toast.error(create.error ?? 'The entry was not posted');
@@ -232,6 +272,17 @@ export default function JournalsPage() {
           <Button size="xs" variant="outline" onClick={(e) => { e.stopPropagation(); setViewing(r); }}>
             View
           </Button>
+          {canEdit && !r.reversalOf && !r.reversedBy && REVERSIBLE.has(r.sourceType) && (
+            <Button size="xs" variant="outline" className="gap-1" onClick={(e) => { e.stopPropagation(); startEdit(r); }} data-slot="edit-journal">
+              <Pencil className="size-3" /> Edit
+            </Button>
+          )}
+          {canDelete && !r.reversalOf && !r.reversedBy && REVERSIBLE.has(r.sourceType) && (
+            <Button size="xs" variant="ghost" className="gap-1 text-destructive hover:text-destructive"
+              onClick={(e) => { e.stopPropagation(); setDeleteError(null); setDeleting(r); }} data-slot="delete-journal">
+              <Trash2 className="size-3" /> Delete
+            </Button>
+          )}
           {canCreate && !r.reversalOf && !r.reversedBy && REVERSIBLE.has(r.sourceType) && (
             <Button
               size="xs"
@@ -258,13 +309,13 @@ export default function JournalsPage() {
           canCreate && (
             <div className="flex gap-2">
             <Button size="sm" variant="outline" asChild className="gap-1.5"><Link href="/accountant/journal-templates"><LayoutTemplate className="size-4" /> Templates</Link></Button>
-            <Dialog open={open} onOpenChange={setOpen}>
+            <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v && editing) { setEditing(null); setRows([emptyRow('r1'), emptyRow('r2')]); setMemo(''); } }}>
               <DialogTrigger asChild>
                 <Button size="sm" className="gap-1.5"><Plus className="size-4" /> New journal</Button>
               </DialogTrigger>
               <DialogContent className="max-w-3xl">
                 <DialogHeader>
-                  <DialogTitle>New journal entry</DialogTitle>
+                  <DialogTitle>{editing ? `Edit journal #${editing.entryNo}` : 'New journal entry'}</DialogTitle>
                   <DialogDescription>
                     Each line is one-sided — either a debit or a credit. The two columns must agree before this
                     can be saved.
@@ -423,8 +474,8 @@ export default function JournalsPage() {
 
                 <DialogFooter>
                   <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
-                  <Button onClick={save} disabled={!balanced || create.busy}>
-                    {create.busy ? 'Saving…' : SAVE_LABEL[mode]}
+                  <Button onClick={save} disabled={!balanced || create.busy || savingEdit} data-slot="save-journal">
+                    {create.busy || savingEdit ? 'Saving…' : editing ? 'Save' : SAVE_LABEL[mode]}
                   </Button>
                 </DialogFooter>
               </DialogContent>
@@ -447,6 +498,10 @@ export default function JournalsPage() {
         <HeldList rows={held.data!.held} canAct={canCreate} onChanged={() => { held.refetch(); state.refetch(); }} />
       )}
 
+      <label className="flex w-fit cursor-pointer items-center gap-2 text-xs text-muted-foreground" data-slot="show-reversed">
+        <input type="checkbox" checked={showReversed} onChange={(e) => setShowReversed(e.target.checked)} />
+        Show reversed entries (edited and deleted journals stay in the ledger as a reversed pair)
+      </label>
       <AsyncPage state={state}>
         {(d) => (
           <DataTable
@@ -467,6 +522,36 @@ export default function JournalsPage() {
           {viewing && <JournalEntryTable entry={viewing} />}
           {viewing && <Attachments targetType="journal" targetId={viewing.id} canEdit={canCreate} title="Supporting documents" />}
           {viewing && <TagsPanel entity="journal_entry" id={viewing.id} canEdit={canCreate} />}
+        </DialogContent>
+      </Dialog>
+      <Dialog open={!!deleting} onOpenChange={(o) => { if (!o) setDeleting(null); }}>
+        <DialogContent data-slot="delete-journal-dialog">
+          <DialogHeader>
+            <DialogTitle>Delete journal #{deleting?.entryNo}?</DialogTitle>
+            <DialogDescription>
+              It is reversed on its own date and leaves this list; anything it settled is owed again. The pair stays in the ledger
+              and the audit trail keeps a copy, as the law requires. A date in a locked period is refused.
+            </DialogDescription>
+          </DialogHeader>
+          {deleteError && <p className="text-sm text-destructive" data-slot="delete-journal-error">{deleteError}</p>}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleting(null)}>Cancel</Button>
+            <Button variant="destructive" disabled={deleteBusy} className="gap-1.5" data-slot="confirm-delete-journal"
+              onClick={async () => {
+                if (!deleting) return;
+                setDeleteBusy(true); setDeleteError(null);
+                try {
+                  await journal.remove(deleting.id);
+                  toast.success(`Journal #${deleting.entryNo} deleted`);
+                  setDeleting(null);
+                  state.refetch();
+                } catch (e) {
+                  setDeleteError(e instanceof Error ? e.message : String(e));
+                } finally { setDeleteBusy(false); }
+              }}>
+              {deleteBusy && <Loader2 className="size-3.5 animate-spin" />} Delete
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
       <Dialog open={!!reversing} onOpenChange={(o) => !o && setReversing(null)}>

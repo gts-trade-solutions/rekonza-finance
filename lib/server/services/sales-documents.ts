@@ -20,6 +20,8 @@ import 'server-only';
 // atomic unit or they are nothing.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import type { Insertable, Updateable } from 'kysely';
+import type { DB } from '../db-types';
 import type { Trx } from '../db';
 import type { Paise, SupplyType } from '../../types';
 import { exportTaxFor, exportTaxOf, isExportSupply, resolveSupplyType, totalTaxPaise } from '../../tax/gst';
@@ -39,6 +41,7 @@ import { voidReason, voidStamp } from './void-reason';
 import { recordSerials } from './serials';
 import { checkGodown } from './godowns';
 import { itemSaleAccounts } from './item-accounts';
+import { plain, recordDeletion, reverseForChange, unlinkDocument } from './doc-delete';
 
 // ── Shared preamble ──────────────────────────────────────────────────────────
 
@@ -140,6 +143,29 @@ export interface CreatedDocument {
   heldForApproval?: boolean;
 }
 
+type DocTable = 'estimates' | 'sales_orders' | 'delivery_challans';
+type LineTable = 'estimate_lines' | 'sales_order_lines' | 'challan_lines';
+
+/**
+ * Insert a document's header, or, for an edit, write the new figures over the
+ * one it replaces (keeping its number, creator, status and what has happened
+ * to it) and clear its lines for the new ones.
+ */
+async function writeDocument(
+  trx: Trx, orgId: number, table: DocTable, lines: LineTable, parent: 'estimate_id' | 'sales_order_id' | 'challan_id',
+  values: Record<string, unknown>, replace: { id: number; number: string } | undefined, keep: string[] = [],
+): Promise<number> {
+  if (!replace) {
+    const inserted = await trx.insertInto(table).values(values as never).executeTakeFirstOrThrow();
+    return Number(inserted.insertId);
+  }
+  const changed = Object.fromEntries(Object.entries(values)
+    .filter(([k]) => !['org_id', 'number', 'created_by_user_id', 'status', ...keep].includes(k)));
+  await trx.updateTable(table).set(changed as never).where('id', '=', replace.id).where('org_id', '=', orgId).execute();
+  await trx.deleteFrom(lines).where(parent as never, '=', replace.id as never).execute();
+  return replace.id;
+}
+
 // ── Estimates ────────────────────────────────────────────────────────────────
 
 export interface CreateEstimateInput extends BaseDocInput {
@@ -158,19 +184,19 @@ export async function createEstimate(
   orgId: number,
   userId: number | null,
   input: CreateEstimateInput,
+  /** Rewrite this document in place (updateSalesDocument): same row, same number. */
+  opts: { replace?: { id: number; number: string } } = {},
 ): Promise<CreatedDocument> {
   const ctx = await partyContext(trx, orgId, input.branchId, input.customerId, input.placeOfSupply, input.date);
   const costed = await costLines(trx, orgId, ctx.supplyType, input.lines, 'sale_price', input.date);
   const { rounded } = roundToRupee(costed.tax.taxablePaise + totalTaxPaise(costed.tax));
 
   const series = await seriesFor(trx, orgId, 'EST', input.voucherTypeId);
-  const number =
-    input.number?.trim() ||
-    (await allocateNumber(trx, orgId, input.branchId, series.docType, fyLabelFor(input.date), { prefix: series.prefix }));
+  const number = opts.replace?.number ??
+    (input.number?.trim() ||
+    (await allocateNumber(trx, orgId, input.branchId, series.docType, fyLabelFor(input.date), { prefix: series.prefix })));
 
-  const inserted = await trx
-    .insertInto('estimates')
-    .values({
+  const values: Insertable<DB['estimates']> = {
       org_id: orgId,
       branch_id: input.branchId,
       number,
@@ -188,9 +214,8 @@ export async function createEstimate(
       total: toSqlFromPaise(rounded),
       notes: input.notes ?? null,
       created_by_user_id: userId,
-    })
-    .executeTakeFirstOrThrow();
-  const id = Number(inserted.insertId);
+    };
+  const id = await writeDocument(trx, orgId, 'estimates', 'estimate_lines', 'estimate_id', values, opts.replace);
 
   await trx
     .insertInto('estimate_lines')
@@ -242,19 +267,19 @@ export async function createSalesOrder(
   orgId: number,
   userId: number | null,
   input: CreateSalesOrderInput,
+  /** Rewrite this document in place (updateSalesDocument): same row, same number. */
+  opts: { replace?: { id: number; number: string } } = {},
 ): Promise<CreatedDocument> {
   const ctx = await partyContext(trx, orgId, input.branchId, input.customerId, input.placeOfSupply, input.date, { fromSource: input.exportFromSource });
   const costed = await costLines(trx, orgId, ctx.supplyType, input.lines, 'sale_price', input.date);
   const { rounded } = roundToRupee(costed.tax.taxablePaise + totalTaxPaise(costed.tax));
 
   const series = await seriesFor(trx, orgId, 'SO', input.voucherTypeId);
-  const number =
-    input.number?.trim() ||
-    (await allocateNumber(trx, orgId, input.branchId, series.docType, fyLabelFor(input.date), { prefix: series.prefix }));
+  const number = opts.replace?.number ??
+    (input.number?.trim() ||
+    (await allocateNumber(trx, orgId, input.branchId, series.docType, fyLabelFor(input.date), { prefix: series.prefix })));
 
-  const inserted = await trx
-    .insertInto('sales_orders')
-    .values({
+  const values: Insertable<DB['sales_orders']> = {
       org_id: orgId,
       branch_id: input.branchId,
       number,
@@ -273,9 +298,8 @@ export async function createSalesOrder(
       invoiced_amount: toSqlFromPaise(0),
       source_estimate_id: input.sourceEstimateId ?? null,
       created_by_user_id: userId,
-    })
-    .executeTakeFirstOrThrow();
-  const id = Number(inserted.insertId);
+    };
+  const id = await writeDocument(trx, orgId, 'sales_orders', 'sales_order_lines', 'sales_order_id', values, opts.replace, ['invoiced_amount', 'source_estimate_id']);
 
   await trx
     .insertInto('sales_order_lines')
@@ -341,6 +365,8 @@ export async function createChallan(
   orgId: number,
   userId: number | null,
   input: CreateChallanInput,
+  /** Rewrite this document in place (updateSalesDocument): same row, same number. */
+  opts: { replace?: { id: number; number: string } } = {},
 ): Promise<CreatedDocument> {
   if (!input.lines.length) throw badRequest('A challan needs at least one line.');
   const ctx = await partyContext(trx, orgId, input.branchId, input.customerId, input.placeOfSupply);
@@ -374,16 +400,14 @@ export async function createChallan(
   const total = priced.reduce((t, l) => t + l.lineTotal, 0);
 
   // A hand-typed number has to meet the same GST rules as an allocated one.
-  const typed = input.number?.trim();
+  const typed = opts.replace ? null : input.number?.trim();
   if (typed) assertGstDocNumber(typed, 'A delivery challan number');
   const series = await seriesFor(trx, orgId, 'DC', input.voucherTypeId);
-  const number =
-    typed ||
-    (await allocateNumber(trx, orgId, input.branchId, series.docType, fyLabelFor(input.date), { prefix: series.prefix }));
+  const number = opts.replace?.number ??
+    (typed ||
+    (await allocateNumber(trx, orgId, input.branchId, series.docType, fyLabelFor(input.date), { prefix: series.prefix })));
 
-  const inserted = await trx
-    .insertInto('delivery_challans')
-    .values({
+  const values: Insertable<DB['delivery_challans']> = {
       org_id: orgId,
       branch_id: input.branchId,
       number,
@@ -395,9 +419,8 @@ export async function createChallan(
       total: toSqlFromPaise(total),
       notes: input.notes ?? null,
       created_by_user_id: userId,
-    })
-    .executeTakeFirstOrThrow();
-  const id = Number(inserted.insertId);
+    };
+  const id = await writeDocument(trx, orgId, 'delivery_challans', 'challan_lines', 'challan_id', values, opts.replace);
 
   await trx
     .insertInto('challan_lines')
@@ -447,6 +470,8 @@ export async function createCreditNote(
   orgId: number,
   userId: number | null,
   input: CreateCreditNoteInput,
+  /** Rewrite this credit note in place (updateSalesDocument): same row, same number. */
+  opts: { replace?: { id: number; number: string } } = {},
 ): Promise<CreatedDocument> {
   if (!input.reason?.trim()) {
     // GST requires a reason on every credit note; it is reported in GSTR-1.
@@ -478,12 +503,12 @@ export async function createCreditNote(
     }
   }
 
-  const typed = input.number?.trim();
+  const typed = opts.replace ? null : input.number?.trim();
   if (typed) assertGstDocNumber(typed, 'A credit note number');
   const series = await seriesFor(trx, orgId, 'CN', input.voucherTypeId);
-  const number =
-    typed ||
-    (await allocateNumber(trx, orgId, input.branchId, series.docType, fyLabelFor(input.date), { prefix: series.prefix }));
+  const number = opts.replace?.number ??
+    (typed ||
+    (await allocateNumber(trx, orgId, input.branchId, series.docType, fyLabelFor(input.date), { prefix: series.prefix })));
 
   // Goods coming back go into the batch they went out in: the one named on
   // the line, or failing that the one the invoice sold.
@@ -508,9 +533,7 @@ export async function createCreditNote(
     lineBatch.push(named ?? sold.get(c.itemId) ?? null);
   }
 
-  const inserted = await trx
-    .insertInto('credit_notes')
-    .values({
+  const cnValues: Insertable<DB['credit_notes']> = {
       org_id: orgId,
       branch_id: input.branchId,
       warehouse_id: await checkGodown(trx, orgId, input.branchId, input.warehouseId),
@@ -530,9 +553,18 @@ export async function createCreditNote(
       total: toSqlFromPaise(rounded),
       applied_amount: toSqlFromPaise(0),
       created_by_user_id: userId,
-    })
-    .executeTakeFirstOrThrow();
-  const id = Number(inserted.insertId);
+    };
+  let id: number;
+  if (opts.replace) {
+    // Its applications were taken back before the edit; it is open again until applied anew.
+    const { org_id: _o, number: _n, created_by_user_id: _c, ...changed } = cnValues;
+    await trx.updateTable('credit_notes').set({ ...changed, journal_entry_id: null } as Updateable<DB['credit_notes']>)
+      .where('id', '=', opts.replace.id).where('org_id', '=', orgId).execute();
+    await trx.deleteFrom('credit_note_lines').where('credit_note_id', '=', opts.replace.id).execute();
+    id = opts.replace.id;
+  } else {
+    id = Number((await trx.insertInto('credit_notes').values(cnValues).executeTakeFirstOrThrow()).insertId);
+  }
 
   // Each line comes back out of the income head its item's sale went to (the
   // item's sales account, as on the invoice), the rest out of Sales.
@@ -1092,4 +1124,164 @@ export async function voidCreditNote(
     .set({ status: 'void', applied_amount: toSqlFromPaise(0), ...voidStamp(why, userId) })
     .where('id', '=', creditNoteId)
     .execute();
+}
+
+
+// ── Edit and delete, as Zoho Books has them ──────────────────────────────────
+
+export type EditableSalesDoc = 'estimate' | 'sales-order' | 'challan' | 'credit-note';
+
+const DOC = {
+  estimate: { table: 'estimates', lines: 'estimate_lines', parent: 'estimate_id', date: 'estimate_date', type: 'estimate', noun: 'Quote' },
+  'sales-order': { table: 'sales_orders', lines: 'sales_order_lines', parent: 'sales_order_id', date: 'order_date', type: 'sales_order', noun: 'Sales order' },
+  challan: { table: 'delivery_challans', lines: 'challan_lines', parent: 'challan_id', date: 'challan_date', type: 'challan', noun: 'Delivery challan' },
+  'credit-note': { table: 'credit_notes', lines: 'credit_note_lines', parent: 'credit_note_id', date: 'note_date', type: 'credit_note', noun: 'Credit note' },
+} as const;
+
+async function docSnapshot(trx: Trx, orgId: number, kind: EditableSalesDoc, id: number) {
+  const d = DOC[kind];
+  const head = await trx.selectFrom(d.table).selectAll().where('id', '=', id).where('org_id', '=', orgId).executeTakeFirst();
+  const lines = await trx.selectFrom(d.lines).selectAll().where(d.parent as never, '=', id as never).execute();
+  return head ? { document: plain(head as Record<string, unknown>), lines: (lines as Record<string, unknown>[]).map(plain) } : null;
+}
+
+/** Why this document cannot be edited (or deleted) now: what has happened to it since. */
+async function salesDocBlocker(trx: Trx, orgId: number, kind: EditableSalesDoc, id: number, what: 'edit' | 'delete'): Promise<string | null> {
+  if (kind === 'estimate') {
+    const e = await trx.selectFrom('estimates').select(['number', 'status']).where('id', '=', id).where('org_id', '=', orgId).executeTakeFirst();
+    if (!e) throw notFound('That quote does not exist.');
+    if (what === 'edit' && e.status === 'converted') return `${e.number} has been converted. Change the order or invoice it became.`;
+    return null;
+  }
+  if (kind === 'sales-order') {
+    const so = await trx.selectFrom('sales_orders').select(['number', 'status', 'invoiced_amount']).where('id', '=', id).where('org_id', '=', orgId).executeTakeFirst();
+    if (!so) throw notFound('That sales order does not exist.');
+    const moved = await trx.selectFrom('sales_order_lines').select('id').where('sales_order_id', '=', id)
+      .where((eb) => eb.or([eb('qty_invoiced', '>', '0'), eb('qty_delivered', '>', '0')])).executeTakeFirst();
+    const challaned = await trx.selectFrom('challan_lines').innerJoin('sales_order_lines as sol', 'sol.id', 'challan_lines.so_line_id')
+      .select('challan_lines.id').where('sol.sales_order_id', '=', id).executeTakeFirst();
+    if (toPaiseFromSql(so.invoiced_amount) > 0 || moved || challaned) {
+      return `${so.number} has been invoiced or delivered in part. Delete those invoices and challans first.`;
+    }
+    return null;
+  }
+  if (kind === 'challan') {
+    const dc = await trx.selectFrom('delivery_challans').select(['number', 'status', 'invoice_id']).where('id', '=', id).where('org_id', '=', orgId).executeTakeFirst();
+    if (!dc) throw notFound('That delivery challan does not exist.');
+    const billed = await trx.selectFrom('challan_lines').select('id').where('challan_id', '=', id).where('qty_invoiced', '>', '0').executeTakeFirst();
+    if (dc.invoice_id || billed || dc.status === 'invoiced') return `${dc.number} has been invoiced. Delete the invoice first.`;
+    if (await trx.selectFrom('eway_bills').select('id').where('challan_id', '=', id).executeTakeFirst()) return `${dc.number} has an e-way bill on record.`;
+    if (await trx.selectFrom('job_work_receipts').select('id').where('challan_id', '=', id).executeTakeFirst()) return `Goods have come back against ${dc.number} from the job worker.`;
+    if (what === 'edit' && await trx.selectFrom('challan_lines').select('id').where('challan_id', '=', id).where('so_line_id', 'is not', null).executeTakeFirst()) {
+      return `${dc.number} was made from a sales order. Delete it and make it from the order again.`;
+    }
+    return null;
+  }
+  const cn = await trx.selectFrom('credit_notes').select(['number', 'status']).where('id', '=', id).where('org_id', '=', orgId).executeTakeFirst();
+  if (!cn) throw notFound('That credit note does not exist.');
+  if (what === 'edit' && cn.status === 'void') return `${cn.number} is void.`;
+  const refunded = await trx.selectFrom('journal_entries').select('id').where('org_id', '=', orgId)
+    .where('source_type', '=', 'credit_note_refund').where('source_id', '=', id).where('reversal_of_entry_id', 'is', null).executeTakeFirst();
+  if (cn.status === 'refunded' || refunded) return `${cn.number} has been refunded in cash. Delete the refund first.`;
+  return null;
+}
+
+/** Take a credit note's credit back off every invoice it was set against. Returns whether its own invoice had it. */
+async function takeBackCredit(trx: Trx, orgId: number, id: number): Promise<boolean> {
+  const cn = await trx.selectFrom('credit_notes').select(['against_invoice_id', 'applied_amount']).where('id', '=', id).executeTakeFirstOrThrow();
+  const apps = await trx.selectFrom('credit_note_applications').select(['invoice_id', 'amount']).where('org_id', '=', orgId).where('credit_note_id', '=', id).execute();
+  const applied = toPaiseFromSql(cn.applied_amount);
+  const back = apps.length
+    ? apps.map((a) => ({ invoiceId: a.invoice_id, paise: toPaiseFromSql(a.amount) }))
+    : cn.against_invoice_id && applied > 0 ? [{ invoiceId: cn.against_invoice_id, paise: applied }] : [];
+  for (const b of back) {
+    await trx.updateTable('invoices').set((eb) => ({ amount_paid: eb('amount_paid', '-', toSqlFromPaise(b.paise)) })).where('id', '=', b.invoiceId).execute();
+    await settleIfPaid(trx, orgId, b.invoiceId);
+  }
+  await trx.deleteFrom('credit_note_applications').where('org_id', '=', orgId).where('credit_note_id', '=', id).execute();
+  await trx.updateTable('credit_notes').set({ applied_amount: toSqlFromPaise(0), status: 'open' }).where('id', '=', id).execute();
+  return back.some((b) => b.invoiceId === cn.against_invoice_id);
+}
+
+export type SalesDocInput =
+  | { kind: 'estimate'; input: CreateEstimateInput }
+  | { kind: 'sales-order'; input: CreateSalesOrderInput }
+  | { kind: 'challan'; input: CreateChallanInput }
+  | { kind: 'credit-note'; input: CreateCreditNoteInput };
+
+/**
+ * Edit a quote, sales order, delivery challan or credit note, as Zoho Books'
+ * Edit: rewritten in place with the same number. A credit note's entry is
+ * reversed and posted again, and its credit set again on its own invoice.
+ */
+export async function updateSalesDocument(trx: Trx, orgId: number, userId: number | null, id: number, doc: SalesDocInput) {
+  const d = DOC[doc.kind];
+  const row = await trx.selectFrom(d.table).select(['id', 'number']).where('id', '=', id).where('org_id', '=', orgId).forUpdate().executeTakeFirst();
+  if (!row) throw notFound(`That ${d.noun.toLowerCase()} does not exist.`);
+  const blocked = await salesDocBlocker(trx, orgId, doc.kind, id, 'edit');
+  if (blocked) throw new ApiError(409, blocked, 'locked_document');
+  const before = await docSnapshot(trx, orgId, doc.kind, id);
+  const replace = { id, number: row.number };
+  let made: CreatedDocument;
+  if (doc.kind === 'estimate') made = await createEstimate(trx, orgId, userId, doc.input, { replace });
+  else if (doc.kind === 'sales-order') made = await createSalesOrder(trx, orgId, userId, { ...doc.input, sourceEstimateId: undefined }, { replace });
+  else if (doc.kind === 'challan') made = await createChallan(trx, orgId, userId, doc.input, { replace });
+  else {
+    const cn = await trx.selectFrom('credit_notes').select(['journal_entry_id']).where('id', '=', id).executeTakeFirstOrThrow();
+    await reverseForChange(trx, orgId, cn.journal_entry_id, { memo: `Credit note ${row.number} edited: the entry as it was, reversed`, userId, module: 'sales' });
+    const hadOwn = await takeBackCredit(trx, orgId, id);
+    await trx.deleteFrom('serial_moves').where('org_id', '=', orgId).where('doc_type', '=', 'credit_note').where('doc_id', '=', id).execute();
+    made = await createCreditNote(trx, orgId, userId, { ...doc.input, applyImmediately: hadOwn }, { replace });
+  }
+  return { ...made, before };
+}
+
+/**
+ * Delete a quote, sales order, delivery challan or credit note, as Zoho Books'
+ * Delete. A credit note's credit comes off its invoices and its entry is
+ * reversed; its number is kept as cancelled for GSTR-1 (migration 118).
+ */
+export async function deleteSalesDocument(trx: Trx, orgId: number, userId: number | null, kind: EditableSalesDoc, id: number, reason?: string | null) {
+  const d = DOC[kind];
+  const row = await trx.selectFrom(d.table).selectAll().where('id', '=', id).where('org_id', '=', orgId).forUpdate().executeTakeFirst() as
+    { id: number; number: string; branch_id: number; customer_id: number; total: string; status: string; journal_entry_id?: number | null } & Record<string, unknown> | undefined;
+  if (!row) throw notFound(`That ${d.noun.toLowerCase()} does not exist.`);
+  const blocked = await salesDocBlocker(trx, orgId, kind, id, 'delete');
+  if (blocked) throw new ApiError(409, blocked, 'locked_document');
+  const snapshot = await docSnapshot(trx, orgId, kind, id);
+  let reversal: number | null = null;
+
+  if (kind === 'estimate') {
+    await trx.updateTable('sales_orders').set({ source_estimate_id: null }).where('org_id', '=', orgId).where('source_estimate_id', '=', id).execute();
+    await trx.updateTable('invoices').set({ source_doc_type: null, source_doc_id: null })
+      .where('org_id', '=', orgId).where('source_doc_type', '=', 'estimate').where('source_doc_id', '=', id).execute();
+  } else if (kind === 'sales-order') {
+    // A quote turned into this order is a quote again.
+    await trx.updateTable('estimates').set({ status: 'accepted', converted_to_type: null, converted_to_id: null })
+      .where('org_id', '=', orgId).where('converted_to_type', '=', 'sales_order').where('converted_to_id', '=', id).execute();
+  } else if (kind === 'challan') {
+    // What it delivered against an order is owed to the customer again.
+    const fromOrder = await trx.selectFrom('challan_lines').select(['so_line_id', 'qty']).where('challan_id', '=', id).where('so_line_id', 'is not', null).execute();
+    for (const l of fromOrder) {
+      await trx.updateTable('sales_order_lines').set((eb) => ({ qty_delivered: eb('qty_delivered', '-', String(l.qty)) })).where('id', '=', Number(l.so_line_id)).execute();
+    }
+  } else {
+    if (row.status !== 'void') {
+      reversal = await reverseForChange(trx, orgId, row.journal_entry_id ?? null, { memo: `Credit note ${row.number} deleted`, userId, module: 'sales' });
+      await takeBackCredit(trx, orgId, id);
+    } else {
+      await trx.deleteFrom('credit_note_applications').where('org_id', '=', orgId).where('credit_note_id', '=', id).execute();
+    }
+    await trx.deleteFrom('serial_moves').where('org_id', '=', orgId).where('doc_type', '=', 'credit_note').where('doc_id', '=', id).execute();
+  }
+
+  await unlinkDocument(trx, orgId, d.type, id);
+  await unlinkDocument(trx, orgId, kind, id);
+  await recordDeletion(trx, {
+    orgId, userId, docType: d.type, docId: id, number: row.number, date: String(row[d.date]).slice(0, 10),
+    totalPaise: toPaiseFromSql(row.total), contactId: row.customer_id, branchId: row.branch_id,
+    journalEntryId: row.journal_entry_id ?? null, reversalEntryId: reversal, reason, snapshot,
+  });
+  await trx.deleteFrom(d.table).where('id', '=', id).where('org_id', '=', orgId).execute();
+  return { number: row.number };
 }

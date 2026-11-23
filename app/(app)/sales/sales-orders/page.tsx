@@ -56,6 +56,8 @@ export default function SalesOrdersPage() {
   const router = useRouter();
   const canCreate = usePermission('sales', 'create');
   const state = useApi<SalesDocListResponse>(() => salesDocuments.list('sales-order'), []);
+  // Zoho's Edit from the row's menu: the same dialog, filled in.
+  const [editId, setEditId] = useState<string | null>(null);
   // An order goes on line by line: invoiced now, or delivered on a challan first.
   const [step, setStep] = useState<{ row: SalesDocRow; to: 'invoice' | 'challan' } | null>(null);
   const [date, setDate] = useState(today());
@@ -198,7 +200,7 @@ export default function SalesOrdersPage() {
             ) : (
               <DataTable
                 rows={d.documents}
-                columns={[...columns, documentMenuColumn('sales-order', state.refetch)]}
+                columns={[...columns, documentMenuColumn('sales-order', state.refetch, (r) => setEditId(r.id))]}
                 getRowId={(r) => r.id}
                 selectable
                 bulkActions={(selected) => <BulkPrintButton kind="sales-order" ids={selected.map((r) => r.id)} />}
@@ -210,6 +212,22 @@ export default function SalesOrdersPage() {
           </>
         )}
       </AsyncPage>
+      {editId && (
+        <QuickDocumentDialog
+          editId={editId}
+          onEditClose={() => setEditId(null)}
+          kind="sales-order"
+          title="New sales order"
+          description="Record a confirmed order. It is a commitment to supply, not revenue — nothing posts yet."
+          buttonLabel="New order"
+          onCreated={state.refetch}
+          extra={(v, set) => (
+            <Field label="Expected ship date">
+              <Input type="date" value={v || inDays(14)} onChange={(e) => set(e.target.value)} />
+            </Field>
+          )}
+        />
+      )}
 
       <Dialog open={!!readying} onOpenChange={(o) => !o && setReadying(null)}>
         <DialogContent data-slot="ready-dialog">

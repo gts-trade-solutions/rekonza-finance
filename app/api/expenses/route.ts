@@ -4,6 +4,7 @@ import { db, transaction } from '@/lib/server/db';
 import { route, body, query, asId } from '@/lib/server/http';
 import { toPaiseFromSql } from '@/lib/server/money-sql';
 import { createExpense } from '@/lib/server/services/purchases';
+import { ExpenseInput, toExpenseInput } from '@/lib/server/expense-input';
 import { logAudit, auditMeta } from '@/lib/server/audit';
 
 const ListQuery = z.object({
@@ -88,49 +89,12 @@ export const GET = route(
   { permission: { module: 'purchases', action: 'view' } },
 );
 
-const CreateInput = z.object({
-  branchId: z.string(),
-  /** The cost centre the document's income or expense belongs to. */
-  costCentreId: z.union([z.string(), z.number()]).nullish(),
-  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use a yyyy-mm-dd date.'),
-  accountId: z.string(),
-  paidThroughBankAccountId: z.string(),
-  // Left out for mileage, where it is the distance times the rate.
-  amountPaise: z.number().int().nonnegative().default(0),
-  gstRatePct: z.number().min(0).max(50).optional(),
-  vendorId: z.string().nullish(),
-  itcEligibility: z.enum(['eligible', 'ineligible', 'capital_goods']).optional(),
-  isBillable: z.boolean().optional(),
-  billableCustomerId: z.string().nullish(),
-  projectId: z.union([z.string(), z.number()]).nullish(),
-  reference: z.string().nullish(),
-  notes: z.string().nullish(),
-  /** A journey claimed by the kilometre; the amount is worked out from it. */
-  mileage: z.object({ km: z.number().positive().max(100000), ratePaise: z.number().int().positive().max(100000) }).nullish(),
-});
-
 export const POST = route(
   async ({ orgId, user, req }) => {
-    const input = await body(req, CreateInput);
+    const input = await body(req, ExpenseInput);
 
     const created = await transaction(async (trx) =>
-      createExpense(trx, orgId, user.userId, {
-        branchId: Number(input.branchId),
-        costCentreId: input.costCentreId ? Number(input.costCentreId) : null,
-        date: input.date,
-        accountId: Number(input.accountId),
-        paidThroughBankAccountId: Number(input.paidThroughBankAccountId),
-        amountPaise: input.amountPaise,
-        gstRatePct: input.gstRatePct,
-        vendorId: input.vendorId ? Number(input.vendorId) : null,
-        itcEligibility: input.itcEligibility,
-        isBillable: input.isBillable,
-        billableCustomerId: input.billableCustomerId ? Number(input.billableCustomerId) : null,
-        projectId: input.projectId ? Number(input.projectId) : null,
-        reference: input.reference,
-        notes: input.notes,
-        mileage: input.mileage ?? null,
-      }),
+      createExpense(trx, orgId, user.userId, toExpenseInput(input)),
     );
 
     await logAudit({

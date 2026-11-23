@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { sql } from 'kysely';
 import { db, transaction } from '@/lib/server/db';
+import { PaymentInput, toPaymentInput } from '@/lib/server/payment-input';
 import { route, body, query, asId, badRequest, forbidden } from '@/lib/server/http';
 import { hasPermission } from '@/lib/rbac';
 import { toPaiseFromSql } from '@/lib/server/money-sql';
@@ -95,42 +96,6 @@ export const GET = route(
   { permission: { module: 'sales', action: 'view' } },
 );
 
-const CreateInput = z.object({
-  kind: z.enum(['received', 'made']),
-  branchId: z.string(),
-  contactId: z.string(),
-  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use a yyyy-mm-dd date.'),
-  mode: z.enum(['cash', 'cheque', 'neft', 'rtgs', 'imps', 'upi', 'card', 'netbanking', 'other']),
-  amountPaise: z.number().int().positive('Enter an amount above zero.'),
-  bankAccountId: z.string(),
-  reference: z.string().nullish(),
-  tdsPaise: z.number().int().nonnegative().optional(),
-  bankChargesPaise: z.number().int().nonnegative().optional(),
-  notes: z.string().nullish(),
-  allocations: z
-    .array(
-      z.object({
-        targetType: z.enum(['invoice', 'bill', 'credit_note', 'vendor_credit', 'retainer', 'opening']),
-        targetId: z.string(),
-        // Worked out from the foreign amount when the payment is in another currency.
-        amountPaise: z.number().int().nonnegative(),
-        foreignAmountPaise: z.number().int().positive().optional(),
-      }),
-    )
-    .optional(),
-  /** An advance for services: GST on what is left unapplied is due now. */
-  advanceGst: z.object({
-    ratePct: z.number().positive().max(40),
-    placeOfSupply: z.string().regex(/^\d{2}$/).nullish(),
-  }).optional(),
-  /** Received or paid in another currency; amountPaise is then the rupees in the bank. */
-  fx: z.object({
-    currency: z.string().trim().toUpperCase().length(3),
-    rate: z.number().positive(),
-    foreignAmountPaise: z.number().int().positive(),
-  }).optional(),
-});
-
 /** Receipts belong to sales and payments made to purchases. */
 function allowKind(role: Parameters<typeof hasPermission>[0], kind: 'received' | 'made', action: 'create' | 'edit') {
   const area = kind === 'received' ? 'sales' : 'purchases';
@@ -141,7 +106,7 @@ function allowKind(role: Parameters<typeof hasPermission>[0], kind: 'received' |
 
 export const POST = route(
   async ({ orgId, user, role, req }) => {
-    const input = await body(req, CreateInput);
+    const input = await body(req, PaymentInput);
     allowKind(role, input.kind, 'create');
     if (input.advanceGst && input.kind !== 'received') {
       throw badRequest('GST on an advance applies to money received for services, not to payments made.');
@@ -149,26 +114,7 @@ export const POST = route(
 
     // Which documents each kind of payment may settle, and that they belong to
     // the same party, is checked by the service, for every caller.
-    const payload = {
-      branchId: Number(input.branchId),
-      contactId: Number(input.contactId),
-      date: input.date,
-      mode: input.mode,
-      amountPaise: input.amountPaise,
-      bankAccountId: Number(input.bankAccountId),
-      reference: input.reference,
-      tdsPaise: input.tdsPaise,
-      bankChargesPaise: input.bankChargesPaise,
-      notes: input.notes,
-      allocations: (input.allocations ?? []).map((a) => ({
-        targetType: a.targetType,
-        targetId: Number(a.targetId),
-        amountPaise: a.amountPaise,
-        foreignAmountPaise: a.foreignAmountPaise,
-      })),
-      advanceGst: input.advanceGst ?? null,
-      fx: input.fx ?? null,
-    };
+    const payload = toPaymentInput(input);
 
     const created = await transaction(async (trx) =>
       input.kind === 'received'

@@ -13,7 +13,7 @@
 // discount percentage applied to every line, printed with each. The items
 // offered are the ones the customer buys (goods, services or both).
 
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { localDay } from '@/lib/selectors';
 import { ListPlus, Plus, Search, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -26,7 +26,7 @@ import {
 } from '@/components/ui/dialog';
 import { Field, MoneyInput } from '@/components/shared/form-bits';
 import { Money } from '@/components/shared/money';
-import { salesDocuments, type SalesDocKind } from '@/lib/api/client';
+import { salesDocuments, type EditableSalesKind, type SalesDocKind } from '@/lib/api/client';
 import { VoucherTypePicker, type VoucherDocType } from '@/components/forms/voucher-type-picker';
 import { useApiAction } from '@/lib/api/use-api';
 import { useAppStore } from '@/lib/store';
@@ -66,6 +66,8 @@ export function QuickDocumentDialog({
   buttonLabel,
   extra,
   onCreated,
+  editId = null,
+  onEditClose,
 }: {
   kind: SalesDocKind;
   title: string;
@@ -74,6 +76,9 @@ export function QuickDocumentDialog({
   /** Renders the one field this kind needs beyond the shared ones. */
   extra?: (value: string, set: (v: string) => void) => ReactNode;
   onCreated: () => void;
+  /** Zoho's Edit: this document, filled in, saved back over itself (no button of its own). */
+  editId?: string | null;
+  onEditClose?: () => void;
 }) {
   // Items and the active branch come from the store, which is hydrated from
   // /api/masters — the same ids the server will validate against. Customers
@@ -91,6 +96,30 @@ export function QuickDocumentDialog({
   const [offerPct, setOfferPct] = useState('');
   const [extraValue, setExtraValue] = useState('');
   const [voucherTypeId, setVoucherTypeId] = useState('');
+  // The document being edited: its number and date are its own.
+  const [editDoc, setEditDoc] = useState<{ id: string; number: string; date: string } | null>(null);
+  // Held in a ref: a page passes a fresh function each render, which must not reload the document.
+  const closeRef = useRef(onEditClose);
+  closeRef.current = onEditClose;
+  useEffect(() => {
+    if (!editId) return;
+    let live = true;
+    setOpen(true);
+    salesDocuments.getOne(kind as EditableSalesKind, editId).then((d) => {
+      if (!live) return;
+      setEditDoc({ id: d.id, number: d.number, date: d.date ?? TODAY() });
+      setCustomerId(d.customerId);
+      setLines(d.lines.filter((l) => l.itemId).map((l) => ({
+        key: nextKey++, itemId: l.itemId!, qty: l.qty, rate: l.ratePaise, discountPct: l.discountPct, gstRatePct: l.gstRatePct,
+      })));
+      setExtraValue((kind === 'estimate' ? d.expiryDate : kind === 'sales-order' ? d.expectedShipDate : kind === 'challan' ? d.challanType : d.reason) ?? '');
+    }).catch((e) => {
+      toast.error('That document could not be loaded', { description: e instanceof Error ? e.message : String(e) });
+      setOpen(false);
+      closeRef.current?.();
+    });
+    return () => { live = false; };
+  }, [editId, kind]);
   // ?new=<kind>&items=a,b opens the dialog with those items on its lines: the
   // item list's bulk "New Transaction → Quote / Sales Order", as Zoho's does.
   const [preset, setPreset] = useState(false);
@@ -138,6 +167,7 @@ export function QuickDocumentDialog({
   }, [lines, supplyType, kind]);
 
   const reset = () => {
+    setEditDoc(null);
     setCustomerId('');
     setLines([blankLine()]);
     setOfferPct('');
@@ -179,7 +209,7 @@ export function QuickDocumentDialog({
       kind,
       branchId,
       customerId,
-      date: TODAY(),
+      date: editDoc?.date ?? TODAY(),
       lines: filled.map((l) => ({
         itemId: l.itemId, qty: l.qty, ratePaise: l.rate,
         ...(kind !== 'challan' ? { gstRatePct: l.gstRatePct } : {}),
@@ -199,6 +229,22 @@ export function QuickDocumentDialog({
       return;
     }
 
+    if (editId) {
+      if (!editDoc) return;
+      try {
+        const done = await salesDocuments.update(kind as EditableSalesKind, editDoc.id, payload);
+        toast.success(`${done.number} updated`, {
+          description: kind === 'credit-note' ? 'Its entry was reversed and posted again; the audit trail keeps the old version.' : 'The audit trail keeps the old version.',
+        });
+        setOpen(false);
+        reset();
+        onEditClose?.();
+        onCreated();
+      } catch (e) {
+        toast.error('Not saved', { description: e instanceof Error ? e.message : String(e) });
+      }
+      return;
+    }
     const result = await create.run(payload);
     if (!result) return;
 
@@ -218,15 +264,17 @@ export function QuickDocumentDialog({
       open={open}
       onOpenChange={(v) => {
         setOpen(v);
-        if (!v) reset();
+        if (!v) { reset(); if (editId) onEditClose?.(); }
       }}
     >
-      <DialogTrigger asChild>
-        <Button size="sm" className="gap-1.5"><Plus className="size-4" /> {buttonLabel}</Button>
-      </DialogTrigger>
-      <DialogContent className="sm:max-w-5xl" data-slot={`new-${kind}`}>
+      {!editId && (
+        <DialogTrigger asChild>
+          <Button size="sm" className="gap-1.5"><Plus className="size-4" /> {buttonLabel}</Button>
+        </DialogTrigger>
+      )}
+      <DialogContent className="sm:max-w-5xl" data-slot={editId ? `edit-${kind}` : `new-${kind}`}>
         <DialogHeader>
-          <DialogTitle>{title}</DialogTitle>
+          <DialogTitle>{editId ? `Edit ${editDoc?.number ?? ''}` : title}</DialogTitle>
           <DialogDescription>{description}</DialogDescription>
         </DialogHeader>
         <div className="max-h-[70vh] space-y-4 overflow-y-auto pr-1 thin-scroll">
@@ -346,8 +394,8 @@ export function QuickDocumentDialog({
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
-          <Button onClick={save} disabled={create.busy}>
-            {create.busy ? 'Saving…' : buttonLabel}
+          <Button onClick={save} disabled={create.busy || (!!editId && !editDoc)} data-slot="save-document">
+            {create.busy ? 'Saving…' : editId ? 'Save' : buttonLabel}
           </Button>
         </DialogFooter>
 
