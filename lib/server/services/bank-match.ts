@@ -263,7 +263,7 @@ async function writeLinks(trx: Trx, orgId: number, userId: number | null, line: 
 }
 
 /** A journal for what a match leaves over, or for a category with no document: the bank on one side. */
-async function postAgainstBank(trx: Trx, orgId: number, userId: number | null, line: BankLine, other: DraftLine[], memo: string): Promise<number> {
+async function postAgainstBank(trx: Trx, orgId: number, userId: number | null, line: BankMoney, other: DraftLine[], memo: string): Promise<number> {
   const amount = other.reduce((t, l) => t + (l.debit ?? 0) - (l.credit ?? 0), 0);
   // Money in: the bank is debited by what the other side credits; money out, the reverse.
   const bankSide: DraftLine = amount < 0
@@ -271,7 +271,8 @@ async function postAgainstBank(trx: Trx, orgId: number, userId: number | null, l
     : { accountId: line.ledgerAccountId, credit: amount, description: line.narration.slice(0, 200) };
   const entry = await postEntry(trx, {
     orgId, branchId: await primaryBranch(trx, orgId), date: line.date, memo: memo.slice(0, 500),
-    sourceType: 'bank_txn', sourceId: line.id, userId, module: 'banking', lines: [bankSide, ...other],
+    // Made from a statement line, or typed in on the account (Add Transaction).
+    sourceType: line.id ? 'bank_txn' : 'bank_entry', sourceId: line.id ?? undefined, userId, module: 'banking', lines: [bankSide, ...other],
   });
   return entry.id;
 }
@@ -391,6 +392,20 @@ export interface CategoriseInput {
 export async function categoriseAs(trx: Trx, orgId: number, userId: number | null, txnId: number, input: CategoriseInput): Promise<{ created: string | null }> {
   const line = await bankLine(trx, orgId, txnId);
   await assertOpen(line);
+  const { link, created } = await postCategory(trx, orgId, userId, line, input);
+  await writeLinks(trx, orgId, userId, line, [link]);
+  return { created };
+}
+
+/**
+ * Money in or out of a bank account: a statement line, or one typed in from
+ * the account's "Add Transaction" (no statement line yet, so `id` is null and
+ * nothing is linked; when the statement arrives, its line is matched to this).
+ */
+export type BankMoney = Omit<BankLine, 'status' | 'id'> & { id: number | null };
+
+/** Record what a category records for this money, and say what it made. */
+async function postCategory(trx: Trx, orgId: number, userId: number | null, line: BankMoney, input: CategoriseInput): Promise<{ link: LinkRow; created: string | null }> {
   const cat = categoryOf(input.category);
   if (!cat) throw badRequest('Choose a category.');
   if (cat.side !== line.direction) {
@@ -500,8 +515,32 @@ export async function categoriseAs(trx: Trx, orgId: number, userId: number | nul
     link = { target_type: 'journal_entry', target_id: entryId, amount: line.amountPaise, created: true, category: cat.key };
   }
 
-  await writeLinks(trx, orgId, userId, line, [link]);
-  return { created: createdNo };
+  return { link, created: createdNo };
+}
+
+/**
+ * Zoho's "Add Transaction" on a bank account: an expense, a transfer, a
+ * deposit, a refund … recorded straight from the account, before (or without)
+ * a statement line, through the same postings as categorising a line would.
+ */
+export async function addBankTransaction(
+  trx: Trx, orgId: number, userId: number | null, bankAccountId: number,
+  input: CategoriseInput & { date: string; amountPaise: Paise },
+): Promise<{ created: string | null; targetType: LinkRow['target_type']; targetId: number }> {
+  const cat = categoryOf(input.category);
+  if (!cat) throw badRequest('Choose what the transaction is.');
+  if (!(input.amountPaise > 0)) throw badRequest('Enter an amount above zero.');
+  const bank = await trx.selectFrom('bank_accounts').select(['id', 'name', 'ledger_account_id', 'is_active'])
+    .where('id', '=', bankAccountId).where('org_id', '=', orgId).executeTakeFirst();
+  if (!bank) throw notFound('That account does not exist.');
+  if (!bank.is_active) throw badRequest(`${bank.name} is inactive. Mark it as active first.`);
+  const money: BankMoney = {
+    id: null, date: input.date, amountPaise: input.amountPaise, direction: cat.side,
+    narration: (input.notes?.trim() || cat.label).slice(0, 200), reference: input.reference?.trim() || null,
+    bankAccountId: bank.id, ledgerAccountId: bank.ledger_account_id, bankName: bank.name,
+  };
+  const { link, created } = await postCategory(trx, orgId, userId, money, input);
+  return { created, targetType: link.target_type, targetId: link.target_id };
 }
 
 // ── Undoing ──────────────────────────────────────────────────────────────────
@@ -580,4 +619,86 @@ export async function linksOf(ex: Executor, orgId: number, txnId: number): Promi
     out.push({ type: r.type, id: String(r.id), label, amountPaise: r.amount, created: r.created, category: r.category ?? null });
   }
   return out;
+}
+
+/** Zoho's "Add Transaction" entries that are not a line category: a credit note's refund, a retainer's payment. */
+export type AddTransactionKind = BankCategoryKey | 'credit_note_refund' | 'retainer_payment';
+
+/**
+ * Everything on Zoho's "Add Transaction ▾" menu for a bank account:
+ * MONEY OUT — Expense, Transfer To Another Account, Credit Note Refund, Payment
+ * Refund; MONEY IN — Customer Payment, Retainer Payment, Transfer From Another
+ * Account, Expense Refund, Deposit From Other Accounts (and the rest of the
+ * categories a line can be). A credit note's refund goes through the credit
+ * note (sales-documents.ts), so its balance comes down; a retainer's payment
+ * is a receipt set against the retainer.
+ */
+export async function addAccountTransaction(
+  trx: Trx, orgId: number, userId: number | null, bankAccountId: number,
+  input: Omit<CategoriseInput, 'category'> & { kind: AddTransactionKind; date: string; amountPaise: Paise; creditNoteId?: number | null; retainerId?: number | null },
+): Promise<{ created: string | null }> {
+  if (input.kind === 'credit_note_refund') {
+    if (!input.creditNoteId) throw badRequest('Choose the credit note to refund.');
+    const { refundCreditNote } = await import('./sales-documents');
+    const r = await refundCreditNote(trx, orgId, userId, input.creditNoteId, {
+      bankAccountId, date: input.date, amountPaise: input.amountPaise, reference: input.reference ?? null,
+    });
+    const cn = await trx.selectFrom('credit_notes').select('number').where('id', '=', input.creditNoteId).executeTakeFirst();
+    return { created: cn ? `${cn.number} refund (${(r.refundedPaise / 100).toFixed(2)})` : null };
+  }
+  if (input.kind === 'retainer_payment') {
+    if (!input.contactId) throw badRequest('Choose the customer.');
+    if (!input.retainerId) throw badRequest('Choose the retainer invoice.');
+    if (!(input.amountPaise > 0)) throw badRequest('Enter an amount above zero.');
+    const bank = await trx.selectFrom('bank_accounts').select(['id', 'name']).where('id', '=', bankAccountId).where('org_id', '=', orgId).executeTakeFirst();
+    if (!bank) throw notFound('That account does not exist.');
+    const pay = await receivePayment(trx, orgId, userId, {
+      branchId: await primaryBranch(trx, orgId), contactId: input.contactId, date: input.date, mode: modeFromNarration(input.reference ?? ''),
+      amountPaise: input.amountPaise, bankAccountId, reference: input.reference ?? null, notes: input.notes ?? null,
+      allocations: [{ targetType: 'retainer', targetId: input.retainerId, amountPaise: input.amountPaise }],
+    });
+    return { created: pay.number };
+  }
+  const r = await addBankTransaction(trx, orgId, userId, bankAccountId, { ...input, category: input.kind });
+  return { created: r.created };
+}
+
+/**
+ * Zoho's Multi-Select & Match: several statement lines of one account that
+ * together are one transaction already in the books — two deposits a bank
+ * split, a payment that left in parts. Each line is linked to that one
+ * transaction for its own amount, and nothing is posted: the transaction
+ * posted when it was entered. The lines must add up to it exactly, or the
+ * match is refused, because a match that hides a difference is worse than none.
+ */
+export async function matchLinesTogether(
+  trx: Trx, orgId: number, userId: number | null, txnIds: number[], target: { type: 'payment' | 'expense' | 'transfer' | 'journal'; id: number },
+): Promise<{ matched: number }> {
+  const ids = [...new Set(txnIds)];
+  if (ids.length < 2) throw badRequest('Choose two or more statement lines to match together.');
+  const lines = await Promise.all(ids.map((id) => bankLine(trx, orgId, id)));
+  for (const l of lines) await assertOpen(l);
+  const first = lines[0];
+  if (lines.some((l) => l.bankAccountId !== first.bankAccountId)) throw badRequest('The lines are from different accounts.');
+  if (lines.some((l) => l.direction !== first.direction)) throw badRequest('Choose only deposits, or only withdrawals.');
+  const pool = await candidatePool(trx, orgId, { id: first.bankAccountId, ledgerAccountId: first.ledgerAccountId }, first.direction);
+  const hit = pool.find((c) => c.type === target.type && Number(c.id) === target.id);
+  if (!hit) throw badRequest('That transaction is not open to match: it may already be matched, or be in another account.');
+  const total = lines.reduce((t, l) => t + l.amountPaise, 0);
+  if (total !== hit.amountPaise) {
+    throw badRequest(`The lines add up to ${(total / 100).toFixed(2)} and ${hit.number} is ${(hit.amountPaise / 100).toFixed(2)}. They have to be the same.`);
+  }
+  const targetType = target.type === 'journal' ? 'journal_entry' : target.type;
+  for (const l of lines) {
+    await writeLinks(trx, orgId, userId, l, [{ target_type: targetType, target_id: target.id, amount: l.amountPaise, created: false }]);
+  }
+  return { matched: lines.length };
+}
+
+/** What several lines of an account could be matched to together: recorded transactions no line has claimed. */
+export async function recordedCandidates(ex: Executor, orgId: number, bankAccountId: number, direction: 'in' | 'out'): Promise<Candidate[]> {
+  const bank = await ex.selectFrom('bank_accounts').select(['id', 'ledger_account_id']).where('id', '=', bankAccountId).where('org_id', '=', orgId).executeTakeFirst();
+  if (!bank) throw notFound('That account does not exist.');
+  const pool = await candidatePool(ex, orgId, { id: bank.id, ledgerAccountId: bank.ledger_account_id }, direction);
+  return pool.filter((c) => c.type !== 'invoice' && c.type !== 'bill').sort((a, b) => b.date.localeCompare(a.date));
 }

@@ -339,12 +339,15 @@ export interface BalanceConfirmations {
 }
 
 export interface BankAccounts {
+  account_code: string | null;
   account_holder: string | null;
   account_last4: string | null;
   account_number: string | null;
   bank_name: string | null;
   branch_name: string | null;
   created_at: Generated<Date>;
+  currency: Generated<string>;
+  description: string | null;
   feed_connected: Generated<number>;
   id: Generated<number>;
   ifsc: string | null;
@@ -357,10 +360,13 @@ export interface BankAccounts {
   opening_date: ColumnType<string | null, string | null, string | null>;
   org_id: number;
   updated_at: Generated<Date>;
+  user_ids: Json | null;
 }
 
 export interface BankRules {
+  account_scope: Generated<string>;
   action_account_id: number | null;
+  apply_to: string | null;
   auto_confirm: Generated<number>;
   bank_account_id: number | null;
   conditions: Json;
@@ -368,9 +374,14 @@ export interface BankRules {
   created_at: Generated<Date>;
   id: Generated<number>;
   is_active: Generated<number>;
+  match_mode: Generated<string>;
   name: string;
   org_id: number;
+  other_bank_account_id: number | null;
   priority: Generated<number>;
+  record_as: string | null;
+  reference_mode: Generated<string>;
+  scope_account_ids: Json | null;
   updated_at: Generated<Date>;
 }
 
@@ -409,6 +420,7 @@ export interface BankTransactions {
   created_at: Generated<Date>;
   dedupe_hash: string;
   deposit: Generated<Decimal>;
+  exclude_reason: string | null;
   id: Generated<number>;
   import_batch_id: number | null;
   matched_at: Date | null;

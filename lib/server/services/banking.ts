@@ -25,6 +25,8 @@ import { toPaiseFromSql, toSqlFromPaise } from '../money-sql';
 import { postEntry, reverseEntry, type DraftLine } from '../ledger/posting';
 import { CODE, accountIds, requireAccount } from '../ledger/chart-of-accounts';
 import { ApiError, badRequest, notFound } from '../http';
+import { ruleCatches, ruleShapeOf } from '../../bank-rules';
+import type { BankCategoryKey } from '../../bank-categories';
 import { receivePayment } from './payments';
 import { undoLinks } from './bank-match';
 
@@ -282,19 +284,17 @@ export async function matchInvoicePayments(trx: Trx, orgId: number, userId: numb
   return matched;
 }
 
-interface RuleCondition {
-  field: 'narration' | 'reference' | 'amount';
-  op: 'contains' | 'equals' | 'starts_with' | 'greater_than' | 'less_than';
-  value: string;
-}
-
 /**
- * Run the organisation's rules over unmatched lines.
+ * Run the organisation's rules over unmatched lines (Zoho's transaction rules,
+ * lib/bank-rules.ts decides which lines a rule catches).
  *
- * Only rules marked auto-confirm actually post. The rest record a suggestion
- * for a human to accept, because a rule that silently miscategorises is worse
- * than one that asks — the misposting is invisible until somebody reads the
- * profit and loss and wonders why fuel is so high.
+ * A rule marked "Categorized" records the line at once, as the category it
+ * names (Zoho's Record As) into its account; one marked "Recognized" only
+ * notes itself on the line, which then shows under Recognized for a person to
+ * accept — a rule that silently miscategorises is worse than one that asks,
+ * because the misposting is invisible until somebody reads the profit and
+ * loss and wonders why fuel is so high. The first rule that catches a line
+ * wins; their order decides which that is.
  */
 export async function applyRules(
   trx: Trx,
@@ -309,54 +309,80 @@ export async function applyRules(
   if (!rules.length) return 0;
 
   let q = trx
-    .selectFrom('bank_transactions').selectAll()
-    .where('org_id', '=', orgId).where('status', '=', 'unmatched');
-  if (bankAccountId) q = q.where('bank_account_id', '=', bankAccountId);
+    .selectFrom('bank_transactions as t')
+    .innerJoin('bank_accounts as b', 'b.id', 't.bank_account_id')
+    .select(['t.id', 't.narration', 't.reference', 't.deposit', 't.withdrawal', 't.bank_account_id', 't.applied_rule_id', 'b.kind'])
+    .where('t.org_id', '=', orgId).where('t.status', '=', 'unmatched');
+  if (bankAccountId) q = q.where('t.bank_account_id', '=', bankAccountId);
   const txns = await q.execute();
+  const shapes = rules.map((r) => ({ rule: r, shape: ruleShapeOf(r) }));
 
   let matched = 0;
   for (const txn of txns) {
-    for (const rule of rules) {
-      if (rule.bank_account_id && rule.bank_account_id !== txn.bank_account_id) continue;
-
-      const conditions = (rule.conditions ?? []) as unknown as RuleCondition[];
-      if (!Array.isArray(conditions) || !conditions.length) continue;
-
-      const amount = toPaiseFromSql(txn.deposit) || toPaiseFromSql(txn.withdrawal);
-      const hit = conditions.every((c) => {
-        const haystack =
-          c.field === 'narration' ? txn.narration.toLowerCase()
-          : c.field === 'reference' ? (txn.reference ?? '').toLowerCase()
-          : String(amount);
-        const needle = String(c.value).toLowerCase();
-        switch (c.op) {
-          case 'contains': return haystack.includes(needle);
-          case 'equals': return haystack === needle;
-          case 'starts_with': return haystack.startsWith(needle);
-          case 'greater_than': return amount > Number(c.value);
-          case 'less_than': return amount < Number(c.value);
-          default: return false;
-        }
-      });
-      if (!hit) continue;
-
-      if (rule.auto_confirm && rule.action_account_id) {
+    const line = {
+      narration: txn.narration, reference: txn.reference, depositPaise: toPaiseFromSql(txn.deposit),
+      withdrawalPaise: toPaiseFromSql(txn.withdrawal), bankAccountId: txn.bank_account_id, bankKind: txn.kind,
+    };
+    const hit = shapes.find((x) => ruleCatches(x.shape, line));
+    if (!hit) {
+      // A rule since changed or switched off no longer recognises the line.
+      if (txn.applied_rule_id) await trx.updateTable('bank_transactions').set({ applied_rule_id: null }).where('id', '=', txn.id).execute();
+      continue;
+    }
+    const rule = hit.rule;
+    if (rule.auto_confirm && (rule.action_account_id || rule.other_bank_account_id)) {
+      if (rule.record_as) {
+        const { categoriseAs } = await import('./bank-match');
+        await categoriseAs(trx, orgId, userId, txn.id, {
+          category: rule.record_as as BankCategoryKey,
+          accountId: rule.action_account_id, otherBankAccountId: rule.other_bank_account_id, contactId: rule.contact_id,
+          reference: rule.reference_mode === 'none' ? '' : txn.reference,
+          notes: `Categorised by the rule "${rule.name}": ${txn.narration}`,
+        });
+        await trx.updateTable('bank_transactions').set({ applied_rule_id: rule.id }).where('id', '=', txn.id).execute();
+      } else {
         await categoriseTransaction(trx, orgId, userId, txn.id, {
-          accountId: rule.action_account_id,
+          accountId: rule.action_account_id!,
           contactId: rule.contact_id,
           ruleId: rule.id,
         });
-        matched++;
-      } else {
-        // Suggestion only: recorded so the reconciliation screen can offer it.
-        await trx
-          .updateTable('bank_transactions').set({ applied_rule_id: rule.id })
-          .where('id', '=', txn.id).execute();
       }
-      break; // First matching rule wins; priority decides which that is.
+      matched++;
+    } else if (txn.applied_rule_id !== rule.id) {
+      // Recognized only: noted so the account's Recognized view can offer it.
+      await trx.updateTable('bank_transactions').set({ applied_rule_id: rule.id }).where('id', '=', txn.id).execute();
     }
   }
   return matched;
+}
+
+/**
+ * Zoho's Categorize on a Recognized line: record it as the rule that
+ * recognised it says. A line whose rule has gone, or names no account, is left
+ * for a person to categorise.
+ */
+export async function applyRecognized(trx: Trx, orgId: number, userId: number | null, ids: number[]): Promise<{ applied: number; skipped: number }> {
+  if (!ids.length) return { applied: 0, skipped: 0 };
+  const lines = await trx.selectFrom('bank_transactions as t').innerJoin('bank_rules as r', 'r.id', 't.applied_rule_id')
+    .select(['t.id', 't.reference', 't.narration', 'r.id as rule_id', 'r.name as rule_name', 'r.record_as', 'r.action_account_id',
+      'r.other_bank_account_id', 'r.contact_id', 'r.reference_mode'])
+    .where('t.org_id', '=', orgId).where('t.id', 'in', ids).where('t.status', '=', 'unmatched').execute();
+  let applied = 0;
+  for (const l of lines) {
+    if (!l.action_account_id && !l.other_bank_account_id) continue;
+    if (l.record_as) {
+      const { categoriseAs } = await import('./bank-match');
+      await categoriseAs(trx, orgId, userId, l.id, {
+        category: l.record_as as BankCategoryKey, accountId: l.action_account_id, otherBankAccountId: l.other_bank_account_id,
+        contactId: l.contact_id, reference: l.reference_mode === 'none' ? '' : l.reference,
+        notes: `Categorised by the rule "${l.rule_name}": ${l.narration}`,
+      });
+    } else {
+      await categoriseTransaction(trx, orgId, userId, l.id, { accountId: l.action_account_id!, contactId: l.contact_id, ruleId: l.rule_id });
+    }
+    applied++;
+  }
+  return { applied, skipped: ids.length - applied };
 }
 
 /**

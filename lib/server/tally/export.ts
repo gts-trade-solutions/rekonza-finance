@@ -210,7 +210,7 @@ function voucherTypeFor(sourceType: string, lines: { subtype: string | null; pai
     case 'expense':
       // An expense paid on the spot is a payment; one left on credit is a journal.
       return outOfMoney ? 'Payment' : 'Journal';
-    case 'bank_txn':
+    case 'bank_txn': case 'bank_entry':
       if (money.length > 1 && intoMoney && outOfMoney) return 'Contra';
       return intoMoney ? 'Receipt' : 'Payment';
     default: return 'Journal';
