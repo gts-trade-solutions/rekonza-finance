@@ -26,6 +26,7 @@ import { postEntry, reverseEntry, type DraftLine } from '../ledger/posting';
 import { CODE, accountIds, requireAccount } from '../ledger/chart-of-accounts';
 import { ApiError, badRequest, notFound } from '../http';
 import { receivePayment } from './payments';
+import { undoLinks } from './bank-match';
 
 export interface StatementRow {
   date: string;
@@ -257,6 +258,7 @@ export async function matchInvoicePayments(trx: Trx, orgId: number, userId: numb
       .where('p.payment_date', '>=', sql<string>`DATE_SUB(${date}, INTERVAL 7 DAY)`).where('p.payment_date', '<=', sql<string>`DATE_ADD(${date}, INTERVAL 7 DAY)`)
       .where('t.id', 'is', null).executeTakeFirst();
     let paymentId = typed?.id;
+    const recorded = !paymentId;
     if (!paymentId) {
       if (amount > inv.left) continue;
       const receipt = await receivePayment(trx, orgId, userId, {
@@ -270,6 +272,11 @@ export async function matchInvoicePayments(trx: Trx, orgId: number, userId: numb
     }
     await trx.updateTable('bank_transactions').set({ status: 'matched', matched_type: 'payment', matched_id: paymentId, matched_at: new Date(), matched_by_user_id: userId })
       .where('id', '=', line.id).execute();
+    // Kept with whether this recorded the receipt, so unmatching takes back only what it did (bank-match.ts).
+    await trx.insertInto('bank_transaction_links').values({
+      org_id: orgId, bank_transaction_id: line.id, target_type: 'payment', target_id: paymentId,
+      amount: toSqlFromPaise(amount), created_by_match: recorded ? 1 : 0, created_by_user_id: userId,
+    }).execute();
     matched++;
   }
   return matched;
@@ -497,6 +504,9 @@ export async function unmatchTransaction(
     .where('id', '=', txnId).where('org_id', '=', orgId).executeTakeFirst();
   if (!txn) throw notFound('That bank line does not exist.');
   if (txn.status !== 'matched') throw badRequest('That line is not matched.');
+
+  // Matched or categorised through the links: undo exactly what that did.
+  if (await undoLinks(trx, orgId, userId, txnId)) return;
 
   // Only a match that posted an entry has one to reverse. Matching to an
   // existing payment posted nothing, so there is nothing to undo in the ledger.

@@ -7,6 +7,8 @@ import {
   categoriseTransaction, matchToPayment, unmatchTransaction, applyRules, matchInvoicePayments, matchEnteredPayments,
 } from '@/lib/server/services/banking';
 import { acceptSuggestions, bulkCategorise, deleteLines, setExcluded, suggestCategories } from '@/lib/server/services/bank-bulk';
+import { bestMatchesFor, categoriseAs, matchLine } from '@/lib/server/services/bank-match';
+import { BANK_CATEGORIES } from '@/lib/bank-categories';
 import { logAudit, auditMeta } from '@/lib/server/audit';
 
 const ListQuery = z.object({
@@ -59,56 +61,11 @@ export const GET = route(
         .executeTakeFirst(),
     ]);
 
-    // Suggestions for the unmatched lines: payments of the same amount and
-    // direction, within a few days. Offered, never applied — a wrong automatic
-    // match is invisible until somebody reconciles the account by hand.
+    // Zoho's "match found" on a row: each unmatched line's confident matches
+    // in the books (bank-match.ts). Offered, never applied without a click.
     const unmatchedRows = rows.filter((r) => r.status === 'unmatched');
-    const suggestions: Record<string, { id: string; number: string; date: string; amountPaise: number }[]> = {};
-
-    if (unmatchedRows.length) {
-      // Payments already reconciled against some other line are not candidates.
-      // Fetched separately rather than as a NOT IN subquery: the two lists are
-      // small, and a correlated subquery here reads worse than it performs.
-      const [candidates, alreadyMatched] = await Promise.all([
-        db
-          .selectFrom('payments')
-          .select(['id', 'number', 'kind', 'payment_date', 'amount', 'bank_account_id'])
-          .where('org_id', '=', orgId)
-          .where('status', '=', 'cleared')
-          .execute(),
-        db
-          .selectFrom('bank_transactions')
-          .select('matched_id')
-          .where('org_id', '=', orgId)
-          .where('matched_type', '=', 'payment')
-          .where('matched_id', 'is not', null)
-          .execute(),
-      ]);
-      const taken = new Set(alreadyMatched.map((m) => m.matched_id));
-
-      for (const t of unmatchedRows) {
-        const amount = toPaiseFromSql(t.deposit) || toPaiseFromSql(t.withdrawal);
-        const wantKind = toPaiseFromSql(t.deposit) > 0 ? 'received' : 'made';
-        const near = candidates.filter(
-          (p) =>
-            !taken.has(p.id) &&
-            p.kind === wantKind &&
-            p.bank_account_id === t.bank_account_id &&
-            toPaiseFromSql(p.amount) === amount &&
-            Math.abs(
-              new Date(p.payment_date).getTime() - new Date(t.txn_date).getTime(),
-            ) <= 7 * 86_400_000,
-        );
-        if (near.length) {
-          suggestions[String(t.id)] = near.slice(0, 3).map((p) => ({
-            id: asId(p.id),
-            number: p.number,
-            date: p.payment_date,
-            amountPaise: toPaiseFromSql(p.amount),
-          }));
-        }
-      }
-    }
+    const best = await bestMatchesFor(db, orgId, unmatchedRows.map((r) => r.id));
+    const suggestions = Object.fromEntries([...best].map(([id, list]) => [String(id), list]));
 
     const categories = q.suggest
       ? await suggestCategories(db, orgId, unmatchedRows.map((r) => ({ id: r.id, narration: r.narration, inflow: toPaiseFromSql(r.deposit) > 0 })))
@@ -180,6 +137,34 @@ const ActionInput = z.discriminatedUnion('action', [
   z.object({ action: z.literal('exclude'), transactionIds: z.array(z.string()).min(1).max(500) }),
   z.object({ action: z.literal('include'), transactionIds: z.array(z.string()).min(1).max(500) }),
   z.object({ action: z.literal('delete'), transactionIds: z.array(z.string()).min(1).max(500) }),
+  // Zoho's Match: one line to one or more things in the books (bank-match.ts).
+  z.object({
+    action: z.literal('match_many'),
+    transactionId: z.string(),
+    picks: z.array(z.object({
+      type: z.enum(['invoice', 'bill', 'payment', 'expense', 'transfer', 'journal']),
+      id: z.string(),
+      amountPaise: z.number().int().positive().optional(),
+    })).min(1).max(50),
+    differenceAccountId: z.string().nullish(),
+  }),
+  // Zoho's Categorize Manually, by its categories (lib/bank-categories.ts).
+  z.object({
+    action: z.literal('categorise_as'),
+    transactionId: z.string(),
+    category: z.enum(BANK_CATEGORIES.map((c) => c.key) as [string, ...string[]]),
+    contactId: z.string().nullish(),
+    allocations: z.array(z.object({ targetId: z.string(), amountPaise: z.number().int().nonnegative() })).max(100).optional(),
+    bankChargesPaise: z.number().int().nonnegative().optional(),
+    tdsPaise: z.number().int().nonnegative().optional(),
+    otherBankAccountId: z.string().nullish(),
+    accountId: z.string().nullish(),
+    gstRatePct: z.number().min(0).max(40).nullish(),
+    itcEligibility: z.enum(['eligible', 'ineligible', 'capital_goods']).optional(),
+    paymentId: z.string().nullish(),
+    reference: z.string().max(100).nullish(),
+    notes: z.string().max(500).nullish(),
+  }),
 ]);
 
 export const POST = route(
@@ -220,6 +205,36 @@ export const POST = route(
         ...auditMeta(req),
       });
       return result;
+    }
+
+    if (input.action === 'match_many' || input.action === 'categorise_as') {
+      const txnId = Number(input.transactionId);
+      const result = await transaction(async (trx) => {
+        if (input.action === 'match_many') {
+          return matchLine(trx, orgId, user.userId, txnId,
+            input.picks.map((p) => ({ type: p.type, id: Number(p.id), amountPaise: p.amountPaise })),
+            { differenceAccountId: input.differenceAccountId ? Number(input.differenceAccountId) : null });
+        }
+        return categoriseAs(trx, orgId, user.userId, txnId, {
+          category: input.category as never,
+          contactId: input.contactId ? Number(input.contactId) : null,
+          allocations: input.allocations?.map((a) => ({ targetId: Number(a.targetId), amountPaise: a.amountPaise })),
+          bankChargesPaise: input.bankChargesPaise, tdsPaise: input.tdsPaise,
+          otherBankAccountId: input.otherBankAccountId ? Number(input.otherBankAccountId) : null,
+          accountId: input.accountId ? Number(input.accountId) : null,
+          gstRatePct: input.gstRatePct ?? null, itcEligibility: input.itcEligibility,
+          paymentId: input.paymentId ? Number(input.paymentId) : null,
+          reference: input.reference, notes: input.notes,
+        });
+      });
+      await logAudit({
+        orgId, actorUserId: user.userId, actorName: user.name, action: 'match', targetType: 'bank_txn', targetId: txnId,
+        detail: input.action === 'match_many'
+          ? `Bank line matched to ${input.picks.map((p) => `${p.type} ${p.id}`).join(', ')}${input.differenceAccountId ? ' (difference posted)' : ''}`
+          : `Bank line categorised as ${BANK_CATEGORIES.find((c) => c.key === input.category)?.label}`,
+        ...auditMeta(req),
+      });
+      return { id: asId(txnId), ...result };
     }
 
     const txnId = Number(input.transactionId);
