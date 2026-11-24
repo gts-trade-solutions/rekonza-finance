@@ -1231,6 +1231,18 @@ export interface ExpenseDetail {
   mileage: { km: number; ratePaise: number } | null; billedInvoiceId: string | null; journalEntryId: string | null;
 }
 
+/** Zoho's module Preferences (Quotes, Sales Orders, Invoices, Delivery Challans, Credit Notes). */
+export type DocPrefType = 'estimate' | 'sales_order' | 'invoice' | 'challan' | 'credit_note';
+export interface DocPreferences {
+  type: DocPrefType; notes: string | null; terms: string | null;
+  settings: { allowEditAfterSending: boolean; onQuoteAccepted?: 'nothing' | 'invoice' | 'sales_order' };
+}
+export const docPreferences = {
+  get: (type: DocPrefType) => api.get<DocPreferences>('/api/settings/document-preferences', { type }),
+  save: (input: { type: DocPrefType; notes?: string | null; terms?: string | null; settings?: Partial<DocPreferences['settings']> }) =>
+    api.put<DocPreferences>('/api/settings/document-preferences', input),
+};
+
 export const salesDocuments = {
   /** A quote, order, challan or credit note as saved, for its Edit dialog. */
   getOne: (kind: EditableSalesKind, id: string) => api.get<EditableSalesDoc>(`/api/sales-documents/${kind}/${id}`),

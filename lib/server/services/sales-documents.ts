@@ -1,3 +1,4 @@
+import { editAfterSendingAllowed } from './doc-preferences';
 import 'server-only';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1298,6 +1299,10 @@ async function salesDocBlocker(trx: Trx, orgId: number, kind: EditableSalesDoc, 
     const e = await trx.selectFrom('estimates').select(['number', 'status']).where('id', '=', id).where('org_id', '=', orgId).executeTakeFirst();
     if (!e) throw notFound('That quote does not exist.');
     if (what === 'edit' && e.status === 'converted') return `${e.number} has been converted. Change the order or invoice it became.`;
+    // Quote Preferences: "Allow editing of sent and accepted quotes", switched off.
+    if (what === 'edit' && (e.status === 'sent' || e.status === 'accepted') && !(await editAfterSendingAllowed(trx, orgId, 'estimate'))) {
+      return `${e.number} has been ${e.status}, and Quote Preferences do not allow editing it now.`;
+    }
     return null;
   }
   if (kind === 'sales-order') {
@@ -1309,6 +1314,9 @@ async function salesDocBlocker(trx: Trx, orgId: number, kind: EditableSalesDoc, 
       .select('challan_lines.id').where('sol.sales_order_id', '=', id).executeTakeFirst();
     if (toPaiseFromSql(so.invoiced_amount) > 0 || moved || challaned) {
       return `${so.number} has been invoiced or delivered in part. Delete those invoices and challans first.`;
+    }
+    if (what === 'edit' && so.status === 'open' && !(await editAfterSendingAllowed(trx, orgId, 'sales_order'))) {
+      return `${so.number} is confirmed, and Sales Order Preferences do not allow editing confirmed orders.`;
     }
     return null;
   }
@@ -1327,6 +1335,9 @@ async function salesDocBlocker(trx: Trx, orgId: number, kind: EditableSalesDoc, 
   const cn = await trx.selectFrom('credit_notes').select(['number', 'status']).where('id', '=', id).where('org_id', '=', orgId).executeTakeFirst();
   if (!cn) throw notFound('That credit note does not exist.');
   if (what === 'edit' && cn.status === 'void') return `${cn.number} is void.`;
+  if (what === 'edit' && (cn.status === 'open' || cn.status === 'applied') && !(await editAfterSendingAllowed(trx, orgId, 'credit_note'))) {
+    return `${cn.number} is open, and Credit Note Preferences do not allow editing open credit notes.`;
+  }
   const refunded = await trx.selectFrom('journal_entries').select('id').where('org_id', '=', orgId)
     .where('source_type', '=', 'credit_note_refund').where('source_id', '=', id).where('reversal_of_entry_id', 'is', null).executeTakeFirst();
   if (cn.status === 'refunded' || refunded) return `${cn.number} has been refunded in cash. Delete the refund first.`;

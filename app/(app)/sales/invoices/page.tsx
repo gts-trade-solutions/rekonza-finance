@@ -12,6 +12,7 @@
 import { NewSplitButton } from '@/components/shared/new-split-button';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { DropdownMenuItem } from '@/components/ui/dropdown-menu';
 import { useMemo, useState } from 'react';
 import { Download, FileCheck2, Mail, Plus, Receipt, Send } from 'lucide-react';
 import { toast } from 'sonner';
@@ -164,7 +165,10 @@ export default function InvoicesPage() {
               ]} />
             )}
           </>
-        }<ModuleMenu slug="invoices" onRefresh={() => void state.refetch()} /></>
+        }<ModuleMenu slug="invoices" onRefresh={() => void state.refetch()}>
+          {/* Zoho's ⋯ → Preferences: Invoice Preferences. */}
+          <DropdownMenuItem onClick={() => router.push('/settings/preferences/invoices')} data-slot="module-preferences">Preferences</DropdownMenuItem>
+        </ModuleMenu></>
         }
       />
 

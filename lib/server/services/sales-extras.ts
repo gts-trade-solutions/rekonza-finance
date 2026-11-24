@@ -21,7 +21,8 @@ import type { Trx } from '../db';
 import type { Paise } from '../../types';
 import { badRequest, conflict, notFound } from '../http';
 import { toPaiseFromSql } from '../money-sql';
-import { createCreditNote, type CreatedDocument } from './sales-documents';
+import { convertToInvoice, createCreditNote, salesOrderFromEstimate, type CreatedDocument } from './sales-documents';
+import { getDocPreferences } from './doc-preferences';
 import { createPurchaseOrder } from './purchase-documents';
 import { saveProject, type BillingMethod } from './projects';
 import { createRetainerZoho } from './retainers';
@@ -170,4 +171,30 @@ export async function retainerFromEstimate(trx: Trx, orgId: number, userId: numb
   });
   await trx.updateTable('retainer_invoices').set({ source_estimate_id: estimateId }).where('id', '=', made.id).execute();
   return { id: made.id, number: made.number, amountPaise };
+}
+
+/**
+ * A quote marked as accepted, and — when Quote Preferences say so — turned into
+ * a draft invoice (to check and send) or a sales order there and then, dated
+ * the day it was accepted.
+ */
+export async function acceptQuote(
+  trx: Trx, orgId: number, userId: number | null, estimateId: number, today: string,
+): Promise<{ invoiceId?: number; invoiceNumber?: string; salesOrderId?: number; salesOrderNumber?: string }> {
+  const est = await trx.selectFrom('estimates').select(['id', 'number', 'status']).where('id', '=', estimateId).where('org_id', '=', orgId).forUpdate().executeTakeFirst();
+  if (!est) throw notFound('That quote does not exist.');
+  if (est.status === 'converted') throw conflict(`${est.number} has already been converted.`);
+  await trx.updateTable('estimates').set({ status: 'accepted' }).where('id', '=', estimateId).execute();
+  const prefs = await getDocPreferences(trx, orgId, 'estimate');
+  if (prefs.settings.onQuoteAccepted === 'invoice') {
+    const due = new Date(`${today}T00:00:00Z`);
+    due.setUTCDate(due.getUTCDate() + 30);
+    const made = await convertToInvoice(trx, orgId, userId, { type: 'estimate', id: estimateId }, { date: today, dueDate: due.toISOString().slice(0, 10), status: 'draft' });
+    return { invoiceId: made.id, invoiceNumber: made.number };
+  }
+  if (prefs.settings.onQuoteAccepted === 'sales_order') {
+    const made = await salesOrderFromEstimate(trx, orgId, userId, estimateId, { date: today });
+    return { salesOrderId: made.id, salesOrderNumber: made.number };
+  }
+  return {};
 }

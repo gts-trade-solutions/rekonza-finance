@@ -525,7 +525,7 @@ export function InvoiceForm({ variant = 'invoice', editing }: {
           variant="ghost"
           size="icon-sm"
           aria-label="Invoice preferences"
-          onClick={() => router.push('/settings/invoice-print')}
+          onClick={() => router.push('/settings/preferences/invoices')}
         >
           <Settings2 className="size-4" />
         </Button>

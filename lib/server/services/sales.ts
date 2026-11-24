@@ -1,3 +1,4 @@
+import { editAfterSendingAllowed } from './doc-preferences';
 import { reverseChargeProblem, withoutTax } from '../../tax/reverse-charge';
 import 'server-only';
 
@@ -794,6 +795,10 @@ async function changeBlocker(trx: Trx, orgId: number, inv: { id: number; number:
   const ewb = await trx.selectFrom('eway_bills').select('status').where('invoice_id', '=', inv.id).where('org_id', '=', orgId)
     .where('status', 'in', ['pending', 'generated']).executeTakeFirst();
   if (ewb) return `${inv.number} has an e-way bill. Cancel the e-way bill first.`;
+  // Invoice Preferences: "Allow editing of sent invoices", switched off.
+  if (what === 'edit' && ['sent', 'partially_paid', 'overdue', 'paid'].includes(inv.status) && !(await editAfterSendingAllowed(trx, orgId, 'invoice'))) {
+    return `${inv.number} has been sent, and Invoice Preferences do not allow editing sent invoices.`;
+  }
   return null;
 }
 

@@ -266,3 +266,37 @@ test('goods coming back on a credit note get an inward sales-return e-way bill; 
     assert.deepEqual([row.credit_note_id, row.sub_supply_type, row.status], [draft.id, 'sales_return', 'generated']);
   });
 });
+
+test('module Preferences: the defaults new documents start with, editing after sending, and what accepting a quote does', async () => {
+  const { getDocPreferences, saveDocPreferences } = await import('../../lib/server/services/doc-preferences');
+  const { updateSalesDocument } = await import('../../lib/server/services/sales-documents');
+  const { updateInvoice } = await import('../../lib/server/services/sales');
+  const { acceptQuote } = await import('../../lib/server/services/sales-extras');
+  await withFixture(async (f) => {
+    const { trx, orgId } = f;
+    const fresh = await getDocPreferences(trx, orgId, 'estimate');
+    assert.deepEqual(fresh.settings, { allowEditAfterSending: true, onQuoteAccepted: 'nothing' }, 'Zoho’s defaults');
+
+    // An invoice's defaults are the organisation's own, which the invoice form reads.
+    await saveDocPreferences(trx, orgId, null, 'invoice', { notes: 'Thank you.', terms: 'Pay in 15 days.', settings: { allowEditAfterSending: false } });
+    const org = await trx.selectFrom('organizations').select(['default_invoice_notes', 'default_invoice_terms']).where('id', '=', orgId).executeTakeFirstOrThrow();
+    assert.deepEqual([org.default_invoice_notes, org.default_invoice_terms], ['Thank you.', 'Pay in 15 days.']);
+    const sale = { branchId: f.branchId, customerId: f.customerId, date: '2026-11-05', dueDate: '2026-12-05', status: 'approved' as const, lines: [line(f)] };
+    const inv = await createInvoice(trx, orgId, null, sale);
+    await trx.updateTable('invoices').set({ status: 'sent' }).where('id', '=', inv.id).execute();
+    await assert.rejects(updateInvoice(trx, orgId, null, inv.id, sale), /do not allow editing sent invoices/);
+
+    // Quotes: editing a sent one switched off, and accepting one makes a draft invoice.
+    await saveDocPreferences(trx, orgId, null, 'estimate', { terms: 'Valid for 15 days.', settings: { allowEditAfterSending: false, onQuoteAccepted: 'invoice' } });
+    assert.equal((await getDocPreferences(trx, orgId, 'estimate')).terms, 'Valid for 15 days.');
+    const input = { branchId: f.branchId, customerId: f.customerId, date: '2026-11-10', expiryDate: '2026-11-30', lines: [line(f)], status: 'sent' as const };
+    const q = await createEstimate(trx, orgId, null, input);
+    await assert.rejects(updateSalesDocument(trx, orgId, null, q.id, { kind: 'estimate', input }), /do not allow editing it now/);
+    const accepted = await acceptQuote(trx, orgId, null, q.id, '2026-11-12');
+    assert.ok(accepted.invoiceId, 'converted to an invoice on acceptance');
+    const madeInv = await trx.selectFrom('invoices').select(['status', 'source_doc_type', 'source_doc_id']).where('id', '=', accepted.invoiceId!).executeTakeFirstOrThrow();
+    assert.deepEqual([madeInv.status, madeInv.source_doc_type, madeInv.source_doc_id], ['draft', 'estimate', q.id]);
+    const est = await trx.selectFrom('estimates').select('status').where('id', '=', q.id).executeTakeFirstOrThrow();
+    assert.equal(est.status, 'converted');
+  });
+});

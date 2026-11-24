@@ -11,6 +11,7 @@
 // - "<Noun> Details | Activity", and the Details/PDF switch: the details grid,
 //   the customer, the items and the totals, or the printed copy itself.
 
+import { PREFS_FOR_KIND } from '@/components/settings/pref-modules';
 import { CancelItemsDialog, CreateProjectDialog, ToPurchaseOrderDialog } from './sales-doc-extras';
 import { REVERSE_CHARGE_NOTE, reverseChargeTax } from '@/lib/tax/reverse-charge';
 import Link from 'next/link';
@@ -262,6 +263,7 @@ function Record({ kind, doc, printDoc, reload }: { kind: SalesDocKindZ; doc: Edi
               <DropdownMenuItem onClick={() => setDeleting(true)} className="text-destructive focus:text-destructive" data-slot="doc-delete">Delete</DropdownMenuItem>
             </>
           )}
+          <DropdownMenuItem onClick={() => router.push(PREFS_FOR_KIND[kind].href)} data-slot="doc-preferences">{PREFS_FOR_KIND[kind].label}</DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
     </>

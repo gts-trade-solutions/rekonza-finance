@@ -6,6 +6,7 @@
 // ⋯ with Sort by, Import, Export, Manage Custom Fields, Refresh List and Reset
 // Column Width. A row opens the record beside the list (the split view).
 
+import { PREFS_FOR_KIND } from '@/components/settings/pref-modules';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useMemo, useState } from 'react';
@@ -169,6 +170,8 @@ export function SalesDocList({ kind }: { kind: SalesDocKindZ }) {
                   </DropdownMenuSub>
                 )}
                 <DropdownMenuSeparator />
+                {/* Zoho's ⋯ → Preferences: the module's own (Quote Preferences …). */}
+                <DropdownMenuItem onClick={() => router.push(PREFS_FOR_KIND[kind].href)} data-slot="module-preferences">Preferences</DropdownMenuItem>
                 <DropdownMenuItem onClick={() => router.push('/settings?tab=custom-fields')}>Manage Custom Fields</DropdownMenuItem>
                 <DropdownMenuItem onClick={() => void state.refetch()}><RefreshCw className="mr-2 size-4 text-primary" /> Refresh List</DropdownMenuItem>
                 <DropdownMenuItem onClick={() => resetColumnWidths()}>Reset Column Width</DropdownMenuItem>

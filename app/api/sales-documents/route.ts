@@ -1,4 +1,4 @@
-import { cancelSalesOrderItems, openCreditNote, projectFromEstimate, purchaseOrderFromSalesOrder, retainerFromEstimate } from '@/lib/server/services/sales-extras';
+import { acceptQuote, cancelSalesOrderItems, openCreditNote, projectFromEstimate, purchaseOrderFromSalesOrder, retainerFromEstimate } from '@/lib/server/services/sales-extras';
 import { z } from 'zod';
 import { CreateInput, DATE, toNum, toSalesDocInput } from '@/lib/server/sales-doc-input';
 import { sql } from 'kysely';
@@ -481,6 +481,22 @@ export const PATCH = route(
           throw badRequest(
             `A ${input.kind.replace('-', ' ')} cannot be moved to "${input.status}" by hand.`,
           );
+        }
+        // Accepting a quote does what Quote Preferences say: nothing more, or a draft invoice or a sales order.
+        if (input.kind === 'estimate' && input.status === 'accepted') {
+          const r = await transaction((trx) => acceptQuote(trx, orgId, user.userId, id, new Date().toISOString().slice(0, 10)));
+          if (r.invoiceId || r.salesOrderId) {
+            await logAudit({
+              orgId, actorUserId: user.userId, actorName: user.name, action: 'create',
+              targetType: r.invoiceId ? 'invoice' : 'sales_order', targetId: (r.invoiceId ?? r.salesOrderId)!,
+              targetLabel: r.invoiceNumber ?? r.salesOrderNumber, detail: `Made automatically when quote #${id} was accepted (Quote Preferences)`, ...auditMeta(req),
+            });
+          }
+          return {
+            id: asId(id), status: r.invoiceId || r.salesOrderId ? 'converted' : 'accepted',
+            ...(r.invoiceId ? { invoiceId: asId(r.invoiceId), invoiceNumber: r.invoiceNumber } : {}),
+            ...(r.salesOrderId ? { salesOrderId: asId(r.salesOrderId), salesOrderNumber: r.salesOrderNumber } : {}),
+          };
         }
         const spec = SPEC[input.kind];
         await sql`

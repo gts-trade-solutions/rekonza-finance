@@ -11,6 +11,7 @@
 // The server decides the tax, the number and (for a credit note) the entry;
 // the totals here are a preview of what it will work out.
 
+import { PREFS_FOR_KIND } from '@/components/settings/pref-modules';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
 import { FileText, Loader2, Pencil, Save, Send } from 'lucide-react';
@@ -31,7 +32,7 @@ import { localDay } from '@/lib/selectors';
 import { customerOptions, termsOptions, userOptions } from '@/lib/options';
 import { useApi } from '@/lib/api/use-api';
 import {
-  api, ApiError, invoices as invoiceApi, projects as projectsApi, salesDocuments,
+  api, ApiError, docPreferences, invoices as invoiceApi, projects as projectsApi, salesDocuments,
   type AttachableType, type EditableSalesDoc,
 } from '@/lib/api/client';
 import {
@@ -212,6 +213,18 @@ export function SalesDocumentForm({ kind, editing }: {
     }).catch(() => toast.error('That invoice could not be loaded.'));
     return () => { live = false; };
   }, [fromInvoice, ed]);
+
+  // A new document starts with its module's Terms & Conditions and Customer Notes (Zoho's Preferences).
+  useEffect(() => {
+    if (ed || cloneId) return;
+    let live = true;
+    docPreferences.get(PREFS_FOR_KIND[kind].type).then((p) => {
+      if (!live) return;
+      if (p.notes) setNotes((n) => n || p.notes || '');
+      if (p.terms) setTerms((t) => t || p.terms || '');
+    }).catch(() => { /* no defaults: the boxes stay empty */ });
+    return () => { live = false; };
+  }, [ed, cloneId, kind]);
 
   const customer = s.contacts.find((c) => c.id === customerId);
   const customers = useMemo(() => customerOptions(s), [s]);
