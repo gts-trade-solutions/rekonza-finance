@@ -103,6 +103,13 @@ export async function runRecurringInvoice(trx: Trx, orgId: number, userId: numbe
     branchId: profile.branch_id, customerId: profile.customer_id, date: runDate, dueDate: due.toISOString().slice(0, 10),
     status: asDraft ? 'draft' : 'approved', subject: profile.profile_name, paymentTerms: profile.payment_terms,
     orderNumber: profile.order_number, salespersonId: profile.salesperson_id, notes: profile.notes, terms: profile.terms,
+    // Zoho's Entity type, the totals' Shipping Charges and adjustment, and the
+    // Rounding Off Preference (migration 126), as on the profile at the time.
+    billOfSupply: profile.entity_type === 'bill_of_supply' || undefined,
+    shippingChargePaise: toPaiseFromSql(profile.shipping_charge ?? '0'),
+    adjustmentPaise: toPaiseFromSql(profile.adjustment ?? '0'),
+    adjustmentLabel: profile.adjustment_label || null,
+    roundTotal: profile.round_off !== 'none',
     sourceDocType: 'recurring', sourceDocId: id,
     lines: [
       ...template.map((l) => ({

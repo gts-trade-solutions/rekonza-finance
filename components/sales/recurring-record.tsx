@@ -115,6 +115,7 @@ function Record({ p, reload }: { p: RecurringProfileDetail; reload: () => void }
                 <p className="text-[12px] font-semibold uppercase">Details</p>
                 {[
                   ['Profile Status:', <StatusBadge key="s" status={p.status === 'active' ? 'active' : p.status === 'expired' ? 'expired' : 'stopped'} />],
+                  ['Entity type:', p.entityType === 'bill_of_supply' ? 'Bill Of Supply' : 'Invoice'],
                   ['Start Date:', day(p.startDate)],
                   ['End Date:', p.endDate ? day(p.endDate) : 'Never Expires'],
                   ['Remaining billing cycle:', p.remainingCycles == null ? 'Unlimited' : String(p.remainingCycles)],
@@ -124,6 +125,9 @@ function Record({ p, reload }: { p: RecurringProfileDetail; reload: () => void }
                   ...(p.priceListName ? [['Price List:', p.priceListName]] : []),
                   ...(p.projects?.length ? [['Project Hours:', p.projects.map((x) => x.name).join(', ')]] : []),
                   ...(p.paymentLink ? [['Payment Options:', 'Online payment link on each invoice']] : []),
+                  ...(p.shippingChargePaise ? [['Shipping Charges:', <Money key="sh" value={p.shippingChargePaise} />]] : []),
+                  ...(p.adjustmentPaise ? [[`${p.adjustmentLabel}:`, <Money key="ad" value={p.adjustmentPaise} />]] : []),
+                  ['Round Off:', p.roundOff === 'whole' ? 'Nearest whole number' : 'No Rounding'],
                   ['Preferences:', p.createAsDraft ? 'Create Invoices as Drafts' : p.autoSend ? 'Send invoices automatically' : 'Create invoices, send by hand'],
                 ].map(([k, v], i) => (
                   <div key={i} className="grid grid-cols-[130px_1fr] gap-2"><span className="text-muted-foreground">{k}</span><span>{v}</span></div>
@@ -170,7 +174,12 @@ function Record({ p, reload }: { p: RecurringProfileDetail; reload: () => void }
                     <td className="px-3 py-2 text-right"><Money value={Math.round(l.ratePaise * l.qty)} /></td>
                   </tr>
                 ))}
-                <tr className="border-t font-medium"><td className="px-3 py-2" colSpan={4}>Total (tax included)</td><td className="px-3 py-2 text-right"><Money value={p.amountPaise} /></td></tr>
+                <tr className="border-t"><td className="px-3 py-2" colSpan={4}>Sub Total</td><td className="px-3 py-2 text-right"><Money value={p.subTotalPaise} /></td></tr>
+                {p.entityType !== 'bill_of_supply' && <tr><td className="px-3 py-1.5" colSpan={4}>Tax</td><td className="px-3 py-1.5 text-right"><Money value={p.taxPaise} /></td></tr>}
+                {p.shippingChargePaise !== 0 && <tr data-slot="next-shipping"><td className="px-3 py-1.5" colSpan={4}>Shipping Charges</td><td className="px-3 py-1.5 text-right"><Money value={p.shippingChargePaise} /></td></tr>}
+                {p.adjustmentPaise !== 0 && <tr data-slot="next-adjustment"><td className="px-3 py-1.5" colSpan={4}>{p.adjustmentLabel}</td><td className="px-3 py-1.5 text-right"><Money value={p.adjustmentPaise} /></td></tr>}
+                <tr data-slot="next-round-off"><td className="px-3 py-1.5" colSpan={4}>Round Off <span className="text-muted-foreground">({p.roundOff === 'whole' ? 'Nearest Whole Number' : 'No Rounding'})</span></td><td className="px-3 py-1.5 text-right"><Money value={p.roundOffPaise} /></td></tr>
+                <tr className="border-t font-medium"><td className="px-3 py-2" colSpan={4}>Total{p.entityType === 'bill_of_supply' ? ' (bill of supply, no tax)' : ''}</td><td className="px-3 py-2 text-right" data-slot="next-total"><Money value={p.amountPaise} /></td></tr>
               </tbody>
             </table>
           </TabsContent>

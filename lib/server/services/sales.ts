@@ -113,6 +113,12 @@ export interface CreateInvoiceInput {
    * as a Bill of Supply (Rule 49).
    */
   billOfSupply?: boolean;
+  /**
+   * Round the total to the rupee (the default, as every invoice has been).
+   * False keeps the paise: a recurring profile whose Rounding Off Preference
+   * is Zoho's "No Rounding" (migration 126).
+   */
+  roundTotal?: boolean;
   /** The TCS head to collect under; the rate is the one in force on the invoice date. */
   tcsCode?: string | null;
   /** A TCS amount worked out elsewhere. Ignored when `tcsCode` is given. */
@@ -383,7 +389,7 @@ export async function createInvoice(
     tcsCode = rate.code;
   }
   const gross = tax.taxablePaise + totalTaxPaise(tax) + shipping + adjustment + tcs;
-  const { rounded, roundOff } = roundToRupee(gross);
+  const { rounded, roundOff } = input.roundTotal === false ? { rounded: gross, roundOff: 0 } : roundToRupee(gross);
 
   // Goods, services, or a mix — inferred from the lines when the caller is
   // silent. It decides which GSTR-1 table the supply is reported in.
