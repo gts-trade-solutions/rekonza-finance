@@ -244,6 +244,9 @@ function Record({ kind, doc, printDoc, reload }: { kind: SalesDocKindZ; doc: Edi
             </>
           )}
           {clonable && <DropdownMenuItem onClick={() => router.push(`${info.base}/new?clone=${doc.id}`)} data-slot="doc-clone"><Copy className="mr-2 size-4" /> Clone</DropdownMenuItem>}
+          {kind === 'credit-note' && !cnDraft && doc.status !== 'void' && (
+            <DropdownMenuItem onClick={() => router.push(`/gst/eway-bills?creditNote=${doc.id}`)} data-slot="cn-eway">Add e-Way Bill Details</DropdownMenuItem>
+          )}
           {kind === 'credit-note' && doc.journalEntryId && (
             <DropdownMenuItem onClick={() => setViewingJournal(true)} data-slot="cn-journal"><FileText className="mr-2 size-4" /> View Journal</DropdownMenuItem>
           )}

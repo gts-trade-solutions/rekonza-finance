@@ -68,3 +68,9 @@ CREATE TABLE IF NOT EXISTS document_preferences (
   updated_at  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (org_id, doc_type)
 );
+
+-- Zoho's credit note ⋯ "Add e-Way Bill Details": goods coming back on a sales
+-- return move under an e-way bill of their own (inward, sales return, CNT).
+ALTER TABLE eway_bills
+  ADD COLUMN credit_note_id BIGINT NULL AFTER challan_id,
+  ADD KEY idx_ewb_credit_note (org_id, credit_note_id);

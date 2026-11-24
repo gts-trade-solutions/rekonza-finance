@@ -75,15 +75,22 @@ export default function EwayBillsPage() {
   const params = useSearchParams();
   const forInvoice = params.get('invoice');
   const forChallan = params.get('challan');
+  const forCreditNote = params.get('creditNote');
   const [opened, setOpened] = useState(false);
   useEffect(() => {
-    if ((!forInvoice && !forChallan) || opened || !state.data) return;
+    if ((!forInvoice && !forChallan && !forCreditNote) || opened || !state.data) return;
     setOpened(true);
-    const row = state.data.ewayBills.find((r) => (forInvoice ? r.docKind === 'invoice' && r.docId === forInvoice : r.docKind === 'challan' && r.docId === forChallan));
-    if (!row) toast.info(`That ${forInvoice ? 'invoice' : 'delivery challan'} is not listed here`, { description: forInvoice ? 'It carries no goods that need an e-way bill, or it is not issued yet.' : 'Only an open challan with goods is listed; a draft is marked open first.' });
+    const [kind, id] = forInvoice ? ['invoice', forInvoice] : forChallan ? ['challan', forChallan] : ['credit_note', forCreditNote];
+    const row = state.data.ewayBills.find((r) => r.docKind === kind && r.docId === id);
+    const noun = kind === 'invoice' ? 'invoice' : kind === 'challan' ? 'delivery challan' : 'credit note';
+    if (!row) toast.info(`That ${noun} is not listed here`, {
+      description: kind === 'invoice' ? 'It carries no goods that need an e-way bill, or it is not issued yet.'
+        : kind === 'challan' ? 'Only an open challan with goods is listed; a draft is marked open first.'
+        : 'Only an open credit note for goods worth ₹50,000 or more is listed; a draft is converted to open first.',
+    });
     else if (row.status === 'generated') toast.info(`${row.number} already has e-way bill ${row.ewayBillNo ?? ''}`.trim());
     else setTarget(row);
-  }, [forInvoice, forChallan, opened, state.data]);
+  }, [forInvoice, forChallan, forCreditNote, opened, state.data]);
 
   const rows = state.data?.ewayBills ?? [];
   const generated = rows.filter((r) => r.status === 'generated');
@@ -101,7 +108,7 @@ export default function EwayBillsPage() {
       // A challan carries no invoice id, so the row says which it is.
       ...(target.docKind === 'invoice'
         ? { invoiceId: target.docId }
-        : { challanId: target.docId }),
+        : target.docKind === 'credit_note' ? { creditNoteId: target.docId } : { challanId: target.docId }),
       vehicleNo: vehicleNo || null,
       transporterName: transporter || null,
       distanceKm: distance,
@@ -163,6 +170,9 @@ export default function EwayBillsPage() {
             {/* A challan is the case people miss — worth saying so on the row. */}
             {r.docKind === 'challan' && (
               <Badge variant="outline" className="text-[9px]">Challan</Badge>
+            )}
+            {r.docKind === 'credit_note' && (
+              <Badge variant="outline" className="text-[9px]">Sales return</Badge>
             )}
           </div>
           <p className="text-xs text-muted-foreground">{r.customerName}</p>

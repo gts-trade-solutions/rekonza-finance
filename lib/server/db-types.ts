@@ -1393,6 +1393,7 @@ export interface EwayBills {
   updated_at: Generated<Date>;
   valid_until: Date | null;
   vehicle_no: string | null;
+  credit_note_id: number | null;
 }
 
 export interface ExceptionEvents {

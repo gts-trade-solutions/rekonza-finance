@@ -63,6 +63,7 @@ const Q = z.object({
   /** For the two single-document views. */
   invoiceId: z.string().optional(),
   challanId: z.string().optional(),
+  creditNoteId: z.string().optional(),
 });
 
 const thisMonth = () => new Date().toISOString().slice(0, 7);
@@ -172,8 +173,10 @@ export const GET = route(
           ? ({ kind: 'invoice', id: Number(q.invoiceId) } as const)
           : q.challanId
             ? ({ kind: 'challan', id: Number(q.challanId) } as const)
-            : null;
-        if (!doc) throw badRequest('Which document? Pass invoiceId or challanId.');
+            : q.creditNoteId
+              ? ({ kind: 'credit_note', id: Number(q.creditNoteId) } as const)
+              : null;
+        if (!doc) throw badRequest('Which document? Pass invoiceId, challanId or creditNoteId.');
         return { view: q.view, ...(await checkEwayBill(db, orgId, doc)) };
       }
 
@@ -188,7 +191,7 @@ export const GET = route(
         // goods are worth. A register built only on invoices shows a clean
         // screen while a vehicle is travelling illegally.
         const { rows } = await sql<{
-          doc_kind: 'invoice' | 'challan';
+          doc_kind: 'invoice' | 'challan' | 'credit_note';
           doc_id: number; id: number | null; number: string; doc_date: string;
           customer_name: string; place_of_supply: string; total: string;
           supply_kind: 'goods' | 'service' | 'both'; movement: string; deemed_inter: number;
@@ -246,6 +249,28 @@ export const GET = route(
              -- value, so filtering them out by amount would hide the risk.
              AND (d.total >= ${EWB_FLOOR_RUPEES}
                   OR (d.challan_type = 'job_work' AND b.state_code <> c.state_code))
+
+          UNION ALL
+
+          -- Goods coming back on a sales return (Zoho's credit note ⋯ Add e-Way
+          -- Bill Details): inward, from the customer's state to the branch's.
+          SELECT 'credit_note' AS doc_kind, n.id AS doc_id, w.id, n.number,
+                 n.note_date AS doc_date, c.display_name AS customer_name,
+                 n.place_of_supply, n.total, 'goods' AS supply_kind,
+                 'sales_return' AS movement, 0 AS deemed_inter,
+                 c.state_code AS from_state, b.state_code AS to_state, b.eway_intra_threshold AS intra_threshold,
+                 w.eway_bill_no, w.status, w.vehicle_no, w.transporter_name,
+                 w.distance_km, w.valid_until, w.generated_at, w.transport_mode,
+                 w.extended_count, w.error_message
+            FROM credit_notes n
+            JOIN contacts c ON c.id = n.customer_id
+            JOIN branches b ON b.id = n.branch_id
+            LEFT JOIN eway_bills w ON w.credit_note_id = n.id
+           WHERE n.org_id = ${orgId}
+             AND n.status NOT IN ('draft', 'void')
+             AND n.total >= ${EWB_FLOOR_RUPEES}
+             AND EXISTS (SELECT 1 FROM credit_note_lines l LEFT JOIN items it ON it.id = l.item_id
+                          WHERE l.credit_note_id = n.id AND COALESCE(it.kind, IF(l.hsn_sac LIKE '99%', 'service', 'goods')) = 'goods')
 
            ORDER BY doc_date DESC
            LIMIT 300
@@ -335,6 +360,7 @@ const ActionInput = z.discriminatedUnion('action', [
     // screen has to be able to say which it is asking about.
     invoiceId: z.union([z.string(), z.number()]).optional(),
     challanId: z.union([z.string(), z.number()]).optional(),
+    creditNoteId: z.union([z.string(), z.number()]).optional(),
     vehicleNo: z.string().trim().max(20).nullish(),
     transporterId: z.string().trim().max(20).nullish(),
     transporterName: z.string().trim().max(150).nullish(),
@@ -492,8 +518,10 @@ export const POST = route(
       ? ({ kind: 'invoice', id: Number(input.invoiceId) } as const)
       : input.challanId
         ? ({ kind: 'challan', id: Number(input.challanId) } as const)
-        : null;
-    if (!doc) throw badRequest('Which document is moving? Pass invoiceId or challanId.');
+        : input.creditNoteId
+          ? ({ kind: 'credit_note', id: Number(input.creditNoteId) } as const)
+          : null;
+    if (!doc) throw badRequest('Which document is moving? Pass invoiceId, challanId or creditNoteId.');
 
     const transport = {
       vehicleNo: input.vehicleNo ?? null,

@@ -38,7 +38,7 @@ import {
 
 // ── What the caller asks for ─────────────────────────────────────────────────
 
-export type EwayBillDocument = { kind: 'invoice'; id: number } | { kind: 'challan'; id: number };
+export type EwayBillDocument = { kind: 'invoice'; id: number } | { kind: 'challan'; id: number } | { kind: 'credit_note'; id: number };
 
 export interface TransportInput {
   vehicleNo?: string | null;
@@ -99,7 +99,9 @@ async function loadDocument(
 ): Promise<Loaded> {
   return doc.kind === 'invoice'
     ? loadFromInvoice(ex, orgId, doc.id)
-    : loadFromChallan(ex, orgId, doc.id);
+    : doc.kind === 'credit_note'
+      ? loadFromCreditNote(ex, orgId, doc.id)
+      : loadFromChallan(ex, orgId, doc.id);
 }
 
 interface DocShipTo {
@@ -270,7 +272,7 @@ async function loadFromChallan(ex: Executor, orgId: number, challanId: number): 
     .selectFrom('delivery_challans')
     .select([
       'id', 'branch_id', 'customer_id', 'number', 'challan_date', 'challan_type',
-      'status', 'place_of_supply', 'total',
+      'status', 'place_of_supply', 'total', 'shipping_charge', 'adjustment',
       'ship_to_name', 'ship_to_address', 'ship_to_city', 'ship_to_pincode', 'ship_to_state_code',
     ])
     .where('id', '=', challanId)
@@ -319,6 +321,8 @@ async function loadFromChallan(ex: Executor, orgId: number, challanId: number): 
 
   const reason = (CHALLAN_REASON[ch.challan_type] ?? 'others') as StoredSubSupplyType;
   const total = toPaiseFromSql(ch.total);
+  // Shipping and an adjustment on the challan (migration 124) are other charges; the goods are the rest.
+  const otherCharges = toPaiseFromSql(ch.shipping_charge) + toPaiseFromSql(ch.adjustment);
 
   return {
     rowId: existing?.id ?? null,
@@ -344,13 +348,96 @@ async function loadFromChallan(ex: Executor, orgId: number, challanId: number): 
       docDate: String(ch.challan_date).slice(0, 10),
       from: parties.from,
       to: parties.to,
-      taxablePaise: total,
+      taxablePaise: total - otherCharges,
       cgstPaise: 0,
       sgstPaise: 0,
       igstPaise: 0,
       cessPaise: 0,
-      otherChargesPaise: 0,
+      otherChargesPaise: otherCharges,
       totalPaise: total,
+      lines,
+    },
+  };
+}
+
+/**
+ * A credit note's goods coming back (Zoho's credit note ⋯ "Add e-Way Bill
+ * Details"): a sales return moves inward, from the customer to the branch, on
+ * the credit note (document type CNT), at its value with its tax.
+ */
+async function loadFromCreditNote(ex: Executor, orgId: number, creditNoteId: number): Promise<Loaded> {
+  const cn = await ex
+    .selectFrom('credit_notes')
+    .select([
+      'id', 'branch_id', 'customer_id', 'number', 'note_date', 'status', 'supply_type',
+      'subtotal', 'cgst', 'sgst', 'igst', 'cess', 'shipping_charge', 'adjustment', 'total',
+    ])
+    .where('id', '=', creditNoteId)
+    .where('org_id', '=', orgId)
+    .executeTakeFirst();
+  if (!cn) throw notFound('That credit note does not exist.');
+  if (cn.status === 'draft' || cn.status === 'void') {
+    throw badRequest('Only an open credit note can carry an e-way bill: convert a draft to open first.');
+  }
+  const parties = await commonParties(ex, orgId, cn.branch_id, cn.customer_id);
+  const intra = cn.supply_type === 'intra';
+  const lineRows = await ex
+    .selectFrom('credit_note_lines as l')
+    .leftJoin('items as it', 'it.id', 'l.item_id')
+    .select(['l.line_no', 'l.description', 'l.hsn_sac', 'l.qty', 'l.uqc', 'l.gst_rate_pct', 'l.taxable', 'it.name as item_name', 'it.kind as item_kind'])
+    .where('l.credit_note_id', '=', creditNoteId)
+    .orderBy('l.line_no')
+    .execute();
+  // Only goods move: a line of services (or a price correction with no item) carries nothing back.
+  const goods = lineRows.filter((l) => (l.item_kind ? l.item_kind === 'goods' : !!l.hsn_sac && !l.hsn_sac.startsWith('99')));
+  const lines: EwbLine[] = goods.map((l) => ({
+    name: (l.description?.trim() || l.item_name || `Line ${l.line_no}`).slice(0, 100),
+    description: l.description?.trim() || l.item_name || '',
+    hsnSac: l.hsn_sac,
+    qty: toNumberFromSql(l.qty),
+    uqc: l.uqc,
+    gstRatePct: toNumberFromSql(l.gst_rate_pct),
+    intra,
+    taxablePaise: toPaiseFromSql(l.taxable),
+  }));
+  const existing = await ex
+    .selectFrom('eway_bills')
+    .select(['id', 'status', 'eway_bill_no'])
+    .where('credit_note_id', '=', creditNoteId)
+    .where('org_id', '=', orgId)
+    .executeTakeFirst();
+  return {
+    rowId: existing?.id ?? null,
+    status: existing?.status ?? 'pending',
+    existingNo: existing?.eway_bill_no ?? null,
+    branchId: cn.branch_id,
+    docLabel: cn.number,
+    docType: 'CNT',
+    reason: 'sales_return',
+    supplyKind: goods.length ? 'goods' : 'service',
+    interStateSupply: false,
+    consignmentPaise: toPaiseFromSql(cn.total),
+    // Inward: the goods travel from the customer back to the branch.
+    fromStateCode: parties.toStateCode,
+    toStateCode: parties.fromStateCode,
+    intraThresholdPaise: parties.intraThresholdPaise,
+    fromPincode: parties.toPincode,
+    toPincode: parties.fromPincode,
+    source: {
+      direction: 'I',
+      subSupplyType: 'sales_return',
+      docType: 'CNT',
+      docNo: cn.number,
+      docDate: String(cn.note_date).slice(0, 10),
+      from: parties.to,
+      to: parties.from,
+      taxablePaise: toPaiseFromSql(cn.subtotal),
+      cgstPaise: toPaiseFromSql(cn.cgst),
+      sgstPaise: toPaiseFromSql(cn.sgst),
+      igstPaise: toPaiseFromSql(cn.igst),
+      cessPaise: toPaiseFromSql(cn.cess),
+      otherChargesPaise: toPaiseFromSql(cn.shipping_charge) + toPaiseFromSql(cn.adjustment),
+      totalPaise: toPaiseFromSql(cn.total),
       lines,
     },
   };
@@ -562,6 +649,7 @@ export async function generateEwayBill(
     org_id: orgId,
     invoice_id: doc.kind === 'invoice' ? doc.id : null,
     challan_id: doc.kind === 'challan' ? doc.id : null,
+    credit_note_id: doc.kind === 'credit_note' ? doc.id : null,
     eway_bill_no: result.ewbNo,
     status: 'generated' as const,
     provider: provider.name,
@@ -681,6 +769,7 @@ async function recordFailure(
       org_id: orgId,
       invoice_id: doc.kind === 'invoice' ? doc.id : null,
       challan_id: doc.kind === 'challan' ? doc.id : null,
+      credit_note_id: doc.kind === 'credit_note' ? doc.id : null,
       status: 'pending',
       sub_supply_type: loaded.source.subSupplyType,
       error_message: message.slice(0, 1000),
@@ -762,10 +851,11 @@ async function loadBill(trx: Trx, orgId: number, billId: number): Promise<Loaded
     .selectFrom('eway_bills as w')
     .leftJoin('invoices as i', 'i.id', 'w.invoice_id')
     .leftJoin('delivery_challans as d', 'd.id', 'w.challan_id')
+    .leftJoin('credit_notes as cn', 'cn.id', 'w.credit_note_id')
     .select([
       'w.id', 'w.eway_bill_no', 'w.status', 'w.provider', 'w.vehicle_no', 'w.transport_mode',
       'w.distance_km', 'w.generated_at', 'w.part_b_at', 'w.valid_until', 'w.extended_count',
-      'w.invoice_id', 'i.branch_id as invoice_branch', 'd.branch_id as challan_branch',
+      'w.invoice_id', 'i.branch_id as invoice_branch', 'd.branch_id as challan_branch', 'cn.branch_id as credit_note_branch',
     ])
     .where('w.id', '=', billId)
     .where('w.org_id', '=', orgId)
@@ -773,7 +863,7 @@ async function loadBill(trx: Trx, orgId: number, billId: number): Promise<Loaded
     .executeTakeFirst();
   if (!row) throw notFound('That e-way bill does not exist.');
 
-  const branchId = row.invoice_branch ?? row.challan_branch;
+  const branchId = row.invoice_branch ?? row.challan_branch ?? row.credit_note_branch;
   if (branchId === null) throw notFound('That e-way bill is not attached to a document.');
   const branch = await trx
     .selectFrom('branches')

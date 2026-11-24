@@ -1821,7 +1821,7 @@ export interface EwayBillRow {
    * challan covers job work, branch transfers and goods out on approval — no
    * invoice, no revenue, and still a lorry that has to be declared.
    */
-  docKind: 'invoice' | 'challan';
+  docKind: 'invoice' | 'challan' | 'credit_note';
   docId: string;
   /** Null on a challan row. Use `docKind` and `docId` to address the document. */
   invoiceId: string | null;
@@ -2034,11 +2034,12 @@ export const gst = {
   /** Build and check an invoice without submitting it — costs no attempt. */
   einvoicePreview: (invoiceId: string) =>
     api.get<EinvoicePreviewResponse>('/api/gst', { view: 'einvoice-preview', invoiceId }),
-  ewayCheck: (doc: { docKind: 'invoice' | 'challan'; docId: string }) =>
+  ewayCheck: (doc: { docKind: 'invoice' | 'challan' | 'credit_note'; docId: string }) =>
     api.get<EwayBillCheckResponse>('/api/gst', {
       view: 'eway-check',
       invoiceId: doc.docKind === 'invoice' ? doc.docId : undefined,
       challanId: doc.docKind === 'challan' ? doc.docId : undefined,
+      creditNoteId: doc.docKind === 'credit_note' ? doc.docId : undefined,
     }),
   submitEinvoice: (invoiceId: string) =>
     api.post<{
@@ -2062,6 +2063,8 @@ export const gst = {
     /** Exactly one of these. A challan moves goods just as an invoice does. */
     invoiceId?: string;
     challanId?: string;
+    /** Goods coming back on a sales return. */
+    creditNoteId?: string;
     vehicleNo?: string | null;
     transporterId?: string | null;
     transporterName?: string | null;

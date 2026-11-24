@@ -249,3 +249,20 @@ test('a bill of supply carries no tax: refused for a taxable line, raised for ex
     assert.equal(toPaiseFromSql(row.cgst) + toPaiseFromSql(row.igst), 0);
   });
 });
+
+test('goods coming back on a credit note get an inward sales-return e-way bill; a draft does not', async () => {
+  const { generateEwayBill } = await import('../../lib/server/integrations/gst/eway-service');
+  const call = (async (_r: unknown, _p: unknown, fn: () => Promise<unknown>) => fn()) as never;
+  await withFixture(async (f) => {
+    const { trx, orgId } = f;
+    await trx.updateTable('branches').set({ address: '14 Anna Salai', city: 'Chennai', pincode: '600002' }).where('id', '=', f.branchId).execute();
+    await trx.updateTable('contacts').set({ billing_address: '9 Mount Road', billing_city: 'Chennai', billing_pincode: '600006' }).where('id', '=', f.customerId).execute();
+    const draft = await createCreditNote(trx, orgId, null, { branchId: f.branchId, customerId: f.customerId, date: new Date().toISOString().slice(0, 10), reason: 'Sales Return', lines: [line(f, 60)], status: 'draft' });
+    await assert.rejects(generateEwayBill(trx, orgId, { kind: 'credit_note', id: draft.id }, { vehicleNo: 'TN01AB1234', distanceKm: 20 }, { call }), /convert a draft to open/);
+    await openCreditNote(trx, orgId, null, draft.id);
+    const gen = await generateEwayBill(trx, orgId, { kind: 'credit_note', id: draft.id }, { vehicleNo: 'TN01AB1234', distanceKm: 20 }, { call });
+    assert.ok(gen.ewayBillNo);
+    const row = await trx.selectFrom('eway_bills').select(['credit_note_id', 'sub_supply_type', 'status']).where('credit_note_id', '=', draft.id).executeTakeFirstOrThrow();
+    assert.deepEqual([row.credit_note_id, row.sub_supply_type, row.status], [draft.id, 'sales_return', 'generated']);
+  });
+});
