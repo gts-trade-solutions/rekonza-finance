@@ -570,6 +570,10 @@ export interface PaymentListItem {
   contactId: string;
   contactName: string;
   bankName: string;
+  /** Zoho's BRANCH, TYPE (Invoice Payment, Customer Advance, Retainer Payment) and INVOICE# columns. */
+  branchName?: string;
+  type?: string;
+  documentNumbers?: string[];
   reference: string | null;
   amountPaise: number;
   tdsPaise: number;
@@ -588,6 +592,10 @@ export const payments = {
   update: (id: string, input: unknown) => api.put<{ id: string; number: string; unappliedPaise: number }>(`/api/payments/${id}`, input),
   /** Zoho's Delete: what it paid is owed again. */
   remove: (id: string, reason?: string) => api.delete<{ deleted: true; number: string }>(`/api/payments/${id}${reason ? `?reason=${encodeURIComponent(reason)}` : ''}`),
+  /** Zoho's Refund: money given back from what the payment left unused. */
+  refund: (id: string, input: { date: string; amountPaise: number; bankAccountId?: string | null; mode?: string | null; reference?: string | null }) =>
+    api.post<{ journalEntryId: number; refundedPaise: number; unappliedPaise: number }>(`/api/payments/${id}`, { action: 'refund', ...input }),
+  deleteRefund: (id: string, refundId: string) => api.post<{ unappliedPaise: number }>(`/api/payments/${id}`, { action: 'delete-refund', refundId }),
   list: (params?: {
     kind?: 'received' | 'made'; from?: string; to?: string;
     contactId?: string; limit?: number; offset?: number;
@@ -606,6 +614,26 @@ export const payments = {
   /** Reverse a payment entered by mistake; what it settled is owed again. */
   void: (paymentId: string, reason: string) =>
     api.patch<{ ok: true }>('/api/payments', { action: 'void', paymentId, reason }),
+};
+
+/** A retainer invoice as Zoho's form and record have it (migration 122, /api/retainers). */
+export interface RetainerDetail {
+  id: string; number: string; status: string; date: string; branchId: string;
+  customerId: string; customerName: string; reference: string | null;
+  projectId: string | null; projectName: string | null;
+  lines: { description: string; amountPaise: number }[]; notes: string | null; terms: string | null;
+  totalPaise: number; paidPaise: number; appliedPaise: number; balancePaise: number;
+  journalEntryId: string | null; changeable: boolean;
+}
+export interface RetainerSave {
+  branchId: string; customerId: string; date: string; reference?: string | null; projectId?: string | null;
+  lines: { description: string; amountPaise: number }[]; notes?: string | null; terms?: string | null; status?: 'draft' | 'sent';
+}
+export const retainers = {
+  get: (id: string) => api.get<RetainerDetail>(`/api/retainers/${id}`),
+  create: (input: RetainerSave) => api.post<{ id: string; number: string; totalPaise: number }>('/api/retainers', input),
+  update: (id: string, input: RetainerSave) => api.put<{ id: string; number: string; totalPaise: number }>(`/api/retainers/${id}`, input),
+  remove: (id: string, reason?: string) => api.delete<{ deleted: true; number: string }>(`/api/retainers/${id}${reason ? `?reason=${encodeURIComponent(reason)}` : ''}`),
 };
 
 export interface PaymentDetail {
@@ -628,6 +656,10 @@ export interface PaymentDetail {
   notes?: string | null;
   currency?: string;
   fcAmountPaise?: number | null;
+  bankName?: string | null;
+  /** The record's View Journal, and the refunds taken from what it left unused (Zoho's Refund). */
+  journalEntryId?: string | null;
+  refunds?: { id: string; date: string; amountPaise: number; memo: string | null }[];
   allocations: {
     id: string; targetType: string; targetId: string; number: string; amountPaise: number; appliedOn: string | null;
     foreignAmountPaise?: number | null; dueDate?: string | null;

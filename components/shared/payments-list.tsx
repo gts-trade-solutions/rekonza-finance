@@ -113,6 +113,27 @@ export function PaymentsList({ kind }: { kind: 'received' | 'made' }) {
     }] : []),
   ];
 
+  // Zoho's Payments Received columns, in Zoho's order (recorded 2026-11-23).
+  const receivedColumns: Column<PaymentListItem>[] = [
+    { key: 'date', header: 'Date', sortValue: (r) => r.date, cell: (r) => new Date(`${r.date.slice(0, 10)}T00:00:00`).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) },
+    { key: 'branch', header: 'Branch', sortValue: (r) => r.branchName ?? '', cell: (r) => r.branchName ?? '' },
+    { key: 'number', header: 'Payment #', sortValue: (r) => r.number, cell: (r) => <span className="font-medium text-link">{r.number}</span> },
+    { key: 'type', header: 'Type', sortValue: (r) => r.type ?? '', cell: (r) => r.type ?? '' },
+    { key: 'ref', header: 'Reference Number', sortValue: (r) => r.reference ?? '', cell: (r) => r.reference ?? '' },
+    { key: 'contact', header: 'Customer Name', sortValue: (r) => r.contactName, cell: (r) => r.contactName },
+    { key: 'docs', header: 'Invoice#', sortValue: (r) => (r.documentNumbers ?? []).join(','), cell: (r) => (r.documentNumbers ?? []).join(', ') },
+    { key: 'mode', header: 'Mode', sortValue: (r) => r.mode, cell: (r) => <span className="capitalize">{r.mode}</span> },
+    { key: 'amount', header: 'Amount', align: 'right', sortValue: (r) => r.amountPaise + r.tdsPaise + r.bankChargesPaise, cell: (r) => <Money value={r.amountPaise + r.tdsPaise + r.bankChargesPaise} className="font-medium" /> },
+    {
+      key: 'unapplied', header: 'Unused Amount', align: 'right', sortValue: (r) => r.unappliedPaise,
+      cell: (r) => r.unappliedPaise > 0 && r.status !== 'void' && canEdit ? (
+        <button type="button" className="underline-offset-2 hover:underline" onClick={(e) => { e.stopPropagation(); setOpenId(r.id); }} title="Apply it to an open invoice">
+          <Money value={r.unappliedPaise} />
+        </button>
+      ) : <Money value={r.unappliedPaise} />,
+    },
+  ];
+
   return (
     <>
       <PageHeader
@@ -128,7 +149,7 @@ export function PaymentsList({ kind }: { kind: 'received' | 'made' }) {
             {canCreate && (
               <Button size="sm" asChild className="gap-1.5">
                 <Link href={isReceipt ? '/sales/payments/new' : '/purchases/payments/new'}>
-                  <Plus className="size-4" /> {isReceipt ? 'Record receipt' : 'Record payment'}
+                  <Plus className="size-4" /> {isReceipt ? 'New' : 'Record payment'}
                 </Link>
               </Button>
             )}
@@ -186,14 +207,15 @@ export function PaymentsList({ kind }: { kind: 'received' | 'made' }) {
 
               <DataTable
                 rows={data.payments}
-                columns={[...columns, documentMenuColumn(isReceipt ? 'payment-received' : 'payment-made', () => void state.refetch(), (r) => router.push(`${isReceipt ? '/sales/payments/new' : '/purchases/payments/new'}?edit=${r.id}`))]}
+                columns={[...(isReceipt ? receivedColumns : columns), documentMenuColumn(isReceipt ? 'payment-received' : 'payment-made', () => void state.refetch(), (r) => router.push(`${isReceipt ? '/sales/payments/new' : '/purchases/payments/new'}?edit=${r.id}`))]}
                 getRowId={(r) => r.id}
                 selectable
                 bulkActions={(selected) => <BulkPrintButton kind={isReceipt ? 'payment-received' : 'payment-made'} ids={selected.map((r) => r.id)} />}
                 initialSort={{ key: 'date', dir: 'desc' }}
                 searchPlaceholder={`Search ${isReceipt ? 'receipt' : 'payment'} or ${party.toLowerCase()}…`}
                 dateFilter={{ getDate: (r) => r.date, value: range, onChange: setRange }}
-                onRowClick={(r) => setOpenId(r.id)}
+                // A receipt opens beside the list, as in Zoho; a payment made keeps its Apply window.
+                onRowClick={(r) => (isReceipt ? router.push(`/sales/payments/${r.id}`) : setOpenId(r.id))}
               />
             </>
           )

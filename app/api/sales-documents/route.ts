@@ -76,11 +76,11 @@ export const GET = route(
       : q.kind === 'sales-order' ? sql`, d.expected_ship_date AS expiry, d.subtotal, NULL AS converted_to_type, NULL AS converted_to_id, d.invoiced_amount AS applied`
       : q.kind === 'challan' ? sql`, NULL AS expiry, d.total AS subtotal, d.challan_type AS converted_to_type, NULL AS converted_to_id, NULL AS applied`
       : q.kind === 'credit-note' ? sql`, NULL AS expiry, d.subtotal, d.reason AS converted_to_type, d.against_invoice_id AS converted_to_id, d.applied_amount AS applied, (SELECT i.number FROM invoices i WHERE i.id = d.against_invoice_id) AS linked_number`
-      : sql`, NULL AS expiry, d.amount AS subtotal, d.description AS converted_to_type, NULL AS converted_to_id, d.applied_amount AS applied`;
+      : sql`, NULL AS expiry, d.amount AS subtotal, d.description AS converted_to_type, d.project_id AS converted_to_id, d.applied_amount AS applied, (SELECT p.name FROM projects p WHERE p.id = d.project_id) AS linked_number`;
 
     const totalCol = q.kind === 'retainer' ? sql`d.amount` : sql`d.total`;
-    // Zoho's Reference# column (migration 121); a retainer has none.
-    const refCol = q.kind === 'retainer' ? sql`NULL` : sql`d.reference_number`;
+    // Zoho's Reference# column (migration 121; a retainer's, migration 122).
+    const refCol = q.kind === 'retainer' ? sql`d.reference` : sql`d.reference_number`;
     // What the customer has actually settled. Only invoice-like documents have
     // one; a quote or a challan is nobody's debt.
     const paidCol =

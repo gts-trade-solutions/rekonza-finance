@@ -1,8 +1,9 @@
 import { sql } from 'kysely';
+import { z } from 'zod';
 import { db, transaction } from '@/lib/server/db';
 import { route, idParam, asId, notFound, forbidden, body, badRequest } from '@/lib/server/http';
 import { logAudit, auditMeta } from '@/lib/server/audit';
-import { deletePayment, updatePayment } from '@/lib/server/services/payments';
+import { deletePayment, deletePaymentRefund, paymentRefunds, refundPayment, updatePayment } from '@/lib/server/services/payments';
 import { PaymentInput, toPaymentInput } from '@/lib/server/payment-input';
 import { hasPermission } from '@/lib/rbac';
 import { toPaiseFromSql } from '@/lib/server/money-sql';
@@ -23,6 +24,7 @@ export const GET = route(async ({ orgId, role, params }) => {
       'contacts.display_name as contact_name', 'contacts.legal_name as contact_legal_name',
       'payments.mode', 'payments.reference', 'payments.bank_account_id',
       'payments.bank_charges', 'payments.notes', 'payments.currency', 'payments.fc_amount', 'payments.branch_id',
+      'payments.journal_entry_id',
     ])
     .where('payments.id', '=', id).where('payments.org_id', '=', orgId)
     .executeTakeFirst();
@@ -50,6 +52,12 @@ export const GET = route(async ({ orgId, role, params }) => {
   `.execute(db);
 
   const tax = toPaiseFromSql(p.advance_cgst) + toPaiseFromSql(p.advance_sgst) + toPaiseFromSql(p.advance_igst);
+  // The record's View Journal and its refunds (Zoho's payment record).
+  const journalLines = p.journal_entry_id
+    ? await db.selectFrom('journal_lines as jl').innerJoin('accounts as a', 'a.id', 'jl.account_id')
+        .select(['jl.line_no', 'a.code', 'a.name', 'jl.debit', 'jl.credit']).where('jl.entry_id', '=', p.journal_entry_id).orderBy('jl.line_no').execute()
+    : [];
+  const refunds = await paymentRefunds(db, orgId, id);
   return {
     id: asId(p.id),
     number: p.number,
@@ -76,6 +84,9 @@ export const GET = route(async ({ orgId, role, params }) => {
     advanceGst: p.advance_gst
       ? { ratePct: Number(p.advance_rate_pct), advancePaise: toPaiseFromSql(p.advance_amount), taxPaise: tax }
       : null,
+    journalEntryId: p.journal_entry_id ? asId(p.journal_entry_id) : null,
+    journalLines: journalLines.map((l) => ({ lineNo: l.line_no, accountCode: l.code, accountName: l.name, debitPaise: toPaiseFromSql(l.debit), creditPaise: toPaiseFromSql(l.credit) })),
+    refunds: refunds.map((r) => ({ id: asId(r.entryId), date: r.date, amountPaise: r.amountPaise, memo: r.memo })),
     allocations: allocations.rows.map((a) => ({
       id: asId(a.id),
       targetType: a.target_type,
@@ -132,4 +143,33 @@ export const DELETE = route(async ({ orgId, user, role, req, params }) => {
     return gone;
   });
   return { deleted: true, number: done.number };
+});
+
+/**
+ * Zoho's Refund on a payment: money given back from what it left unused
+ * (services/payments.ts refundPayment), and deleting such a refund.
+ */
+const RefundInput = z.discriminatedUnion('action', [
+  z.object({
+    action: z.literal('refund'), date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), amountPaise: z.number().int().positive().optional(),
+    bankAccountId: z.coerce.number().int().positive().nullish(), mode: z.string().max(30).nullish(), reference: z.string().max(100).nullish(),
+  }),
+  z.object({ action: z.literal('delete-refund'), refundId: z.coerce.number().int().positive() }),
+]);
+
+export const POST = route(async ({ orgId, user, role, req, params }) => {
+  const id = idParam(params);
+  const input = await body(req, RefundInput);
+  const kind = await kindOf(orgId, id, role, input.action === 'refund' ? 'edit' : 'void');
+  const area = kind === 'received' ? 'sales' : 'purchases';
+  if (input.action === 'refund') {
+    const r = await transaction((trx) => refundPayment(trx, orgId, user.userId, id, {
+      date: input.date, amountPaise: input.amountPaise, bankAccountId: input.bankAccountId ?? null, mode: input.mode ?? null, reference: input.reference ?? null,
+    }));
+    await logAudit({ orgId, actorUserId: user.userId, actorName: user.name, action: 'update', targetType: 'payment', targetId: id, detail: `Refunded ${(r.refundedPaise / 100).toFixed(2)} (${area})`, ...auditMeta(req) });
+    return r;
+  }
+  const r = await transaction((trx) => deletePaymentRefund(trx, orgId, user.userId, id, input.refundId));
+  await logAudit({ orgId, actorUserId: user.userId, actorName: user.name, action: 'delete', targetType: 'payment', targetId: id, detail: 'Refund deleted', ...auditMeta(req) });
+  return r;
 });
