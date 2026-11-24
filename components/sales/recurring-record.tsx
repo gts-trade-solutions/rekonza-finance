@@ -121,6 +121,9 @@ function Record({ p, reload }: { p: RecurringProfileDetail; reload: () => void }
                   ['Payment Terms:', terms],
                   ['Salesperson:', p.salespersonName ?? '--'],
                   ...(p.orderNumber ? [['Order Number:', p.orderNumber]] : []),
+                  ...(p.priceListName ? [['Price List:', p.priceListName]] : []),
+                  ...(p.projects?.length ? [['Project Hours:', p.projects.map((x) => x.name).join(', ')]] : []),
+                  ...(p.paymentLink ? [['Payment Options:', 'Online payment link on each invoice']] : []),
                   ['Preferences:', p.createAsDraft ? 'Create Invoices as Drafts' : p.autoSend ? 'Send invoices automatically' : 'Create invoices, send by hand'],
                 ].map(([k, v], i) => (
                   <div key={i} className="grid grid-cols-[130px_1fr] gap-2"><span className="text-muted-foreground">{k}</span><span>{v}</span></div>

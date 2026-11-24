@@ -19,6 +19,7 @@
 //
 // Zoho folds the sidebar to its rail on an account's page, and so does this.
 
+import { InboxStrip } from '@/components/banking/inbound-statements';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
@@ -51,11 +52,11 @@ interface Head {
     bankName: string | null; isActive: boolean; isPrimary: boolean; balancePaise: number; amountInBankPaise: number | null; amountInBankOn: string | null;
   };
   others: { id: string; name: string; kind: string; accountNumber: string | null; amountInBooksPaise: number }[];
-  counts: { uncategorized: number; bestMatches: number; recognized: number; excluded: number; chequesPending: number };
+  counts: { uncategorized: number; bestMatches: number; recognized: number; excluded: number; manuallyExcluded?: number; autoExcluded?: number; chequesPending: number };
 }
 interface Line {
   id: string; date: string; narration: string; reference: string | null; depositPaise: number; withdrawalPaise: number;
-  status: string; runningBalancePaise: number | null; excludeReason: string | null;
+  status: string; runningBalancePaise: number | null; excludeReason: string | null; autoExcluded?: boolean;
   recognizedBy: { ruleName: string; recordAs: string | null; accountName: string | null } | null;
 }
 interface Book {
@@ -114,6 +115,8 @@ export function BankAccountPage() {
   const setTab = (t: Tab) => { setOpenLine(null); setPicked(new Set()); router.replace(`/banking/transactions?account_id=${accountId}&filter_by=${FILTER_OF[t]}`); };
 
   const [pill, setPill] = useState<'all' | 'best' | 'recognized'>('all');
+  // Excluded's pills (Zoho's): kept out by a person, or automatically as a duplicate at import.
+  const [excludedPill, setExcludedPill] = useState<'manually_excluded' | 'auto_excluded'>('manually_excluded');
   const [direction, setDirection] = useState<'' | 'in' | 'out'>('');
   const [booksDirection, setBooksDirection] = useState<'' | 'in' | 'out'>('');
   const [sortAsc, setSortAsc] = useState(false);
@@ -135,10 +138,10 @@ export function BankAccountPage() {
     () => (accountId && (tab === 'uncategorized' || tab === 'excluded')
       ? api.get('/api/banking/transactions', {
           bankAccountId: accountId, status: tab === 'excluded' ? 'excluded' : 'unmatched',
-          view: tab === 'uncategorized' && pill !== 'all' ? pill : undefined, limit: 500,
+          view: tab === 'uncategorized' ? (pill !== 'all' ? pill : undefined) : excludedPill, limit: 500,
         })
       : Promise.resolve({ transactions: [] })),
-    [accountId, tab, pill],
+    [accountId, tab, pill, excludedPill],
   );
   const books = useApi<{ transactions: Book[]; closingPaise: number }>(
     () => (accountId && tab === 'all' ? api.get(`/api/banking/accounts/${accountId}/books`, { direction: booksDirection || undefined }) : Promise.resolve({ transactions: [], closingPaise: 0 })),
@@ -178,6 +181,8 @@ export function BankAccountPage() {
 
   return (
     <div className="-mx-6 -mt-5 space-y-0" data-slot="bank-account-page">
+      {/* Zoho's strip above the account: its own address for emailed statements. */}
+      {account.kind !== 'clearing' && <InboxStrip accountId={account.id} />}
       {/* ── Title band ─────────────────────────────────────────────────── */}
       <div className="flex flex-wrap items-start gap-3 border-b bg-surface px-5 py-3.5">
         <div className="min-w-0 flex-1">
@@ -306,7 +311,8 @@ export function BankAccountPage() {
                 <>
                   <span className="text-muted-foreground">View By:</span><span className="font-medium">Excluded transactions</span>
                   <span className="h-5 w-px bg-border" />
-                  <Pill active onClick={() => undefined} slot="manually-excluded">Manually Excluded ({c.excluded})</Pill>
+                  <Pill active={excludedPill === 'manually_excluded'} onClick={() => { setExcludedPill('manually_excluded'); setPicked(new Set()); }} slot="manually-excluded">Manually Excluded ({c.manuallyExcluded ?? c.excluded})</Pill>
+                  <Pill active={excludedPill === 'auto_excluded'} onClick={() => { setExcludedPill('auto_excluded'); setPicked(new Set()); }} slot="auto-excluded">Automatically Excluded ({c.autoExcluded ?? 0})</Pill>
                   <button type="button" className="ml-auto text-link hover:underline" onClick={() => setTab('uncategorized')}>Uncategorized</button>
                 </>
               )}

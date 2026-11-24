@@ -942,7 +942,7 @@ export async function applyRetainer(
 ): Promise<{ journalEntryId: number; appliedPaise: Paise }> {
   const r = await trx
     .selectFrom('retainer_invoices')
-    .select(['id', 'number', 'branch_id', 'customer_id', 'status', 'amount', 'amount_paid', 'applied_amount'])
+    .select(['id', 'number', 'branch_id', 'customer_id', 'status', 'amount', 'amount_paid', 'applied_amount', 'refunded_amount'])
     .where('id', '=', retainerId)
     .where('org_id', '=', orgId)
     .executeTakeFirst();
@@ -972,7 +972,8 @@ export async function applyRetainer(
         'is money the customer owes us, not money we are holding.',
     );
   }
-  const available = paid - toPaiseFromSql(r.applied_amount);
+  // What has been refunded to the customer is gone: it cannot settle an invoice as well.
+  const available = paid - toPaiseFromSql(r.applied_amount) - toPaiseFromSql(r.refunded_amount);
   const owing = toPaiseFromSql(inv.total) - toPaiseFromSql(inv.amount_paid);
   const amount = amountPaise ?? Math.min(available, owing);
 

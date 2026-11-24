@@ -2,7 +2,8 @@
 
 // Zoho Books' "New Rules" form (and Edit Rule): what a rule applies to, whether
 // it only recognises a line or categorises it, the criteria (all of them, or
-// any one), what the line is recorded as and into which account, where the
+// any one), what the line is recorded as and into which account (or, for a
+// Customer or Vendor Payment, from or to which contact), where the
 // reference comes from, and which accounts the rule runs on. The choices are
 // the ones the server can carry out (lib/bank-rules.ts); the server checks
 // them again (services/bank-rules.ts).
@@ -65,6 +66,7 @@ export function RuleForm({ editing }: { editing?: RuleRecord }) {
   const [criteria, setCriteria] = useState<RuleCriterion[]>(editing?.criteria.length ? editing.criteria : [blank()]);
   const [recordAs, setRecordAs] = useState(editing?.recordAs ?? '');
   const [accountId, setAccountId] = useState(editing?.accountId ?? editing?.otherBankAccountId ?? '');
+  const [contactId, setContactId] = useState(editing?.contactId ?? '');
   const [referenceMode, setReferenceMode] = useState<'statement' | 'none'>(editing?.referenceMode ?? 'statement');
   const [scope, setScope] = useState<RuleScope>(editing?.scope ?? 'custom');
   const [scopeIds, setScopeIds] = useState<string[]>(editing?.scopeAccountIds ?? []);
@@ -74,6 +76,11 @@ export function RuleForm({ editing }: { editing?: RuleRecord }) {
   const recordOptions = useMemo(() => recordAsOptions(applyTo).map((c) => ({ value: c.key, label: c.label })), [applyTo]);
   const cat = recordAsOptions(applyTo).find((c) => c.key === recordAs) ?? null;
   const transfer = cat?.engine === 'transfer';
+  // Zoho's Customer Payment / Vendor Payment: from or to a contact, settling their oldest open invoices or bills.
+  const payment = cat?.engine === 'customer' || cat?.engine === 'vendor';
+  const contactOptions = useMemo(() => (masters.data?.contacts ?? [])
+    .filter((c) => c.kind === 'both' || c.kind === (cat?.engine === 'vendor' ? 'vendor' : 'customer'))
+    .map((c) => ({ value: c.id, label: c.displayName })), [masters.data, cat]);
   const accountOptions = useMemo(() => {
     if (!masters.data || !cat) return [];
     if (transfer) return masters.data.bankAccounts.filter((b) => cat.otherAccount !== 'card' || b.kind === 'card').map((b) => ({ value: b.id, label: b.name, sublabel: b.kind }));
@@ -96,13 +103,14 @@ export function RuleForm({ editing }: { editing?: RuleRecord }) {
     if (!name.trim()) problems.push('Enter a rule name.');
     criteria.forEach((c, i) => { if (!c.value.trim()) problems.push(`Criterion ${i + 1}: enter what to compare with.`); });
     if (!recordAs) problems.push('Choose how to record the transactions.');
-    if (recordAs && !accountId) problems.push('Choose the account.');
+    if (recordAs && payment && !contactId) problems.push(cat?.engine === 'vendor' ? 'Choose the vendor.' : 'Choose the customer.');
+    if (recordAs && !payment && !accountId) problems.push('Choose the account.');
     if (scope === 'custom' && !scopeIds.length) problems.push('Choose the accounts the rule is for.');
     if (problems.length) { setErrors(problems); return; }
     setErrors([]); setSaving(true);
     const payload = {
       name: name.trim(), applyTo, markAs, matchMode, criteria: criteria.map((c) => ({ ...c, value: c.value.trim() })), recordAs,
-      accountId: transfer ? null : accountId, otherBankAccountId: transfer ? accountId : null, referenceMode, scope,
+      accountId: transfer || payment ? null : accountId, otherBankAccountId: transfer ? accountId : null, contactId: payment ? contactId : null, referenceMode, scope,
       scopeAccountIds: scope === 'custom' ? scopeIds : null,
     };
     try {
@@ -164,11 +172,18 @@ export function RuleForm({ editing }: { editing?: RuleRecord }) {
         </div>
         <hr className="max-w-[740px]" />
         <FormRow label="Record As" required>
-          <Combobox options={recordOptions} value={recordAs} onChange={(v) => { setRecordAs(v); setAccountId(''); }} showAvatar={false} placeholder=" " />
+          <Combobox options={recordOptions} value={recordAs} onChange={(v) => { setRecordAs(v); setAccountId(''); setContactId(''); }} showAvatar={false} placeholder=" " />
         </FormRow>
-        <FormRow label="Account" required hint={cat?.hint}>
-          <Combobox options={accountOptions} value={accountId} onChange={setAccountId} showAvatar={false} placeholder="Select an account" disabled={!recordAs} />
-        </FormRow>
+        {payment ? (
+          <FormRow label={cat?.engine === 'vendor' ? 'Vendor' : 'Customer'} required
+            hint={cat?.engine === 'vendor' ? 'Paid against their oldest open bills first; anything over is kept as an advance.' : 'Set against their oldest open invoices first; anything over is kept as an advance.'}>
+            <Combobox options={contactOptions} value={contactId} onChange={setContactId} showAvatar={false} placeholder={cat?.engine === 'vendor' ? 'Select a vendor' : 'Select a customer'} data-slot="rule-contact" />
+          </FormRow>
+        ) : (
+          <FormRow label="Account" required hint={cat?.hint}>
+            <Combobox options={accountOptions} value={accountId} onChange={setAccountId} showAvatar={false} placeholder="Select an account" disabled={!recordAs} />
+          </FormRow>
+        )}
         <FormRow label="Reference Number">
           <Combobox options={REFERENCE_MODES} value={referenceMode} onChange={(v) => setReferenceMode((v as 'statement' | 'none') || 'statement')} showAvatar={false} />
         </FormRow>

@@ -808,7 +808,8 @@ if (!DEMO) {
   await open('/settings?tab=org');
   check('Organization Profile: the logo box at the top, as in Zoho', (await page.locator('[data-slot=org-logo] [data-slot=logo-upload]').count()) === 1);
 
-  for (const [list, slug, title] of [['/sales/invoices', 'invoices', 'Invoices'], ['/sales/estimates', 'quotes', 'Quotes'], ['/purchases/bills', 'bills', 'Bills'], ['/sales/payments', 'payments-received', 'Customer Payments'], ['/accountant/journals', 'journals', 'Manual Journals']]) {
+  // Payments Received: Zoho's Import ▸ reads "Import Payments" (then Retainer and Applied Excess Payments).
+  for (const [list, slug, title] of [['/sales/invoices', 'invoices', 'Invoices'], ['/sales/estimates', 'quotes', 'Quotes'], ['/purchases/bills', 'bills', 'Bills'], ['/sales/payments', 'payments-received', 'Payments'], ['/accountant/journals', 'journals', 'Manual Journals']]) {
     await open(list);
     await page.locator('[data-slot=module-menu]').first().click();
     await page.waitForTimeout(300);

@@ -4,14 +4,16 @@ import { route, body, forbidden } from '@/lib/server/http';
 import { hasPermission } from '@/lib/rbac';
 import { logAudit, auditMeta } from '@/lib/server/audit';
 import { siteUrl } from '@/lib/server/mail/mailer';
-import { createPaymentLink, gatewayStatus, saveGateway } from '@/lib/server/services/payment-links';
+import { createPaymentLink, gatewayStatus, onlinePayments, saveGateway } from '@/lib/server/services/payment-links';
 
 // Online payments: whether this company's Razorpay is connected, connecting
 // it, and a payment link for an invoice (services/payment-links.ts).
 
 export const GET = route(async ({ orgId, req }) => {
   const s = await gatewayStatus(db, orgId);
-  return { ...s, webhookUrl: `${siteUrl(req)}/api/payments/razorpay/${orgId}` };
+  // ?list=1: Payments Received ⋯ → Online Payments, every link and what became of it.
+  const list = new URL(req.url).searchParams.get('list') === '1';
+  return { ...s, webhookUrl: `${siteUrl(req)}/api/payments/razorpay/${orgId}`, ...(list ? { links: await onlinePayments(db, orgId) } : {}) };
 });
 
 const Input = z.discriminatedUnion('action', [

@@ -9,7 +9,8 @@ import type { Sheet } from '../xlsx';
 
 export type ImportKind =
   | 'contacts' | 'items' | 'accounts' | 'opening-ledger' | 'opening-bills' | 'journals' | 'invoices' | 'bills'
-  | 'estimates' | 'sales-orders' | 'credit-notes' | 'purchase-orders' | 'expenses' | 'payments-received' | 'payments-made';
+  | 'estimates' | 'sales-orders' | 'credit-notes' | 'purchase-orders' | 'expenses' | 'payments-received' | 'payments-made'
+  | 'retainer-payments' | 'applied-excess-payments';
 
 export interface ColumnSpec {
   key: string;
@@ -261,6 +262,33 @@ export const TEMPLATES: Record<ImportKind, Template> = {
       { key: 'bank_charges', label: 'Bank charges', example: '' },
       { key: 'invoice', label: 'Invoice settled', example: 'INV/26-27/0001' },
       { key: 'notes', label: 'Notes', example: '' },
+    ],
+  },
+  // Zoho's Payments Received ⋯ → Import → Import Retainer Payments.
+  'retainer-payments': {
+    title: 'Retainer payments',
+    description: 'One row per payment against a retainer (service) invoice, each posted and applied to the retainer it names.',
+    columns: [
+      { key: 'date', label: 'Date', required: true, example: '2026-04-15' },
+      { key: 'customer', label: 'Customer', required: true, example: 'Sri Murugan Motors' },
+      { key: 'retainer', label: 'Retainer invoice number', required: true, example: 'RET-00001' },
+      { key: 'amount', label: 'Amount received', required: true, example: '25000' },
+      { key: 'mode', label: 'Mode', example: 'neft', hint: 'cash, cheque, upi, neft, imps or card' },
+      { key: 'account', label: 'Deposited to', required: true, example: 'HDFC Bank – Current', hint: 'the bank or cash account’s name' },
+      { key: 'reference', label: 'Reference', example: 'UTR 4472' },
+      { key: 'notes', label: 'Notes', example: '' },
+    ],
+  },
+  // Zoho's Payments Received ⋯ → Import → Import Applied Excess Payments.
+  'applied-excess-payments': {
+    title: 'Applied excess payments',
+    description: 'One row per application: money a customer paid in excess (an advance, or a payment’s unused amount) set against one of their invoices. Nothing new is received.',
+    columns: [
+      { key: 'date', label: 'Date applied', required: true, example: '2026-04-20' },
+      { key: 'customer', label: 'Customer', required: true, example: 'Sri Murugan Motors' },
+      { key: 'payment', label: 'Payment number', required: true, example: 'PR/26-27/0007' },
+      { key: 'invoice', label: 'Invoice number', required: true, example: 'INV/26-27/0012' },
+      { key: 'amount', label: 'Amount applied', required: true, example: '5000' },
     ],
   },
   'payments-made': {

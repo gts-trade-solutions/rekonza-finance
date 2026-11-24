@@ -96,7 +96,11 @@ const BANK_REPLIES = [
   '/api/banking/transactions?bankAccountId=[id]&status=unmatched&limit=500',
   '/api/banking/transactions?bankAccountId=[id]&status=unmatched&view=best&limit=500',
   '/api/banking/transactions?bankAccountId=[id]&status=unmatched&view=recognized&limit=500',
-  '/api/banking/transactions?bankAccountId=[id]&status=excluded&limit=500',
+  // Excluded's two pills (migration 125): kept out by a person, or automatically as a duplicate.
+  '/api/banking/transactions?bankAccountId=[id]&status=excluded&view=manually_excluded&limit=500',
+  '/api/banking/transactions?bankAccountId=[id]&status=excluded&view=auto_excluded&limit=500',
+  // The strip above the account: its address for emailed statements.
+  '/api/banking/inbound?accountId=[id]',
   '/api/banking/accounts/[id]/books',
   '/api/banking/accounts/[id]/books?direction=in',
   '/api/banking/accounts/[id]/books?direction=out',
@@ -121,6 +125,10 @@ const EDIT_PAGES = [
  */
 const ON_DEMAND = [
   '/api/export?module=all',
+  // Banking → More → Auto-upload bank statements from email; Preferences; Payments Received ⋯ → Online Payments.
+  '/api/banking/inbound',
+  '/api/banking/preferences',
+  '/api/payment-links?list=1',
   ...['contacts', 'items', 'accounts', 'invoices', 'bills', 'journals', 'journal-lines', 'credit-notes', 'estimates', 'sales-orders',
     'purchase-orders', 'expenses', 'payments-received', 'payments-made', 'vendor-credits', 'bank-transactions'].map((m) => `/api/export?module=${m}`),
   ...['3.1a', '3.1b', '3.1c', '3.1d', '3.1e', '3.1.1i', '3.1.1ii', '4A1', '4A2', '4A3', '4A4', '4A5', '4B1', '4B2', '4D1', '4D2', '5gst', '5nongst', '3.2']

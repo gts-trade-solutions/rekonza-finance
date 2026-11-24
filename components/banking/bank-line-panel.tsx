@@ -310,12 +310,23 @@ function CategorizeTab({ detail, masters, onDone, lineId }: { detail: LineDetail
   const [paymentId, setPaymentId] = useState('');
   const act = useApiAction((input: unknown) => api.post<{ created?: string | null }>('/api/banking/transactions', input));
 
-  // The account a category starts on, as Zoho fills it in.
+  // The account a category starts on, as Zoho fills it in: the Banking
+  // Preferences' default expense or income account where one is set and fits
+  // the category, else the category's usual account.
+  const prefs = useApi<{ defaultExpenseAccountId: string | null; defaultIncomeAccountId: string | null }>(() => api.get('/api/banking/preferences'), []);
   useEffect(() => {
-    const def = cat.defaultCode ? masters.accounts.find((a) => a.code === cat.defaultCode)?.id ?? '' : '';
+    const fits = (id: string | null) => {
+      const a = id ? masters.accounts.find((x) => x.id === id) : undefined;
+      return a && (!cat.accountTypes || cat.accountTypes.includes(a.type as never)) ? a.id : '';
+    };
+    const preferred = cat.side === 'out' ? fits(prefs.data?.defaultExpenseAccountId ?? null)
+      : cat.engine === 'journal' && cat.accountTypes?.length === 1 && cat.accountTypes[0] === 'income' ? fits(prefs.data?.defaultIncomeAccountId ?? null) : '';
+    const def = cat.engine === 'expense' || cat.engine === 'journal'
+      ? preferred || (cat.defaultCode ? masters.accounts.find((a) => a.code === cat.defaultCode)?.id ?? '' : '')
+      : cat.defaultCode ? masters.accounts.find((a) => a.code === cat.defaultCode)?.id ?? '' : '';
     setAccountId(def);
     setContactId(''); setOther(''); setGst(0); setAlloc({}); setPaymentId(''); setCharges(0); setTds(0);
-  }, [category]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [category, prefs.data]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const needsParty = cat.engine === 'customer' || cat.engine === 'vendor' || cat.engine === 'refund';
   const party = useApi<LineDetail | null>(

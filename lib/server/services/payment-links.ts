@@ -138,3 +138,18 @@ export async function handleLinkWebhook(orgId: number, rawBody: string, signatur
     return { recorded: true, paymentId: receipt.id, number: receipt.number };
   });
 }
+
+/** Zoho's Payments Received ⋯ → Online Payments: every payment link made, and what became of it. */
+export async function onlinePayments(ex: Executor, orgId: number) {
+  const rows = await ex.selectFrom('invoice_payment_links as l').innerJoin('invoices as i', 'i.id', 'l.invoice_id')
+    .innerJoin('contacts as c', 'c.id', 'i.customer_id').leftJoin('payments as p', 'p.id', 'l.payment_id')
+    .select(['l.id', 'l.invoice_id', 'i.number as invoice_number', 'c.display_name', 'l.amount', 'l.status', 'l.short_url', 'l.created_at', 'l.paid_at',
+      'l.payment_id', 'p.number as payment_number', 'l.provider_payment_id'])
+    .where('l.org_id', '=', orgId).orderBy('l.id', 'desc').limit(500).execute();
+  return rows.map((r) => ({
+    id: String(r.id), invoiceId: String(r.invoice_id), invoiceNumber: r.invoice_number, customerName: r.display_name,
+    amountPaise: toPaiseFromSql(r.amount), status: r.status, url: r.short_url, createdAt: new Date(r.created_at).toISOString(),
+    paidAt: r.paid_at ? new Date(r.paid_at).toISOString() : null, paymentId: r.payment_id ? String(r.payment_id) : null,
+    paymentNumber: r.payment_number ?? null, providerPaymentId: r.provider_payment_id ?? null,
+  }));
+}

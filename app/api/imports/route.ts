@@ -39,6 +39,7 @@ const MODULE: Record<ImportKind, string> = {
   'opening-bills': 'accountant', journals: 'accountant', invoices: 'sales', bills: 'purchases',
   estimates: 'sales', 'sales-orders': 'sales', 'credit-notes': 'sales', 'payments-received': 'sales',
   'purchase-orders': 'purchases', expenses: 'purchases', 'payments-made': 'purchases',
+  'retainer-payments': 'sales', 'applied-excess-payments': 'sales',
 };
 
 const Input = z.discriminatedUnion('source', [

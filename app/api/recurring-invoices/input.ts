@@ -12,6 +12,7 @@ const LineInput = z.object({
   ratePaise: z.number().int().nonnegative(),
   gstRatePct: z.number().min(0).max(50).default(18),
   hsnSac: z.string().nullish(),
+  discountPct: z.number().min(0).max(100).optional(),
 });
 
 export const CreateInput = z.object({
@@ -27,6 +28,9 @@ export const CreateInput = z.object({
   salespersonId: z.union([z.string(), z.number()]).nullish(),
   notes: z.string().max(4000).nullish(),
   terms: z.string().max(4000).nullish(),
+  priceListId: z.union([z.string(), z.number()]).nullish(),
+  projectIds: z.array(z.union([z.string(), z.number()])).max(20).optional(),
+  paymentLink: z.boolean().optional(),
   createAsDraft: z.boolean().optional(),
   autoSend: z.boolean().optional(),
   autoRun: z.boolean().optional(),
@@ -39,9 +43,12 @@ export const toProfileInput = (input: z.infer<typeof CreateInput>, branchId: num
   frequency: input.frequency as Frequency, every: input.every ?? 1, startDate: input.startDate, endDate: input.endDate ?? null,
   paymentTerms: input.paymentTerms ?? null, salespersonId: input.salespersonId ? Number(input.salespersonId) : null,
   notes: input.notes ?? null, terms: input.terms ?? null, createAsDraft: !!input.createAsDraft, autoSend: !!input.autoSend, autoRun: !!input.autoRun,
+  priceListId: input.priceListId ? Number(input.priceListId) : null,
+  projectIds: (input.projectIds ?? []).map(Number).filter((n) => n > 0),
+  paymentLink: !!input.paymentLink,
   lines: input.lines.map((l) => ({
     itemId: l.itemId == null || l.itemId === '' ? null : Number(l.itemId), description: l.description ?? null,
-    qty: l.qty, ratePaise: l.ratePaise, gstRatePct: l.gstRatePct, hsnSac: l.hsnSac ?? null,
+    qty: l.qty, ratePaise: l.ratePaise, gstRatePct: l.gstRatePct, hsnSac: l.hsnSac ?? null, discountPct: l.discountPct ?? 0,
   })),
 });
 
