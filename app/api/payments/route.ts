@@ -41,6 +41,7 @@ export const GET = route(
           'payments.unapplied_amount', 'payments.reference', 'payments.status',
           'payments.contact_id', 'contacts.display_name as contact_name',
           'bank_accounts.name as bank_name', 'branches.name as branch_name', 'payments.advance_gst',
+          'payments.created_at', 'payments.updated_at',
         ])
         .orderBy('payments.payment_date', 'desc')
         .orderBy('payments.id', 'desc')
@@ -112,6 +113,9 @@ export const GET = route(
         bankChargesPaise: toPaiseFromSql(r.bank_charges),
         unappliedPaise: toPaiseFromSql(r.unapplied_amount),
         allocationCount: allocBy.get(r.id) ?? 0,
+        // Zoho's Sort by → Created Time / Last Modified Time.
+        createdAt: new Date(r.created_at).toISOString(),
+        updatedAt: new Date(r.updated_at).toISOString(),
       })),
       summary: {
         count: Number(totals?.count ?? 0),

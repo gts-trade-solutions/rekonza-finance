@@ -9,14 +9,20 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useState } from 'react';
-import { Plus, Wallet } from 'lucide-react';
+import { useMemo, useState } from 'react';
+import { Download, MoreHorizontal, Plus, RefreshCw, Upload, Wallet } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card } from '@/components/ui/card';
 import { PageHeader } from '@/components/shared/page-header';
 import { ModuleMenu } from '@/components/shared/module-menu';
-import { DataTable, type Column } from '@/components/shared/data-table';
+import { DataTable, resetColumnWidths, type Column } from '@/components/shared/data-table';
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuSub, DropdownMenuSubContent,
+  DropdownMenuSubTrigger, DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import { downloadCsv } from '@/components/shared/report-shell';
+import { toRupees } from '@/lib/money';
 import { BulkPrintButton, documentMenuColumn } from '@/components/shared/document-menu';
 import { Money } from '@/components/shared/money';
 import { EmptyState } from '@/components/shared/empty-state';
@@ -35,6 +41,8 @@ export function PaymentsList({ kind }: { kind: 'received' | 'made' }) {
   const canEdit = usePermission(isReceipt ? 'sales' : 'purchases', 'edit');
   const [openId, setOpenId] = useState<string | null>(null);
   const [range, setRange] = useState<RangeValue>(() => ({ ...ALL_TIME, mode: 'all' }));
+  // Zoho's ⋯ → Sort by on Payments Received.
+  const [sort, setSort] = useState<{ key: string; dir: 'asc' | 'desc' }>({ key: 'date', dir: 'desc' });
 
   const state = useApi<PaymentListResponse>(
     () =>
@@ -113,9 +121,18 @@ export function PaymentsList({ kind }: { kind: 'received' | 'made' }) {
     }] : []),
   ];
 
+  // Zoho's Export → Export Current View: the rows on screen, with Zoho's columns.
+  const exportView = (rows: PaymentListItem[]) => downloadCsv('payments-received.csv', [
+    ['Date', 'Branch', 'Payment #', 'Type', 'Reference Number', 'Customer Name', 'Invoice#', 'Mode', 'Amount', 'Unused Amount'],
+    ...rows.map((r) => [r.date.slice(0, 10), r.branchName ?? '', r.number, r.type ?? '', r.reference ?? '', r.contactName, (r.documentNumbers ?? []).join(' '),
+      r.mode, toRupees(r.amountPaise + r.tdsPaise + r.bankChargesPaise), toRupees(r.unappliedPaise)]),
+  ]);
   // Zoho's Payments Received columns, in Zoho's order (recorded 2026-11-23).
   const receivedColumns: Column<PaymentListItem>[] = [
     { key: 'date', header: 'Date', sortValue: (r) => r.date, cell: (r) => new Date(`${r.date.slice(0, 10)}T00:00:00`).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) },
+    // Sort by → Created Time / Last Modified Time: sortable, not shown unless chosen under Customize Columns.
+    { key: 'created', header: 'Created Time', defaultHidden: true, sortValue: (r) => r.createdAt ?? '', cell: (r) => (r.createdAt ? new Date(r.createdAt).toLocaleString('en-IN') : '') },
+    { key: 'modified', header: 'Last Modified Time', defaultHidden: true, sortValue: (r) => r.updatedAt ?? '', cell: (r) => (r.updatedAt ? new Date(r.updatedAt).toLocaleString('en-IN') : '') },
     { key: 'branch', header: 'Branch', sortValue: (r) => r.branchName ?? '', cell: (r) => r.branchName ?? '' },
     { key: 'number', header: 'Payment #', sortValue: (r) => r.number, cell: (r) => <span className="font-medium text-link">{r.number}</span> },
     { key: 'type', header: 'Type', sortValue: (r) => r.type ?? '', cell: (r) => r.type ?? '' },
@@ -153,7 +170,9 @@ export function PaymentsList({ kind }: { kind: 'received' | 'made' }) {
                 </Link>
               </Button>
             )}
-            <ModuleMenu slug={isReceipt ? 'payments-received' : 'payments-made'} onRefresh={() => void state.refetch()} />
+            {isReceipt
+              ? <ReceivedMenu sort={sort} onSort={setSort} onRefresh={() => void state.refetch()} onExportView={() => exportView(state.data?.payments ?? [])} />
+              : <ModuleMenu slug="payments-made" onRefresh={() => void state.refetch()} />}
           </>
         }
       />
@@ -211,7 +230,8 @@ export function PaymentsList({ kind }: { kind: 'received' | 'made' }) {
                 getRowId={(r) => r.id}
                 selectable
                 bulkActions={(selected) => <BulkPrintButton kind={isReceipt ? 'payment-received' : 'payment-made'} ids={selected.map((r) => r.id)} />}
-                initialSort={{ key: 'date', dir: 'desc' }}
+                key={isReceipt ? `${sort.key}-${sort.dir}` : 'made'}
+                initialSort={isReceipt ? sort : { key: 'date', dir: 'desc' }}
                 searchPlaceholder={`Search ${isReceipt ? 'receipt' : 'payment'} or ${party.toLowerCase()}…`}
                 dateFilter={{ getDate: (r) => r.date, value: range, onChange: setRange }}
                 // A receipt opens beside the list, as in Zoho; a payment made keeps its Apply window.
@@ -229,5 +249,77 @@ export function PaymentsList({ kind }: { kind: 'received' | 'made' }) {
         onChanged={() => void state.refetch()}
       />
     </>
+  );
+}
+
+/** Zoho's Sort by on Payments Received, in Zoho's order. */
+const RECEIVED_SORTS: { key: string; label: string }[] = [
+  { key: 'created', label: 'Created Time' }, { key: 'modified', label: 'Last Modified Time' }, { key: 'date', label: 'Date' },
+  { key: 'number', label: 'Payment #' }, { key: 'contact', label: 'Customer Name' }, { key: 'mode', label: 'Mode' },
+  { key: 'amount', label: 'Amount' }, { key: 'unapplied', label: 'Unused Amount' },
+];
+
+/**
+ * Zoho's ⋯ on Payments Received: Sort by, Import ▸ (Import Payments, Import
+ * Retainer Payments, Import Applied Excess Payments), Export ▸ (Export
+ * Payments, Export Current View), Manage Custom Fields, Online Payments,
+ * Refresh List and Reset Column Width.
+ */
+function ReceivedMenu({ sort, onSort, onRefresh, onExportView }: {
+  sort: { key: string; dir: 'asc' | 'desc' };
+  onSort: (s: { key: string; dir: 'asc' | 'desc' }) => void;
+  onRefresh: () => void;
+  onExportView: () => void;
+}) {
+  const router = useRouter();
+  const canImport = usePermission('sales', 'create');
+  const canExport = usePermission('sales', 'export');
+  const imports = useMemo(() => [
+    { slug: 'payments-received', label: 'Import Payments' },
+    { slug: 'retainer-payments', label: 'Import Retainer Payments' },
+    { slug: 'applied-excess-payments', label: 'Import Applied Excess Payments' },
+  ], []);
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger aria-label="More actions" data-slot="module-menu"
+        className="grid size-8 place-items-center rounded-[3px] border bg-background transition-colors hover:bg-accent">
+        <MoreHorizontal className="size-4" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="min-w-56">
+        <DropdownMenuSub>
+          <DropdownMenuSubTrigger data-slot="list-sort">Sort by</DropdownMenuSubTrigger>
+          <DropdownMenuSubContent className="min-w-44">
+            {RECEIVED_SORTS.map((x) => (
+              <DropdownMenuItem key={x.key} data-slot="list-sort-by" data-value={x.key}
+                onClick={() => onSort({ key: x.key, dir: sort.key === x.key && sort.dir === 'desc' ? 'asc' : 'desc' })}>
+                {x.label}{sort.key === x.key ? (sort.dir === 'asc' ? ' ↑' : ' ↓') : ''}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuSubContent>
+        </DropdownMenuSub>
+        {canImport && (
+          <DropdownMenuSub>
+            <DropdownMenuSubTrigger><Upload className="mr-2 size-4 text-primary" /> Import</DropdownMenuSubTrigger>
+            <DropdownMenuSubContent className="min-w-60">
+              {imports.map((m) => <DropdownMenuItem key={m.slug} onClick={() => router.push(`/import/${m.slug}`)} data-slot={`import-${m.slug}`}>{m.label}</DropdownMenuItem>)}
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
+        )}
+        {canExport && (
+          <DropdownMenuSub>
+            <DropdownMenuSubTrigger><Download className="mr-2 size-4 text-primary" /> Export</DropdownMenuSubTrigger>
+            <DropdownMenuSubContent>
+              <DropdownMenuItem onClick={() => router.push('/settings/export?module=payments-received')} data-slot="module-export">Export Payments</DropdownMenuItem>
+              <DropdownMenuItem onClick={onExportView} data-slot="export-view">Export Current View</DropdownMenuItem>
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
+        )}
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onClick={() => router.push('/settings?tab=custom-fields')}>Manage Custom Fields</DropdownMenuItem>
+        <DropdownMenuItem onClick={() => router.push('/sales/payments/online')} data-slot="online-payments">Online Payments</DropdownMenuItem>
+        <DropdownMenuItem onClick={onRefresh}><RefreshCw className="mr-2 size-4 text-primary" /> Refresh List</DropdownMenuItem>
+        <DropdownMenuItem onClick={() => resetColumnWidths()}>Reset Column Width</DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

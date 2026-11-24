@@ -462,7 +462,7 @@ function recordIdFrom(pathname: string, base: string): string | null {
   if (!pathname.startsWith(base + '/')) return null;
   const rest = pathname.slice(base.length + 1).split('/');
   // The list's own pages beneath it (the form, the timesheet, statements printed in bulk) are not records.
-  if (rest.length !== 1 || !rest[0] || ['new', 'timesheet', 'statements'].includes(rest[0])) return null;
+  if (rest.length !== 1 || !rest[0] || ['new', 'timesheet', 'statements', 'online'].includes(rest[0])) return null;
   return decodeURIComponent(rest[0]);
 }
 

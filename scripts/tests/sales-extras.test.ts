@@ -160,3 +160,43 @@ test('a recurring profile keeps its price list, its projects and its payment opt
     assert.equal((await verifyLedgerBalances(f.trx, f.orgId)).balanced, true);
   });
 });
+
+// ── Payments Received ⋯ → Import: retainer payments, and applied excess payments ──
+
+test('Import Retainer Payments posts each row against the retainer it names; Import Applied Excess Payments sets unused money against invoices', async () => {
+  const { runImport } = await import('../../lib/server/imports/run');
+  await withFixture(async (f) => {
+    const { trx, orgId } = f;
+    const ctx = { orgId, userId: null, branchId: f.branchId, onDuplicate: 'skip' as const };
+    const r = await createRetainerZoho(trx, orgId, null, { branchId: f.branchId, customerId: f.customerId, date: '2026-11-01', lines: [{ description: 'Advance', amountPaise: 300_000 }] });
+    const retNo = (await retainerDetail(trx, orgId, r.id)).number;
+    const out = await runImport(trx, ctx, 'retainer-payments', [
+      { date: '2026-11-02', customer: 'Bonita', retainer: retNo, amount: '1000', mode: 'upi', account: 'ICICI', reference: 'UTR1' },
+      { date: '2026-11-03', customer: 'Bonita', retainer: 'RET-NOPE', amount: '10', account: 'ICICI' },
+      { date: '2026-11-03', customer: 'Bonita', retainer: retNo, amount: '5000', account: 'ICICI' },
+    ]);
+    assert.equal(out.created, 1);
+    assert.deepEqual(out.errors.map((e) => e.row), [3, 4], 'rows counted as in the file, the heading being row 1');
+    assert.match(out.errors[0].message, /not one of theirs/);
+    assert.match(out.errors[1].message, /Only ₹2,000 is still owed/);
+    assert.equal((await retainerDetail(trx, orgId, r.id)).paidPaise, 100_000);
+    const twice = await runImport(trx, ctx, 'retainer-payments', [{ date: '2026-11-02', customer: 'Bonita', retainer: retNo, amount: '1000', account: 'ICICI' }]);
+    assert.deepEqual([twice.created, twice.skipped], [0, 1], 'the same payment imported twice is skipped');
+
+    // An advance of ₹1,500 received earlier, then an invoice: the import applies ₹1,200 of it.
+    const adv = await receivePayment(trx, orgId, null, { branchId: f.branchId, contactId: f.customerId, date: '2026-11-04', mode: 'neft', amountPaise: 150_000, bankAccountId: f.bankId, allocations: [] });
+    const inv = await createInvoice(trx, orgId, null, { branchId: f.branchId, customerId: f.customerId, date: '2026-11-05', dueDate: '2026-11-30', status: 'approved', lines: [{ itemId: null, description: 'Work', qty: 1, ratePaise: 120_000, gstRatePct: 0 }] } as never);
+    const invNo = (await trx.selectFrom('invoices').select('number').where('id', '=', Number(inv.id)).executeTakeFirstOrThrow()).number;
+    const applied = await runImport(trx, ctx, 'applied-excess-payments', [
+      { date: '2026-11-06', customer: 'Bonita', payment: adv.number, invoice: invNo, amount: '1200' },
+      { date: '2026-11-06', customer: 'Bonita', payment: adv.number, invoice: invNo, amount: '900' },
+    ]);
+    assert.equal(applied.created, 1);
+    assert.match(applied.errors[0]?.message ?? '', /Only ₹300 of .* is unused|still owed/);
+    const left = await trx.selectFrom('payments').select('unapplied_amount').where('id', '=', adv.id).executeTakeFirstOrThrow();
+    assert.equal(toPaiseFromSql(left.unapplied_amount), 30_000);
+    const paid = await trx.selectFrom('invoices').select(['status', 'amount_paid']).where('id', '=', Number(inv.id)).executeTakeFirstOrThrow();
+    assert.deepEqual([paid.status, toPaiseFromSql(paid.amount_paid)], ['paid', 120_000]);
+    assert.equal((await verifyLedgerBalances(trx, orgId)).balanced, true);
+  });
+});

@@ -23,7 +23,7 @@ import { createInvoice } from '../services/sales';
 import { createBill, createExpense } from '../services/purchases';
 import { createCreditNote, createEstimate, createSalesOrder } from '../services/sales-documents';
 import { createPurchaseOrder } from '../services/purchase-documents';
-import { makePayment, receivePayment, type PaymentMode } from '../services/payments';
+import { applyPayment, makePayment, receivePayment, type PaymentMode } from '../services/payments';
 import { toPaiseFromSql } from '../money-sql';
 import { addOpeningDocument, setAccountOpenings } from '../services/opening-balances';
 import { findBillDuplicates } from '../services/bill-duplicates';
@@ -359,8 +359,63 @@ const payment = (side: 'received' | 'made'): Handler => async (trx, ctx, l, r) =
   return 'created';
 };
 
+/** A payment against a retainer invoice: received, posted, and applied to the retainer the row names. */
+const retainerPayment: Handler = async (trx, ctx, l, r) => {
+  const contactId = party(l, r.customer, 'customer', 'Customer');
+  const number = str(r.retainer) || fail('Retainer invoice number is missing.');
+  const ret = await trx.selectFrom('retainer_invoices').select(['id', 'status', 'amount', 'amount_paid'])
+    .where('org_id', '=', ctx.orgId).where('customer_id', '=', contactId).where('number', '=', number).executeTakeFirst();
+  if (!ret || ret.status === 'void') fail(`Retainer invoice ${number} is not one of theirs.`);
+  const open = toPaiseFromSql(ret!.amount) - toPaiseFromSql(ret!.amount_paid);
+  if (open <= 0) fail(`Retainer invoice ${number} is paid already.`);
+  const amount = paise(r.amount, 'Amount') ?? fail('Amount is missing.');
+  if (amount > open) fail(`Only ₹${(open / 100).toLocaleString('en-IN')} is still owed on ${number}.`);
+  const word = str(r.mode).toLowerCase().replace(/[^a-z]/g, '');
+  const mode = (word ? (MODES as string[]).includes(word) ? word : MODE_WORDS[word] : 'neft') as PaymentMode | undefined;
+  if (!mode) fail(`Mode "${str(r.mode)}" should be one of ${MODES.join(', ')}.`);
+  const day = date(r.date, 'Date');
+  const ref = opt(r.reference);
+  const twin = await trx.selectFrom('payment_allocations as a').innerJoin('payments as p', 'p.id', 'a.payment_id')
+    .select('p.id').where('p.org_id', '=', ctx.orgId).where('a.target_type', '=', 'retainer').where('a.target_id', '=', ret!.id)
+    .where('p.payment_date', '=', day).where('p.amount', '=', toSqlFromPaise(amount as Paise)).where('p.status', '!=', 'void').executeTakeFirst();
+  if (twin) {
+    if (ctx.onDuplicate === 'skip') return 'skipped';
+    fail(`This payment on ${number} (${day}, ₹${(amount / 100).toLocaleString('en-IN')}) is already in your books.`);
+  }
+  await receivePayment(trx, ctx.orgId, ctx.userId, {
+    branchId: ctx.branchId, contactId, date: day, mode: mode!, amountPaise: amount, bankAccountId: bankOf(l, r.account, 'Deposited to').id,
+    reference: ref, allocations: [{ targetType: 'retainer', targetId: ret!.id, amountPaise: amount }], notes: opt(r.notes),
+  });
+  return 'created';
+};
+
+/** Money already received and left unused, set against an invoice: nothing new is posted for the money itself. */
+const appliedExcess: Handler = async (trx, ctx, l, r) => {
+  const contactId = party(l, r.customer, 'customer', 'Customer');
+  const payNo = str(r.payment) || fail('Payment number is missing.');
+  const invNo = str(r.invoice) || fail('Invoice number is missing.');
+  const pay = await trx.selectFrom('payments').select(['id', 'status', 'unapplied_amount'])
+    .where('org_id', '=', ctx.orgId).where('kind', '=', 'received').where('contact_id', '=', contactId).where('number', '=', payNo).executeTakeFirst();
+  if (!pay || pay.status === 'void') fail(`Payment ${payNo} is not one of theirs.`);
+  const inv = await trx.selectFrom('invoices').select(['id', 'status', 'total', 'amount_paid'])
+    .where('org_id', '=', ctx.orgId).where('customer_id', '=', contactId).where('number', '=', invNo).executeTakeFirst();
+  if (!inv || inv.status === 'void' || inv.status === 'draft') fail(`Invoice ${invNo} is not an open one of theirs.`);
+  const amount = paise(r.amount, 'Amount applied') ?? fail('Amount applied is missing.');
+  const unused = toPaiseFromSql(pay!.unapplied_amount);
+  if (unused <= 0) {
+    if (ctx.onDuplicate === 'skip') return 'skipped';
+    fail(`Nothing of ${payNo} is left unused.`);
+  }
+  if (amount > unused) fail(`Only ₹${(unused / 100).toLocaleString('en-IN')} of ${payNo} is unused.`);
+  const owing = toPaiseFromSql(inv!.total) - toPaiseFromSql(inv!.amount_paid);
+  if (amount > owing) fail(`Only ₹${(owing / 100).toLocaleString('en-IN')} is still owed on ${invNo}.`);
+  await applyPayment(trx, ctx.orgId, ctx.userId, pay!.id, { date: date(r.date, 'Date applied'), allocations: [{ targetType: 'invoice', targetId: inv!.id, amountPaise: amount }] });
+  return 'created';
+};
+
 const HANDLERS: Partial<Record<ImportKind, Handler>> = {
   contacts, items, accounts, 'opening-bills': openingBills, expenses, 'payments-received': payment('received'), 'payments-made': payment('made'),
+  'retainer-payments': retainerPayment, 'applied-excess-payments': appliedExcess,
 };
 
 // ── Grouped kinds: one document from several rows ────────────────────────────

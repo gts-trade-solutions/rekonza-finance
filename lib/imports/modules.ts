@@ -33,6 +33,8 @@ export const IMPORT_MODULES: ImportModule[] = [
   { slug: 'sales-orders', title: 'Sales Orders', noun: 'sales order', kind: 'sales-orders', back: '/sales/sales-orders', exportModule: 'sales-orders', module: 'sales', duplicates: false },
   { slug: 'invoices', title: 'Invoices', noun: 'invoice', kind: 'invoices', back: '/sales/invoices', exportModule: 'invoices', module: 'sales', duplicates: false },
   { slug: 'payments-received', title: 'Customer Payments', noun: 'payment', kind: 'payments-received', back: '/sales/payments', exportModule: 'payments-received', module: 'sales', duplicates: false },
+  { slug: 'retainer-payments', title: 'Retainer Payments', noun: 'retainer payment', kind: 'retainer-payments', back: '/sales/payments', exportModule: 'payments-received', module: 'sales', duplicates: false },
+  { slug: 'applied-excess-payments', title: 'Applied Excess Payments', noun: 'application', kind: 'applied-excess-payments', back: '/sales/payments', exportModule: null, module: 'sales', duplicates: false },
   { slug: 'credit-notes', title: 'Credit Notes', noun: 'credit note', kind: 'credit-notes', back: '/sales/credit-notes', exportModule: 'credit-notes', module: 'sales', duplicates: false },
   { slug: 'expenses', title: 'Expenses', noun: 'expense', kind: 'expenses', back: '/purchases/expenses', exportModule: 'expenses', module: 'purchases', duplicates: false },
   { slug: 'purchase-orders', title: 'Purchase Orders', noun: 'purchase order', kind: 'purchase-orders', back: '/purchases/purchase-orders', exportModule: 'purchase-orders', module: 'purchases', duplicates: false },

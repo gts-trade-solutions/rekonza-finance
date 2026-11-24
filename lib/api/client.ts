@@ -580,6 +580,8 @@ export interface PaymentListItem {
   bankChargesPaise: number;
   unappliedPaise: number;
   allocationCount: number;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface PaymentListResponse {

@@ -23,6 +23,8 @@ export const EXPORT_MODULE_FOR: Record<ImportKind, string> = {
   'opening-bills': 'opening-bills', journals: 'journals', invoices: 'invoices', bills: 'bills',
   estimates: 'estimates', 'sales-orders': 'sales-orders', 'credit-notes': 'credit-notes', 'purchase-orders': 'purchase-orders',
   expenses: 'expenses', 'payments-received': 'payments-received', 'payments-made': 'payments-made',
+  // Read from a file of their own; an export holds them inside its payments.
+  'retainer-payments': 'payments-received', 'applied-excess-payments': 'payments-received',
 };
 
 const NESTED = ['lines', 'items', 'entries', 'line_items'];
