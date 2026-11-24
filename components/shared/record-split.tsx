@@ -39,12 +39,12 @@ import { Money } from '@/components/shared/money';
 import { StatusBadge } from '@/components/shared/status-badge';
 import { InvoiceStatus } from '@/components/shared/invoice-status';
 import { usePermission } from '@/lib/store/hooks';
-import { bills, contacts, invoices, items, projects, salesDocuments, type ContactRow, type ItemRow, type SalesDocRow } from '@/lib/api/client';
+import { bills, contacts, invoices, items, payments, projects, salesDocuments, type ContactRow, type ItemRow, type SalesDocRow } from '@/lib/api/client';
 import { SALES_DOC, VIEWS, zohoDay, zohoStatus, type SalesDocKindZ } from '@/components/sales/sales-docs';
 import { useForceNavCollapsed } from '@/components/layout/nav-state';
 import { claimListSearch, releaseListSearch } from '@/components/layout/page-context';
 
-export type SplitKind = 'invoice' | 'bill' | 'customer' | 'vendor' | 'project' | 'item' | SalesDocKindZ;
+export type SplitKind = 'invoice' | 'bill' | 'customer' | 'vendor' | 'project' | 'item' | 'payment-received' | SalesDocKindZ;
 
 interface SplitRow {
   id: string;
@@ -366,6 +366,29 @@ const CONFIG: Record<SplitKind, {
   'sales-order': salesDocSplit('sales-order'),
   challan: salesDocSplit('challan'),
   'credit-note': salesDocSplit('credit-note'),
+  // Zoho's payments column (recorded 2026-11-23): the customer and amount, the
+  // payment number and date, the mode under them; the sidebar stays open.
+  'payment-received': {
+    label: 'Payments Received',
+    base: '/sales/payments',
+    newHref: '/sales/payments/new',
+    module: 'sales',
+    keepNav: true,
+    load: async () => (await payments.list({ kind: 'received', limit: 300 })).payments.map((pm): SplitRow => ({
+      id: pm.id,
+      title: pm.contactName,
+      amount: pm.amountPaise + pm.tdsPaise + pm.bankChargesPaise,
+      sub: `${pm.number} • ${day(pm.date)}`,
+      status: pm.status === 'void' ? <StatusBadge status="void" /> : <span className="text-[12px] uppercase text-muted-foreground">{pm.type === 'Customer Advance' ? 'Advance' : pm.mode}</span>,
+      search: `${pm.number} ${pm.contactName} ${pm.reference ?? ''}`.toLowerCase(),
+      raw: pm,
+    })),
+    sorts: [
+      { key: 'date', label: 'Date', value: (r: SplitRow) => (r.raw as { date: string }).date },
+      { key: 'number', label: 'Payment #', value: (r: SplitRow) => (r.raw as { number: string }).number },
+      { key: 'amount', label: 'Amount', value: (r: SplitRow) => r.amount ?? 0 },
+    ],
+  },
   project: {
     label: 'Projects',
     base: '/projects',

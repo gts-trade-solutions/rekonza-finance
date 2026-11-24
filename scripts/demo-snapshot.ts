@@ -157,6 +157,8 @@ const ROWS = [
   ...['estimate', 'sales-order', 'challan', 'credit-note', 'retainer'].map((k) => ({ api: `/api/sales-documents?kind=${k}`, screen: `/print/${k}/[id]` })),
   ...['purchase-order', 'vendor-credit'].map((k) => ({ api: `/api/purchase-documents?kind=${k}`, screen: `/print/${k}/[id]` })),
   { api: '/api/payments?kind=received&limit=500', screen: '/print/payment-received/[id]' },
+  // A payment received opens beside its list (Zoho's split view), with its receipt.
+  { api: '/api/payments?kind=received&limit=500', screen: '/sales/payments/[id]' },
   { api: '/api/payments?kind=made&limit=500', screen: '/print/payment-made/[id]' },
 ];
 

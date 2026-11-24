@@ -16,7 +16,7 @@ import 'server-only';
 
 import { sql, type Updateable } from 'kysely';
 import type { DB } from '../db-types';
-import type { Trx } from '../db';
+import type { Executor, Trx } from '../db';
 import type { Paise } from '../../types';
 import { toPaiseFromSql, toSqlFromPaise } from '../money-sql';
 import { allocateOrgNumber, postEntry, reverseEntry, type DraftLine } from '../ledger/posting';
@@ -658,7 +658,85 @@ async function paymentBlocker(trx: Trx, orgId: number, p: { id: number; number: 
   if (batch) return `${p.number} was paid in a bank payment batch. Change it there.`;
   const adjusted = await trx.selectFrom('advance_tax_adjustments').select('id').where('payment_id', '=', p.id).executeTakeFirst();
   if (adjusted) return `GST on ${p.number}, taken as an advance, has been adjusted against an invoice. Unapply it first.`;
+  if ((await paymentRefunds(trx, orgId, p.id)).length) return `Part of ${p.number} has been refunded. Delete the refund first.`;
   return null;
+}
+
+// ── Refund (Zoho's "Refund" on a payment) ─────────────────────────────────────
+
+/**
+ * Money given back from what a payment left unused: an advance returned to the
+ * customer, or one the vendor returns to us.
+ *
+ *   received:  Dr Accounts Receivable (the customer)   Cr Bank
+ *   made:      Dr Bank                                  Cr Accounts Payable (the vendor)
+ *
+ * The receipt credited the customer with all of it, the unused part included;
+ * the refund takes that unused part back out, and the payment has that much
+ * less left to apply. An advance that carried GST is not refunded here: the
+ * tax paid on it would have to come back too (a refund voucher, Rule 51), so
+ * it is refused rather than half done.
+ */
+export async function refundPayment(
+  trx: Trx,
+  orgId: number,
+  userId: number | null,
+  paymentId: number,
+  input: { date: string; amountPaise?: Paise; bankAccountId?: number | null; mode?: string | null; reference?: string | null },
+): Promise<{ journalEntryId: number; refundedPaise: Paise; unappliedPaise: Paise }> {
+  const p = await trx.selectFrom('payments')
+    .select(['id', 'number', 'kind', 'status', 'branch_id', 'contact_id', 'bank_account_id', 'unapplied_amount', 'advance_gst', 'payment_date'])
+    .where('id', '=', paymentId).where('org_id', '=', orgId).forUpdate().executeTakeFirst();
+  if (!p) throw notFound('That payment does not exist.');
+  if (p.status === 'void') throw badRequest(`${p.number} is void.`);
+  if (p.advance_gst) throw badRequest(`${p.number} is an advance that carried GST. Refund it with a refund voucher, so the GST paid on it comes back too.`);
+  const unused = toPaiseFromSql(p.unapplied_amount);
+  const amount = input.amountPaise ?? unused;
+  if (unused <= 0) throw badRequest(`Nothing of ${p.number} is left unused, so there is nothing to refund.`);
+  if (amount <= 0) throw badRequest('Enter the amount to refund.');
+  if (amount > unused) throw badRequest(`Only ${(unused / 100).toFixed(2)} of ${p.number} is unused; the rest settled documents.`);
+  if (input.date < String(p.payment_date).slice(0, 10)) throw badRequest('A refund cannot be dated before the payment it comes from.');
+  const bankId = input.bankAccountId ?? p.bank_account_id;
+  const bank = bankId ? await trx.selectFrom('bank_accounts').select(['id', 'ledger_account_id']).where('id', '=', bankId).where('org_id', '=', orgId).executeTakeFirst() : null;
+  if (!bank) throw notFound('Choose the account the refund is paid from.');
+
+  const acc = await accountIds(trx, orgId);
+  const received = p.kind === 'received';
+  const party = { accountId: requireAccount(acc, received ? CODE.AR : CODE.AP), contactId: p.contact_id };
+  const entry = await postEntry(trx, {
+    orgId, branchId: p.branch_id, date: input.date, userId, module: received ? 'sales' : 'purchases',
+    memo: `Refund from ${p.number}${input.mode ? ` by ${input.mode}` : ''}${input.reference ? ` — ${input.reference}` : ''}`,
+    sourceType: 'payment_refund', sourceId: p.id,
+    lines: received
+      ? [{ ...party, debit: amount, description: `Refund from ${p.number}` }, { accountId: bank.ledger_account_id, credit: amount }]
+      : [{ accountId: bank.ledger_account_id, debit: amount }, { ...party, credit: amount, description: `Refund from ${p.number}` }],
+  });
+  const left = unused - amount;
+  await trx.updateTable('payments').set({ unapplied_amount: toSqlFromPaise(left) }).where('id', '=', p.id).execute();
+  return { journalEntryId: entry.id, refundedPaise: amount, unappliedPaise: left };
+}
+
+/** The refunds taken from a payment and still standing (not reversed). */
+export async function paymentRefunds(trx: Executor, orgId: number, paymentId: number): Promise<{ entryId: number; date: string; amountPaise: Paise; memo: string | null }[]> {
+  const { rows } = await sql<{ id: number; entry_date: string; memo: string | null; amount: string }>`
+    SELECT je.id, je.entry_date, je.memo, je.total_debit AS amount
+      FROM journal_entries je
+     WHERE je.org_id = ${orgId} AND je.source_type = 'payment_refund' AND je.source_id = ${paymentId}
+       AND je.reversal_of_entry_id IS NULL
+       AND NOT EXISTS (SELECT 1 FROM journal_entries r WHERE r.reversal_of_entry_id = je.id)
+     ORDER BY je.entry_date, je.id`.execute(trx);
+  return rows.map((r) => ({ entryId: r.id, date: String(r.entry_date).slice(0, 10), amountPaise: toPaiseFromSql(r.amount), memo: r.memo }));
+}
+
+/** Delete a refund: its entry is reversed and the money is unused on the payment again. */
+export async function deletePaymentRefund(trx: Trx, orgId: number, userId: number | null, paymentId: number, entryId: number): Promise<{ unappliedPaise: Paise }> {
+  const refund = (await paymentRefunds(trx, orgId, paymentId)).find((r) => r.entryId === entryId);
+  if (!refund) throw notFound('That refund does not exist, or was already deleted.');
+  const p = await trx.selectFrom('payments').select(['id', 'number', 'kind', 'unapplied_amount']).where('id', '=', paymentId).forUpdate().executeTakeFirstOrThrow();
+  await reverseForChange(trx, orgId, entryId, { memo: `Refund from ${p.number} deleted`, userId, module: p.kind === 'received' ? 'sales' : 'purchases' });
+  const left = toPaiseFromSql(p.unapplied_amount) + refund.amountPaise;
+  await trx.updateTable('payments').set({ unapplied_amount: toSqlFromPaise(left) }).where('id', '=', p.id).execute();
+  return { unappliedPaise: left };
 }
 
 /** Take a payment off everything it settled and reverse its entry: the first half of an edit or a delete. */

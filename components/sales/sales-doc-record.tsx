@@ -586,7 +586,7 @@ function ShareDialog({ kind, doc, onClose }: { kind: SalesDocKindZ; doc: Editabl
 }
 
 /** Zoho's View Journal on a credit note: the entry it posted. */
-function JournalDialog({ entryId, number, onClose }: { entryId: string; number: string; onClose: () => void }) {
+export function JournalDialog({ entryId, number, onClose }: { entryId: string; number: string; onClose: () => void }) {
   const state = useApi(() => journal.list({ entryId }), [entryId]);
   const entry = state.data?.entries[0];
   return (

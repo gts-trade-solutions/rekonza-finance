@@ -570,6 +570,10 @@ export interface PaymentListItem {
   contactId: string;
   contactName: string;
   bankName: string;
+  /** Zoho's BRANCH, TYPE (Invoice Payment, Customer Advance, Retainer Payment) and INVOICE# columns. */
+  branchName?: string;
+  type?: string;
+  documentNumbers?: string[];
   reference: string | null;
   amountPaise: number;
   tdsPaise: number;
@@ -588,6 +592,10 @@ export const payments = {
   update: (id: string, input: unknown) => api.put<{ id: string; number: string; unappliedPaise: number }>(`/api/payments/${id}`, input),
   /** Zoho's Delete: what it paid is owed again. */
   remove: (id: string, reason?: string) => api.delete<{ deleted: true; number: string }>(`/api/payments/${id}${reason ? `?reason=${encodeURIComponent(reason)}` : ''}`),
+  /** Zoho's Refund: money given back from what the payment left unused. */
+  refund: (id: string, input: { date: string; amountPaise: number; bankAccountId?: string | null; mode?: string | null; reference?: string | null }) =>
+    api.post<{ journalEntryId: number; refundedPaise: number; unappliedPaise: number }>(`/api/payments/${id}`, { action: 'refund', ...input }),
+  deleteRefund: (id: string, refundId: string) => api.post<{ unappliedPaise: number }>(`/api/payments/${id}`, { action: 'delete-refund', refundId }),
   list: (params?: {
     kind?: 'received' | 'made'; from?: string; to?: string;
     contactId?: string; limit?: number; offset?: number;
@@ -628,6 +636,10 @@ export interface PaymentDetail {
   notes?: string | null;
   currency?: string;
   fcAmountPaise?: number | null;
+  bankName?: string | null;
+  /** The record's View Journal, and the refunds taken from what it left unused (Zoho's Refund). */
+  journalEntryId?: string | null;
+  refunds?: { id: string; date: string; amountPaise: number; memo: string | null }[];
   allocations: {
     id: string; targetType: string; targetId: string; number: string; amountPaise: number; appliedOn: string | null;
     foreignAmountPaise?: number | null; dueDate?: string | null;

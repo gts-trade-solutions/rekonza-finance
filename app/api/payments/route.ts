@@ -25,6 +25,7 @@ export const GET = route(
       .selectFrom('payments')
       .innerJoin('contacts', 'contacts.id', 'payments.contact_id')
       .innerJoin('bank_accounts', 'bank_accounts.id', 'payments.bank_account_id')
+      .innerJoin('branches', 'branches.id', 'payments.branch_id')
       .where('payments.org_id', '=', orgId);
 
     if (q.kind) base = base.where('payments.kind', '=', q.kind);
@@ -39,7 +40,7 @@ export const GET = route(
           'payments.mode', 'payments.amount', 'payments.tds_amount', 'payments.bank_charges',
           'payments.unapplied_amount', 'payments.reference', 'payments.status',
           'payments.contact_id', 'contacts.display_name as contact_name',
-          'bank_accounts.name as bank_name',
+          'bank_accounts.name as bank_name', 'branches.name as branch_name', 'payments.advance_gst',
         ])
         .orderBy('payments.payment_date', 'desc')
         .orderBy('payments.id', 'desc')
@@ -67,6 +68,29 @@ export const GET = route(
           .execute()
       : [];
     const allocBy = new Map(allocRows.map((a) => [a.payment_id, Number(a.n)]));
+    // Zoho's INVOICE# and TYPE columns: the documents each receipt settled, by number.
+    const settled = ids.length
+      ? await db.selectFrom('payment_allocations as pa')
+          .leftJoin('invoices as i', (j) => j.onRef('i.id', '=', 'pa.target_id').on('pa.target_type', '=', 'invoice'))
+          .leftJoin('bills as b', (j) => j.onRef('b.id', '=', 'pa.target_id').on('pa.target_type', '=', 'bill'))
+          .leftJoin('retainer_invoices as r', (j) => j.onRef('r.id', '=', 'pa.target_id').on('pa.target_type', '=', 'retainer'))
+          .select(['pa.payment_id', 'pa.target_type', 'i.number as inv', 'b.vendor_invoice_no as bill', 'b.internal_no as bill_no', 'r.number as ret'])
+          .where('pa.payment_id', 'in', ids).orderBy('pa.id').execute()
+      : [];
+    const docsBy = new Map<number, { numbers: string[]; retainer: boolean }>();
+    for (const d of settled) {
+      const e = docsBy.get(d.payment_id) ?? { numbers: [], retainer: false };
+      const n = d.inv ?? d.bill ?? d.bill_no ?? d.ret;
+      if (n) e.numbers.push(n);
+      if (d.target_type === 'retainer') e.retainer = true;
+      docsBy.set(d.payment_id, e);
+    }
+    const typeOf = (r: { id: number; advance_gst: number }) => {
+      const d = docsBy.get(r.id);
+      if (d?.retainer) return 'Retainer Payment';
+      if (!d?.numbers.length || r.advance_gst) return 'Customer Advance';
+      return 'Invoice Payment';
+    };
 
     return {
       payments: rows.map((r) => ({
@@ -79,6 +103,9 @@ export const GET = route(
         contactId: asId(r.contact_id),
         contactName: r.contact_name,
         bankName: r.bank_name,
+        branchName: r.branch_name,
+        type: typeOf(r),
+        documentNumbers: docsBy.get(r.id)?.numbers ?? [],
         reference: r.reference,
         amountPaise: toPaiseFromSql(r.amount),
         tdsPaise: toPaiseFromSql(r.tds_amount),

@@ -118,8 +118,11 @@ export function DocumentForm({
   footer,
   footerSummary,
   headerExtra,
+  tabs,
 }: {
   title: string;
+  /** Zoho's tabs in place of the title (a payment's Invoice Payment | Customer Advance). */
+  tabs?: ReactNode;
   icon?: ReactNode;
   backHref: string;
   children: ReactNode;
@@ -131,8 +134,12 @@ export function DocumentForm({
     <div className="-mx-6 -mb-6 -mt-5 flex min-h-[calc(100vh-3rem)] flex-col" data-slot="document-form">
       {/* Title band: Zoho's 65px band, its document icon and a 22px title. */}
       <div className="sticky top-0 z-20 flex h-[65px] shrink-0 items-center gap-3 border-b bg-surface px-5">
-        <span className="text-foreground [&_svg]:size-6">{icon}</span>
-        <h1 className="flex-1 truncate text-[22px] font-normal leading-tight">{title}</h1>
+        {tabs ? <div className="flex h-full flex-1 items-stretch gap-7" aria-label={title}>{tabs}</div> : (
+          <>
+            <span className="text-foreground [&_svg]:size-6">{icon}</span>
+            <h1 className="flex-1 truncate text-[22px] font-normal leading-tight">{title}</h1>
+          </>
+        )}
         {headerExtra}
         <Link
           href={backHref}
