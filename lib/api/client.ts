@@ -616,6 +616,26 @@ export const payments = {
     api.patch<{ ok: true }>('/api/payments', { action: 'void', paymentId, reason }),
 };
 
+/** A retainer invoice as Zoho's form and record have it (migration 122, /api/retainers). */
+export interface RetainerDetail {
+  id: string; number: string; status: string; date: string; branchId: string;
+  customerId: string; customerName: string; reference: string | null;
+  projectId: string | null; projectName: string | null;
+  lines: { description: string; amountPaise: number }[]; notes: string | null; terms: string | null;
+  totalPaise: number; paidPaise: number; appliedPaise: number; balancePaise: number;
+  journalEntryId: string | null; changeable: boolean;
+}
+export interface RetainerSave {
+  branchId: string; customerId: string; date: string; reference?: string | null; projectId?: string | null;
+  lines: { description: string; amountPaise: number }[]; notes?: string | null; terms?: string | null; status?: 'draft' | 'sent';
+}
+export const retainers = {
+  get: (id: string) => api.get<RetainerDetail>(`/api/retainers/${id}`),
+  create: (input: RetainerSave) => api.post<{ id: string; number: string; totalPaise: number }>('/api/retainers', input),
+  update: (id: string, input: RetainerSave) => api.put<{ id: string; number: string; totalPaise: number }>(`/api/retainers/${id}`, input),
+  remove: (id: string, reason?: string) => api.delete<{ deleted: true; number: string }>(`/api/retainers/${id}${reason ? `?reason=${encodeURIComponent(reason)}` : ''}`),
+};
+
 export interface PaymentDetail {
   id: string;
   number: string;

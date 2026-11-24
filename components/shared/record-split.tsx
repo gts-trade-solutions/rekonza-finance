@@ -44,7 +44,7 @@ import { SALES_DOC, VIEWS, zohoDay, zohoStatus, type SalesDocKindZ } from '@/com
 import { useForceNavCollapsed } from '@/components/layout/nav-state';
 import { claimListSearch, releaseListSearch } from '@/components/layout/page-context';
 
-export type SplitKind = 'invoice' | 'bill' | 'customer' | 'vendor' | 'project' | 'item' | 'payment-received' | SalesDocKindZ;
+export type SplitKind = 'invoice' | 'bill' | 'customer' | 'vendor' | 'project' | 'item' | 'payment-received' | 'retainer' | SalesDocKindZ;
 
 interface SplitRow {
   id: string;
@@ -388,6 +388,23 @@ const CONFIG: Record<SplitKind, {
       { key: 'number', label: 'Payment #', value: (r: SplitRow) => (r.raw as { number: string }).number },
       { key: 'amount', label: 'Amount', value: (r: SplitRow) => r.amount ?? 0 },
     ],
+  },
+  // Service (retainer) invoices, Zoho's column: customer and amount, number and date, status.
+  retainer: {
+    label: 'Service Invoices',
+    base: '/sales/retainers',
+    newHref: '/sales/retainers/new',
+    module: 'sales',
+    keepNav: true,
+    load: async () => (await salesDocuments.list('retainer', { limit: 300 })).documents.map((d): SplitRow => ({
+      id: d.id,
+      title: d.customerName,
+      amount: d.totalPaise,
+      sub: `${d.number} • ${day(d.date)}`,
+      status: <StatusBadge status={d.status} />,
+      search: `${d.number} ${d.customerName} ${d.reference ?? ''}`.toLowerCase(),
+      raw: d,
+    })),
   },
   project: {
     label: 'Projects',

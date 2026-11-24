@@ -159,6 +159,8 @@ const ROWS = [
   { api: '/api/payments?kind=received&limit=500', screen: '/print/payment-received/[id]' },
   // A payment received opens beside its list (Zoho's split view), with its receipt.
   { api: '/api/payments?kind=received&limit=500', screen: '/sales/payments/[id]' },
+  // A service (retainer) invoice opens beside its list; its Edit page is recorded beneath it.
+  { api: '/api/sales-documents?kind=retainer', screen: '/sales/retainers/[id]' },
   { api: '/api/payments?kind=made&limit=500', screen: '/print/payment-made/[id]' },
 ];
 

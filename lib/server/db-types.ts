@@ -2807,9 +2807,15 @@ export interface RetainerInvoices {
   description: string;
   id: Generated<number>;
   journal_entry_id: number | null;
+  /** [{ description, amountPaise }] — Zoho's DESCRIPTION | AMOUNT rows (migration 122). */
+  lines: Json | null;
+  notes: string | null;
   number: string;
   org_id: number;
+  project_id: number | null;
+  reference: string | null;
   retainer_date: ColumnType<string, string, string>;
+  terms: string | null;
   status: Generated<"applied" | "draft" | "paid" | "partially_applied" | "sent" | "void">;
   updated_at: Generated<Date>;
 }
