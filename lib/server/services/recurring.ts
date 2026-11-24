@@ -14,7 +14,9 @@ import type { Trx } from '../db';
 import { toPaiseFromSql } from '../money-sql';
 import { postEntry } from '../ledger/posting';
 import { conflict, notFound } from '../http';
-import { createInvoice, markInvoiceSent } from './sales';
+import { createInvoice, markInvoiceSent, type InvoiceLineInput } from './sales';
+import { unbilled } from './projects';
+import { createPaymentLink, gatewayStatus } from './payment-links';
 import { createBill, createExpense } from './purchases';
 
 export type Frequency = 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'yearly';
@@ -63,7 +65,8 @@ export async function runRecurringJournal(trx: Trx, orgId: number, userId: numbe
 
 export const TERM_DAYS: Record<string, number> = { due_on_receipt: 0, net_15: 15, net_30: 30, net_45: 45, net_60: 60 };
 
-export interface TemplateLine { itemId: number | null; description: string | null; qty: number; ratePaise: number; gstRatePct: number; hsnSac: string | null }
+/** A profile's line as written; the discount is kept apart from the rate, as Zoho's item table has it. */
+export interface TemplateLine { itemId: number | null; description: string | null; qty: number; ratePaise: number; gstRatePct: number; hsnSac: string | null; discountPct?: number }
 
 export async function runRecurringInvoice(trx: Trx, orgId: number, userId: number | null, id: number, date?: string) {
   const profile = await trx.selectFrom('recurring_invoices').selectAll()
@@ -79,22 +82,57 @@ export async function runRecurringInvoice(trx: Trx, orgId: number, userId: numbe
 
   // Zoho's "Create Invoices as Drafts": each invoice waits as a draft for someone to check.
   const asDraft = !!profile.create_as_draft;
+  // Zoho's "Associate Project(s) Hours": each project's billable, unbilled hours
+  // up to the invoice date go on as lines at the project's rates, and are
+  // marked billed with the invoice, so the next one does not bill them again.
+  const projectIds = (typeof profile.project_ids === 'string' ? JSON.parse(profile.project_ids) : profile.project_ids ?? []) as number[];
+  const hourLines: InvoiceLineInput[] = [];
+  const entryIds: number[] = [];
+  for (const pid of projectIds) {
+    const project = await trx.selectFrom('projects').select(['id', 'name', 'customer_id', 'gst_rate_pct', 'sac_code', 'status'])
+      .where('id', '=', Number(pid)).where('org_id', '=', orgId).executeTakeFirst();
+    if (!project || project.status !== 'active' || (project.customer_id && project.customer_id !== profile.customer_id)) continue;
+    const u = await unbilled(trx, orgId, project.id, runDate);
+    for (const t of u.time) {
+      const hours = Math.round((t.minutes / 60) * 100) / 100;
+      hourLines.push({ description: `${project.name}: ${t.label} — ${hours} h`, hsnSac: project.sac_code || null, qty: hours, uqc: 'HRS', ratePaise: t.ratePaise, gstRatePct: Number(project.gst_rate_pct) });
+      entryIds.push(...t.entryIds);
+    }
+  }
   const invoice = await createInvoice(trx, orgId, userId, {
     branchId: profile.branch_id, customerId: profile.customer_id, date: runDate, dueDate: due.toISOString().slice(0, 10),
     status: asDraft ? 'draft' : 'approved', subject: profile.profile_name, paymentTerms: profile.payment_terms,
     orderNumber: profile.order_number, salespersonId: profile.salesperson_id, notes: profile.notes, terms: profile.terms,
     sourceDocType: 'recurring', sourceDocId: id,
-    lines: template.map((l) => ({
-      itemId: l.itemId, description: l.description, hsnSac: l.hsnSac, qty: l.qty, ratePaise: l.ratePaise, gstRatePct: l.gstRatePct,
-    })),
+    lines: [
+      ...template.map((l) => ({
+        itemId: l.itemId, description: l.description, hsnSac: l.hsnSac, qty: l.qty, ratePaise: l.ratePaise, gstRatePct: l.gstRatePct, discountPct: l.discountPct ?? 0,
+      })),
+      ...hourLines,
+    ],
   });
+  if (entryIds.length) await trx.updateTable('time_entries').set({ invoice_id: invoice.id }).where('id', 'in', entryIds).execute();
+  if (projectIds.length === 1) await trx.updateTable('invoices').set({ project_id: Number(projectIds[0]) }).where('id', '=', invoice.id).execute();
   // Auto-send moves it straight to sent; otherwise it waits for a human. A draft is never sent.
   const send = !!profile.auto_send && !asDraft;
   if (send) await markInvoiceSent(trx, orgId, userId, invoice.id);
+  // Zoho's "Associate Payment Options": a payment link on each issued invoice,
+  // when online payments are connected. A link that cannot be made does not
+  // undo the invoice; why is kept on the profile for its record to show.
+  let linkNote: string | null = null;
+  let paymentLink: string | null = null;
+  if (profile.payment_link && !asDraft) {
+    try {
+      if ((await gatewayStatus(trx, orgId)).connected) paymentLink = (await createPaymentLink(trx, orgId, userId, invoice.id)).url;
+      else linkNote = 'No payment link: online payments are not connected (Settings → Integrations).';
+    } catch (e) {
+      linkNote = `No payment link on ${invoice.number}: ${e instanceof Error ? e.message : String(e)}`.slice(0, 500);
+    }
+  }
   await trx.updateTable('recurring_invoices').set({
-    last_generated_at: runDate, next_run: advancePeriod(runDate, profile.frequency as Frequency, profile.repeat_every), last_error: null,
+    last_generated_at: runDate, next_run: advancePeriod(runDate, profile.frequency as Frequency, profile.repeat_every), last_error: linkNote,
   }).where('id', '=', id).execute();
-  return { name: profile.profile_name, invoice, runDate, autoSent: send };
+  return { name: profile.profile_name, invoice, runDate, autoSent: send, hoursBilled: entryIds.length, paymentLink };
 }
 
 /** A recurring bill's line, as written on the profile. */

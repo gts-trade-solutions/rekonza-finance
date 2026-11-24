@@ -29,17 +29,20 @@ import { Money } from '@/components/shared/money';
 import { useAppStore } from '@/lib/store';
 import { localDay } from '@/lib/selectors';
 import { termsOptions, userOptions } from '@/lib/options';
-import { ApiError, invoices as invoiceApi, recurringInvoices, type RecurringProfileDetail } from '@/lib/api/client';
+import { api, ApiError, invoices as invoiceApi, recurringInvoices, type RecurringProfileDetail } from '@/lib/api/client';
+import { useApi } from '@/lib/api/use-api';
+import { MultiCombobox } from '@/components/ui/multi-combobox';
+import { listRate, type PriceListShape } from '@/lib/price-list-rate';
 import { RECURRING_FROM_FORM } from '@/lib/recurring-handoff';
 import { REPEAT_CHOICES, repeatChoice, type RepeatUnit } from '@/lib/recurring-repeat';
 import { computeLineTax, placeOfSupplyFor, resolveSupplyType } from '@/lib/tax/gst';
 import { refreshSplitList } from '@/components/shared/record-split';
 
-type SourceLine = { itemId: string | number | null; description: string | null; qty: number; ratePaise: number; gstRatePct: number; hsnSac: string | null };
+type SourceLine = { itemId: string | number | null; description: string | null; qty: number; ratePaise: number; gstRatePct: number; hsnSac: string | null; discountPct?: number };
 let n = 0;
 const toEditor = (l: SourceLine): EditorLine => ({
   ...newEditorLine(`l${n++}`), itemId: l.itemId == null ? null : String(l.itemId), description: l.description ?? '', hsnSac: l.hsnSac ?? '',
-  qty: l.qty, ratePaise: l.ratePaise, gstRatePct: l.gstRatePct,
+  qty: l.qty, ratePaise: l.ratePaise, gstRatePct: l.gstRatePct, discountPct: l.discountPct ?? 0,
 });
 const CUSTOM_UNITS: { value: RepeatUnit; label: string }[] = [
   { value: 'daily', label: 'Day(s)' }, { value: 'weekly', label: 'Week(s)' }, { value: 'monthly', label: 'Month(s)' }, { value: 'yearly', label: 'Year(s)' },
@@ -66,6 +69,30 @@ export function RecurringForm({ editing }: { editing?: RecurringProfileDetail })
   const [asDraft, setAsDraft] = useState(editing?.createAsDraft ?? false);
   const [autoSend, setAutoSend] = useState(editing?.autoSend ?? false);
   const [autoRun, setAutoRun] = useState(editing?.autoRun ?? false);
+  // Zoho's Select Price List, Associate Project(s) Hours and Associate Payment Options.
+  const [priceListId, setPriceListId] = useState(editing?.priceListId ?? '');
+  const [projectIds, setProjectIds] = useState<string[]>(editing?.projects.map((x) => x.id) ?? []);
+  const [paymentLink, setPaymentLink] = useState(editing?.paymentLink ?? false);
+  const priceLists = useApi<{ lists: PriceListShape[] }>(() => api.get('/api/price-lists'), []);
+  const projects = useApi<{ projects: { id: string; name: string }[] }>(
+    () => (customerId ? api.get('/api/projects', { customerId, status: 'active' }) : Promise.resolve({ projects: [] })), [customerId],
+  );
+  const gateway = useApi<{ connected: boolean }>(() => api.get('/api/payment-links'), []);
+  const list = (priceLists.data?.lists ?? []).find((l) => l.id === priceListId) ?? null;
+  // The list's rate (and its discount) on a line whose item was just chosen, or on every line when the list changes.
+  const priced = (l: EditorLine): EditorLine => {
+    if (!list || !l.itemId) return l;
+    const item = s.items.find((i) => i.id === l.itemId);
+    if (!item) return l;
+    const r = listRate(list, l.itemId, item.salePricePaise, l.qty);
+    return { ...l, ratePaise: r.ratePaise, discountPct: r.discountPct, discountMode: 'percent' };
+  };
+  const setLinesPriced = (next: EditorLine[]) => setLines(next.map((l) => {
+    const before = lines.find((x) => x.key === l.key);
+    return before && before.itemId === l.itemId ? l : priced(l);
+  }));
+  useEffect(() => { if (list) setLines((ls) => ls.map(priced)); }, [priceListId, priceLists.data]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (!editing || customerId !== editing.customerId) setProjectIds([]); }, [customerId]); // eslint-disable-line react-hooks/exhaustive-deps
   const [errors, setErrors] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
 
@@ -134,10 +161,11 @@ export function RecurringForm({ editing }: { editing?: RecurringProfileDetail })
       customerId, name: name.trim(), orderNumber: orderNumber || null, frequency: repeat.frequency, every: repeat.every,
       startDate, endDate: neverExpires ? null : endDate || null, paymentTerms, salespersonId: salespersonId || null,
       notes: notes || null, terms: terms || null, createAsDraft: asDraft, autoSend, autoRun,
-      // A discount is kept in the rate: the template carries the price as agreed.
+      priceListId: priceListId || null, projectIds, paymentLink,
+      // The rate and the discount kept apart, as Zoho's item table has them.
       lines: filled.map((l) => ({
         itemId: l.itemId, description: l.description || null, qty: l.qty,
-        ratePaise: Math.round(l.ratePaise * (1 - effectiveDiscountPct(l) / 100)), gstRatePct: l.gstRatePct, hsnSac: l.hsnSac || null,
+        ratePaise: l.ratePaise, discountPct: Math.round(effectiveDiscountPct(l) * 100) / 100, gstRatePct: l.gstRatePct, hsnSac: l.hsnSac || null,
       })),
     };
     try {
@@ -196,11 +224,20 @@ export function RecurringForm({ editing }: { editing?: RecurringProfileDetail })
         </FormRowPair>
         <FormRow label="Payment Terms" width="lg"><Combobox options={termsOptions()} value={paymentTerms} onChange={setPaymentTerms} showAvatar={false} /></FormRow>
         <FormRow label="Salesperson" width="lg"><Combobox options={userOptions(s)} value={salespersonId} onChange={setSalespersonId} placeholder="Select or Add Salesperson" clearable /></FormRow>
+        <FormRow label="Associate Project(s) Hours" width="lg" hint="Each project's billable hours not yet invoiced are added to every invoice this profile raises.">
+          {customerId && (projects.data?.projects.length ?? 0) > 0
+            ? <MultiCombobox options={(projects.data?.projects ?? []).map((x) => ({ value: x.id, label: x.name }))} value={projectIds} onChange={setProjectIds} placeholder="Select projects" searchPlaceholder="Search projects" data-slot="recurring-projects" />
+            : <p className="py-2 text-[13px] text-muted-foreground" data-slot="recurring-no-projects">{customerId ? 'There are no active projects for this customer.' : 'Select a customer to see their projects.'}</p>}
+        </FormRow>
+        <FormRow label="Select Price List" width="lg" hint="The rates of the items you add come from this list.">
+          <Combobox options={(priceLists.data?.lists ?? []).filter((l) => l.isActive || l.id === priceListId).map((l) => ({ value: l.id, label: l.name }))}
+            value={priceListId} onChange={setPriceListId} placeholder="Select Price List" showAvatar={false} clearable data-slot="recurring-price-list" />
+        </FormRow>
       </div>
 
       <div className="space-y-2" data-slot="recurring-items">
         <p className="text-[15px] font-medium">Item Table</p>
-        <LineItemsEditor docDate={startDate} lines={lines} onChange={setLines} supplyType={supplyType} />
+        <LineItemsEditor docDate={startDate} lines={lines} onChange={setLinesPriced} supplyType={supplyType} />
       </div>
 
       <div className="grid gap-6 lg:grid-cols-2">
@@ -224,6 +261,11 @@ export function RecurringForm({ editing }: { editing?: RecurringProfileDetail })
           Send each invoice to the customer when it is created</label>
         <label className="flex items-center gap-2"><Checkbox checked={autoRun} onCheckedChange={(v) => setAutoRun(v === true)} />
           Create each invoice on its date by itself (otherwise press Create Invoice)</label>
+        <label className="flex items-center gap-2" data-slot="recurring-payment-options">
+          <Checkbox checked={paymentLink} disabled={!gateway.data?.connected} onCheckedChange={(v) => setPaymentLink(v === true)} data-slot="recurring-payment-link" />
+          <span><span className="text-muted-foreground">Associate Payment Options : </span>add an online payment link (Razorpay) to each invoice
+            {!gateway.data?.connected && <span className="text-muted-foreground"> — connect online payments in <a href="/settings?tab=integrations" className="text-link hover:underline">Settings → Integrations</a> first</span>}</span>
+        </label>
       </div>
     </DocumentForm>
   );

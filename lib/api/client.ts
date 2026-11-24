@@ -623,6 +623,8 @@ export interface RetainerDetail {
   projectId: string | null; projectName: string | null;
   lines: { description: string; amountPaise: number }[]; notes: string | null; terms: string | null;
   totalPaise: number; paidPaise: number; appliedPaise: number; balancePaise: number;
+  refundedPaise: number; unappliedPaise: number;
+  refunds: { entryId: string; date: string; amountPaise: number; memo: string | null }[];
   journalEntryId: string | null; changeable: boolean;
 }
 export interface RetainerSave {
@@ -2136,8 +2138,11 @@ export interface RecurringProfileDetail {
   frequency: 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'yearly'; every: number; repeatLabel: string;
   startDate: string; endDate: string | null; nextRun: string | null; lastGeneratedAt: string | null;
   paymentTerms: string | null;
-  lines: { itemId: number | null; description: string | null; qty: number; ratePaise: number; gstRatePct: number; hsnSac: string | null }[];
+  lines: { itemId: number | null; description: string | null; qty: number; ratePaise: number; gstRatePct: number; hsnSac: string | null; discountPct?: number }[];
   notes: string | null; terms: string | null;
+  priceListId: string | null; priceListName: string | null;
+  projects: { id: string; name: string }[];
+  paymentLink: boolean;
   createAsDraft: boolean; autoSend: boolean; autoRun: boolean; isActive: boolean; lastError: string | null;
   status: 'active' | 'stopped' | 'expired';
   amountPaise: number; remainingCycles: number | null;

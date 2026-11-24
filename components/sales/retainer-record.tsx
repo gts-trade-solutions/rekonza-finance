@@ -2,7 +2,7 @@
 
 // One retainer invoice, beside its list in Zoho Books' split view (recorded
 // from Zoho's demo on 2026-11-23): the bar Edit · Send Email · PDF/Print ▾ ·
-// Apply to Invoices · ⋯ (Clone, Delete, View Journal), and the retainer as it
+// Apply to Invoices · ⋯ (Clone, Refund, Delete, View Journal), and the retainer as it
 // prints. Before it is paid the bar offers Record Payment where Zoho's Apply
 // to Invoices stands: the receipt settles the retainer, and only money that
 // has arrived can then be applied to an invoice (services/sales-documents.ts
@@ -55,9 +55,10 @@ function Record({ r, printDoc, reload }: { r: RetainerDetail; printDoc: PrintDoc
   const canEdit = usePermission('sales', 'edit');
   const canVoid = usePermission('sales', 'void');
   const send = useDocumentActions('retainer', r.id, reload);
-  const [dialog, setDialog] = useState<null | 'apply' | 'pay' | 'delete' | 'journal'>(null);
+  const [dialog, setDialog] = useState<null | 'apply' | 'pay' | 'delete' | 'journal' | 'refund'>(null);
   const live = r.status !== 'void';
-  const spendable = r.paidPaise - r.appliedPaise;
+  // Paid, and neither applied to an invoice nor refunded: what can still be applied, or paid back.
+  const spendable = r.unappliedPaise ?? r.paidPaise - r.appliedPaise;
 
   const actions = (
     <>
@@ -86,6 +87,7 @@ function Record({ r, printDoc, reload }: { r: RetainerDetail; printDoc: PrintDoc
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="min-w-44">
           {canCreate && <DropdownMenuItem onClick={() => router.push(`/sales/retainers/new?clone=${r.id}`)} data-slot="retainer-clone">Clone</DropdownMenuItem>}
+          {canCreate && live && spendable > 0 && <DropdownMenuItem onClick={() => setDialog('refund')} data-slot="retainer-refund">Refund</DropdownMenuItem>}
           {r.journalEntryId && <DropdownMenuItem onClick={() => setDialog('journal')} data-slot="retainer-journal">View Journal</DropdownMenuItem>}
           {canVoid && r.changeable && (
             <>
@@ -105,6 +107,7 @@ function Record({ r, printDoc, reload }: { r: RetainerDetail; printDoc: PrintDoc
         <span>Amount <Money value={r.totalPaise} className="font-medium" /></span>
         <span>Received <Money value={r.paidPaise} className="font-medium" /></span>
         <span>Applied to invoices <Money value={r.appliedPaise} className="font-medium" /></span>
+        {r.refundedPaise > 0 && <span>Refunded <Money value={r.refundedPaise} className="font-medium" /></span>}
         {r.projectName && <span>Project <span className="font-medium">{r.projectName}</span></span>}
         {r.reference && <span>Reference# <span className="font-medium">{r.reference}</span></span>}
       </Card>
@@ -114,6 +117,9 @@ function Record({ r, printDoc, reload }: { r: RetainerDetail; printDoc: PrintDoc
         </div>
       </Card>
 
+      {r.refunds.length > 0 && <RefundHistory r={r} reload={reload} />}
+
+      {dialog === 'refund' && <RefundDialog r={r} available={spendable} onClose={() => setDialog(null)} onDone={() => { setDialog(null); reload(); }} />}
       {dialog === 'apply' && <ApplyDialog r={r} onClose={() => setDialog(null)} onDone={() => { setDialog(null); reload(); }} />}
       {dialog === 'pay' && <PayDialog r={r} onClose={() => setDialog(null)} onDone={() => { setDialog(null); reload(); }} />}
       {dialog === 'journal' && r.journalEntryId && <JournalDialog entryId={r.journalEntryId} number={r.number} onClose={() => setDialog(null)} />}
@@ -245,5 +251,82 @@ function DeleteDialog({ r, onClose, onDone }: { r: RetainerDetail; onClose: () =
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/** Zoho's ⋯ → Refund: what was paid and not applied, paid back from a bank or cash account. */
+function RefundDialog({ r, available, onClose, onDone }: { r: RetainerDetail; available: number; onClose: () => void; onDone: () => void }) {
+  const masters = useApi<{ bankAccounts: { id: string; name: string; kind: string }[] }>(() => api.get('/api/masters'), []);
+  const [amount, setAmount] = useState(available);
+  const [date, setDate] = useState(localDay(new Date()));
+  const [mode, setMode] = useState('neft');
+  const [bankId, setBankId] = useState('');
+  const [reference, setReference] = useState('');
+  const [busy, setBusy] = useState(false);
+  const banks = (masters.data?.bankAccounts ?? []).filter((b) => b.kind !== 'card');
+  const go = async () => {
+    setBusy(true);
+    try {
+      await api.post(`/api/retainers/${r.id}`, { action: 'refund', date, amountPaise: amount, bankAccountId: bankId || banks[0]?.id, mode, reference: reference || undefined });
+      toast.success('Refund recorded', { description: `${(amount / 100).toFixed(2)} paid back to ${r.customerName}.` });
+      onDone();
+    } catch (e) {
+      toast.error('Not refunded', { description: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Dialog open onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="sm:max-w-md" data-slot="retainer-refund-dialog">
+        <DialogHeader>
+          <DialogTitle>Refund {r.number}</DialogTitle>
+          <DialogDescription>{r.customerName} · {(available / 100).toLocaleString('en-IN', { minimumFractionDigits: 2 })} paid and not applied to an invoice</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3 text-[13px]">
+          <label className="block space-y-1"><span className="text-muted-foreground">Amount*</span><MoneyInput valuePaise={amount} onChangePaise={setAmount} /></label>
+          <label className="block space-y-1"><span className="text-muted-foreground">Refunded On*</span><Input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></label>
+          <label className="block space-y-1"><span className="text-muted-foreground">Payment Mode</span>
+            <Combobox options={['cash', 'neft', 'upi', 'imps', 'cheque', 'card'].map((m) => ({ value: m, label: m.toUpperCase() }))} value={mode} onChange={setMode} showAvatar={false} /></label>
+          <label className="block space-y-1"><span className="text-muted-foreground">From Account*</span>
+            <Combobox options={banks.map((b) => ({ value: b.id, label: b.name, sublabel: b.kind }))} value={bankId || banks[0]?.id || ''} onChange={setBankId} placeholder="Select an account" /></label>
+          <label className="block space-y-1"><span className="text-muted-foreground">Reference#</span><Input value={reference} onChange={(e) => setReference(e.target.value)} /></label>
+        </div>
+        <DialogFooter>
+          <Button onClick={() => void go()} disabled={busy || amount <= 0 || amount > available || !(bankId || banks[0])} data-slot="retainer-refund-save">{busy && <Loader2 className="size-3.5 animate-spin" />} Save</Button>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** Refund History, as Zoho lists it under the record; a refund can be deleted (reversed). */
+function RefundHistory({ r, reload }: { r: RetainerDetail; reload: () => void }) {
+  const canVoid = usePermission('sales', 'void');
+  const remove = async (entryId: string) => {
+    if (!window.confirm('Delete this refund? Its entry is reversed and the money is back on the retainer to apply.')) return;
+    try {
+      await api.post(`/api/retainers/${r.id}`, { action: 'delete_refund', entryId });
+      toast.success('Refund deleted');
+      reload();
+    } catch (e) {
+      toast.error('Not deleted', { description: e instanceof Error ? e.message : String(e) });
+    }
+  };
+  return (
+    <Card className="p-0" data-slot="retainer-refunds">
+      <p className="border-b px-5 py-3 text-[13px] font-medium">Refund History</p>
+      <div className="divide-y text-[13px]">
+        {r.refunds.map((x) => (
+          <div key={x.entryId} className="flex items-center gap-4 px-5 py-2.5">
+            <span className="w-28 text-muted-foreground">{new Date(`${x.date}T00:00:00`).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</span>
+            <span className="min-w-0 flex-1 truncate text-muted-foreground">{x.memo}</span>
+            <Money value={x.amountPaise} className="font-medium" />
+            {canVoid && <button type="button" className="text-destructive hover:underline" onClick={() => void remove(x.entryId)} data-slot="retainer-refund-delete">Delete</button>}
+          </div>
+        ))}
+      </div>
+    </Card>
   );
 }

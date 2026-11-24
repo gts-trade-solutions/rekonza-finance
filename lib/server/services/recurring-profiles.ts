@@ -36,6 +36,12 @@ export interface ProfileInput {
   lines: TemplateLine[];
   notes?: string | null;
   terms?: string | null;
+  /** Zoho's Select Price List: the list the rates were taken from (the rates themselves are on the lines). */
+  priceListId?: number | null;
+  /** Zoho's Associate Project(s) Hours: projects whose unbilled hours go on each invoice. */
+  projectIds?: number[];
+  /** Zoho's Associate Payment Options: a payment link on each issued invoice. */
+  paymentLink?: boolean;
   createAsDraft?: boolean;
   autoSend?: boolean;
   autoRun?: boolean;
@@ -51,6 +57,17 @@ export async function checkProfile(ex: Executor, orgId: number, input: ProfileIn
   if (input.lines.some((l) => !(l.qty > 0))) throw badRequest('Enter a quantity above zero on every line.');
   const c = await ex.selectFrom('contacts').select('id').where('id', '=', input.customerId).where('org_id', '=', orgId).executeTakeFirst();
   if (!c) throw badRequest('That customer does not exist.');
+  if (input.lines.some((l) => (l.discountPct ?? 0) < 0 || (l.discountPct ?? 0) > 100)) throw badRequest('A discount is 0% to 100%.');
+  if (input.priceListId) {
+    const pl = await ex.selectFrom('price_lists').select(['id', 'is_active']).where('id', '=', input.priceListId).where('org_id', '=', orgId).executeTakeFirst();
+    if (!pl) throw badRequest('That price list does not exist.');
+    if (!pl.is_active) throw badRequest('That price list is inactive.');
+  }
+  for (const pid of input.projectIds ?? []) {
+    const p = await ex.selectFrom('projects').select(['id', 'customer_id', 'name']).where('id', '=', pid).where('org_id', '=', orgId).executeTakeFirst();
+    if (!p) throw badRequest('One of the projects does not exist.');
+    if (p.customer_id && p.customer_id !== input.customerId) throw badRequest(`${p.name} is another customer's project.`);
+  }
 }
 
 const values = (input: ProfileInput) => ({
@@ -67,6 +84,9 @@ const values = (input: ProfileInput) => ({
   template: JSON.stringify(input.lines),
   notes: input.notes?.trim() || null,
   terms: input.terms?.trim() || null,
+  price_list_id: input.priceListId ?? null,
+  project_ids: input.projectIds?.length ? JSON.stringify([...new Set(input.projectIds)]) : null,
+  payment_link: input.paymentLink ? 1 : 0,
   create_as_draft: input.createAsDraft ? 1 : 0,
   auto_send: input.autoSend ? 1 : 0,
 });
@@ -101,6 +121,9 @@ export interface ProfileDetail {
   frequency: Frequency; every: number; repeatLabel: string;
   startDate: string; endDate: string | null; nextRun: string | null; lastGeneratedAt: string | null;
   paymentTerms: string | null; lines: TemplateLine[]; notes: string | null; terms: string | null;
+  priceListId: string | null; priceListName: string | null;
+  projects: { id: string; name: string }[];
+  paymentLink: boolean;
   createAsDraft: boolean; autoSend: boolean; autoRun: boolean; isActive: boolean; lastError: string | null;
   /** Zoho's Profile Status: Active, Stopped or Expired. */
   status: 'active' | 'stopped' | 'expired';
@@ -118,7 +141,7 @@ export async function profileDetail(ex: Executor, orgId: number, id: number, tod
     .leftJoin('users as u', 'u.id', 'r.salesperson_id')
     .select(['r.id', 'r.profile_name', 'r.order_number', 'r.branch_id', 'r.customer_id', 'c.display_name', 'c.email', 'r.salesperson_id', 'u.name as salesperson',
       'r.frequency', 'r.repeat_every', 'r.start_date', 'r.end_date', 'r.next_run', 'r.last_generated_at', 'r.payment_terms', 'r.template',
-      'r.notes', 'r.terms', 'r.create_as_draft', 'r.auto_send', 'r.auto_run', 'r.is_active', 'r.last_error'])
+      'r.notes', 'r.terms', 'r.create_as_draft', 'r.auto_send', 'r.auto_run', 'r.is_active', 'r.last_error', 'r.price_list_id', 'r.project_ids', 'r.payment_link'])
     .where('r.id', '=', id).where('r.org_id', '=', orgId).executeTakeFirst();
   if (!p) throw notFound('That recurring invoice does not exist.');
   const lines = (typeof p.template === 'string' ? JSON.parse(p.template) : p.template) as TemplateLine[];
@@ -135,8 +158,16 @@ export async function profileDetail(ex: Executor, orgId: number, id: number, tod
   const invoices = await ex.selectFrom('invoices').select(['id', 'number', 'invoice_date', 'status', 'total', 'amount_paid'])
     .where('org_id', '=', orgId).where(sql<boolean>`source_doc_type = 'recurring'`).where(sql<boolean>`source_doc_id = ${id}`)
     .orderBy('invoice_date', 'desc').orderBy('id', 'desc').limit(100).execute();
-  const taxable = lines.reduce((t, l) => t + Math.round(l.ratePaise * l.qty), 0);
-  const tax = lines.reduce((t, l) => t + Math.round((Math.round(l.ratePaise * l.qty) * l.gstRatePct) / 100), 0);
+  const net = (l: TemplateLine) => Math.round(l.ratePaise * l.qty * (1 - (l.discountPct ?? 0) / 100));
+  const taxable = lines.reduce((t, l) => t + net(l), 0);
+  const tax = lines.reduce((t, l) => t + Math.round((net(l) * l.gstRatePct) / 100), 0);
+  const projectIds = (typeof p.project_ids === 'string' ? JSON.parse(p.project_ids) : p.project_ids ?? []) as number[];
+  const projects = projectIds.length
+    ? await ex.selectFrom('projects').select(['id', 'name']).where('org_id', '=', orgId).where('id', 'in', projectIds.map(Number)).execute()
+    : [];
+  const priceList = p.price_list_id
+    ? await ex.selectFrom('price_lists').select(['id', 'name']).where('id', '=', p.price_list_id).where('org_id', '=', orgId).executeTakeFirst()
+    : undefined;
   const children = invoices.map((i) => ({
     id: String(i.id), number: i.number, date: String(i.invoice_date).slice(0, 10), status: i.status,
     totalPaise: toPaiseFromSql(i.total), balancePaise: toPaiseFromSql(i.total) - toPaiseFromSql(i.amount_paid),
@@ -153,6 +184,9 @@ export async function profileDetail(ex: Executor, orgId: number, id: number, tod
     startDate: String(p.start_date).slice(0, 10), endDate: end, nextRun: expired ? null : next,
     lastGeneratedAt: p.last_generated_at ? String(p.last_generated_at).slice(0, 10) : null,
     paymentTerms: p.payment_terms ?? null, lines, notes: p.notes ?? null, terms: p.terms ?? null,
+    priceListId: priceList ? String(priceList.id) : null, priceListName: priceList?.name ?? null,
+    projects: projects.map((x) => ({ id: String(x.id), name: x.name })),
+    paymentLink: !!p.payment_link,
     createAsDraft: !!p.create_as_draft, autoSend: !!p.auto_send, autoRun: !!p.auto_run, isActive: !!p.is_active, lastError: p.last_error ?? null,
     status: expired ? 'expired' : p.is_active ? 'active' : 'stopped',
     amountPaise: taxable + tax,
