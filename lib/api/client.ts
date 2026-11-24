@@ -2122,11 +2122,36 @@ export interface RecurringInvoiceRow {
   taxablePaise: number;
   totalPaise: number;
   isDue: boolean;
+  /** Zoho's FREQUENCY and STATUS (migration 123). */
+  every?: number;
+  repeatLabel?: string;
+  status?: 'active' | 'stopped' | 'expired';
+}
+
+/** One profile as its record and Edit form have it (/api/recurring-invoices/[id]). */
+export interface RecurringProfileDetail {
+  id: string; name: string; orderNumber: string | null; branchId: string;
+  customerId: string; customerName: string; customerEmail: string | null;
+  salespersonId: string | null; salespersonName: string | null;
+  frequency: 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'yearly'; every: number; repeatLabel: string;
+  startDate: string; endDate: string | null; nextRun: string | null; lastGeneratedAt: string | null;
+  paymentTerms: string | null;
+  lines: { itemId: number | null; description: string | null; qty: number; ratePaise: number; gstRatePct: number; hsnSac: string | null }[];
+  notes: string | null; terms: string | null;
+  createAsDraft: boolean; autoSend: boolean; autoRun: boolean; isActive: boolean; lastError: string | null;
+  status: 'active' | 'stopped' | 'expired';
+  amountPaise: number; remainingCycles: number | null;
+  invoices: { id: string; number: string; date: string; status: string; totalPaise: number; balancePaise: number }[];
+  unpaidPaise: number;
+  activities: { at: string; actor: string | null; action: string; detail: string | null }[];
 }
 
 export const recurringInvoices = {
   list: () => api.get<{ profiles: RecurringInvoiceRow[] }>('/api/recurring-invoices'),
   create: (input: unknown) => api.post<{ id: string; name: string }>('/api/recurring-invoices', input),
+  get: (id: string) => api.get<RecurringProfileDetail>(`/api/recurring-invoices/${id}`),
+  /** Zoho's Edit: the profile's terms change from the next invoice on. */
+  update: (id: string, input: unknown) => api.put<{ id: string }>(`/api/recurring-invoices/${id}`, input),
   run: (id: string, date?: string) =>
     api.patch<{ id: string; invoiceId: string; number: string; totalPaise: number; autoSent: boolean }>(
       '/api/recurring-invoices',

@@ -2666,20 +2666,26 @@ export interface RecurringInvoices {
   auto_run: Generated<number>;
   auto_send: Generated<number>;
   branch_id: number;
+  create_as_draft: Generated<number>;
   created_at: Generated<Date>;
   customer_id: number;
   end_date: ColumnType<string | null, string | null, string | null>;
-  frequency: Generated<"monthly" | "quarterly" | "weekly" | "yearly">;
+  frequency: Generated<"daily" | "monthly" | "quarterly" | "weekly" | "yearly">;
   id: Generated<number>;
   is_active: Generated<number>;
   last_error: string | null;
   last_generated_at: ColumnType<string | null, string | null, string | null>;
   next_run: ColumnType<string, string, string>;
+  notes: string | null;
+  order_number: string | null;
   org_id: number;
   payment_terms: string | null;
   profile_name: string;
+  repeat_every: Generated<number>;
+  salesperson_id: number | null;
   start_date: ColumnType<string, string, string>;
   template: Json;
+  terms: string | null;
   updated_at: Generated<Date>;
 }
 

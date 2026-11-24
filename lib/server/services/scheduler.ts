@@ -67,7 +67,11 @@ export async function runScheduledPostings(opts: { now?: Date; trx?: Trx; orgId?
     for (const p of await due.execute()) {
       const next = String(p.next_run).slice(0, 10);
       if (p.end_date && next > String(p.end_date).slice(0, 10)) continue;
-      if (advancePeriod(next, p.frequency as Frequency) <= today) {
+      // A recurring invoice may repeat every N periods (migration 123): "behind" is more than one of its runs.
+      const every = table === 'recurring_invoices'
+        ? Number((await ex.selectFrom('recurring_invoices').select('repeat_every').where('id', '=', p.id).executeTakeFirst())?.repeat_every ?? 1)
+        : 1;
+      if (advancePeriod(next, p.frequency as Frequency, every) <= today) {
         result.behind++;
         const note = `Missed the run due ${next}, and more since. Run the missed periods by hand; the scheduler carries on from the current one.`;
         if (p.last_error !== note) await ex.updateTable(table).set({ last_error: note }).where('id', '=', p.id).execute();

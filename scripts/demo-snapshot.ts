@@ -161,6 +161,8 @@ const ROWS = [
   { api: '/api/payments?kind=received&limit=500', screen: '/sales/payments/[id]' },
   // A service (retainer) invoice opens beside its list; its Edit page is recorded beneath it.
   { api: '/api/sales-documents?kind=retainer', screen: '/sales/retainers/[id]' },
+  // A recurring invoice profile opens beside its list; its Edit page is recorded beneath it.
+  { api: '/api/recurring-invoices', screen: '/sales/recurring/[id]' },
   { api: '/api/payments?kind=made&limit=500', screen: '/print/payment-made/[id]' },
 ];
 

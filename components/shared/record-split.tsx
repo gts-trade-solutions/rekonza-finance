@@ -39,12 +39,12 @@ import { Money } from '@/components/shared/money';
 import { StatusBadge } from '@/components/shared/status-badge';
 import { InvoiceStatus } from '@/components/shared/invoice-status';
 import { usePermission } from '@/lib/store/hooks';
-import { bills, contacts, invoices, items, payments, projects, salesDocuments, type ContactRow, type ItemRow, type SalesDocRow } from '@/lib/api/client';
+import { bills, contacts, invoices, items, payments, projects, recurringInvoices, salesDocuments, type ContactRow, type ItemRow, type SalesDocRow } from '@/lib/api/client';
 import { SALES_DOC, VIEWS, zohoDay, zohoStatus, type SalesDocKindZ } from '@/components/sales/sales-docs';
 import { useForceNavCollapsed } from '@/components/layout/nav-state';
 import { claimListSearch, releaseListSearch } from '@/components/layout/page-context';
 
-export type SplitKind = 'invoice' | 'bill' | 'customer' | 'vendor' | 'project' | 'item' | 'payment-received' | 'retainer' | SalesDocKindZ;
+export type SplitKind = 'invoice' | 'bill' | 'customer' | 'vendor' | 'project' | 'item' | 'payment-received' | 'retainer' | 'recurring-invoice' | SalesDocKindZ;
 
 interface SplitRow {
   id: string;
@@ -404,6 +404,24 @@ const CONFIG: Record<SplitKind, {
       status: <StatusBadge status={d.status} />,
       search: `${d.number} ${d.customerName} ${d.reference ?? ''}`.toLowerCase(),
       raw: d,
+    })),
+  },
+  // Zoho's recurring column: the customer and amount, the profile name and its
+  // terms, the status and the next invoice date.
+  'recurring-invoice': {
+    label: 'Recurring Invoices',
+    base: '/sales/recurring',
+    newHref: '/sales/recurring/new',
+    module: 'sales',
+    keepNav: true,
+    load: async () => (await recurringInvoices.list()).profiles.map((r): SplitRow => ({
+      id: r.id,
+      title: r.customerName,
+      amount: r.totalPaise,
+      sub: `${r.name} • ${r.repeatLabel ?? r.frequency}`,
+      status: <span className="flex items-center gap-2"><StatusBadge status={r.status ?? (r.isActive ? 'active' : 'stopped')} />{r.status === 'active' && <span className="text-[12px] text-muted-foreground">Next Invoice on {day(r.nextRun)}</span>}</span>,
+      search: `${r.name} ${r.customerName}`.toLowerCase(),
+      raw: r,
     })),
   },
   project: {

@@ -17,17 +17,22 @@ import { conflict, notFound } from '../http';
 import { createInvoice, markInvoiceSent } from './sales';
 import { createBill, createExpense } from './purchases';
 
-export type Frequency = 'weekly' | 'monthly' | 'quarterly' | 'yearly';
+export type Frequency = 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'yearly';
 
-/** Move a date forward one period. 31 Jan rolls to 28 or 29 Feb, never into March. */
-export function advancePeriod(date: string, frequency: Frequency): string {
+/**
+ * Move a date forward `every` periods (Zoho's "Repeat Every": 2 Weeks, 6
+ * Months, 3 Years …). 31 Jan rolls to 28 or 29 Feb, never into March.
+ */
+export function advancePeriod(date: string, frequency: Frequency, every = 1): string {
+  const n = Math.max(1, Math.floor(every) || 1);
   const d = new Date(`${date}T00:00:00Z`);
   const day = d.getUTCDate();
-  if (frequency === 'weekly') d.setUTCDate(day + 7);
-  else if (frequency === 'monthly') d.setUTCMonth(d.getUTCMonth() + 1);
-  else if (frequency === 'quarterly') d.setUTCMonth(d.getUTCMonth() + 3);
-  else d.setUTCFullYear(d.getUTCFullYear() + 1);
-  if (frequency !== 'weekly' && d.getUTCDate() !== day) d.setUTCDate(0);
+  if (frequency === 'daily') d.setUTCDate(day + n);
+  else if (frequency === 'weekly') d.setUTCDate(day + 7 * n);
+  else if (frequency === 'monthly') d.setUTCMonth(d.getUTCMonth() + n);
+  else if (frequency === 'quarterly') d.setUTCMonth(d.getUTCMonth() + 3 * n);
+  else d.setUTCFullYear(d.getUTCFullYear() + n);
+  if (frequency !== 'weekly' && frequency !== 'daily' && d.getUTCDate() !== day) d.setUTCDate(0);
   return d.toISOString().slice(0, 10);
 }
 
@@ -72,20 +77,24 @@ export async function runRecurringInvoice(trx: Trx, orgId: number, userId: numbe
   const due = new Date(`${runDate}T00:00:00Z`);
   due.setUTCDate(due.getUTCDate() + (TERM_DAYS[profile.payment_terms ?? 'net_30'] ?? 30));
 
+  // Zoho's "Create Invoices as Drafts": each invoice waits as a draft for someone to check.
+  const asDraft = !!profile.create_as_draft;
   const invoice = await createInvoice(trx, orgId, userId, {
     branchId: profile.branch_id, customerId: profile.customer_id, date: runDate, dueDate: due.toISOString().slice(0, 10),
-    status: 'approved', subject: profile.profile_name, paymentTerms: profile.payment_terms,
+    status: asDraft ? 'draft' : 'approved', subject: profile.profile_name, paymentTerms: profile.payment_terms,
+    orderNumber: profile.order_number, salespersonId: profile.salesperson_id, notes: profile.notes, terms: profile.terms,
     sourceDocType: 'recurring', sourceDocId: id,
     lines: template.map((l) => ({
       itemId: l.itemId, description: l.description, hsnSac: l.hsnSac, qty: l.qty, ratePaise: l.ratePaise, gstRatePct: l.gstRatePct,
     })),
   });
-  // Auto-send moves it straight to sent; otherwise it waits for a human.
-  if (profile.auto_send) await markInvoiceSent(trx, orgId, userId, invoice.id);
+  // Auto-send moves it straight to sent; otherwise it waits for a human. A draft is never sent.
+  const send = !!profile.auto_send && !asDraft;
+  if (send) await markInvoiceSent(trx, orgId, userId, invoice.id);
   await trx.updateTable('recurring_invoices').set({
-    last_generated_at: runDate, next_run: advancePeriod(runDate, profile.frequency as Frequency), last_error: null,
+    last_generated_at: runDate, next_run: advancePeriod(runDate, profile.frequency as Frequency, profile.repeat_every), last_error: null,
   }).where('id', '=', id).execute();
-  return { name: profile.profile_name, invoice, runDate, autoSent: !!profile.auto_send };
+  return { name: profile.profile_name, invoice, runDate, autoSent: send };
 }
 
 /** A recurring bill's line, as written on the profile. */
