@@ -30,6 +30,7 @@ import type { Paise } from '../../types';
 import { toPaiseFromSql } from '../money-sql';
 import { b2clThreshold, monthRange } from './returns';
 import { advancesForMonth, type AdvanceRow } from './advances';
+import { reverseChargeTax } from '../../tax/reverse-charge';
 
 /** From the May 2025 period the HSN table has a B2B part and a B2C part. */
 const HSN_SPLIT_FROM = '2025-05';
@@ -71,6 +72,8 @@ interface DocHead {
   totalPaise: Paise;
   /** An invoice, or a debit note kept with them (it is reported as a note). */
   kind?: 'invoice' | 'debit_note';
+  /** Under reverse charge (an invoice, or a credit note against one): rchrg Y and the tax the recipient owes. */
+  reverseCharge?: boolean;
   /** Notes only: the invoice it was raised against. */
   againstTotalPaise?: Paise | null;
   againstDate?: string | null;
@@ -161,10 +164,10 @@ export async function gstr1PortalFile(
     id: number; number: string; invoice_date: string; status: string; gstin: string | null;
     place_of_supply: string; supply_type: string; total: string; branch_state: string;
     sb_no: string | null; sb_date: string | null; sb_port: string | null;
-    doc_kind: 'invoice' | 'debit_note';
+    doc_kind: 'invoice' | 'debit_note'; reverse_charge: number;
     against_total: string | null; against_date: string | null; against_supply_type: string | null;
   }>`
-    SELECT i.id, i.number, i.invoice_date, i.status, NULLIF(c.gstin, '') AS gstin,
+    SELECT i.id, i.number, i.invoice_date, i.status, NULLIF(c.gstin, '') AS gstin, i.reverse_charge,
            i.place_of_supply, i.supply_type, i.total, b.state_code AS branch_state,
            i.export_shipping_bill_no AS sb_no, i.export_shipping_bill_date AS sb_date, i.export_port_code AS sb_port,
            i.doc_kind, o.total AS against_total, o.invoice_date AS against_date, o.supply_type AS against_supply_type
@@ -200,15 +203,17 @@ export async function gstr1PortalFile(
     id: number; number: string; note_date: string; status: string; gstin: string | null;
     place_of_supply: string; supply_type: string; total: string; branch_state: string;
     against_total: string | null; against_date: string | null; against_supply_type: string | null;
+    against_rc: number | null;
   }>`
     SELECT n.id, n.number, n.note_date, n.status, NULLIF(c.gstin, '') AS gstin,
            n.place_of_supply, n.supply_type, n.total, b.state_code AS branch_state,
-           i.total AS against_total, i.invoice_date AS against_date, i.supply_type AS against_supply_type
+           i.total AS against_total, i.invoice_date AS against_date, i.supply_type AS against_supply_type,
+           i.reverse_charge AS against_rc
       FROM credit_notes n
       JOIN contacts c ON c.id = n.customer_id
       JOIN branches b ON b.id = n.branch_id
       LEFT JOIN invoices i ON i.id = n.against_invoice_id
-     WHERE n.org_id = ${orgId}
+     WHERE n.org_id = ${orgId} AND n.status <> 'draft'
        AND n.note_date BETWEEN ${period.from} AND ${period.to}
        ${branchFilter('n')}
      ORDER BY n.note_date, n.id
@@ -224,7 +229,7 @@ export async function gstr1PortalFile(
       FROM credit_note_lines l
       JOIN credit_notes n ON n.id = l.credit_note_id
       LEFT JOIN items it ON it.id = l.item_id
-     WHERE n.org_id = ${orgId} AND n.status <> 'void'
+     WHERE n.org_id = ${orgId} AND n.status NOT IN ('void', 'draft')
        AND n.note_date BETWEEN ${period.from} AND ${period.to}
        ${branchFilter('n')}
      GROUP BY l.credit_note_id, l.gst_rate_pct, COALESCE(it.tax_pref, 'taxable')
@@ -254,6 +259,7 @@ export async function gstr1PortalFile(
     gstin: r.gstin, pos: r.place_of_supply, branchState: r.branch_state, supplyType: r.supply_type,
     totalPaise: toPaiseFromSql(r.total),
     kind: r.doc_kind,
+    reverseCharge: Number(r.reverse_charge) === 1,
     againstTotalPaise: r.against_total == null ? null : toPaiseFromSql(r.against_total),
     againstDate: r.against_date == null ? null : String(r.against_date).slice(0, 10),
     againstSupplyType: r.against_supply_type,
@@ -271,6 +277,8 @@ export async function gstr1PortalFile(
     againstTotalPaise: r.against_total == null ? null : toPaiseFromSql(r.against_total),
     againstDate: r.against_date == null ? null : String(r.against_date).slice(0, 10),
     againstSupplyType: r.against_supply_type,
+    // A note against a reverse-charge invoice is reported as the invoice was: rchrg Y.
+    reverseCharge: Number(r.against_rc ?? 0) === 1,
   }));
 
   // ── Sort every line into its table ────────────────────────────────────────
@@ -310,7 +318,15 @@ export async function gstr1PortalFile(
       case 'sez': {
         const inv_typ = section === 'b2b' ? 'R' : taxed.some((l) => l.igst > 0) ? 'SEWP' : 'SEWOP';
         const list = b2b.get(head.gstin ?? '') ?? [];
-        list.push({ ...base, pos: head.pos, rchrg: 'N', inv_typ, itms: wrapped(taxed, 'all') });
+        // Reverse charge: the invoice charged no GST, but the return reports the
+        // tax the recipient owes on it, at each rate, with rchrg Y.
+        const items = head.reverseCharge
+          ? taxed.map((l) => {
+              const owed = reverseChargeTax(l.taxable, l.rate, head.pos === head.branchState);
+              return { ...l, cgst: owed.cgstPaise, sgst: owed.sgstPaise, igst: owed.igstPaise, cess: 0 as Paise };
+            })
+          : taxed;
+        list.push({ ...base, pos: head.pos, rchrg: head.reverseCharge ? 'Y' : 'N', inv_typ, itms: wrapped(items, 'all') });
         b2b.set(head.gstin ?? '', list);
         break;
       }
@@ -347,7 +363,14 @@ export async function gstr1PortalFile(
       // the credit, nil-rated lines included.
       const inv_typ = head.supplyType === 'sez' ? (lines.some((l) => l.igst > 0) ? 'SEWP' : 'SEWOP') : 'R';
       const list = cdnr.get(head.gstin) ?? [];
-      list.push({ ...base, pos: head.pos, rchrg: 'N', inv_typ, itms: wrapped(lines, 'all') });
+      // Reverse charge: the note gave back no GST; it reports the tax the recipient reverses.
+      const items = head.reverseCharge
+        ? lines.map((l) => {
+            const owed = reverseChargeTax(l.taxable, l.rate, head.pos === head.branchState);
+            return { ...l, cgst: owed.cgstPaise, sgst: owed.sgstPaise, igst: owed.igstPaise, cess: 0 as Paise };
+          })
+        : lines;
+      list.push({ ...base, pos: head.pos, rchrg: head.reverseCharge ? 'Y' : 'N', inv_typ, itms: wrapped(items, 'all') });
       cdnr.set(head.gstin, list);
       return;
     }
@@ -397,7 +420,7 @@ export async function gstr1PortalFile(
           JOIN credit_notes n ON n.id = l.credit_note_id
           JOIN contacts c ON c.id = n.customer_id
           LEFT JOIN hsn_codes h ON h.org_id = n.org_id AND h.code = l.hsn_sac
-         WHERE n.org_id = ${orgId} AND n.status <> 'void'
+         WHERE n.org_id = ${orgId} AND n.status NOT IN ('void', 'draft')
            AND n.note_date BETWEEN ${period.from} AND ${period.to}
            ${branchFilter('n')}
       ) x

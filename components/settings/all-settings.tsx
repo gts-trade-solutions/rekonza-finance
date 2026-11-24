@@ -73,6 +73,11 @@ export const SETTING_SECTIONS: { title: string; groups: SettingGroup[] }[] = [
         title: 'Module Settings', icon: Package, tint: 'from-[#e8f3fb] text-[#1673b5]',
         links: [
           { label: 'Items', href: '/settings/items' },
+          { label: 'Quotes', href: '/settings/preferences/quotes' },
+          { label: 'Sales Orders', href: '/settings/preferences/sales-orders' },
+          { label: 'Invoices', href: '/settings/preferences/invoices' },
+          { label: 'Delivery Challans', href: '/settings/preferences/delivery-challans' },
+          { label: 'Credit Notes', href: '/settings/preferences/credit-notes' },
         ],
       },
       {

@@ -168,7 +168,7 @@ export default function InvoiceDetailPage() {
                       {canVoid && !irnLive && inv.amountPaidPaise === 0 && (
                         <DropdownMenuItem onClick={() => setDeleting(true)} className="text-destructive focus:text-destructive" data-slot="delete-invoice">Delete</DropdownMenuItem>
                       )}
-                      <DropdownMenuItem onClick={() => router.push('/settings/invoice-print')} data-slot="invoice-preferences">Invoice Preferences</DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => router.push('/settings/preferences/invoices')} data-slot="invoice-preferences">Invoice Preferences</DropdownMenuItem>
                       {/* Rekonza's own, beyond Zoho's menu: the e-invoice and a bad debt. */}
                       {((irnLive && cancelUntil && canFileGst) || (canVoid && invoiceIsSent(inv) && inv.status !== 'void' && inv.balancePaise > 0)) && <DropdownMenuSeparator />}
                       {irnLive && cancelUntil && canFileGst && (

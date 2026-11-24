@@ -1,3 +1,4 @@
+import { reverseChargeTax } from '../../tax/reverse-charge';
 import 'server-only';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -117,6 +118,28 @@ function withRoundOff(totals: { label: string; paise: number }[], total: number)
 
 const ORIGINAL = ['Original'];
 
+/** Zoho's Shipping Charges and Adjustment beneath the tax, before the round-off (migration 124). */
+function withExtras(totals: { label: string; paise: number }[], d: { shipping_charge?: unknown; adjustment?: unknown; adjustment_label?: string | null }) {
+  const shipping = d.shipping_charge != null ? p(d.shipping_charge as never) : 0;
+  const adjustment = d.adjustment != null ? p(d.adjustment as never) : 0;
+  return [
+    ...totals,
+    ...(shipping ? [{ label: 'Shipping charges', paise: shipping }] : []),
+    ...(adjustment ? [{ label: d.adjustment_label || 'Adjustment', paise: adjustment }] : []),
+  ];
+}
+
+/** A reverse-charge quote or order: the GST the recipient pays, at each line's rate (Rule 46(p)). */
+function reverseChargeAfter(d: { reverse_charge?: unknown; supply_type: string }, lines: { taxable?: unknown; gst_rate_pct?: unknown }[]) {
+  if (Number(d.reverse_charge ?? 0) !== 1) return [];
+  const intra = d.supply_type === 'intra';
+  const owed = lines.reduce((t, l) => {
+    const r = reverseChargeTax(p((l.taxable ?? 0) as never), Number(l.gst_rate_pct ?? 0), intra);
+    return t + r.cgstPaise + r.sgstPaise + r.igstPaise;
+  }, 0);
+  return owed ? [{ label: 'Tax payable on reverse charge', paise: owed }] : [];
+}
+
 /** Zoho's "Reference#" among the facts beside the parties, when one was given. */
 const refFact = (r: string | null) => (r ? [{ label: 'Reference#', value: r }] : []);
 
@@ -138,7 +161,7 @@ export async function printableDocument(
       const { party, shipTo } = await partyOf(ex, orgId, d.customer_id, 'Quote to');
       const cols = taxColumns(registration, d.supply_type, p(d.igst));
       return {
-        kind, id: asId(d.id), number: d.number, title: 'Quotation', endorsement: null, date, status: d.status,
+        kind, id: asId(d.id), number: d.number, title: 'Quotation', endorsement: d.reverse_charge ? 'Tax payable on reverse charge' : null, date, status: d.status,
         tag: d.status === 'draft' ? 'Draft' : null, copies: ORIGINAL, seller, party, partyId: asId(d.customer_id), shipTo,
         placeOfSupply: d.place_of_supply, taxColumns: cols,
         facts: [
@@ -149,8 +172,8 @@ export async function printableDocument(
             ? [{ label: 'Special offer', value: `${Number(lines[0].discount_pct)}% off` }] : []),
         ],
         lines: lines.map(taxedLine),
-        totals: withRoundOff(taxTotals(cols, p(d.subtotal), { cgst: p(d.cgst), sgst: p(d.sgst), igst: p(d.igst), cess: p(d.cess) }), p(d.total)),
-        totalLabel: 'Total', totalPaise: p(d.total), after: [], allocations: null, notes: d.notes, terms: d.terms,
+        totals: withRoundOff(withExtras(taxTotals(cols, p(d.subtotal), { cgst: p(d.cgst), sgst: p(d.sgst), igst: p(d.igst), cess: p(d.cess) }), d), p(d.total)),
+        totalLabel: 'Total', totalPaise: p(d.total), after: reverseChargeAfter(d, lines), allocations: null, notes: d.notes, terms: d.terms,
       };
     }
     case 'sales-order': {
@@ -177,12 +200,12 @@ export async function printableDocument(
             ...(d.expected_ship_date ? [{ label: 'Expected delivery', value: day(d.expected_ship_date) }] : []),
           ],
           lines: lines.map(taxedLine),
-          totals: withRoundOff(taxTotals(cols, p(d.subtotal), { cgst: p(d.cgst), sgst: p(d.sgst), igst: p(d.igst), cess: p(d.cess) }), p(d.total)),
-          totalLabel: 'Amount payable', totalPaise: p(d.total), after: [], allocations: null, notes: null, terms: null,
+          totals: withRoundOff(withExtras(taxTotals(cols, p(d.subtotal), { cgst: p(d.cgst), sgst: p(d.sgst), igst: p(d.igst), cess: p(d.cess) }), d), p(d.total)),
+          totalLabel: 'Amount payable', totalPaise: p(d.total), after: reverseChargeAfter(d, lines), allocations: null, notes: null, terms: null,
         };
       }
       return {
-        kind, id: asId(d.id), number: d.number, title: 'Sales Order', endorsement: null, date, status: d.status,
+        kind, id: asId(d.id), number: d.number, title: 'Sales Order', endorsement: d.reverse_charge ? 'Tax payable on reverse charge' : null, date, status: d.status,
         tag: d.status === 'cancelled' ? 'Cancelled' : null, copies: ORIGINAL, seller, party, partyId: asId(d.customer_id), shipTo,
         placeOfSupply: d.place_of_supply, taxColumns: cols,
         facts: [
@@ -192,9 +215,9 @@ export async function printableDocument(
           ...(d.delivery_method ? [{ label: 'Delivery method', value: d.delivery_method }] : []),
         ],
         lines: lines.map(taxedLine),
-        totals: withRoundOff(taxTotals(cols, p(d.subtotal), { cgst: p(d.cgst), sgst: p(d.sgst), igst: p(d.igst), cess: p(d.cess) }), p(d.total)),
+        totals: withRoundOff(withExtras(taxTotals(cols, p(d.subtotal), { cgst: p(d.cgst), sgst: p(d.sgst), igst: p(d.igst), cess: p(d.cess) }), d), p(d.total)),
         totalLabel: 'Total', totalPaise: p(d.total),
-        after: p(d.invoiced_amount) ? [{ label: 'Invoiced', paise: p(d.invoiced_amount) }] : [],
+        after: [...reverseChargeAfter(d, lines), ...(p(d.invoiced_amount) ? [{ label: 'Invoiced', paise: p(d.invoiced_amount) }] : [])],
         allocations: null, notes: d.notes, terms: d.terms,
       };
     }
@@ -237,7 +260,15 @@ export async function printableDocument(
           ...(invoiced.length ? [{ label: invoiced.length > 1 ? 'Invoices' : 'Invoice no.', value: invoiced.map((i) => i.number).join(', ') }] : []),
         ],
         lines: lines.map((l) => singleLineWith(l.description?.trim() || l.item_name || null, l.hsn_sac, Number(l.qty), l.uqc, p(l.rate), p(l.line_total))),
-        totals: [], totalLabel: 'Value of goods', totalPaise: total, after: [], allocations: null, notes: d.notes, terms: d.terms,
+        ...(() => {
+          // Shipping and an adjustment under the goods' value, as Zoho's challan has them.
+          const extras = withExtras([], d);
+          const goods = total - extras.reduce((t, e) => t + e.paise, 0);
+          return extras.length
+            ? { totals: [{ label: 'Value of goods', paise: goods }, ...extras], totalLabel: 'Total', totalPaise: total }
+            : { totals: [], totalLabel: 'Value of goods', totalPaise: total };
+        })(),
+        after: [], allocations: null, notes: d.notes, terms: d.terms,
       };
     }
     case 'credit-note': {
@@ -256,7 +287,7 @@ export async function printableDocument(
       return {
         kind, id: asId(d.id), number: d.number, title: 'Credit Note',
         endorsement: [against ? `Against invoice ${against.number} dated ${day(against.invoice_date)}` : null, d.reason].filter(Boolean).join(' · ') || null,
-        date, status: d.status, tag: d.status === 'void' ? 'Cancelled' : null, copies: ORIGINAL,
+        date, status: d.status, tag: d.status === 'void' ? 'Cancelled' : d.status === 'draft' ? 'Draft' : null, copies: ORIGINAL,
         seller, party, partyId: asId(d.customer_id), shipTo: null, placeOfSupply: d.place_of_supply, taxColumns: cols,
         facts: [
           { label: 'Credit note no.', value: d.number }, { label: 'Date', value: day(date) },
@@ -264,7 +295,7 @@ export async function printableDocument(
           ...refFact(d.reference_number),
         ],
         lines: lines.map(taxedLine),
-        totals: withRoundOff(taxTotals(cols, p(d.subtotal), { cgst: p(d.cgst), sgst: p(d.sgst), igst: p(d.igst), cess: p(d.cess) }), p(d.total)),
+        totals: withRoundOff(withExtras(taxTotals(cols, p(d.subtotal), { cgst: p(d.cgst), sgst: p(d.sgst), igst: p(d.igst), cess: p(d.cess) }), d), p(d.total)),
         totalLabel: 'Credit total', totalPaise: p(d.total),
         after: applied ? [{ label: d.status === 'refunded' ? 'Refunded or applied' : 'Applied', paise: applied }, { label: 'Credit remaining', paise: p(d.total) - applied }] : [],
         allocations: null, notes: d.notes, terms: d.terms,

@@ -1,5 +1,6 @@
+import { acceptQuote, cancelSalesOrderItems, openCreditNote, projectFromEstimate, purchaseOrderFromSalesOrder, retainerFromEstimate } from '@/lib/server/services/sales-extras';
 import { z } from 'zod';
-import { CreateInput, DATE, mapLines, toNum, zohoInput } from '@/lib/server/sales-doc-input';
+import { CreateInput, DATE, toNum, toSalesDocInput } from '@/lib/server/sales-doc-input';
 import { sql } from 'kysely';
 import { db, transaction } from '@/lib/server/db';
 import { route, body, query, asId, badRequest } from '@/lib/server/http';
@@ -159,37 +160,25 @@ export const POST = route(
     const customerId = Number(input.customerId);
 
     const created = await transaction(async (trx) => {
+      if (input.kind !== 'retainer') {
+        // One mapping for create and edit (lib/server/sales-doc-input.ts).
+        const doc = toSalesDocInput(input, branch);
+        switch (doc.kind) {
+          case 'estimate': {
+            const made = await createEstimate(trx, orgId, user.userId, doc.input);
+            // "Create a retainer invoice for this quote automatically".
+            if (doc.input.retainerPct) await retainerFromEstimate(trx, orgId, user.userId, made.id);
+            return made;
+          }
+          case 'sales-order':
+            return createSalesOrder(trx, orgId, user.userId, { ...doc.input, sourceEstimateId: input.kind === 'sales-order' ? toNum(input.sourceEstimateId) : null });
+          case 'challan':
+            return createChallan(trx, orgId, user.userId, doc.input);
+          case 'credit-note':
+            return createCreditNote(trx, orgId, user.userId, doc.input);
+        }
+      }
       switch (input.kind) {
-        case 'estimate':
-          return createEstimate(trx, orgId, user.userId, {
-            branchId: branch, customerId, date: input.date, expiryDate: input.expiryDate,
-            lines: mapLines(input.lines), placeOfSupply: input.placeOfSupply,
-            notes: input.notes, status: input.status, voucherTypeId: toNum(input.voucherTypeId),
-            ...zohoInput(input), projectId: toNum(input.projectId || null),
-          });
-        case 'sales-order':
-          return createSalesOrder(trx, orgId, user.userId, {
-            branchId: branch, customerId, date: input.date,
-            expectedShipDate: input.expectedShipDate ?? null,
-            lines: mapLines(input.lines), placeOfSupply: input.placeOfSupply,
-            notes: input.notes, sourceEstimateId: toNum(input.sourceEstimateId), voucherTypeId: toNum(input.voucherTypeId),
-            ...zohoInput(input), paymentTerms: input.paymentTerms ?? null, deliveryMethod: input.deliveryMethod ?? null, status: input.status,
-          });
-        case 'challan':
-          return createChallan(trx, orgId, user.userId, {
-            branchId: branch, customerId, date: input.date, challanType: input.challanType,
-            lines: mapLines(input.lines), placeOfSupply: input.placeOfSupply, notes: input.notes, voucherTypeId: toNum(input.voucherTypeId),
-            referenceNumber: input.referenceNumber ?? null, terms: input.terms ?? null, status: input.status,
-          });
-        case 'credit-note':
-          return createCreditNote(trx, orgId, user.userId, {
-            branchId: branch, customerId, date: input.date, reason: input.reason,
-            againstInvoiceId: toNum(input.againstInvoiceId),
-            applyImmediately: input.applyImmediately,
-            warehouseId: toNum(input.warehouseId),
-            lines: mapLines(input.lines), placeOfSupply: input.placeOfSupply, notes: input.notes, voucherTypeId: toNum(input.voucherTypeId),
-            ...zohoInput(input),
-          });
         case 'retainer':
           return createRetainer(trx, orgId, user.userId, {
             branchId: branch, customerId, date: input.date,
@@ -282,6 +271,27 @@ const ActionInput = z.discriminatedUnion('action', [
     kind: z.enum(KINDS),
     id: z.union([z.string(), z.number()]),
     status: z.string(),
+  }),
+  // A draft credit note, posted (Zoho's "Convert to Open").
+  z.object({ action: z.literal('open-credit-note'), id: z.union([z.string(), z.number()]) }),
+  // Zoho's sales order "Cancel Items": omitted lines cancel everything left.
+  z.object({ action: z.literal('cancel-items'), id: z.union([z.string(), z.number()]), lines: LINES }),
+  // Zoho's sales order "Convert to Purchase Order".
+  z.object({
+    action: z.literal('to-purchase-order'),
+    id: z.union([z.string(), z.number()]),
+    vendorId: z.union([z.string(), z.number()]),
+    date: DATE,
+    expectedDate: DATE.nullish(),
+    lineIds: z.array(z.union([z.string(), z.number()])).optional(),
+  }),
+  // Zoho's quote "Create Project".
+  z.object({
+    action: z.literal('create-project'),
+    id: z.union([z.string(), z.number()]),
+    name: z.string().trim().max(200).nullish(),
+    billingMethod: z.enum(['fixed', 'project_hours', 'task_hours', 'staff_hours']).optional(),
+    ratePaise: z.number().int().positive().optional(),
   }),
 ]);
 
@@ -405,6 +415,57 @@ export const PATCH = route(
         return { id: asId(id), status: 'void' };
       }
 
+      case 'open-credit-note': {
+        const made = await transaction(async (trx) => {
+          const out = await openCreditNote(trx, orgId, user.userId, id);
+          await logAudit({
+            trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'update', targetType: 'credit-note', targetId: id,
+            targetLabel: out.number, detail: `Draft credit note ${out.number} converted to open and posted`, ...auditMeta(req),
+          });
+          return out;
+        });
+        return { id: asId(made.id), number: made.number, status: 'open', journalEntryId: made.journalEntryId === null ? null : asId(made.journalEntryId) };
+      }
+
+      case 'cancel-items': {
+        const out = await transaction(async (trx) => {
+          const r = await cancelSalesOrderItems(trx, orgId, id, picks(input.lines));
+          await logAudit({
+            trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'update', targetType: 'sales-order', targetId: id,
+            detail: `Cancelled ${r.cancelled} unit(s) still to invoice; the order is now ${r.status}`, ...auditMeta(req),
+          });
+          return r;
+        });
+        return out;
+      }
+
+      case 'to-purchase-order': {
+        const out = await transaction(async (trx) => {
+          const r = await purchaseOrderFromSalesOrder(trx, orgId, user.userId, id, {
+            vendorId: Number(input.vendorId), date: input.date, expectedDate: input.expectedDate ?? null,
+            lineIds: input.lineIds?.map(Number),
+          });
+          await logAudit({
+            trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'create', targetType: 'purchase_order', targetId: r.id,
+            targetLabel: r.number, detail: `Purchase order ${r.number} raised for sales order #${id}`, ...auditMeta(req),
+          });
+          return r;
+        });
+        return { purchaseOrderId: asId(out.id), number: out.number, totalPaise: out.totalPaise, skipped: out.skipped };
+      }
+
+      case 'create-project': {
+        const out = await transaction(async (trx) => {
+          const r = await projectFromEstimate(trx, orgId, user.userId, id, { name: input.name, billingMethod: input.billingMethod, ratePaise: input.ratePaise as never });
+          await logAudit({
+            trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'create', targetType: 'project', targetId: r.id,
+            targetLabel: r.name, detail: `Project "${r.name}" made from quote #${id}`, ...auditMeta(req),
+          });
+          return r;
+        });
+        return { projectId: asId(out.id), name: out.name };
+      }
+
       case 'set-status': {
         // Only the statuses a person legitimately sets by hand. Anything that
         // follows from a posting — converted, applied, invoiced — is set by the
@@ -420,6 +481,22 @@ export const PATCH = route(
           throw badRequest(
             `A ${input.kind.replace('-', ' ')} cannot be moved to "${input.status}" by hand.`,
           );
+        }
+        // Accepting a quote does what Quote Preferences say: nothing more, or a draft invoice or a sales order.
+        if (input.kind === 'estimate' && input.status === 'accepted') {
+          const r = await transaction((trx) => acceptQuote(trx, orgId, user.userId, id, new Date().toISOString().slice(0, 10)));
+          if (r.invoiceId || r.salesOrderId) {
+            await logAudit({
+              orgId, actorUserId: user.userId, actorName: user.name, action: 'create',
+              targetType: r.invoiceId ? 'invoice' : 'sales_order', targetId: (r.invoiceId ?? r.salesOrderId)!,
+              targetLabel: r.invoiceNumber ?? r.salesOrderNumber, detail: `Made automatically when quote #${id} was accepted (Quote Preferences)`, ...auditMeta(req),
+            });
+          }
+          return {
+            id: asId(id), status: r.invoiceId || r.salesOrderId ? 'converted' : 'accepted',
+            ...(r.invoiceId ? { invoiceId: asId(r.invoiceId), invoiceNumber: r.invoiceNumber } : {}),
+            ...(r.salesOrderId ? { salesOrderId: asId(r.salesOrderId), salesOrderNumber: r.salesOrderNumber } : {}),
+          };
         }
         const spec = SPEC[input.kind];
         await sql`

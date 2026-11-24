@@ -70,6 +70,11 @@ function SupplyTable({ rows, showGstin = true }: { rows: Gstr1Row[]; showGstin?:
                   {i.againstNumber && (
                     <span className="ml-1 text-[10px] text-muted-foreground">vs {i.againstNumber}</span>
                   )}
+                  {i.reverseCharge && (
+                    <span className="ml-1.5 rounded border px-1 text-[10px] font-normal text-muted-foreground" title="Tax payable on reverse charge: the recipient pays the GST (rchrg Y)" data-slot="gstr1-rcm">
+                      Reverse charge
+                    </span>
+                  )}
                 </td>
                 <td className="px-3 py-2 text-xs">{new Date(i.date).toLocaleDateString('en-IN')}</td>
                 <td className="px-3 py-2">{i.customerName}</td>

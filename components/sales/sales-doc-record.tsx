@@ -11,6 +11,9 @@
 // - "<Noun> Details | Activity", and the Details/PDF switch: the details grid,
 //   the customer, the items and the totals, or the printed copy itself.
 
+import { PREFS_FOR_KIND } from '@/components/settings/pref-modules';
+import { CancelItemsDialog, CreateProjectDialog, ToPurchaseOrderDialog } from './sales-doc-extras';
+import { REVERSE_CHARGE_NOTE, reverseChargeTax } from '@/lib/tax/reverse-charge';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { useMemo, useState } from 'react';
@@ -87,6 +90,7 @@ function Record({ kind, doc, printDoc, reload }: { kind: SalesDocKindZ; doc: Edi
   const [step, setStep] = useState<null | 'so-invoice' | 'so-challan' | 'challan-invoice'>(null);
   const [readying, setReadying] = useState(false);
   const [cnDialog, setCnDialog] = useState<null | 'apply' | 'refund' | 'void'>(null);
+  const [extra, setExtra] = useState<null | 'project' | 'to-po' | 'cancel-items'>(null);
   const [date, setDate] = useState(today());
   const [dueDate, setDueDate] = useState(plusDays(30));
 
@@ -137,7 +141,12 @@ function Record({ kind, doc, printDoc, reload }: { kind: SalesDocKindZ; doc: Edi
     id: doc.id, number: doc.number, customerId: doc.customerId, customerName: doc.customerName ?? '',
     totalPaise: doc.totalPaise ?? 0, appliedPaise: doc.appliedPaise ?? 0,
   };
-  const cnLeft = (doc.balancePaise ?? 0) > 0 && doc.status !== 'void';
+  const cnDraft = kind === 'credit-note' && doc.status === 'draft';
+  const cnLeft = (doc.balancePaise ?? 0) > 0 && doc.status !== 'void' && !cnDraft;
+  // A draft credit note, posted (Zoho's Convert to Open).
+  const openDraft = () => run(() => salesDocuments.openCreditNote(doc.id), `${doc.number} converted to open and posted`);
+  // What is still to invoice or deliver on an order, that Cancel Items can take off.
+  const soLeft = kind === 'sales-order' && doc.lines.some((l) => l.qty - (l.qtyInvoiced ?? 0) - (l.qtyCancelled ?? 0) > 0 && l.qty - (l.qtyDelivered ?? 0) - (l.qtyCancelled ?? 0) > 0);
 
   const sendLabel = kind === 'estimate' ? 'Mails' : kind === 'credit-note' ? 'Email' : 'Send Email';
   const emailNow = () => (send.mailReady ? send.emailNow() : send.mailApp());
@@ -185,6 +194,9 @@ function Record({ kind, doc, printDoc, reload }: { kind: SalesDocKindZ; doc: Edi
           {busy ? <Loader2 className="size-4 animate-spin" /> : <MoreHorizontal className="size-4" />}
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="min-w-52">
+          {kind === 'estimate' && canCreate && !doc.projectId && (
+            <DropdownMenuItem onClick={() => setExtra('project')} data-slot="create-project">Create Project</DropdownMenuItem>
+          )}
           {kind === 'estimate' && canEdit && (
             <>
               {doc.status === 'draft' && <DropdownMenuItem onClick={() => void setStatus('sent', 'marked as sent')} data-slot="mark-sent">Mark as Sent</DropdownMenuItem>}
@@ -205,6 +217,12 @@ function Record({ kind, doc, printDoc, reload }: { kind: SalesDocKindZ; doc: Edi
               {doc.stage !== 'ready' && <DropdownMenuItem onClick={() => { setDate(today()); setReadying(true); }} data-slot="so-ready">Mark as Ready for Delivery</DropdownMenuItem>}
             </>
           )}
+          {kind === 'sales-order' && canCreate && doc.status !== 'cancelled' && doc.status !== 'draft' && (
+            <DropdownMenuItem onClick={() => setExtra('to-po')} data-slot="so-to-po">Convert to Purchase Order</DropdownMenuItem>
+          )}
+          {kind === 'sales-order' && canEdit && soLeft && (doc.status === 'open' || doc.status === 'partially_invoiced') && (
+            <DropdownMenuItem onClick={() => setExtra('cancel-items')} data-slot="so-cancel-items">Cancel Items</DropdownMenuItem>
+          )}
           {kind === 'challan' && canEdit && doc.status === 'draft' && (
             <DropdownMenuItem onClick={() => void setStatus('open', 'marked as open')} data-slot="mark-open">Mark as Open</DropdownMenuItem>
           )}
@@ -214,6 +232,12 @@ function Record({ kind, doc, printDoc, reload }: { kind: SalesDocKindZ; doc: Edi
           {kind === 'challan' && canEdit && doc.status === 'open' && (
             <DropdownMenuItem onClick={() => void setStatus('returned', 'marked as returned')} data-slot="mark-returned">Mark as Returned</DropdownMenuItem>
           )}
+          {kind === 'challan' && doc.status !== 'draft' && doc.status !== 'cancelled' && (
+            <DropdownMenuItem onClick={() => router.push(`/gst/eway-bills?challan=${doc.id}`)} data-slot="challan-eway">Add e-Way Bill Details</DropdownMenuItem>
+          )}
+          {cnDraft && canEdit && (
+            <DropdownMenuItem onClick={() => void openDraft()} data-slot="cn-open">Convert to Open</DropdownMenuItem>
+          )}
           {kind === 'credit-note' && canCreate && cnLeft && (
             <>
               <DropdownMenuItem onClick={() => setCnDialog('apply')} data-slot="cn-apply">Apply to Invoices</DropdownMenuItem>
@@ -221,13 +245,16 @@ function Record({ kind, doc, printDoc, reload }: { kind: SalesDocKindZ; doc: Edi
             </>
           )}
           {clonable && <DropdownMenuItem onClick={() => router.push(`${info.base}/new?clone=${doc.id}`)} data-slot="doc-clone"><Copy className="mr-2 size-4" /> Clone</DropdownMenuItem>}
+          {kind === 'credit-note' && !cnDraft && doc.status !== 'void' && (
+            <DropdownMenuItem onClick={() => router.push(`/gst/eway-bills?creditNote=${doc.id}`)} data-slot="cn-eway">Add e-Way Bill Details</DropdownMenuItem>
+          )}
           {kind === 'credit-note' && doc.journalEntryId && (
             <DropdownMenuItem onClick={() => setViewingJournal(true)} data-slot="cn-journal"><FileText className="mr-2 size-4" /> View Journal</DropdownMenuItem>
           )}
           {kind === 'sales-order' && canVoid && doc.status !== 'cancelled' && doc.status !== 'invoiced' && (
             <DropdownMenuItem onClick={() => { if (window.confirm(`Void ${doc.number}? Nothing more is delivered or invoiced against it.`)) void setStatus('cancelled', 'voided'); }} data-slot="so-void">Void</DropdownMenuItem>
           )}
-          {kind === 'credit-note' && canVoid && doc.status !== 'void' && doc.status !== 'refunded' && (
+          {kind === 'credit-note' && canVoid && !cnDraft && doc.status !== 'void' && doc.status !== 'refunded' && (
             <DropdownMenuItem onClick={() => setCnDialog('void')} data-slot="cn-void">Void</DropdownMenuItem>
           )}
           {deletable && (
@@ -236,6 +263,7 @@ function Record({ kind, doc, printDoc, reload }: { kind: SalesDocKindZ; doc: Edi
               <DropdownMenuItem onClick={() => setDeleting(true)} className="text-destructive focus:text-destructive" data-slot="doc-delete">Delete</DropdownMenuItem>
             </>
           )}
+          <DropdownMenuItem onClick={() => router.push(PREFS_FOR_KIND[kind].href)} data-slot="doc-preferences">{PREFS_FOR_KIND[kind].label}</DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
     </>
@@ -258,7 +286,7 @@ function Record({ kind, doc, printDoc, reload }: { kind: SalesDocKindZ; doc: Edi
         onSoInvoice={() => { setDate(today()); setDueDate(plusDays(30)); setStep('so-invoice'); }}
         onSoChallan={() => { setDate(today()); setStep('so-challan'); }}
         onChallanInvoice={() => { setDate(today()); setDueDate(plusDays(30)); setStep('challan-invoice'); }}
-        onApply={() => setCnDialog('apply')} onRefund={() => setCnDialog('refund')}
+        onApply={() => setCnDialog('apply')} onRefund={() => setCnDialog('refund')} onOpenDraft={() => void openDraft()}
       />
 
       <Card className="p-0" data-slot="doc-body">
@@ -301,6 +329,9 @@ function Record({ kind, doc, printDoc, reload }: { kind: SalesDocKindZ; doc: Edi
       {cnDialog === 'apply' && <ApplyDialog cn={cn} onClose={() => setCnDialog(null)} onDone={() => { setCnDialog(null); reload(); }} />}
       {cnDialog === 'refund' && <RefundDialog cn={cn} onClose={() => setCnDialog(null)} onDone={() => { setCnDialog(null); reload(); }} />}
       {cnDialog === 'void' && <VoidCreditNoteDialog cn={cn} onClose={() => setCnDialog(null)} onDone={() => { setCnDialog(null); reload(); }} />}
+      {extra === 'project' && <CreateProjectDialog doc={doc} onClose={() => setExtra(null)} onDone={() => { setExtra(null); reload(); }} />}
+      {extra === 'to-po' && <ToPurchaseOrderDialog doc={doc} onClose={() => setExtra(null)} onDone={(id) => { setExtra(null); router.push(`/print/purchase-order/${id}`); }} />}
+      {extra === 'cancel-items' && <CancelItemsDialog doc={doc} onClose={() => setExtra(null)} onDone={() => { setExtra(null); reload(); }} />}
 
       <Dialog open={readying} onOpenChange={setReadying}>
         <DialogContent data-slot="ready-dialog">
@@ -359,7 +390,7 @@ function Record({ kind, doc, printDoc, reload }: { kind: SalesDocKindZ; doc: Edi
 function WhatsNext(p: {
   kind: SalesDocKindZ; doc: EditableSalesDoc; z: string; busy: boolean; canCreate: boolean; canEdit: boolean;
   onSend: () => void; onMarkSent: () => void; onToInvoice: () => void; onToOrder: () => void; onConfirm: () => void; onOpen: () => void;
-  onSoInvoice: () => void; onSoChallan: () => void; onChallanInvoice: () => void; onApply: () => void; onRefund: () => void;
+  onSoInvoice: () => void; onSoChallan: () => void; onChallanInvoice: () => void; onApply: () => void; onRefund: () => void; onOpenDraft: () => void;
 }) {
   const { kind, doc } = p;
   let text: string | null = null;
@@ -388,6 +419,9 @@ function WhatsNext(p: {
       text = 'Convert this delivery challan to an invoice once the customer keeps the goods.';
       buttons = p.canCreate && <Button size="sm" onClick={p.onChallanInvoice} disabled={p.busy}>Convert to Invoice</Button>;
     }
+  } else if (kind === 'credit-note' && doc.status === 'draft') {
+    text = 'This credit note is a draft: nothing is posted until you convert it to open.';
+    buttons = p.canEdit && <Button size="sm" onClick={p.onOpenDraft} disabled={p.busy} data-slot="whats-next-open">Convert to Open</Button>;
   } else if (kind === 'credit-note' && (doc.balancePaise ?? 0) > 0 && doc.status !== 'void') {
     text = `Credits remaining: ${formatINR(doc.balancePaise ?? 0)}. Apply them to the customer’s invoices or refund them.`;
     buttons = p.canCreate && <><Button size="sm" onClick={p.onApply} disabled={p.busy}>Apply to Invoices</Button><Button size="sm" variant="outline" onClick={p.onRefund} disabled={p.busy}>Refund</Button></>;
@@ -428,6 +462,7 @@ function Details({ kind, doc, z }: { kind: SalesDocKindZ; doc: EditableSalesDoc;
     f.push(['Reference Number', doc.referenceNumber ?? '-']);
     if (kind === 'estimate' && doc.projectName) f.push(['Project Name', doc.projectName]);
     if (doc.placeOfSupply) f.push(['Place of Supply', GST_STATES[doc.placeOfSupply] ?? doc.placeOfSupply]);
+    if (kind === 'estimate' || kind === 'sales-order') f.push(['Reverse Charge', doc.reverseCharge ? 'Yes' : 'No']);
     return f;
   }, [kind, doc, info]);
   const links: { label: string; items: { id: string; number: string; href: string }[] }[] = [
@@ -436,7 +471,14 @@ function Details({ kind, doc, z }: { kind: SalesDocKindZ; doc: EditableSalesDoc;
     ...(doc.salesOrder ? [{ label: 'Sales Order', items: [{ ...doc.salesOrder, href: `/sales/sales-orders/${doc.salesOrder.id}` }] }] : []),
     ...(doc.invoices?.length ? [{ label: 'Invoices', items: doc.invoices.map((i) => ({ ...i, href: `/sales/invoices/${i.id}` })) }] : []),
     ...(doc.challans?.length ? [{ label: 'Delivery Challans', items: doc.challans.map((c) => ({ ...c, href: `/sales/challans/${c.id}` })) }] : []),
+    ...(doc.purchaseOrders?.length ? [{ label: 'Purchase Orders', items: doc.purchaseOrders.map((p) => ({ ...p, href: `/print/purchase-order/${p.id}` })) }] : []),
+    ...(doc.retainers?.length ? [{ label: 'Retainer Invoices', items: doc.retainers.map((r) => ({ ...r, href: `/sales/retainers/${r.id}` })) }] : []),
   ];
+  // Under reverse charge: the GST the recipient pays, at each line's rate (Rule 46(p)).
+  const intra = !!doc.placeOfSupply && doc.supplyType === 'intra';
+  const rcmTax = doc.reverseCharge
+    ? doc.lines.reduce((t, l) => { const r = reverseChargeTax((l.amountPaise ?? 0) as never, l.gstRatePct, intra); return t + r.cgstPaise + r.sgstPaise + r.igstPaise; }, 0)
+    : 0;
   const taxRows: [string, number][] = [
     ['CGST', doc.cgstPaise ?? 0], ['SGST', doc.sgstPaise ?? 0], ['IGST', doc.igstPaise ?? 0], ['Cess', doc.cessPaise ?? 0],
   ].filter(([, v]) => (v as number) > 0) as [string, number][];
@@ -508,7 +550,12 @@ function Details({ kind, doc, z }: { kind: SalesDocKindZ; doc: EditableSalesDoc;
         <dl className="ml-auto w-full max-w-xs space-y-1.5" data-slot="doc-totals">
           {kind !== 'challan' && <div className="flex justify-between"><dt className="text-muted-foreground">Sub Total</dt><dd className="tabular"><Money value={doc.subtotalPaise ?? 0} /></dd></div>}
           {taxRows.map(([k, v]) => <div key={k} className="flex justify-between"><dt className="text-muted-foreground">{k}</dt><dd className="tabular"><Money value={v} /></dd></div>)}
+          {(doc.shippingChargePaise ?? 0) !== 0 && <div className="flex justify-between" data-slot="doc-shipping"><dt className="text-muted-foreground">Shipping Charges</dt><dd className="tabular"><Money value={doc.shippingChargePaise ?? 0} /></dd></div>}
+          {(doc.adjustmentPaise ?? 0) !== 0 && <div className="flex justify-between" data-slot="doc-adjustment"><dt className="text-muted-foreground">{doc.adjustmentLabel ?? 'Adjustment'}</dt><dd className="tabular"><Money value={doc.adjustmentPaise ?? 0} /></dd></div>}
           <div className="flex justify-between border-t pt-1.5 font-semibold"><dt>Total</dt><dd className="tabular"><Money value={doc.totalPaise ?? 0} /></dd></div>
+          {doc.reverseCharge && rcmTax > 0 && (
+            <p className="rounded border border-dashed p-2 text-[12px] text-muted-foreground" data-slot="doc-rcm">{REVERSE_CHARGE_NOTE} Tax payable by the recipient: <Money value={rcmTax} /></p>
+          )}
           {kind === 'sales-order' && (doc.invoicedPaise ?? 0) > 0 && <div className="flex justify-between"><dt className="text-muted-foreground">Invoiced</dt><dd className="tabular"><Money value={doc.invoicedPaise ?? 0} /></dd></div>}
           {kind === 'credit-note' && (
             <>

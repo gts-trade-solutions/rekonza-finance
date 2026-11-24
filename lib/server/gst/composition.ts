@@ -85,7 +85,7 @@ export async function cmp08(ex: Executor, orgId: number, fy: number, q: Quarter)
     UNION ALL
     SELECT n.note_date AS d, cl.taxable, cl.gst_rate_pct AS rate, -1 AS sign
       FROM credit_note_lines cl JOIN credit_notes n ON n.id = cl.credit_note_id
-     WHERE n.org_id = ${orgId} AND n.status <> 'void' AND n.note_date BETWEEN ${from} AND ${to}
+     WHERE n.org_id = ${orgId} AND n.status NOT IN ('void', 'draft') AND n.note_date BETWEEN ${from} AND ${to}
   `.execute(ex);
   let turnover = 0;
   let exempt = 0;

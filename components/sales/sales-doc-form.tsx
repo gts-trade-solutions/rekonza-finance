@@ -11,6 +11,7 @@
 // The server decides the tax, the number and (for a credit note) the entry;
 // the totals here are a preview of what it will work out.
 
+import { PREFS_FOR_KIND } from '@/components/settings/pref-modules';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
 import { FileText, Loader2, Pencil, Save, Send } from 'lucide-react';
@@ -18,6 +19,8 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
+import { Checkbox } from '@/components/ui/checkbox';
+import { MoneyInput } from '@/components/shared/form-bits';
 import { Combobox } from '@/components/ui/combobox';
 import { DocumentForm, FormErrors, FormRow, FormRowPair, FormSectionRule } from '@/components/shared/form-layout';
 import { LineItemsEditor, effectiveDiscountPct, newEditorLine, type EditorLine } from '@/components/forms/document-lines';
@@ -29,13 +32,14 @@ import { localDay } from '@/lib/selectors';
 import { customerOptions, termsOptions, userOptions } from '@/lib/options';
 import { useApi } from '@/lib/api/use-api';
 import {
-  api, ApiError, invoices as invoiceApi, projects as projectsApi, salesDocuments,
+  api, ApiError, docPreferences, invoices as invoiceApi, projects as projectsApi, salesDocuments,
   type AttachableType, type EditableSalesDoc,
 } from '@/lib/api/client';
 import {
   GST_STATES, STATE_ALPHA, computeLineTax, placeOfSupplyFor, resolveSupplyType, stateTaxLabel, sumTax, totalTaxPaise,
 } from '@/lib/tax/gst';
 import { formatINR, roundToRupee } from '@/lib/money';
+import { REVERSE_CHARGE_NOTE } from '@/lib/tax/reverse-charge';
 import type { Contact, ContactAddress } from '@/lib/types';
 import { ATTACH_TARGET, CHALLAN_TYPES, CREDIT_REASONS, SALES_DOC, type SalesDocKindZ } from './sales-docs';
 
@@ -146,7 +150,19 @@ export function SalesDocumentForm({ kind, editing }: {
   const [terms, setTerms] = useState(ed?.terms ?? '');
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [errors, setErrors] = useState<string[]>([]);
-  const [saving, setSaving] = useState<false | 'draft' | 'send' | 'save'>(false);
+  const [saving, setSaving] = useState<false | 'draft' | 'send' | 'save' | 'open'>(false);
+  // Zoho's Shipping Charges and Adjustment at the foot of the totals.
+  const [shipping, setShipping] = useState(ed?.shippingChargePaise ?? 0);
+  const [adjustment, setAdjustment] = useState(ed?.adjustmentPaise ?? 0);
+  const [adjustmentLabel, setAdjustmentLabel] = useState(ed?.adjustmentLabel ?? 'Adjustment');
+  // "This transaction is applicable for reverse charge" (quotes and orders).
+  const [reverseCharge, setReverseCharge] = useState(!!ed?.reverseCharge);
+  // "Create a retainer invoice for this quote automatically", and its per cent.
+  const [retainerOn, setRetainerOn] = useState(false);
+  const [retainerPct, setRetainerPct] = useState('50');
+  // A credit note line's ACCOUNT (by editor line); empty takes the item's own sales account.
+  const [lineAccounts, setLineAccounts] = useState<Record<string, string>>(() =>
+    Object.fromEntries((ed?.lines ?? []).map((l, i) => [`e${i}`, l.accountId ?? '']).filter(([, v]) => v)));
 
   // The number this one will get (peeked, not taken); an edit keeps its own.
   const next = useApi<{ number: string }>(
@@ -197,6 +213,18 @@ export function SalesDocumentForm({ kind, editing }: {
     }).catch(() => toast.error('That invoice could not be loaded.'));
     return () => { live = false; };
   }, [fromInvoice, ed]);
+
+  // A new document starts with its module's Terms & Conditions and Customer Notes (Zoho's Preferences).
+  useEffect(() => {
+    if (ed || cloneId) return;
+    let live = true;
+    docPreferences.get(PREFS_FOR_KIND[kind].type).then((p) => {
+      if (!live) return;
+      if (p.notes) setNotes((n) => n || p.notes || '');
+      if (p.terms) setTerms((t) => t || p.terms || '');
+    }).catch(() => { /* no defaults: the boxes stay empty */ });
+    return () => { live = false; };
+  }, [ed, cloneId, kind]);
 
   const customer = s.contacts.find((c) => c.id === customerId);
   const customers = useMemo(() => customerOptions(s), [s]);
@@ -258,18 +286,29 @@ export function SalesDocumentForm({ kind, editing }: {
   };
 
   // The totals as the server will work them out (a challan carries no GST: its goods' value only).
+  const rcm = (isQuote || isOrder) && reverseCharge;
   const totals = useMemo(() => {
+    const extra = shipping + adjustment;
     if (isChallan) {
       const value = lines.reduce((t, l) => t + Math.round(l.ratePaise * l.qty), 0);
-      return { sub: value, discount: 0, taxable: value, tax: null, roundOff: 0, total: value, qty: lines.reduce((t, l) => t + (l.qty || 0), 0) };
+      return { sub: value, discount: 0, taxable: value, tax: null, rcmTax: 0, roundOff: 0, total: value + extra, qty: lines.reduce((t, l) => t + (l.qty || 0), 0) };
     }
     const tax = sumTax(lines.map((l) => computeLineTax({
       ratePaise: l.ratePaise, qty: l.qty, discountPct: effectiveDiscountPct(l), gstRatePct: l.gstRatePct, cessRatePct: l.cessRatePct, supplyType,
     }).tax));
     const sub = lines.reduce((t, l) => t + Math.round(l.ratePaise * l.qty), 0);
-    const { rounded, roundOff } = roundToRupee(tax.taxablePaise + totalTaxPaise(tax));
-    return { sub, discount: sub - tax.taxablePaise, taxable: tax.taxablePaise, tax, roundOff, total: rounded, qty: lines.reduce((t, l) => t + (l.qty || 0), 0) };
-  }, [lines, supplyType, isChallan]);
+    // Under reverse charge the buyer pays the GST: the document charges none, and says how much it is.
+    const charged = rcm ? 0 : totalTaxPaise(tax);
+    const { rounded, roundOff } = roundToRupee(tax.taxablePaise + charged + extra);
+    return {
+      sub, discount: sub - tax.taxablePaise, taxable: tax.taxablePaise, tax: rcm ? null : tax, rcmTax: rcm ? totalTaxPaise(tax) : 0,
+      roundOff, total: rounded, qty: lines.reduce((t, l) => t + (l.qty || 0), 0),
+    };
+  }, [lines, supplyType, isChallan, rcm, shipping, adjustment]);
+  const incomeAccounts = useMemo(
+    () => s.accounts.filter((a) => a.type === 'income').map((a) => ({ value: a.id, label: `${a.code ? `${a.code} · ` : ''}${a.name}` })),
+    [s.accounts],
+  );
 
   /** Zoho's own messages, in the pink box at the top. */
   const problems = (): string[] => {
@@ -280,10 +319,12 @@ export function SalesDocumentForm({ kind, editing }: {
     if (isChallan && !challanType) out.push('Please choose an appropriate Challan type.');
     if (isCredit && !reason) out.push('Please select a reason for issuing the credit note.');
     if (isQuote && expiryDate && expiryDate < date) out.push('The expiry date cannot be earlier than the quote date.');
+    if (isQuote && retainerOn && !(Number(retainerPct) > 0 && Number(retainerPct) <= 100)) out.push('Enter the retainer as a per cent of the quote, above 0 and up to 100.');
+    if (rcm && customer && !customer.gstin) out.push('Reverse charge applies only to a registered customer: add their GSTIN.');
     return out;
   };
 
-  const save = async (mode: 'draft' | 'send' | 'save') => {
+  const save = async (mode: 'draft' | 'send' | 'save' | 'open') => {
     const found = problems();
     setErrors(found);
     if (found.length) { window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
@@ -294,18 +335,25 @@ export function SalesDocumentForm({ kind, editing }: {
       placeOfSupply: posTouched && pos ? pos : undefined,
       notes: notes.trim() || null, terms: terms.trim() || null,
       referenceNumber: referenceNumber.trim() || null,
+      shippingChargePaise: shipping, adjustmentPaise: adjustment, adjustmentLabel: adjustment ? adjustmentLabel.trim() || 'Adjustment' : null,
     };
     const taxedLines = kept.map((l) => ({
       itemId: l.itemId, description: l.description || null, hsnSac: l.hsnSac || undefined, qty: l.qty, uqc: l.uqc || undefined,
       ratePaise: l.ratePaise, discountPct: effectiveDiscountPct(l), gstRatePct: l.gstRatePct, cessRatePct: l.cessRatePct,
+      ...(isCredit ? { accountId: lineAccounts[l.key] || null } : {}),
     }));
     const payload = isQuote
-      ? { ...common, expiryDate, salespersonId: salespersonId || null, projectId: projectId || null, lines: taxedLines, ...(ed ? {} : { status: mode === 'draft' ? 'draft' : 'sent' }) }
+      ? {
+          ...common, expiryDate, salespersonId: salespersonId || null, projectId: projectId || null, lines: taxedLines, reverseCharge,
+          ...(ed ? {} : { status: mode === 'draft' ? 'draft' : 'sent', retainerPct: retainerOn ? Number(retainerPct) : null }),
+        }
       : isOrder
-        ? { ...common, expectedShipDate: expectedShipDate || null, paymentTerms, deliveryMethod: deliveryMethod || null, salespersonId: salespersonId || null, lines: taxedLines, ...(ed ? {} : { status: mode === 'draft' ? 'draft' : 'open' }) }
+        ? { ...common, expectedShipDate: expectedShipDate || null, paymentTerms, deliveryMethod: deliveryMethod || null, salespersonId: salespersonId || null, lines: taxedLines, reverseCharge, ...(ed ? {} : { status: mode === 'draft' ? 'draft' : 'open' }) }
         : isChallan
           ? { ...common, challanType, lines: kept.map((l) => ({ itemId: l.itemId, description: l.description || null, hsnSac: l.hsnSac || undefined, qty: l.qty, uqc: l.uqc || undefined, ratePaise: l.ratePaise })), ...(ed ? {} : { status: 'draft' }) }
-          : { ...common, reason, againstInvoiceId: againstInvoiceId || null, salespersonId: salespersonId || null, lines: taxedLines };
+          // A credit note: Save as Draft posts nothing; Save as Open (and Save on an open one) posts.
+          : { ...common, reason, againstInvoiceId: againstInvoiceId || null, salespersonId: salespersonId || null, lines: taxedLines,
+              status: mode === 'open' || (ed && ed.status !== 'draft') ? 'open' : mode === 'draft' || (ed?.status === 'draft' && mode === 'save') ? 'draft' : 'open' };
     try {
       const done = ed ? await salesDocuments.update(kind, ed.id, payload) : await salesDocuments.create(payload);
       await uploadPending(ATTACH_TARGET[kind] as AttachableType, done.id, pendingFiles);
@@ -313,9 +361,11 @@ export function SalesDocumentForm({ kind, editing }: {
       if (ed && mode === 'send' && ed.status === 'draft' && (isQuote || isOrder)) {
         await salesDocuments.setStatus(kind, done.id, isQuote ? 'sent' : 'open').catch(() => toast.warning('Saved, but its status did not change.'));
       }
+      const creditDraft = isCredit && (mode === 'draft' || (ed?.status === 'draft' && mode === 'save'));
       toast.success(`${info.noun} ${done.number} ${ed ? 'updated' : mode === 'draft' ? 'saved as draft' : 'saved'}`, {
         description: isCredit
-          ? (ed ? 'Its entry was reversed and posted again; the audit trail keeps the old version.' : 'Revenue and the GST on it are reversed; the customer owes that much less.')
+          ? creditDraft ? 'A draft posts nothing until it is converted to open.'
+            : (ed && ed.status !== 'draft' ? 'Its entry was reversed and posted again; the audit trail keeps the old version.' : 'Revenue and the GST on it are reversed; the customer owes that much less.')
           : `A ${info.lower} posts nothing to the ledger.`,
       });
       router.push(`${info.base}/${done.id}`);
@@ -329,7 +379,7 @@ export function SalesDocumentForm({ kind, editing }: {
 
   const title = ed ? `Edit ${info.noun}` : `New ${info.noun}`;
   const busy = !!saving;
-  const spin = (m: 'draft' | 'send' | 'save') => (saving === m ? <Loader2 className="size-4 animate-spin" /> : null);
+  const spin = (m: 'draft' | 'send' | 'save' | 'open') => (saving === m ? <Loader2 className="size-4 animate-spin" /> : null);
   // Zoho's bottom bar for each: Edit is Save (and Save and Send for a draft quote or order).
   const footer = (
     <>
@@ -339,9 +389,15 @@ export function SalesDocumentForm({ kind, editing }: {
           {(isQuote || isOrder) && ed.status === 'draft' && (
             <Button variant="outline" onClick={() => void save('send')} disabled={busy} className="gap-1.5" data-slot="doc-save-send">{spin('send') ?? <Send className="size-4" />} Save and Send</Button>
           )}
+          {isCredit && ed.status === 'draft' && (
+            <Button variant="outline" onClick={() => void save('open')} disabled={busy} className="gap-1.5" data-slot="doc-save-open">{spin('open') ?? <Send className="size-4" />} Save as Open</Button>
+          )}
         </>
       ) : isCredit ? (
-        <Button onClick={() => void save('save')} disabled={busy} className="gap-1.5" data-slot="doc-save-open">{spin('save') ?? <Save className="size-4" />} Save as Open</Button>
+        <>
+          <Button variant="outline" onClick={() => void save('draft')} disabled={busy} className="gap-1.5" data-slot="doc-save-draft">{spin('draft') ?? <Save className="size-4" />} Save as Draft</Button>
+          <Button onClick={() => void save('open')} disabled={busy} className="gap-1.5" data-slot="doc-save-open">{spin('open') ?? <Save className="size-4" />} Save as Open</Button>
+        </>
       ) : (
         <>
           <Button variant="outline" onClick={() => void save('draft')} disabled={busy} className="gap-1.5" data-slot="doc-save-draft">{spin('draft') ?? <Save className="size-4" />} Save as Draft</Button>
@@ -460,6 +516,14 @@ export function SalesDocumentForm({ kind, editing }: {
             />
           </FormRow>
         )}
+        {(isQuote || isOrder) && (
+          <FormRow label="">
+            <label className="flex items-center gap-2 text-[13px]" data-slot="reverse-charge">
+              <Checkbox checked={reverseCharge} onCheckedChange={(v) => setReverseCharge(v === true)} />
+              This transaction is applicable for reverse charge
+            </label>
+          </FormRow>
+        )}
         <FormRow label="Select Price List">
           <Combobox
             options={activeLists.map((l) => ({ value: l.id, label: priceListLabel(l) }))}
@@ -470,7 +534,8 @@ export function SalesDocumentForm({ kind, editing }: {
 
       <div className="space-y-3">
         <h2 className="text-sm font-semibold">Item Table</h2>
-        <LineItemsEditor docDate={date} lines={lines} onChange={setLines} priceFor={priceFor} supplyType={supplyType} />
+        <LineItemsEditor docDate={date} lines={lines} onChange={setLines} priceFor={priceFor} supplyType={supplyType}
+          {...(isCredit ? { accountOptions: incomeAccounts, accountValues: lineAccounts, onAccountChange: (k: string, v: string) => setLineAccounts((m) => ({ ...m, [k]: v })) } : {})} />
         {isChallan && <p className="text-xs text-muted-foreground">A delivery challan moves goods without selling them: it carries their value, and no GST.</p>}
       </div>
 
@@ -487,6 +552,21 @@ export function SalesDocumentForm({ kind, editing }: {
               placeholder="Enter the terms and conditions of your business to be displayed in your transaction" />
           </div>
           <PendingAttachments value={pendingFiles} onChange={setPendingFiles} label={info.attachLabel} />
+          {isQuote && !ed && (
+            <div className="space-y-2" data-slot="auto-retainer">
+              <label className="flex items-center gap-2 text-[13px]">
+                <Checkbox checked={retainerOn} onCheckedChange={(v) => setRetainerOn(v === true)} />
+                Create a retainer invoice for this quote automatically
+              </label>
+              {retainerOn && (
+                <div className="flex items-center gap-2 pl-6 text-[13px]">
+                  <span className="text-muted-foreground">Retainer</span>
+                  <Input type="number" min="1" max="100" step="0.01" value={retainerPct} onChange={(e) => setRetainerPct(e.target.value)} className="h-8 w-24" data-slot="retainer-pct" />
+                  <span className="text-muted-foreground">% of the quote total</span>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         <div className="rounded-md border bg-muted/30 p-4" data-slot="doc-totals">
@@ -504,10 +584,23 @@ export function SalesDocumentForm({ kind, editing }: {
             {totals.tax && totals.tax.igstPaise > 0 && (
               <div className="flex items-center justify-between"><dt className="text-muted-foreground">IGST</dt><dd className="tabular">{formatINR(totals.tax.igstPaise)}</dd></div>
             )}
+            <div className="flex items-center justify-between gap-3" data-slot="shipping-row">
+              <dt className="text-muted-foreground">Shipping Charges</dt>
+              <dd className="w-32"><MoneyInput valuePaise={shipping} onChangePaise={(v) => setShipping(Math.max(0, v))} /></dd>
+            </div>
+            <div className="flex items-center justify-between gap-3" data-slot="adjustment-row">
+              <dt><Input value={adjustmentLabel} onChange={(e) => setAdjustmentLabel(e.target.value)} className="h-8 w-36 border-dashed text-[13px]" aria-label="Adjustment label" /></dt>
+              <dd className="w-32"><MoneyInput valuePaise={adjustment} onChangePaise={setAdjustment} allowNegative /></dd>
+            </div>
             {totals.roundOff !== 0 && (
               <div className="flex items-center justify-between"><dt className="text-muted-foreground">Round Off</dt><dd className="tabular">{formatINR(totals.roundOff)}</dd></div>
             )}
             <div className="flex items-center justify-between border-t pt-2.5 text-base font-semibold"><dt>Total ( ₹ )</dt><dd className="tabular">{formatINR(totals.total)}</dd></div>
+            {rcm && totals.rcmTax > 0 && (
+              <div className="rounded border border-dashed p-2 text-[12px] text-muted-foreground" data-slot="rcm-note">
+                {REVERSE_CHARGE_NOTE} Tax payable by the recipient: <span className="font-medium text-foreground tabular">{formatINR(totals.rcmTax)}</span>
+              </div>
+            )}
           </dl>
         </div>
       </div>

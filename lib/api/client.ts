@@ -298,6 +298,9 @@ export interface InvoiceDetail {
   adjustmentPaise: number;
   adjustmentLabel: string | null;
   roundOffPaise: number;
+  /** Under reverse charge (the buyer pays the GST), and a bill of supply. */
+  reverseCharge?: boolean;
+  billOfSupply?: boolean;
   totalPaise: number;
   amountPaidPaise: number;
   balancePaise: number;
@@ -1174,6 +1177,8 @@ export interface SalesDocRow {
   /** An order: where it has got to before the invoice. */
   stage?: 'order' | 'proforma' | 'in_process' | 'ready';
   proformaNumber?: string | null;
+  /** An order's: how far its invoices are paid (Zoho's PAYMENT column). */
+  payment?: 'paid' | 'partially_paid' | 'unpaid' | null;
 }
 
 export interface SalesDocListResponse {
@@ -1206,9 +1211,19 @@ export interface EditableSalesDoc {
   againstInvoice?: { id: string; number: string } | null;
   invoices?: { id: string; number: string }[];
   challans?: { id: string; number: string }[];
+  /** A sales order's purchase orders; a quote's automatic retainer invoices. */
+  purchaseOrders?: { id: string; number: string }[];
+  retainers?: { id: string; number: string }[];
+  /** Zoho's Shipping Charges and Adjustment (migration 124). */
+  shippingChargePaise?: number; adjustmentPaise?: number; adjustmentLabel?: string | null;
+  /** Reverse charge (quotes and orders): the buyer pays the GST. */
+  reverseCharge?: boolean;
+  retainerPct?: number | null;
   lines: {
+    lineId?: string; accountId?: string | null;
     itemId: string | null; itemName?: string | null; sku?: string | null; description: string | null; hsnSac: string | null;
     qty: number; uqc: string | null; ratePaise: number; discountPct: number; gstRatePct: number; amountPaise?: number;
+    qtyInvoiced?: number; qtyDelivered?: number; qtyCancelled?: number;
   }[];
 }
 
@@ -1219,6 +1234,18 @@ export interface ExpenseDetail {
   isBillable: boolean; billableCustomerId: string | null; projectId: string | null; reference: string | null; notes: string | null;
   mileage: { km: number; ratePaise: number } | null; billedInvoiceId: string | null; journalEntryId: string | null;
 }
+
+/** Zoho's module Preferences (Quotes, Sales Orders, Invoices, Delivery Challans, Credit Notes). */
+export type DocPrefType = 'estimate' | 'sales_order' | 'invoice' | 'challan' | 'credit_note';
+export interface DocPreferences {
+  type: DocPrefType; notes: string | null; terms: string | null;
+  settings: { allowEditAfterSending: boolean; onQuoteAccepted?: 'nothing' | 'invoice' | 'sales_order' };
+}
+export const docPreferences = {
+  get: (type: DocPrefType) => api.get<DocPreferences>('/api/settings/document-preferences', { type }),
+  save: (input: { type: DocPrefType; notes?: string | null; terms?: string | null; settings?: Partial<DocPreferences['settings']> }) =>
+    api.put<DocPreferences>('/api/settings/document-preferences', input),
+};
 
 export const salesDocuments = {
   /** A quote, order, challan or credit note as saved, for its Edit dialog. */
@@ -1247,6 +1274,18 @@ export const salesDocuments = {
     api.patch<{ id: string; status: string }>('/api/sales-documents', {
       action: 'set-status', kind, id, status,
     }),
+  /** A draft credit note, posted (Zoho's Convert to Open). */
+  openCreditNote: (id: string) =>
+    api.patch<{ id: string; number: string; status: string }>('/api/sales-documents', { action: 'open-credit-note', id }),
+  /** Zoho's sales order Cancel Items: lines and quantities, or everything left when none are given. */
+  cancelItems: (id: string, lines?: { lineId: string; qty: number }[]) =>
+    api.patch<{ cancelled: number; status: string }>('/api/sales-documents', { action: 'cancel-items', id, lines }),
+  /** Zoho's sales order Convert to Purchase Order. */
+  toPurchaseOrder: (id: string, input: { vendorId: string; date: string; expectedDate?: string | null; lineIds?: string[] }) =>
+    api.patch<{ purchaseOrderId: string; number: string; totalPaise: number; skipped: number }>('/api/sales-documents', { action: 'to-purchase-order', id, ...input }),
+  /** Zoho's quote Create Project. */
+  createProject: (id: string, input: { name?: string | null; billingMethod?: 'fixed' | 'project_hours' | 'task_hours' | 'staff_hours'; ratePaise?: number }) =>
+    api.patch<{ projectId: string; name: string }>('/api/sales-documents', { action: 'create-project', id, ...input }),
   applyRetainer: (id: string, invoiceId: string, amountPaise?: number) =>
     api.patch<{ appliedPaise: number; journalEntryId: string }>('/api/sales-documents', {
       action: 'apply-retainer', id, invoiceId, amountPaise,
@@ -1653,6 +1692,8 @@ export interface Gstr1Row {
   noteType?: 'C' | 'D';
   againstNumber?: string | null;
   irnStatus?: string;
+  /** Reported with rchrg Y: the recipient pays the GST. */
+  reverseCharge?: boolean;
 }
 
 export interface Gstr1Response {
@@ -1798,7 +1839,7 @@ export interface EwayBillRow {
    * challan covers job work, branch transfers and goods out on approval — no
    * invoice, no revenue, and still a lorry that has to be declared.
    */
-  docKind: 'invoice' | 'challan';
+  docKind: 'invoice' | 'challan' | 'credit_note';
   docId: string;
   /** Null on a challan row. Use `docKind` and `docId` to address the document. */
   invoiceId: string | null;
@@ -2011,11 +2052,12 @@ export const gst = {
   /** Build and check an invoice without submitting it — costs no attempt. */
   einvoicePreview: (invoiceId: string) =>
     api.get<EinvoicePreviewResponse>('/api/gst', { view: 'einvoice-preview', invoiceId }),
-  ewayCheck: (doc: { docKind: 'invoice' | 'challan'; docId: string }) =>
+  ewayCheck: (doc: { docKind: 'invoice' | 'challan' | 'credit_note'; docId: string }) =>
     api.get<EwayBillCheckResponse>('/api/gst', {
       view: 'eway-check',
       invoiceId: doc.docKind === 'invoice' ? doc.docId : undefined,
       challanId: doc.docKind === 'challan' ? doc.docId : undefined,
+      creditNoteId: doc.docKind === 'credit_note' ? doc.docId : undefined,
     }),
   submitEinvoice: (invoiceId: string) =>
     api.post<{
@@ -2039,6 +2081,8 @@ export const gst = {
     /** Exactly one of these. A challan moves goods just as an invoice does. */
     invoiceId?: string;
     challanId?: string;
+    /** Goods coming back on a sales return. */
+    creditNoteId?: string;
     vehicleNo?: string | null;
     transporterId?: string | null;
     transporterName?: string | null;

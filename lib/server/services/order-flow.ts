@@ -81,25 +81,27 @@ function choose<L extends { id: number; line_no: number }>(
 
 async function loadOrder(trx: Trx, orgId: number, soId: number) {
   const so = await trx.selectFrom('sales_orders')
-    .select(['id', 'number', 'branch_id', 'customer_id', 'place_of_supply', 'supply_type', 'status', 'invoiced_amount'])
+    .select(['id', 'number', 'branch_id', 'customer_id', 'place_of_supply', 'supply_type', 'status', 'invoiced_amount',
+      'shipping_charge', 'adjustment', 'adjustment_label', 'reverse_charge', 'salesperson_id', 'notes', 'terms'])
     .where('id', '=', soId).where('org_id', '=', orgId).forUpdate().executeTakeFirst();
   if (!so) throw notFound('That sales order does not exist.');
   if (so.status === 'cancelled') throw conflict(`Sales order ${so.number} was cancelled.`);
   if (so.status === 'closed') throw conflict(`Sales order ${so.number} is closed.`);
   if (so.status === 'draft') throw conflict(`Sales order ${so.number} is a draft: mark it as confirmed first.`);
   const lines = await trx.selectFrom('sales_order_lines')
-    .select(['id', 'line_no', 'item_id', 'description', 'hsn_sac', 'qty', 'qty_delivered', 'qty_invoiced', 'uqc', 'rate', 'discount_pct', 'gst_rate_pct'])
+    .select(['id', 'line_no', 'item_id', 'description', 'hsn_sac', 'qty', 'qty_delivered', 'qty_invoiced', 'qty_cancelled', 'uqc', 'rate', 'discount_pct', 'gst_rate_pct'])
     .where('sales_order_id', '=', soId).orderBy('line_no').execute();
   return { so, lines };
 }
 
 async function refreshOrderStatus(trx: Trx, soId: number, addInvoicedPaise: Paise) {
-  const lines = await trx.selectFrom('sales_order_lines').select(['qty', 'qty_invoiced'])
+  const lines = await trx.selectFrom('sales_order_lines').select(['qty', 'qty_invoiced', 'qty_cancelled'])
     .where('sales_order_id', '=', soId).execute();
   const so = await trx.selectFrom('sales_orders').select(['invoiced_amount']).where('id', '=', soId).executeTakeFirstOrThrow();
   await trx.updateTable('sales_orders').set({
     invoiced_amount: toSqlFromPaise(toPaiseFromSql(so.invoiced_amount) + addInvoicedPaise),
-    status: statusFor(lines.map((l) => ({ qty: l.qty, done: Number(l.qty_invoiced) })), 'invoiced', 'partially_invoiced', 'open') as 'open',
+    // Quantity cancelled (Zoho's Cancel Items) counts as done: it will never be invoiced.
+    status: statusFor(lines.map((l) => ({ qty: l.qty, done: Number(l.qty_invoiced) + Number(l.qty_cancelled) })), 'invoiced', 'partially_invoiced', 'open') as 'open',
   }).where('id', '=', soId).execute();
 }
 
@@ -135,7 +137,7 @@ export async function invoiceFromSalesOrder(
   const challaned = await onOpenChallans(trx, lines.map((l) => l.id));
   const held = (id: number) => Math.max((challaned.get(id) ?? 0) - (input.alsoOnChallans?.get(id) ?? 0), 0);
   const picked = choose(
-    lines, (l) => Number(l.qty) - Number(l.qty_invoiced) - held(l.id), input.lines, `sales order ${so.number}`,
+    lines, (l) => Number(l.qty) - Number(l.qty_invoiced) - Number(l.qty_cancelled) - held(l.id), input.lines, `sales order ${so.number}`,
   );
 
   const created = await createInvoice(trx, orgId, userId, {
@@ -144,6 +146,12 @@ export async function invoiceFromSalesOrder(
     // An export order's invoice charges the IGST the order did, or none under the LUT while one covers it.
     exportFromSource: exportTaxOf(so.supply_type),
     sourceDocType: 'sales_order', sourceDocId: so.id, holdForApproval: true,
+    // The order's reverse charge holds for every invoice from it; its shipping and adjustment go on the first.
+    reverseCharge: Number(so.reverse_charge) === 1,
+    salespersonId: so.salesperson_id,
+    ...(toPaiseFromSql(so.invoiced_amount) === 0
+      ? { shippingChargePaise: toPaiseFromSql(so.shipping_charge), adjustmentPaise: toPaiseFromSql(so.adjustment), adjustmentLabel: so.adjustment_label }
+      : {}),
     lines: picked.map(({ line, qty }) => ({
       itemId: line.item_id, description: line.description, hsnSac: line.hsn_sac, qty, uqc: line.uqc,
       ratePaise: toPaiseFromSql(line.rate), discountPct: Number(line.discount_pct), gstRatePct: Number(line.gst_rate_pct),
@@ -165,7 +173,7 @@ export async function challanFromSalesOrder(
   input: { date: string; challanType?: 'supply_on_approval' | 'liquid_gas' | 'other'; notes?: string | null; lines?: LinePick[] },
 ): Promise<CreatedDocument> {
   const { so, lines } = await loadOrder(trx, orgId, soId);
-  const picked = choose(lines, (l) => Number(l.qty) - Number(l.qty_delivered), input.lines, `sales order ${so.number}`);
+  const picked = choose(lines, (l) => Number(l.qty) - Number(l.qty_delivered) - Number(l.qty_cancelled), input.lines, `sales order ${so.number}`);
   // Goods invoiced from the order before they were sent: invoiced, less what
   // was sent and invoiced already. They go out on this challan as invoiced.
   const challaned = await onOpenChallans(trx, picked.map(({ line }) => line.id));

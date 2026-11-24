@@ -201,7 +201,7 @@ async function turnover(ex: Executor, orgId: number, from: string, to: string): 
         SELECT COALESCE(i.supply_type, 'intra'), cl.gst_rate_pct, cl.taxable, -1
           FROM credit_note_lines cl JOIN credit_notes n ON n.id = cl.credit_note_id
           LEFT JOIN invoices i ON i.id = n.against_invoice_id
-         WHERE n.org_id = ${orgId} AND n.status <> 'void' AND n.note_date BETWEEN ${from} AND ${to}
+         WHERE n.org_id = ${orgId} AND n.status NOT IN ('void', 'draft') AND n.note_date BETWEEN ${from} AND ${to}
       ) x
   `.execute(ex);
   return { exempt: p(rows[0]?.exempt ?? '0'), total: p(rows[0]?.total ?? '0') };

@@ -96,6 +96,10 @@ function documentTitle(inv: InvoiceDetail): { title: string; endorsement: string
     };
   }
   if (inv.seller.registration === 'unregistered') return { title: 'Invoice', endorsement: null };
+  // Zoho's New Bill Of Supply: exempt, nil-rated or non-GST goods (Rule 49).
+  if (inv.billOfSupply) return { title: 'Bill of Supply', endorsement: inv.seller.registration === 'composition' ? 'Composition taxable person, not eligible to collect tax on supplies' : null };
+  // Reverse charge (Rule 46(p)): the invoice says the recipient pays the tax.
+  if (inv.reverseCharge) return { title: 'Tax Invoice', endorsement: 'Tax is payable on reverse charge basis' };
   if (inv.seller.registration === 'composition') {
     return {
       title: 'Bill of Supply',
@@ -359,7 +363,7 @@ export function invoiceModel(inv: InvoiceDetail, copyLabel: string | null): Shee
       ...(fx ? [{ label: 'Currency', value: fx.currency }] : []),
       ...(inv.ewayBill ? [{ label: 'E-Way Bill#', value: inv.ewayBill.number }] : []),
       ...(inv.printFields ?? []).map((f) => ({ label: f.label, value: f.value })),
-      ...(exp ? [] : [{ label: 'Reverse Charge', value: 'No' }]),
+      ...(exp ? [] : [{ label: 'Reverse Charge', value: inv.reverseCharge ? 'Yes' : 'No' }]),
     ],
     balance: { label: 'Balance Due', paise: balancePaise },
     date: day(inv.date),

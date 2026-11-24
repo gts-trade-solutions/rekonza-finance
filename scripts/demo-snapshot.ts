@@ -142,6 +142,8 @@ const ON_DEMAND = [
   '/api/saved-views?list=items',
   '/api/saved-views?list=customers',
   '/api/saved-views?list=vendors',
+  // Zoho's module Preferences: read by every new quote, order, challan and credit note, and by their Preferences pages.
+  ...['estimate', 'sales_order', 'invoice', 'challan', 'credit_note'].map((t) => `/api/settings/document-preferences?type=${t}`),
   // The Banking Overview's period, scope and Active/Inactive/All Accounts menus.
   ...['30d', '12m'].flatMap((period) => ['active', 'inactive', 'all'].map((status) => `/api/banking/overview?period=${period}&status=${status}`)),
   '/api/banking/accounts?status=all',

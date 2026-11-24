@@ -1,3 +1,4 @@
+import { editAfterSendingAllowed } from './doc-preferences';
 import 'server-only';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -38,6 +39,7 @@ import { costLines, type DocumentLineInput } from './lines';
 import { fyLabelFor, createInvoice } from './sales';
 import { ApiError, badRequest, conflict, notFound } from '../http';
 import { voidReason, voidStamp } from './void-reason';
+import { reverseChargeProblem, withoutTax } from '../../tax/reverse-charge';
 import { recordSerials } from './serials';
 import { checkGodown } from './godowns';
 import { itemSaleAccounts } from './item-accounts';
@@ -137,6 +139,41 @@ interface BaseDocInput {
   salespersonId?: number | null;
   /** Zoho's Terms & Conditions, printed under the notes. */
   terms?: string | null;
+  /** Zoho's Shipping Charges and Adjustment at the foot of the document (migration 124). */
+  shippingChargePaise?: Paise;
+  adjustmentPaise?: Paise;
+  adjustmentLabel?: string | null;
+}
+
+/**
+ * Shipping and the adjustment as stored, and what they add to the total. Both
+ * sit outside the GST, as on an invoice: shipping is income of its own and the
+ * adjustment rounds a figure the customer agreed.
+ */
+function extrasOf(input: { shippingChargePaise?: Paise; adjustmentPaise?: Paise; adjustmentLabel?: string | null }) {
+  const shipping = input.shippingChargePaise ?? 0;
+  const adjustment = input.adjustmentPaise ?? 0;
+  if (shipping < 0) throw badRequest('Shipping charges cannot be negative.');
+  return {
+    shipping: shipping as Paise,
+    adjustment: adjustment as Paise,
+    values: {
+      shipping_charge: toSqlFromPaise(shipping as Paise),
+      adjustment: toSqlFromPaise(adjustment as Paise),
+      adjustment_label: adjustment ? (input.adjustmentLabel?.trim() || 'Adjustment').slice(0, 60) : null,
+    },
+  };
+}
+
+/** Reverse charge on a quote or order (Zoho's checkbox): the buyer must be registered, and the GST comes off. */
+async function reverseCharged<D extends Awaited<ReturnType<typeof costLines>>>(
+  trx: Trx, orgId: number, customerId: number, supplyType: SupplyType, costed: D, on: boolean | undefined,
+): Promise<D> {
+  if (!on) return costed;
+  const c = await trx.selectFrom('contacts').select('gstin').where('id', '=', customerId).where('org_id', '=', orgId).executeTakeFirst();
+  const problem = reverseChargeProblem({ buyerGstin: c?.gstin, supplyType });
+  if (problem) throw badRequest(problem);
+  return withoutTax(costed);
 }
 
 /** A salesperson and a project named on a document must be this business's own. */
@@ -198,6 +235,10 @@ export interface CreateEstimateInput extends BaseDocInput {
   status?: 'draft' | 'sent';
   /** Zoho's Project Name: the project the quote is for. */
   projectId?: number | null;
+  /** "This transaction is applicable for reverse charge": the buyer pays the GST. */
+  reverseCharge?: boolean;
+  /** "Create a retainer invoice for this quote automatically", for this per cent of the quote. */
+  retainerPct?: number | null;
 }
 
 /**
@@ -216,8 +257,13 @@ export async function createEstimate(
 ): Promise<CreatedDocument> {
   await checkPeople(trx, orgId, input);
   const ctx = await partyContext(trx, orgId, input.branchId, input.customerId, input.placeOfSupply, input.date);
-  const costed = await costLines(trx, orgId, ctx.supplyType, input.lines, 'sale_price', input.date);
-  const { rounded } = roundToRupee(costed.tax.taxablePaise + totalTaxPaise(costed.tax));
+  const costed = await reverseCharged(trx, orgId, input.customerId, ctx.supplyType,
+    await costLines(trx, orgId, ctx.supplyType, input.lines, 'sale_price', input.date), input.reverseCharge);
+  const extras = extrasOf(input);
+  const { rounded } = roundToRupee(costed.tax.taxablePaise + totalTaxPaise(costed.tax) + extras.shipping + extras.adjustment);
+  if (input.retainerPct != null && !(input.retainerPct > 0 && input.retainerPct <= 100)) {
+    throw badRequest('The retainer is a per cent of the quote, above 0 and up to 100.');
+  }
 
   const series = await seriesFor(trx, orgId, 'EST', input.voucherTypeId);
   const number = opts.replace?.number ??
@@ -242,6 +288,9 @@ export async function createEstimate(
       total: toSqlFromPaise(rounded),
       notes: input.notes ?? null,
       ...zohoFields(input),
+      ...extras.values,
+      reverse_charge: input.reverseCharge ? 1 : 0,
+      retainer_pct: input.retainerPct != null ? String(input.retainerPct) : null,
       salesperson_id: input.salespersonId ?? null,
       project_id: input.projectId ?? null,
       created_by_user_id: userId,
@@ -288,6 +337,8 @@ export interface CreateSalesOrderInput extends BaseDocInput {
   deliveryMethod?: string | null;
   /** Zoho's Save as Draft; otherwise the order is confirmed (open). An edit keeps its status. */
   status?: 'draft' | 'open';
+  /** "This transaction is applicable for reverse charge": the buyer pays the GST. */
+  reverseCharge?: boolean;
 }
 
 /**
@@ -308,8 +359,10 @@ export async function createSalesOrder(
 ): Promise<CreatedDocument> {
   await checkPeople(trx, orgId, input);
   const ctx = await partyContext(trx, orgId, input.branchId, input.customerId, input.placeOfSupply, input.date, { fromSource: input.exportFromSource });
-  const costed = await costLines(trx, orgId, ctx.supplyType, input.lines, 'sale_price', input.date);
-  const { rounded } = roundToRupee(costed.tax.taxablePaise + totalTaxPaise(costed.tax));
+  const costed = await reverseCharged(trx, orgId, input.customerId, ctx.supplyType,
+    await costLines(trx, orgId, ctx.supplyType, input.lines, 'sale_price', input.date), input.reverseCharge);
+  const extras = extrasOf(input);
+  const { rounded } = roundToRupee(costed.tax.taxablePaise + totalTaxPaise(costed.tax) + extras.shipping + extras.adjustment);
 
   const series = await seriesFor(trx, orgId, 'SO', input.voucherTypeId);
   const number = opts.replace?.number ??
@@ -336,6 +389,8 @@ export async function createSalesOrder(
       source_estimate_id: input.sourceEstimateId ?? null,
       notes: input.notes ?? null,
       ...zohoFields(input),
+      ...extras.values,
+      reverse_charge: input.reverseCharge ? 1 : 0,
       salesperson_id: input.salespersonId ?? null,
       payment_terms: input.paymentTerms ?? null,
       delivery_method: input.deliveryMethod?.trim() || null,
@@ -396,6 +451,9 @@ export interface CreateChallanInput {
   /** Zoho's Save as Draft; otherwise open. An edit keeps its status. */
   status?: 'draft' | 'open';
   lines: { itemId?: number | null; description?: string | null; hsnSac?: string | null; qty: number; uqc?: string | null; ratePaise?: Paise }[];
+  shippingChargePaise?: Paise;
+  adjustmentPaise?: Paise;
+  adjustmentLabel?: string | null;
 }
 
 /**
@@ -443,7 +501,9 @@ export async function createChallan(
       lineTotal: Math.round(rate * l.qty),
     };
   });
-  const total = priced.reduce((t, l) => t + l.lineTotal, 0);
+  const extras = extrasOf(input);
+  // The goods' value, then Zoho's shipping and adjustment beneath it.
+  const total = priced.reduce((t, l) => t + l.lineTotal, 0) + extras.shipping + extras.adjustment;
 
   // A hand-typed number has to meet the same GST rules as an allocated one.
   const typed = opts.replace ? null : input.number?.trim();
@@ -462,9 +522,10 @@ export async function createChallan(
       challan_type: input.challanType ?? 'other',
       place_of_supply: ctx.placeOfSupply,
       status: input.status ?? 'open',
-      total: toSqlFromPaise(total),
+      total: toSqlFromPaise(total as Paise),
       notes: input.notes ?? null,
       ...zohoFields(input),
+      ...extras.values,
       created_by_user_id: userId,
     };
   const id = await writeDocument(trx, orgId, 'delivery_challans', 'challan_lines', 'challan_id', values, opts.replace);
@@ -487,7 +548,7 @@ export async function createChallan(
     )
     .execute();
 
-  return { id, number, totalPaise: total, journalEntryId: null };
+  return { id, number, totalPaise: total as Paise, journalEntryId: null };
 }
 
 // ── Credit notes ─────────────────────────────────────────────────────────────
@@ -497,6 +558,12 @@ export interface CreateCreditNoteInput extends BaseDocInput {
   againstInvoiceId?: number | null;
   /** Apply it against the invoice immediately, up to that invoice's balance. */
   applyImmediately?: boolean;
+  /**
+   * Zoho's Save as Draft: the note is kept, numbered, and posts nothing — no
+   * entry, no GSTR-1, no stock back, nothing applied or refunded — until it is
+   * converted to open. Otherwise (and by default) it is open and posted.
+   */
+  status?: 'draft' | 'open';
 }
 
 /**
@@ -526,9 +593,27 @@ export async function createCreditNote(
   }
 
   await checkPeople(trx, orgId, input);
+  const draft = input.status === 'draft';
   const ctx = await partyContext(trx, orgId, input.branchId, input.customerId, input.placeOfSupply, input.date, { againstInvoiceId: input.againstInvoiceId });
-  const costed = await costLines(trx, orgId, ctx.supplyType, input.lines, 'sale_price', input.date);
-  const { rounded } = roundToRupee(costed.tax.taxablePaise + totalTaxPaise(costed.tax));
+  // A credit note follows its invoice: against a reverse-charge invoice (which
+  // charged and posted no GST) it gives back no GST either; the recipient
+  // reverses the tax it paid, and GSTR-1 reports the note with rchrg Y.
+  const rcInvoice = input.againstInvoiceId
+    ? Number((await trx.selectFrom('invoices').select('reverse_charge').where('id', '=', input.againstInvoiceId).where('org_id', '=', orgId).executeTakeFirst())?.reverse_charge ?? 0) === 1
+    : false;
+  const costedAll = await costLines(trx, orgId, ctx.supplyType, input.lines, 'sale_price', input.date);
+  const costed = rcInvoice ? withoutTax(costedAll) : costedAll;
+  const extras = extrasOf(input);
+  const { rounded } = roundToRupee(costed.tax.taxablePaise + totalTaxPaise(costed.tax) + extras.shipping + extras.adjustment);
+
+  // Zoho's ACCOUNT column: a line may come back out of another income head (as an invoice line may go to one).
+  const namedAccounts = [...new Set(input.lines.map((l) => l.accountId).filter((x): x is number => !!x))];
+  if (namedAccounts.length) {
+    const found = await trx.selectFrom('accounts').select(['id', 'type']).where('org_id', '=', orgId).where('id', 'in', namedAccounts).execute();
+    for (const a of namedAccounts) {
+      if (found.find((f) => f.id === a)?.type !== 'income') throw badRequest('A credit note line can come back only out of an income account.');
+    }
+  }
 
   let invoice: { id: number; number: string; total: string; amount_paid: string } | undefined;
   if (input.againstInvoiceId) {
@@ -592,7 +677,7 @@ export async function createCreditNote(
       against_invoice_id: input.againstInvoiceId ?? null,
       place_of_supply: ctx.placeOfSupply,
       supply_type: ctx.supplyType,
-      status: 'open',
+      status: draft ? 'draft' : 'open',
       subtotal: toSqlFromPaise(costed.tax.taxablePaise),
       cgst: toSqlFromPaise(costed.tax.cgstPaise),
       sgst: toSqlFromPaise(costed.tax.sgstPaise),
@@ -602,6 +687,7 @@ export async function createCreditNote(
       applied_amount: toSqlFromPaise(0),
       notes: input.notes ?? null,
       ...zohoFields(input),
+      ...extras.values,
       salesperson_id: input.salespersonId ?? null,
       created_by_user_id: userId,
     };
@@ -620,7 +706,7 @@ export async function createCreditNote(
   // Each line comes back out of the income head its item's sale went to (the
   // item's sales account, as on the invoice), the rest out of Sales.
   const itemAccounts = await itemSaleAccounts(trx, orgId, costed.lines.map((c) => c.itemId));
-  const lineAccount = (c: { itemId: number | null }) => (c.itemId ? itemAccounts.get(c.itemId) ?? null : null);
+  const accountOf = (c: { itemId: number | null }, i: number) => input.lines[i]?.accountId ?? (c.itemId ? itemAccounts.get(c.itemId) ?? null : null);
   await trx
     .insertInto('credit_note_lines')
     .values(
@@ -629,7 +715,7 @@ export async function createCreditNote(
         credit_note_id: id,
         line_no: i + 1,
         item_id: c.itemId,
-        account_id: lineAccount(c),
+        account_id: accountOf(c, i),
         description: c.description,
         hsn_sac: c.hsnSac,
         qty: c.qty,
@@ -648,6 +734,9 @@ export async function createCreditNote(
       })),
     )
     .execute();
+  // A draft stops here: nothing is posted, returned to stock or applied until it is open.
+  if (draft) return { id, number, totalPaise: rounded, journalEntryId: null };
+
   // Numbered pieces coming back: each has to have gone out.
   const cnLineIds = (await trx.selectFrom('credit_note_lines').select('id').where('credit_note_id', '=', id).orderBy('line_no').execute()).map((r) => r.id);
   await recordSerials(trx, orgId, { type: 'credit_note', id }, 1,
@@ -655,8 +744,8 @@ export async function createCreditNote(
 
   const acc = await accountIds(trx, orgId);
   const own = new Map<number, number>();
-  for (const c of costed.lines) {
-    const a = lineAccount(c);
+  for (const [i, c] of costed.lines.entries()) {
+    const a = accountOf(c, i);
     if (a) own.set(a, (own.get(a) ?? 0) + c.taxable);
   }
   const elsewhere = [...own.values()].reduce((t, v) => t + v, 0);
@@ -669,10 +758,15 @@ export async function createCreditNote(
     { accountId: requireAccount(acc, CODE.GST_CESS), debit: costed.tax.cessPaise },
     { accountId: requireAccount(acc, CODE.AR), credit: rounded, contactId: input.customerId },
   ];
+  // Shipping charged on the invoice comes back out of Shipping Income; the
+  // adjustment out of where an invoice's went (other income, or discount allowed).
+  if (extras.shipping > 0) lines.push({ accountId: requireAccount(acc, CODE.SHIPPING_INCOME), debit: extras.shipping });
+  if (extras.adjustment > 0) lines.push({ accountId: requireAccount(acc, CODE.OTHER_INCOME), debit: extras.adjustment });
+  else if (extras.adjustment < 0) lines.push({ accountId: requireAccount(acc, CODE.DISCOUNT_ALLOWED), credit: -extras.adjustment });
 
   // Rounding the credit to the rupee leaves the same paisa remainder an invoice
   // does, and it goes to the same place.
-  const rawTotal = costed.tax.taxablePaise + totalTaxPaise(costed.tax);
+  const rawTotal = costed.tax.taxablePaise + totalTaxPaise(costed.tax) + extras.shipping + extras.adjustment;
   const roundOff = rounded - rawTotal;
   if (roundOff > 0) lines.push({ accountId: requireAccount(acc, CODE.ROUNDING), debit: roundOff });
   else if (roundOff < 0) lines.push({ accountId: requireAccount(acc, CODE.ROUNDING), credit: -roundOff });
@@ -733,6 +827,7 @@ export async function applyCreditNote(
     .where('id', '=', creditNoteId).where('org_id', '=', orgId).forUpdate().executeTakeFirst();
   if (!cn) throw notFound('That credit note does not exist.');
   if (cn.status === 'void') throw conflict('That credit note has been voided.');
+  if (cn.status === 'draft') throw conflict(`${cn.number} is a draft. Convert it to open before applying it.`);
   const left = toPaiseFromSql(cn.total) - toPaiseFromSql(cn.applied_amount);
   const wanted = input.allocations.filter((a) => a.amountPaise > 0);
   if (!wanted.length) throw badRequest('Give an amount against at least one invoice.');
@@ -803,6 +898,7 @@ export async function refundCreditNote(
     .executeTakeFirst();
   if (!cn) throw notFound('That credit note does not exist.');
   if (cn.status === 'void') throw conflict('That credit note has been voided.');
+  if (cn.status === 'draft') throw conflict(`${cn.number} is a draft. Convert it to open before refunding it.`);
 
   const unapplied = toPaiseFromSql(cn.total) - toPaiseFromSql(cn.applied_amount);
   const amount = input.amountPaise ?? unapplied;
@@ -1066,7 +1162,7 @@ export async function convertToInvoice(
   if (source.type === 'estimate') {
     const est = await trx
       .selectFrom('estimates')
-      .select(['id', 'number', 'branch_id', 'customer_id', 'place_of_supply', 'supply_type', 'status', 'notes'])
+      .select(['id', 'number', 'branch_id', 'customer_id', 'place_of_supply', 'supply_type', 'status', 'notes', 'terms', 'shipping_charge', 'adjustment', 'adjustment_label', 'reverse_charge', 'salesperson_id', 'project_id', 'reference_number'])
       .where('id', '=', source.id)
       .where('org_id', '=', orgId)
       .executeTakeFirst();
@@ -1090,6 +1186,14 @@ export async function convertToInvoice(
       exportFromSource: exportTaxOf(est.supply_type),
       status: input.status ?? 'approved',
       notes: est.notes,
+      terms: est.terms,
+      orderNumber: est.reference_number,
+      salespersonId: est.salesperson_id,
+      // Zoho's shipping, adjustment and reverse charge go on to the invoice the quote becomes.
+      shippingChargePaise: toPaiseFromSql(est.shipping_charge),
+      adjustmentPaise: toPaiseFromSql(est.adjustment),
+      adjustmentLabel: est.adjustment_label,
+      reverseCharge: Number(est.reverse_charge) === 1,
       sourceDocType: 'estimate',
       sourceDocId: est.id,
       lines: lines.map((l) => ({
@@ -1203,6 +1307,10 @@ async function salesDocBlocker(trx: Trx, orgId: number, kind: EditableSalesDoc, 
     const e = await trx.selectFrom('estimates').select(['number', 'status']).where('id', '=', id).where('org_id', '=', orgId).executeTakeFirst();
     if (!e) throw notFound('That quote does not exist.');
     if (what === 'edit' && e.status === 'converted') return `${e.number} has been converted. Change the order or invoice it became.`;
+    // Quote Preferences: "Allow editing of sent and accepted quotes", switched off.
+    if (what === 'edit' && (e.status === 'sent' || e.status === 'accepted') && !(await editAfterSendingAllowed(trx, orgId, 'estimate'))) {
+      return `${e.number} has been ${e.status}, and Quote Preferences do not allow editing it now.`;
+    }
     return null;
   }
   if (kind === 'sales-order') {
@@ -1214,6 +1322,9 @@ async function salesDocBlocker(trx: Trx, orgId: number, kind: EditableSalesDoc, 
       .select('challan_lines.id').where('sol.sales_order_id', '=', id).executeTakeFirst();
     if (toPaiseFromSql(so.invoiced_amount) > 0 || moved || challaned) {
       return `${so.number} has been invoiced or delivered in part. Delete those invoices and challans first.`;
+    }
+    if (what === 'edit' && so.status === 'open' && !(await editAfterSendingAllowed(trx, orgId, 'sales_order'))) {
+      return `${so.number} is confirmed, and Sales Order Preferences do not allow editing confirmed orders.`;
     }
     return null;
   }
@@ -1232,6 +1343,9 @@ async function salesDocBlocker(trx: Trx, orgId: number, kind: EditableSalesDoc, 
   const cn = await trx.selectFrom('credit_notes').select(['number', 'status']).where('id', '=', id).where('org_id', '=', orgId).executeTakeFirst();
   if (!cn) throw notFound('That credit note does not exist.');
   if (what === 'edit' && cn.status === 'void') return `${cn.number} is void.`;
+  if (what === 'edit' && (cn.status === 'open' || cn.status === 'applied') && !(await editAfterSendingAllowed(trx, orgId, 'credit_note'))) {
+    return `${cn.number} is open, and Credit Note Preferences do not allow editing open credit notes.`;
+  }
   const refunded = await trx.selectFrom('journal_entries').select('id').where('org_id', '=', orgId)
     .where('source_type', '=', 'credit_note_refund').where('source_id', '=', id).where('reversal_of_entry_id', 'is', null).executeTakeFirst();
   if (cn.status === 'refunded' || refunded) return `${cn.number} has been refunded in cash. Delete the refund first.`;
@@ -1279,11 +1393,16 @@ export async function updateSalesDocument(trx: Trx, orgId: number, userId: numbe
   else if (doc.kind === 'sales-order') made = await createSalesOrder(trx, orgId, userId, { ...doc.input, sourceEstimateId: undefined }, { replace });
   else if (doc.kind === 'challan') made = await createChallan(trx, orgId, userId, doc.input, { replace });
   else {
-    const cn = await trx.selectFrom('credit_notes').select(['journal_entry_id']).where('id', '=', id).executeTakeFirstOrThrow();
-    await reverseForChange(trx, orgId, cn.journal_entry_id, { memo: `Credit note ${row.number} edited: the entry as it was, reversed`, userId, module: 'sales' });
-    const hadOwn = await takeBackCredit(trx, orgId, id);
-    await trx.deleteFrom('serial_moves').where('org_id', '=', orgId).where('doc_type', '=', 'credit_note').where('doc_id', '=', id).execute();
-    made = await createCreditNote(trx, orgId, userId, { ...doc.input, applyImmediately: hadOwn }, { replace });
+    const cn = await trx.selectFrom('credit_notes').select(['journal_entry_id', 'status']).where('id', '=', id).executeTakeFirstOrThrow();
+    if (cn.status === 'draft') {
+      // A draft has nothing posted to undo: it is rewritten, and stays a draft unless asked to open.
+      made = await createCreditNote(trx, orgId, userId, { ...doc.input, status: doc.input.status ?? 'draft' }, { replace });
+    } else {
+      await reverseForChange(trx, orgId, cn.journal_entry_id, { memo: `Credit note ${row.number} edited: the entry as it was, reversed`, userId, module: 'sales' });
+      const hadOwn = await takeBackCredit(trx, orgId, id);
+      await trx.deleteFrom('serial_moves').where('org_id', '=', orgId).where('doc_type', '=', 'credit_note').where('doc_id', '=', id).execute();
+      made = await createCreditNote(trx, orgId, userId, { ...doc.input, status: 'open', applyImmediately: hadOwn }, { replace });
+    }
   }
   return { ...made, before };
 }

@@ -66,6 +66,8 @@ export interface Gstr1Row {
   noteType?: 'C' | 'D';
   againstNumber?: string | null;
   irnStatus?: string;
+  /** Under reverse charge (an invoice, or a credit note against one): reported with rchrg Y. */
+  reverseCharge?: boolean;
 }
 
 export interface Gstr1 {
@@ -99,8 +101,9 @@ export async function gstr1(ex: Executor, orgId: number, month: string, branchId
     supply_type: string; subtotal: string; cgst: string; sgst: string;
     igst: string; cess: string; total: string; irn_status: string | null;
     doc_kind: 'invoice' | 'debit_note'; note_reason: string | null; against_number: string | null; export_lut_arn: string | null;
+    reverse_charge: number;
   }>`
-    SELECT i.id, i.number, i.invoice_date, i.status, i.doc_kind, i.note_reason, o.number AS against_number,
+    SELECT i.id, i.number, i.invoice_date, i.status, i.doc_kind, i.note_reason, o.number AS against_number, i.reverse_charge,
            c.display_name AS customer_name, c.gstin, i.place_of_supply, i.supply_type,
            i.subtotal, i.cgst, i.sgst, i.igst, i.cess, i.total, i.export_lut_arn,
            e.status AS irn_status
@@ -129,6 +132,7 @@ export async function gstr1(ex: Executor, orgId: number, month: string, branchId
     cessPaise: toPaiseFromSql(r.cess),
     totalPaise: toPaiseFromSql(r.total),
     irnStatus: r.irn_status ?? 'not_applicable',
+    reverseCharge: Number(r.reverse_charge) === 1,
   });
 
   // A void invoice is reported in the document summary as cancelled, not in a
@@ -165,16 +169,16 @@ export async function gstr1(ex: Executor, orgId: number, month: string, branchId
     id: number; number: string; note_date: string; reason: string;
     customer_name: string; gstin: string | null; place_of_supply: string; supply_type: string;
     subtotal: string; cgst: string; sgst: string; igst: string; cess: string; total: string;
-    against_number: string | null;
+    against_number: string | null; against_rc: number | null;
   }>`
-    SELECT n.id, n.number, n.note_date, n.reason,
+    SELECT n.id, n.number, n.note_date, n.reason, i.reverse_charge AS against_rc,
            c.display_name AS customer_name, c.gstin, n.place_of_supply, n.supply_type,
            n.subtotal, n.cgst, n.sgst, n.igst, n.cess, n.total,
            i.number AS against_number
       FROM credit_notes n
       JOIN contacts c ON c.id = n.customer_id
       LEFT JOIN invoices i ON i.id = n.against_invoice_id
-     WHERE n.org_id = ${orgId} AND n.status <> 'void'
+     WHERE n.org_id = ${orgId} AND n.status NOT IN ('void', 'draft')
        AND n.note_date BETWEEN ${period.from} AND ${period.to}
        ${branchId ? sql`AND n.branch_id = ${branchId}` : sql``}
      ORDER BY n.note_date, n.id
@@ -197,6 +201,7 @@ export async function gstr1(ex: Executor, orgId: number, month: string, branchId
     reason: r.reason,
     againstNumber: r.against_number,
     noteType: 'C' as const,
+    reverseCharge: Number(r.against_rc ?? 0) === 1,
   }));
   // Debit notes sit in the same tables as credit notes (9B), as type D.
   creditNotes.push(...debitNotes);

@@ -6,6 +6,7 @@
 // ⋯ with Sort by, Import, Export, Manage Custom Fields, Refresh List and Reset
 // Column Width. A row opens the record beside the list (the split view).
 
+import { PREFS_FOR_KIND } from '@/components/settings/pref-modules';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useMemo, useState } from 'react';
@@ -63,6 +64,8 @@ function columnsFor(kind: SalesDocKindZ): Column<SalesDocRow>[] {
             return <span title={s.replace(/_/g, ' ')} data-slot="invoiced-mark" data-state={s} className={`inline-block size-2.5 rounded-full ${tone}`} />;
           },
         },
+        // Zoho's PAYMENT: how far the invoices raised from the order are paid.
+        { key: 'payment', header: 'Payment', align: 'center', sortValue: (r) => r.payment ?? '', cell: (r) => (r.payment ? <StatusBadge status={r.payment} /> : '') },
         { key: 'invoicedAmount', header: 'Invoiced Amount', align: 'right', defaultHidden: true, sortValue: (r) => r.appliedPaise ?? 0, cell: (r) => <Money value={r.appliedPaise ?? 0} showZero={false} /> },
         { key: 'shipment', header: 'Expected Shipment Date', defaultHidden: true, sortValue: (r) => r.detail ?? '', cell: (r) => zohoDay(r.detail) },
         { key: 'products', header: 'Products', defaultHidden: true, sortValue: (r) => r.items?.[0]?.name ?? '', cell: (r) => (r.items ?? []).map((i) => i.name).join(', ') },
@@ -167,6 +170,8 @@ export function SalesDocList({ kind }: { kind: SalesDocKindZ }) {
                   </DropdownMenuSub>
                 )}
                 <DropdownMenuSeparator />
+                {/* Zoho's ⋯ → Preferences: the module's own (Quote Preferences …). */}
+                <DropdownMenuItem onClick={() => router.push(PREFS_FOR_KIND[kind].href)} data-slot="module-preferences">Preferences</DropdownMenuItem>
                 <DropdownMenuItem onClick={() => router.push('/settings?tab=custom-fields')}>Manage Custom Fields</DropdownMenuItem>
                 <DropdownMenuItem onClick={() => void state.refetch()}><RefreshCw className="mr-2 size-4 text-primary" /> Refresh List</DropdownMenuItem>
                 <DropdownMenuItem onClick={() => resetColumnWidths()}>Reset Column Width</DropdownMenuItem>

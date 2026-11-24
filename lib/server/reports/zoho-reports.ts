@@ -162,7 +162,7 @@ export async function partyRegister(ex: Executor, orgId: number, side: 'customer
         UNION ALL
         SELECT 'Credit note', n.id, n.number, n.note_date, NULL, c.display_name, n.customer_id, n.status, -n.total, -(n.total - n.applied_amount)
           FROM credit_notes n JOIN contacts c ON c.id = n.customer_id
-         WHERE n.org_id = ${orgId} AND n.status <> 'void' AND n.note_date BETWEEN ${w.from} AND ${w.to}
+         WHERE n.org_id = ${orgId} AND n.status NOT IN ('void', 'draft') AND n.note_date BETWEEN ${w.from} AND ${w.to}
         UNION ALL
         SELECT 'Service invoice', r.id, r.number, r.retainer_date, NULL, c.display_name, r.customer_id, r.status, r.amount, r.amount - r.amount_paid
           FROM retainer_invoices r JOIN contacts c ON c.id = r.customer_id
@@ -254,7 +254,7 @@ export async function salesSummary(ex: Executor, orgId: number, w: Window) {
        GROUP BY m
       UNION ALL
       SELECT DATE_FORMAT(n.note_date, '%Y-%m'), 0, 0, 0, 0, COUNT(*), SUM(n.subtotal)
-        FROM credit_notes n WHERE n.org_id = ${orgId} AND n.status <> 'void' AND n.note_date BETWEEN ${w.from} AND ${w.to}
+        FROM credit_notes n WHERE n.org_id = ${orgId} AND n.status NOT IN ('void', 'draft') AND n.note_date BETWEEN ${w.from} AND ${w.to}
        GROUP BY 1
     ) x GROUP BY m ORDER BY m`.execute(ex);
   return rows.map((r) => ({

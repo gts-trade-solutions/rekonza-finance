@@ -1,3 +1,5 @@
+import { editAfterSendingAllowed } from './doc-preferences';
+import { reverseChargeProblem, withoutTax } from '../../tax/reverse-charge';
 import 'server-only';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -99,6 +101,18 @@ export interface CreateInvoiceInput {
   shippingChargePaise?: Paise;
   adjustmentPaise?: Paise;
   adjustmentLabel?: string | null;
+  /**
+   * Zoho's "This transaction is applicable for reverse charge": the buyer pays
+   * the GST, so the invoice charges and posts none and GSTR-1 reports it with
+   * rchrg Y (lib/tax/reverse-charge.ts). Only to a registered buyer.
+   */
+  reverseCharge?: boolean;
+  /**
+   * Zoho's "New Bill Of Supply": exempt, nil-rated or non-GST goods (or a
+   * composition dealer's sale), with no tax on it at all — titled and printed
+   * as a Bill of Supply (Rule 49).
+   */
+  billOfSupply?: boolean;
   /** The TCS head to collect under; the rate is the one in force on the invoice date. */
   tcsCode?: string | null;
   /** A TCS amount worked out elsewhere. Ignored when `tcsCode` is given. */
@@ -258,7 +272,7 @@ export async function createInvoice(
 
   const customer = await trx
     .selectFrom('contacts')
-    .select(['id', 'display_name', 'state_code', 'gst_treatment', 'pan'])
+    .select(['id', 'display_name', 'state_code', 'gst_treatment', 'pan', 'gstin'])
     .where('id', '=', input.customerId)
     .where('org_id', '=', orgId)
     .executeTakeFirst();
@@ -320,7 +334,17 @@ export async function createInvoice(
   }
   if (registration !== 'regular') supplyType = 'nil_or_exempt';
 
-  const costed = await costLines(trx, orgId, supplyType, input.lines, 'sale_price', input.date);
+  let costed = await costLines(trx, orgId, supplyType, input.lines, 'sale_price', input.date);
+  // A bill of supply carries no tax: a registered business raises one only for exempt, nil-rated or non-GST goods.
+  if (input.billOfSupply && registration === 'regular' && costed.lines.some((c) => c.gstRatePct > 0)) {
+    throw badRequest('A bill of supply carries no tax: every line must be exempt, nil-rated or non-GST (0%). Raise a tax invoice for taxable goods.');
+  }
+  if (input.reverseCharge) {
+    if (input.billOfSupply) throw badRequest('A bill of supply carries no tax, so it cannot be under reverse charge.');
+    const problem = reverseChargeProblem({ buyerGstin: customer.gstin, supplyType });
+    if (problem) throw badRequest(problem);
+    costed = withoutTax(costed);
+  }
   const computed = costed.lines;
 
   // A line may credit its own income head, or Asset Disposal Clearing when it
@@ -437,6 +461,8 @@ export async function createInvoice(
       shipping_charge: toSqlFromPaise(shipping),
       adjustment: toSqlFromPaise(adjustment),
       adjustment_label: input.adjustmentLabel ?? null,
+      reverse_charge: input.reverseCharge ? 1 : 0,
+      bill_of_supply: input.billOfSupply ? 1 : 0,
       round_off: toSqlFromPaise(roundOff),
       total: toSqlFromPaise(rounded),
       amount_paid: toSqlFromPaise(0),
@@ -769,6 +795,10 @@ async function changeBlocker(trx: Trx, orgId: number, inv: { id: number; number:
   const ewb = await trx.selectFrom('eway_bills').select('status').where('invoice_id', '=', inv.id).where('org_id', '=', orgId)
     .where('status', 'in', ['pending', 'generated']).executeTakeFirst();
   if (ewb) return `${inv.number} has an e-way bill. Cancel the e-way bill first.`;
+  // Invoice Preferences: "Allow editing of sent invoices", switched off.
+  if (what === 'edit' && ['sent', 'partially_paid', 'overdue', 'paid'].includes(inv.status) && !(await editAfterSendingAllowed(trx, orgId, 'invoice'))) {
+    return `${inv.number} has been sent, and Invoice Preferences do not allow editing sent invoices.`;
+  }
   return null;
 }
 
