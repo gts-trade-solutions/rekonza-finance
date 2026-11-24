@@ -2,7 +2,8 @@ import { z } from 'zod';
 import { db, transaction } from '@/lib/server/db';
 import { route, body, query, asId, badRequest } from '@/lib/server/http';
 import { runRecurringInvoice, type Frequency } from '@/lib/server/services/recurring';
-import { createProfile, repeatLabel } from '@/lib/server/services/recurring-profiles';
+import { createProfile, profileAmount, repeatLabel, type EntityType, type RoundOff } from '@/lib/server/services/recurring-profiles';
+import { toPaiseFromSql } from '@/lib/server/money-sql';
 import { CreateInput, toProfileInput } from './input';
 import '@/lib/server/jobs/boot';
 import { logAudit, auditMeta } from '@/lib/server/audit';
@@ -29,6 +30,7 @@ interface TemplateLine {
   ratePaise: number;
   gstRatePct: number;
   hsnSac: string | null;
+  discountPct?: number;
 }
 
 export const GET = route(
@@ -40,6 +42,7 @@ export const GET = route(
         'r.id', 'r.profile_name', 'r.frequency', 'r.repeat_every', 'r.start_date', 'r.end_date', 'r.next_run',
         'r.payment_terms', 'r.template', 'r.auto_send', 'r.is_active', 'r.last_generated_at', 'r.auto_run', 'r.last_error',
         'r.customer_id', 'c.display_name as customer_name',
+        'r.entity_type', 'r.shipping_charge', 'r.adjustment', 'r.round_off',
       ])
       .where('r.org_id', '=', orgId)
       .orderBy('r.next_run')
@@ -50,12 +53,13 @@ export const GET = route(
     return {
       profiles: rows.map((r) => {
         const template = (typeof r.template === 'string' ? JSON.parse(r.template) : r.template) as TemplateLine[];
-        // The value shown is what the template comes to today, tax included.
-        const taxable = template.reduce((t, l) => t + Math.round(l.ratePaise * l.qty), 0);
-        const tax = template.reduce(
-          (t, l) => t + Math.round((Math.round(l.ratePaise * l.qty) * l.gstRatePct) / 100),
-          0,
-        );
+        // The value shown is what the next invoice comes to: the lines after their
+        // discounts, tax (none on a bill of supply), shipping, adjustment, rounding.
+        const amount = profileAmount({
+          lines: template, entityType: (r.entity_type ?? 'invoice') as EntityType,
+          shippingPaise: toPaiseFromSql(r.shipping_charge ?? '0'), adjustmentPaise: toPaiseFromSql(r.adjustment ?? '0'),
+          roundOff: (r.round_off ?? 'whole') as RoundOff,
+        });
         return {
           id: asId(r.id),
           name: r.profile_name,
@@ -78,8 +82,9 @@ export const GET = route(
           isActive: !!r.is_active,
           lastGeneratedAt: r.last_generated_at ? String(r.last_generated_at).slice(0, 10) : null,
           lineCount: template.length,
-          taxablePaise: taxable,
-          totalPaise: taxable + tax,
+          taxablePaise: amount.subTotalPaise,
+          totalPaise: amount.totalPaise,
+          entityType: r.entity_type ?? 'invoice',
           isDue: !!r.is_active && String(r.next_run).slice(0, 10) <= today,
         };
       }),

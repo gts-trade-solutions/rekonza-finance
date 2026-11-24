@@ -16,16 +16,30 @@ import 'server-only';
 import { sql } from 'kysely';
 import type { Executor } from '../db';
 import { badRequest, notFound } from '../http';
-import { toPaiseFromSql } from '../money-sql';
+import { toPaiseFromSql, toSqlFromPaise } from '../money-sql';
+import { roundToRupee } from '../../money';
 import { advancePeriod, type Frequency, type TemplateLine } from './recurring';
+import { registrationOn } from './statutory';
 
 export { REPEAT_CHOICES, repeatLabel } from '../../recurring-repeat';
 import { repeatLabel } from '../../recurring-repeat';
+
+/** Zoho's Entity type: the profile raises invoices or bills of supply. */
+export type EntityType = 'invoice' | 'bill_of_supply';
+/** Zoho's Rounding Off Preference: "No Rounding", or round the total to the nearest whole number. */
+export type RoundOff = 'none' | 'whole';
 
 export interface ProfileInput {
   branchId: number;
   customerId: number;
   name: string;
+  entityType?: EntityType;
+  /** The totals' Shipping Charges, on every invoice raised. */
+  shippingChargePaise?: number;
+  /** The adjustment row: its label and an amount that may be negative. */
+  adjustmentPaise?: number;
+  adjustmentLabel?: string | null;
+  roundOff?: RoundOff;
   orderNumber?: string | null;
   frequency: Frequency;
   every: number;
@@ -47,6 +61,22 @@ export interface ProfileInput {
   autoRun?: boolean;
 }
 
+/**
+ * What a profile's next invoice comes to: its lines (after their discounts),
+ * their tax (none on a bill of supply), the Shipping Charges and adjustment,
+ * and the Rounding Off Preference. The list's AMOUNT and the record show this.
+ */
+export function profileAmount(p: {
+  lines: TemplateLine[]; entityType: EntityType; shippingPaise: number; adjustmentPaise: number; roundOff: RoundOff;
+}): { subTotalPaise: number; taxPaise: number; roundOffPaise: number; totalPaise: number } {
+  const net = (l: TemplateLine) => Math.round(l.ratePaise * l.qty * (1 - (l.discountPct ?? 0) / 100));
+  const sub = p.lines.reduce((t, l) => t + net(l), 0);
+  const tax = p.entityType === 'bill_of_supply' ? 0 : p.lines.reduce((t, l) => t + Math.round((net(l) * l.gstRatePct) / 100), 0);
+  const gross = sub + tax + p.shippingPaise + p.adjustmentPaise;
+  const r = p.roundOff === 'whole' ? roundToRupee(gross) : { rounded: gross, roundOff: 0 };
+  return { subTotalPaise: sub, taxPaise: tax, roundOffPaise: r.roundOff, totalPaise: r.rounded };
+}
+
 /** Zoho's checks, in Zoho's words, before anything is saved. */
 export async function checkProfile(ex: Executor, orgId: number, input: ProfileInput): Promise<void> {
   if (!input.customerId) throw badRequest('Select a customer.');
@@ -58,6 +88,14 @@ export async function checkProfile(ex: Executor, orgId: number, input: ProfileIn
   const c = await ex.selectFrom('contacts').select('id').where('id', '=', input.customerId).where('org_id', '=', orgId).executeTakeFirst();
   if (!c) throw badRequest('That customer does not exist.');
   if (input.lines.some((l) => (l.discountPct ?? 0) < 0 || (l.discountPct ?? 0) > 100)) throw badRequest('A discount is 0% to 100%.');
+  if ((input.shippingChargePaise ?? 0) < 0) throw badRequest('Shipping charges cannot be below zero.');
+  if (Math.abs(input.adjustmentPaise ?? 0) > 1_000_000_000_00) throw badRequest('That adjustment is too large.');
+  // A bill of supply carries no tax: as on the invoice (services/sales.ts), a
+  // regular dealer raises one only for exempt, nil-rated or non-GST goods.
+  if (input.entityType === 'bill_of_supply' && input.lines.some((l) => l.gstRatePct > 0)
+      && (await registrationOn(ex, orgId, input.startDate)) === 'regular') {
+    throw badRequest('A bill of supply carries no tax: every line must be exempt, nil-rated or non-GST (0%). Raise a tax invoice for taxable goods.');
+  }
   if (input.priceListId) {
     const pl = await ex.selectFrom('price_lists').select(['id', 'is_active']).where('id', '=', input.priceListId).where('org_id', '=', orgId).executeTakeFirst();
     if (!pl) throw badRequest('That price list does not exist.');
@@ -73,6 +111,7 @@ export async function checkProfile(ex: Executor, orgId: number, input: ProfileIn
 const values = (input: ProfileInput) => ({
   branch_id: input.branchId,
   profile_name: input.name.trim(),
+  entity_type: input.entityType ?? 'invoice',
   order_number: input.orderNumber?.trim() || null,
   customer_id: input.customerId,
   salesperson_id: input.salespersonId ?? null,
@@ -84,6 +123,11 @@ const values = (input: ProfileInput) => ({
   template: JSON.stringify(input.lines),
   notes: input.notes?.trim() || null,
   terms: input.terms?.trim() || null,
+  shipping_charge: toSqlFromPaise(input.shippingChargePaise ?? 0),
+  adjustment: toSqlFromPaise(input.adjustmentPaise ?? 0),
+  adjustment_label: input.adjustmentLabel?.trim() || null,
+  // Left as it is when an edit does not say; a new profile starts on Zoho's "No Rounding" (createProfile).
+  ...(input.roundOff ? { round_off: input.roundOff } : {}),
   price_list_id: input.priceListId ?? null,
   project_ids: input.projectIds?.length ? JSON.stringify([...new Set(input.projectIds)]) : null,
   payment_link: input.paymentLink ? 1 : 0,
@@ -94,7 +138,7 @@ const values = (input: ProfileInput) => ({
 export async function createProfile(ex: Executor, orgId: number, input: ProfileInput): Promise<number> {
   await checkProfile(ex, orgId, input);
   const r = await ex.insertInto('recurring_invoices')
-    .values({ org_id: orgId, ...values(input), next_run: input.startDate, auto_run: input.autoRun ? 1 : 0, is_active: 1 })
+    .values({ org_id: orgId, round_off: 'none' as const, ...values(input), next_run: input.startDate, auto_run: input.autoRun ? 1 : 0, is_active: 1 })
     .executeTakeFirstOrThrow();
   return Number(r.insertId);
 }
@@ -116,6 +160,10 @@ export async function updateProfile(ex: Executor, orgId: number, id: number, inp
 
 export interface ProfileDetail {
   id: string; name: string; orderNumber: string | null; branchId: string;
+  entityType: EntityType;
+  shippingChargePaise: number; adjustmentPaise: number; adjustmentLabel: string; roundOff: RoundOff;
+  /** The next invoice's figures: what its lines come to, its tax, and the paise the rounding moves. */
+  subTotalPaise: number; taxPaise: number; roundOffPaise: number;
   customerId: string; customerName: string; customerEmail: string | null;
   salespersonId: string | null; salespersonName: string | null;
   frequency: Frequency; every: number; repeatLabel: string;
@@ -141,7 +189,8 @@ export async function profileDetail(ex: Executor, orgId: number, id: number, tod
     .leftJoin('users as u', 'u.id', 'r.salesperson_id')
     .select(['r.id', 'r.profile_name', 'r.order_number', 'r.branch_id', 'r.customer_id', 'c.display_name', 'c.email', 'r.salesperson_id', 'u.name as salesperson',
       'r.frequency', 'r.repeat_every', 'r.start_date', 'r.end_date', 'r.next_run', 'r.last_generated_at', 'r.payment_terms', 'r.template',
-      'r.notes', 'r.terms', 'r.create_as_draft', 'r.auto_send', 'r.auto_run', 'r.is_active', 'r.last_error', 'r.price_list_id', 'r.project_ids', 'r.payment_link'])
+      'r.notes', 'r.terms', 'r.create_as_draft', 'r.auto_send', 'r.auto_run', 'r.is_active', 'r.last_error', 'r.price_list_id', 'r.project_ids', 'r.payment_link',
+      'r.entity_type', 'r.shipping_charge', 'r.adjustment', 'r.adjustment_label', 'r.round_off'])
     .where('r.id', '=', id).where('r.org_id', '=', orgId).executeTakeFirst();
   if (!p) throw notFound('That recurring invoice does not exist.');
   const lines = (typeof p.template === 'string' ? JSON.parse(p.template) : p.template) as TemplateLine[];
@@ -158,9 +207,11 @@ export async function profileDetail(ex: Executor, orgId: number, id: number, tod
   const invoices = await ex.selectFrom('invoices').select(['id', 'number', 'invoice_date', 'status', 'total', 'amount_paid'])
     .where('org_id', '=', orgId).where(sql<boolean>`source_doc_type = 'recurring'`).where(sql<boolean>`source_doc_id = ${id}`)
     .orderBy('invoice_date', 'desc').orderBy('id', 'desc').limit(100).execute();
-  const net = (l: TemplateLine) => Math.round(l.ratePaise * l.qty * (1 - (l.discountPct ?? 0) / 100));
-  const taxable = lines.reduce((t, l) => t + net(l), 0);
-  const tax = lines.reduce((t, l) => t + Math.round((net(l) * l.gstRatePct) / 100), 0);
+  const entityType = (p.entity_type ?? 'invoice') as EntityType;
+  const shipping = toPaiseFromSql(p.shipping_charge ?? '0');
+  const adjustment = toPaiseFromSql(p.adjustment ?? '0');
+  const roundOff = (p.round_off ?? 'whole') as RoundOff;
+  const amount = profileAmount({ lines, entityType, shippingPaise: shipping, adjustmentPaise: adjustment, roundOff });
   const projectIds = (typeof p.project_ids === 'string' ? JSON.parse(p.project_ids) : p.project_ids ?? []) as number[];
   const projects = projectIds.length
     ? await ex.selectFrom('projects').select(['id', 'name']).where('org_id', '=', orgId).where('id', 'in', projectIds.map(Number)).execute()
@@ -178,6 +229,8 @@ export async function profileDetail(ex: Executor, orgId: number, id: number, tod
     .orderBy('id', 'desc').limit(50).execute();
   return {
     id: String(p.id), name: p.profile_name, orderNumber: p.order_number ?? null, branchId: String(p.branch_id),
+    entityType, shippingChargePaise: shipping, adjustmentPaise: adjustment, adjustmentLabel: p.adjustment_label || 'Adjustment', roundOff,
+    subTotalPaise: amount.subTotalPaise, taxPaise: amount.taxPaise, roundOffPaise: amount.roundOffPaise,
     customerId: String(p.customer_id), customerName: p.display_name, customerEmail: p.email ?? null,
     salespersonId: p.salesperson_id ? String(p.salesperson_id) : null, salespersonName: p.salesperson ?? null,
     frequency: freq, every, repeatLabel: repeatLabel(freq, every),
@@ -189,7 +242,7 @@ export async function profileDetail(ex: Executor, orgId: number, id: number, tod
     paymentLink: !!p.payment_link,
     createAsDraft: !!p.create_as_draft, autoSend: !!p.auto_send, autoRun: !!p.auto_run, isActive: !!p.is_active, lastError: p.last_error ?? null,
     status: expired ? 'expired' : p.is_active ? 'active' : 'stopped',
-    amountPaise: taxable + tax,
+    amountPaise: amount.totalPaise,
     remainingCycles: remaining,
     invoices: children,
     unpaidPaise: children.filter((c) => c.status !== 'void' && c.status !== 'draft').reduce((t, c) => t + Math.max(0, c.balancePaise), 0),

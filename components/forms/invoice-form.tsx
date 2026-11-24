@@ -578,10 +578,10 @@ export function InvoiceForm({ variant = 'invoice', editing }: {
           {!ed && variant === 'invoice' && (
             <Button variant="link" className="px-1" data-slot="form-make-recurring" disabled={!!saving} onClick={() => {
               sessionStorage.setItem(RECURRING_FROM_FORM, JSON.stringify({
-                customerId, paymentTerms,
+                customerId, paymentTerms, shippingChargePaise: shipping, adjustmentPaise: adjustment, adjustmentLabel,
                 lines: lines.filter((l) => l.qty > 0 && (l.itemId || l.description.trim())).map((l) => ({
                   itemId: l.itemId || null, description: l.description || null, qty: l.qty,
-                  ratePaise: l.ratePaise, gstRatePct: l.gstRatePct, hsnSac: l.hsnSac || null,
+                  ratePaise: l.ratePaise, gstRatePct: l.gstRatePct, hsnSac: l.hsnSac || null, discountPct: effectiveDiscountPct(l),
                 })),
               }));
               router.push('/sales/recurring?from=form');

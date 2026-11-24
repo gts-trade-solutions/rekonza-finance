@@ -2747,6 +2747,13 @@ export interface RecurringInvoices {
   start_date: ColumnType<string, string, string>;
   template: Json;
   terms: string | null;
+  /** Zoho's Entity type (migration 126). */
+  entity_type: Generated<"bill_of_supply" | "invoice">;
+  shipping_charge: Generated<Decimal>;
+  adjustment: Generated<Decimal>;
+  adjustment_label: string | null;
+  /** Zoho's Rounding Off Preference: none, or the nearest whole number. */
+  round_off: Generated<"none" | "whole">;
   updated_at: Generated<Date>;
 }
 

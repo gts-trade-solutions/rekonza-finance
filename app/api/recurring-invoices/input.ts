@@ -17,6 +17,12 @@ const LineInput = z.object({
 
 export const CreateInput = z.object({
   name: z.string().trim().max(200),
+  /** Zoho's Entity type, the totals' Shipping Charges and adjustment, and the Rounding Off Preference (migration 126). */
+  entityType: z.enum(['invoice', 'bill_of_supply']).optional(),
+  shippingChargePaise: z.number().int().nonnegative().optional(),
+  adjustmentPaise: z.number().int().optional(),
+  adjustmentLabel: z.string().trim().max(60).nullish(),
+  roundOff: z.enum(['none', 'whole']).optional(),
   customerId: z.union([z.string(), z.number()]).nullish(),
   orderNumber: z.string().max(100).nullish(),
   frequency: z.enum(FREQUENCIES),
@@ -40,6 +46,8 @@ export const CreateInput = z.object({
 /** The form's input as the profile service takes it. */
 export const toProfileInput = (input: z.infer<typeof CreateInput>, branchId: number) => ({
   branchId, customerId: Number(input.customerId ?? 0), name: input.name, orderNumber: input.orderNumber ?? null,
+  entityType: input.entityType, shippingChargePaise: input.shippingChargePaise ?? 0, adjustmentPaise: input.adjustmentPaise ?? 0,
+  adjustmentLabel: input.adjustmentLabel ?? null, roundOff: input.roundOff,
   frequency: input.frequency as Frequency, every: input.every ?? 1, startDate: input.startDate, endDate: input.endDate ?? null,
   paymentTerms: input.paymentTerms ?? null, salespersonId: input.salespersonId ? Number(input.salespersonId) : null,
   notes: input.notes ?? null, terms: input.terms ?? null, createAsDraft: !!input.createAsDraft, autoSend: !!input.autoSend, autoRun: !!input.autoRun,

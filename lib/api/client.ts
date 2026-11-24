@@ -2181,6 +2181,10 @@ export interface RecurringInvoiceRow {
 /** One profile as its record and Edit form have it (/api/recurring-invoices/[id]). */
 export interface RecurringProfileDetail {
   id: string; name: string; orderNumber: string | null; branchId: string;
+  /** Zoho's Entity type, the totals' Shipping Charges and adjustment, and the Rounding Off Preference (migration 126). */
+  entityType: 'invoice' | 'bill_of_supply';
+  shippingChargePaise: number; adjustmentPaise: number; adjustmentLabel: string; roundOff: 'none' | 'whole';
+  subTotalPaise: number; taxPaise: number; roundOffPaise: number;
   customerId: string; customerName: string; customerEmail: string | null;
   salespersonId: string | null; salespersonName: string | null;
   frequency: 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'yearly'; every: number; repeatLabel: string;
