@@ -8,8 +8,11 @@
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
 import {
-  FileText, Info, Loader2, Save, Send, Settings2,
+  ChevronDown, FileText, Info, Loader2, Save, Send, Settings2,
 } from 'lucide-react';
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { toast } from 'sonner';
 import { toastWarnings } from '@/lib/api/warnings';
 import { Button } from '@/components/ui/button';
@@ -371,7 +374,8 @@ export function InvoiceForm({ variant = 'invoice', editing }: {
 
   const valid = !!customerId && lines.some((l) => l.qty > 0 && l.ratePaise > 0) && (!foreign || rate > 0);
 
-  const save = async (mode: 'draft' | 'send') => {
+  // `after`: Zoho's Save and Send ▾ — Save and Print, Save and Share, Save and Send Later.
+  const save = async (mode: 'draft' | 'send', after?: 'print' | 'share' | 'later') => {
     // Zoho's messages, in Zoho's order: the customer first, then the items.
     if (!customerId) { toast.error('Select a customer.'); return; }
     if (!lines.some((l) => l.itemId || l.description.trim())) { toast.error('Enter the valid item name or description.'); return; }
@@ -512,7 +516,10 @@ export function InvoiceForm({ variant = 'invoice', editing }: {
             ? 'The sale and the money are both in the ledger, and the invoice is settled.'
             : 'Posted to the ledger — open the Journal tab to see the entry.',
     });
-    router.push(`/sales/invoices/${created.id}`);
+    router.push(after === 'print' ? `/sales/invoices/${created.id}/print?print=1`
+      : after === 'share' ? `/sales/invoices/${created.id}?share=1`
+        : after === 'later' ? `/sales/invoices/${created.id}?schedule=1`
+          : `/sales/invoices/${created.id}`);
   };
 
   return (
@@ -544,10 +551,24 @@ export function InvoiceForm({ variant = 'invoice', editing }: {
                 {saving === 'draft' ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
                 Save as Draft
               </Button>
-              <Button onClick={() => save('send')} disabled={!!saving} className="gap-1.5">
-                {saving === 'send' ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />}
-                Save and Send
-              </Button>
+              <span className="inline-flex" data-slot="save-send-split">
+                <Button onClick={() => save('send')} disabled={!!saving} className="gap-1.5 rounded-r-none">
+                  {saving === 'send' ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />}
+                  Save and Send
+                </Button>
+                {variant === 'invoice' && (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button disabled={!!saving} className="rounded-l-none border-l border-white/30 px-1.5" aria-label="More ways to save" data-slot="save-send-more"><ChevronDown className="size-4" /></Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start" side="top">
+                      <DropdownMenuItem onClick={() => void save('send', 'print')} data-slot="save-print">Save and Print</DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => void save('send', 'share')} data-slot="save-share">Save and Share</DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => void save('send', 'later')} data-slot="save-send-later">Save and Send Later</DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                )}
+              </span>
             </>
           )}
           <Button variant="ghost" onClick={() => router.push(ed ? `/sales/invoices/${ed.id}` : v.back)} disabled={!!saving}>

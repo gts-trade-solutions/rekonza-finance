@@ -194,17 +194,17 @@ check('Status reads as Zoho capitals in colour', await page.locator('[data-slot=
 }).catch(() => false));
 await page.locator('[data-slot=columns-menu]').click();
 await page.waitForTimeout(300);
-await page.getByRole('menuitemcheckbox', { name: /supply/i }).click();
+await page.getByRole('menuitemcheckbox', { name: /order number/i }).click();
 await page.keyboard.press('Escape');
 await page.waitForTimeout(300);
-check('Customize Columns hides a column', (await page.locator('thead th', { hasText: /^Supply$/i }).count()) === 0);
+check('Customize Columns hides a column', (await page.locator('thead th', { hasText: /^Order Number$/i }).count()) === 0);
 await open('/sales/invoices');
-check('…and remembers it', (await page.locator('thead th', { hasText: /^Supply$/i }).count()) === 0);
+check('…and remembers it', (await page.locator('thead th', { hasText: /^Order Number$/i }).count()) === 0);
 await page.locator('[data-slot=columns-menu]').click();
-await page.getByRole('menuitemcheckbox', { name: /supply/i }).click();
+await page.getByRole('menuitemcheckbox', { name: /order number/i }).click();
 await page.keyboard.press('Escape');
 await page.waitForTimeout(300);
-check('…and shows it again', (await page.locator('thead th', { hasText: /^Supply$/i }).count()) === 1);
+check('…and shows it again', (await page.locator('thead th', { hasText: /^Order Number$/i }).count()) === 1);
 
 // ── D. Split view ──────────────────────────────────────────────────────────
 // A record row in the list beside the record.

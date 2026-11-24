@@ -183,6 +183,8 @@ export interface InvoiceListItem {
   number: string;
   date: string;
   dueDate: string;
+  /** Zoho's ORDER NUMBER column. */
+  orderNumber?: string | null;
   status: string;
   /** A debit note is kept with the invoices (CGST Act s.34(3)). */
   docKind?: 'invoice' | 'debit_note';

@@ -96,34 +96,31 @@ export default function InvoicesPage() {
     })).filter((t) => ['all', 'unpaid', 'partially_paid', 'paid'].includes(t.value) || t.count > 0);
   }, [state.data]);
 
+  // Zoho's columns, in Zoho's order: DATE | INVOICE# | ORDER NUMBER | CUSTOMER NAME |
+  // STATUS | DUE DATE | AMOUNT | BALANCE DUE. Rekonza's Supply stays under Customize Columns.
+  const day = (d: string) => new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
   const columns: Column<InvoiceListItem>[] = [
+    { key: 'date', header: 'Date', sortValue: (r) => r.date, cell: (r) => day(r.date) },
     {
       key: 'number',
-      header: 'Invoice #',
+      header: 'Invoice#',
       sortValue: (r) => r.number,
       cell: (r) => (
         <div className="flex items-center gap-1.5">
-          <span className="font-medium">{r.number}</span>
+          <span className="font-medium text-link">{r.number}</span>
           <EInvoiceMark einvoice={{ status: r.einvoice.status as never, irn: r.einvoice.irn ?? undefined }} />
         </div>
       ),
     },
-    { key: 'customer', header: 'Customer', sortValue: (r) => r.customerName, cell: (r) => r.customerName },
-    {
-      key: 'date',
-      header: 'Date',
-      sortValue: (r) => r.date,
-      cell: (r) => new Date(r.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: '2-digit' }),
-    },
-    {
-      key: 'due',
-      header: 'Due',
-      sortValue: (r) => r.dueDate,
-      cell: (r) => new Date(r.dueDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: '2-digit' }),
-    },
+    { key: 'order', header: 'Order Number', sortValue: (r) => r.orderNumber ?? '', cell: (r) => r.orderNumber ?? '' },
+    { key: 'customer', header: 'Customer Name', sortValue: (r) => r.customerName, cell: (r) => r.customerName },
+    { key: 'status', header: 'Status', sortValue: (r) => r.status, cell: (r) => <InvoiceStatus status={r.status} dueDate={r.dueDate} balancePaise={r.balancePaise} /> },
+    { key: 'due', header: 'Due Date', sortValue: (r) => r.dueDate, cell: (r) => day(r.dueDate) },
+    { key: 'total', header: 'Amount', align: 'right', sortValue: (r) => r.totalPaise, cell: (r) => <Money value={r.totalPaise} /> },
     {
       key: 'supply',
       header: 'Supply',
+      defaultHidden: true,
       sortValue: (r) => r.supplyType,
       cell: (r) => (
         <span className="text-xs uppercase text-muted-foreground">
@@ -131,11 +128,9 @@ export default function InvoicesPage() {
         </span>
       ),
     },
-    { key: 'status', header: 'Status', sortValue: (r) => r.status, cell: (r) => <InvoiceStatus status={r.status} dueDate={r.dueDate} balancePaise={r.balancePaise} /> },
-    { key: 'total', header: 'Total', align: 'right', sortValue: (r) => r.totalPaise, cell: (r) => <Money value={r.totalPaise} /> },
     {
       key: 'balance',
-      header: 'Balance due',
+      header: 'Balance Due',
       align: 'right',
       sortValue: (r) => r.balancePaise,
       cell: (r) => (

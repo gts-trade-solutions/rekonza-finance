@@ -11,10 +11,13 @@
 // The server decides the tax, the number and (for a credit note) the entry;
 // the totals here are a preview of what it will work out.
 
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { PREFS_FOR_KIND } from '@/components/settings/pref-modules';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
-import { FileText, Loader2, Pencil, Save, Send } from 'lucide-react';
+import { ChevronDown, FileText, Loader2, Pencil, Save, Send } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -324,7 +327,8 @@ export function SalesDocumentForm({ kind, editing }: {
     return out;
   };
 
-  const save = async (mode: 'draft' | 'send' | 'save' | 'open') => {
+  // `print`: a sales order's Save and Send ▾ → Save and Print (Zoho's): saved, then its print copy.
+  const save = async (mode: 'draft' | 'send' | 'save' | 'open', print = false) => {
     const found = problems();
     setErrors(found);
     if (found.length) { window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
@@ -368,7 +372,7 @@ export function SalesDocumentForm({ kind, editing }: {
             : (ed && ed.status !== 'draft' ? 'Its entry was reversed and posted again; the audit trail keeps the old version.' : 'Revenue and the GST on it are reversed; the customer owes that much less.')
           : `A ${info.lower} posts nothing to the ledger.`,
       });
-      router.push(`${info.base}/${done.id}`);
+      router.push(print ? `/print/${kind}/${done.id}?print=1` : `${info.base}/${done.id}`);
     } catch (err) {
       setSaving(false);
       const message = err instanceof ApiError ? err.message : `The ${info.lower} was not saved.`;
@@ -401,7 +405,20 @@ export function SalesDocumentForm({ kind, editing }: {
       ) : (
         <>
           <Button variant="outline" onClick={() => void save('draft')} disabled={busy} className="gap-1.5" data-slot="doc-save-draft">{spin('draft') ?? <Save className="size-4" />} Save as Draft</Button>
-          {!isChallan && <Button onClick={() => void save('send')} disabled={busy} className="gap-1.5" data-slot="doc-save-send">{spin('send') ?? <Send className="size-4" />} Save and Send</Button>}
+          {!isChallan && !isOrder && <Button onClick={() => void save('send')} disabled={busy} className="gap-1.5" data-slot="doc-save-send">{spin('send') ?? <Send className="size-4" />} Save and Send</Button>}
+          {isOrder && (
+            <span className="inline-flex" data-slot="save-send-split">
+              <Button onClick={() => void save('send')} disabled={busy} className="gap-1.5 rounded-r-none" data-slot="doc-save-send">{spin('send') ?? <Send className="size-4" />} Save and Send</Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button disabled={busy} className="rounded-l-none border-l border-white/30 px-1.5" aria-label="More ways to save" data-slot="save-send-more"><ChevronDown className="size-4" /></Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" side="top">
+                  <DropdownMenuItem onClick={() => void save('send', true)} data-slot="save-print">Save and Print</DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </span>
+          )}
         </>
       )}
       <Button variant="ghost" onClick={() => router.push(ed ? `${info.base}/${ed.id}` : info.base)} disabled={busy}>Cancel</Button>

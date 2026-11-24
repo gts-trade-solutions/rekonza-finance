@@ -10,7 +10,7 @@
 // Rekonza's WhatsApp and mail-app sending live in the Share window, beside the
 // link they carry.
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { CalendarClock, ChevronDown, Copy, Loader2, Mail, MessageCircle, Send, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -164,13 +164,23 @@ function EmailInvoiceDialog({ inv, schedule, onClose, markSent, onChanged }: {
 }
 
 /** Share — "Share Invoice Link", after marking a draft as sent. */
-export function InvoiceShare({ inv, markSent, onChanged }: { inv: InvoiceDetail; markSent: () => Promise<boolean>; onChanged: () => void }) {
+export function InvoiceShare({ inv, markSent, onChanged, autoOpen = false }: {
+  inv: InvoiceDetail; markSent: () => Promise<boolean>; onChanged: () => void;
+  /** Open at once: the form's Save and Send ▾ → Save and Share. */
+  autoOpen?: boolean;
+}) {
   const canShare = usePermission('sales', 'export');
   const canEdit = usePermission('sales', 'edit');
   const [step, setStep] = useState<null | 'confirm' | 'share'>(null);
   const [expires, setExpires] = useState(addDays(90));
   const [url, setUrl] = useState('');
   const [busy, setBusy] = useState(false);
+  const [opened, setOpened] = useState(false);
+  useEffect(() => {
+    if (!autoOpen || opened || !canShare || inv.status === 'void') return;
+    setOpened(true);
+    setStep(invoiceIsSent(inv) ? 'share' : 'confirm');
+  }, [autoOpen, opened, canShare, inv]);
   if (!canShare || inv.status === 'void') return null;
 
   const open = () => setStep(invoiceIsSent(inv) ? 'share' : 'confirm');

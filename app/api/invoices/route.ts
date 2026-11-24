@@ -93,7 +93,7 @@ export const GET = route(
       base
         .select([
           'invoices.id', 'invoices.number', 'invoices.invoice_date', 'invoices.due_date',
-          'invoices.status', 'invoices.supply_type', 'invoices.supply_kind',
+          'invoices.status', 'invoices.supply_type', 'invoices.supply_kind', 'invoices.order_number',
           'invoices.subtotal', 'invoices.total', 'invoices.amount_paid',
           'invoices.customer_id', 'invoices.branch_id',
           'invoices.currency', 'invoices.fc_total', 'invoices.fc_amount_paid', 'invoices.doc_kind', 'invoices.paid_at_sale',
@@ -147,6 +147,8 @@ export const GET = route(
         number: r.number,
         date: r.invoice_date,
         dueDate: r.due_date,
+        // Zoho's ORDER NUMBER column: the customer's PO or the sales order it came from.
+        orderNumber: r.order_number ?? null,
         status: r.status,
         docKind: r.doc_kind,
         paidAtSale: !!r.paid_at_sale,

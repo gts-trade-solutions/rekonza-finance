@@ -8,8 +8,8 @@
 // from, not a rendering of what they ought to be.
 
 import Link from 'next/link';
-import { useParams, useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
+import { useEffect, useState } from 'react';
 import {
   Ban, ChevronDown, FileText, Loader2, MoreHorizontal, Pencil, Printer, Receipt, Sparkles, Trash2, Wallet,
 } from 'lucide-react';
@@ -76,6 +76,10 @@ export default function InvoiceDetailPage() {
   const removeIt = useApiAction(invoiceApi.remove);
   const [tab, setTab] = useState('journal');
   const [sendMode, setSendMode] = useState<null | 'now' | 'schedule'>(null);
+  // Arrived from the form's Save and Send ▾: Save and Send Later opens Schedule Email, Save and Share opens Share.
+  const arrived = useSearchParams();
+  const openShare = arrived.get('share') === '1';
+  useEffect(() => { if (arrived.get('schedule') === '1') setSendMode('schedule'); }, [arrived]);
   const [payWarning, setPayWarning] = useState(false);
   const [skipPayWarning, setSkipPayWarning] = useState(false);
   // Mark as sent: the ⋯ item, and the first step of Send, Share and paying a draft.
@@ -114,7 +118,7 @@ export default function InvoiceDetailPage() {
                   )}
                   {/* Zoho's bar: Edit · Send ▾ · Share · PDF/Print ▾ · Record Payment · ⋯ */}
                   <InvoiceSendMenu inv={inv} markSent={markSent} onChanged={() => void state.refetch()} mode={sendMode} setMode={setSendMode} />
-                  <InvoiceShare inv={inv} markSent={markSent} onChanged={() => void state.refetch()} />
+                  <InvoiceShare inv={inv} markSent={markSent} onChanged={() => void state.refetch()} autoOpen={openShare} />
                   <DropdownMenu>
                     <DropdownMenuTrigger className="inline-flex h-8 items-center gap-1.5 rounded-[3px] border px-3 text-[13px] transition-colors hover:bg-accent" data-slot="pdf-print">
                       <Printer className="size-3.5" /> PDF/Print <ChevronDown className="size-3" />
