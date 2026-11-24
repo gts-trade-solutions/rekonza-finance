@@ -49,6 +49,7 @@ const TONES: Record<string, Tone> = {
   active: 'good',
 
   overdue: 'bad',
+  unpaid: 'bad',
   failed: 'bad',
   bounced: 'bad',
   declined: 'bad',

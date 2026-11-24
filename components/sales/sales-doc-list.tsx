@@ -63,6 +63,8 @@ function columnsFor(kind: SalesDocKindZ): Column<SalesDocRow>[] {
             return <span title={s.replace(/_/g, ' ')} data-slot="invoiced-mark" data-state={s} className={`inline-block size-2.5 rounded-full ${tone}`} />;
           },
         },
+        // Zoho's PAYMENT: how far the invoices raised from the order are paid.
+        { key: 'payment', header: 'Payment', align: 'center', sortValue: (r) => r.payment ?? '', cell: (r) => (r.payment ? <StatusBadge status={r.payment} /> : '') },
         { key: 'invoicedAmount', header: 'Invoiced Amount', align: 'right', defaultHidden: true, sortValue: (r) => r.appliedPaise ?? 0, cell: (r) => <Money value={r.appliedPaise ?? 0} showZero={false} /> },
         { key: 'shipment', header: 'Expected Shipment Date', defaultHidden: true, sortValue: (r) => r.detail ?? '', cell: (r) => zohoDay(r.detail) },
         { key: 'products', header: 'Products', defaultHidden: true, sortValue: (r) => r.items?.[0]?.name ?? '', cell: (r) => (r.items ?? []).map((i) => i.name).join(', ') },

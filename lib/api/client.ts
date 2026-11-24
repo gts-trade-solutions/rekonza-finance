@@ -1173,6 +1173,8 @@ export interface SalesDocRow {
   /** An order: where it has got to before the invoice. */
   stage?: 'order' | 'proforma' | 'in_process' | 'ready';
   proformaNumber?: string | null;
+  /** An order's: how far its invoices are paid (Zoho's PAYMENT column). */
+  payment?: 'paid' | 'partially_paid' | 'unpaid' | null;
 }
 
 export interface SalesDocListResponse {
