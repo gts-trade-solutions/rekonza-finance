@@ -79,6 +79,17 @@ export async function salesDocRecord(orgId: number, kind: EditableSalesDoc, id: 
     invoices = l?.invoices ?? [];
     salesOrder = l?.salesOrder ?? null;
   }
+  // A sales order's purchase orders (Zoho's Convert to Purchase Order), a quote's automatic retainer.
+  let purchaseOrders: { id: string; number: string }[] = [];
+  let retainers: { id: string; number: string }[] = [];
+  if (kind === 'sales-order') {
+    purchaseOrders = (await ex.selectFrom('purchase_orders').select(['id', 'number']).where('org_id', '=', orgId).where('source_sales_order_id', '=', id).orderBy('id').execute())
+      .map((p) => ({ id: String(p.id), number: p.number }));
+  }
+  if (kind === 'estimate') {
+    retainers = (await ex.selectFrom('retainer_invoices').select(['id', 'number']).where('org_id', '=', orgId).where('source_estimate_id', '=', id).orderBy('id').execute())
+      .map((r) => ({ id: String(r.id), number: r.number }));
+  }
   if (kind === 'credit-note' && row.against_invoice_id) {
     const inv = await ex.selectFrom('invoices').select(['number', 'invoice_date']).where('id', '=', Number(row.against_invoice_id)).where('org_id', '=', orgId).executeTakeFirst();
     againstInvoice = ref(row.against_invoice_id, inv?.number);
@@ -110,8 +121,20 @@ export async function salesDocRecord(orgId: number, kind: EditableSalesDoc, id: 
     journalEntryId: row.journal_entry_id ? String(row.journal_entry_id) : null,
     createdAt: row.created_at ? new Date(row.created_at as string).toISOString() : null,
     createdByName,
-    convertedTo, sourceEstimate, salesOrder, againstInvoice, invoices, challans,
+    convertedTo, sourceEstimate, salesOrder, againstInvoice, invoices, challans, purchaseOrders, retainers,
+    /** Zoho's Shipping Charges and Adjustment (migration 124). */
+    shippingChargePaise: row.shipping_charge != null ? paise(row.shipping_charge) : 0,
+    adjustmentPaise: row.adjustment != null ? paise(row.adjustment) : 0,
+    adjustmentLabel: str(row.adjustment_label),
+    /** Reverse charge: the buyer pays the GST (quotes and orders). */
+    reverseCharge: Number(row.reverse_charge ?? 0) === 1,
+    retainerPct: row.retainer_pct != null ? Number(row.retainer_pct) : null,
     lines: lines.map((l) => ({
+      lineId: String(l.id),
+      accountId: l.account_id ? String(l.account_id) : null,
+      qtyInvoiced: l.qty_invoiced != null ? Number(l.qty_invoiced) : 0,
+      qtyDelivered: l.qty_delivered != null ? Number(l.qty_delivered) : 0,
+      qtyCancelled: l.qty_cancelled != null ? Number(l.qty_cancelled) : 0,
       itemId: l.item_id ? String(l.item_id) : null, itemName: str(l.item_name), sku: str(l.item_sku),
       description: str(l.description), hsnSac: str(l.hsn_sac),
       qty: Number(l.qty), uqc: str(l.uqc), ratePaise: paise(l.rate),

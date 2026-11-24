@@ -48,12 +48,14 @@ import { CostCentrePicker } from '@/components/forms/cost-centre-picker';
 import { RECURRING_FROM_FORM } from '@/lib/recurring-handoff';
 import { GodownPicker } from '@/components/forms/godown-picker';
 
-export type InvoiceVariant = 'invoice' | 'receipt' | 'debit_note';
+export type InvoiceVariant = 'invoice' | 'receipt' | 'debit_note' | 'bill_of_supply';
 
 const VARIANT = {
   invoice: { title: 'New Invoice', noun: 'Invoice', back: '/sales/invoices' },
   receipt: { title: 'New Sales Receipt', noun: 'Sales receipt', back: '/sales/sales-receipts' },
   debit_note: { title: 'New Debit Note', noun: 'Debit note', back: '/sales/debit-notes' },
+  // Zoho's New Bill Of Supply: exempt, nil-rated or non-GST goods, no tax at all (Rule 49).
+  bill_of_supply: { title: 'New Bill Of Supply', noun: 'Bill of supply', back: '/sales/invoices' },
 } as const;
 
 const MODES = [
@@ -149,6 +151,9 @@ export function InvoiceForm({ variant = 'invoice', editing }: {
   const [tcsCode, setTcsCode] = useState(ed?.edit?.tcsCode ?? '');
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [markPaid, setMarkPaid] = useState(variant === 'receipt');
+  // Zoho's "This transaction is applicable for reverse charge": the buyer pays the GST.
+  const [reverseCharge, setReverseCharge] = useState(!!ed?.reverseCharge);
+  const billOfSupply = variant === 'bill_of_supply' || !!ed?.billOfSupply;
   const [paidMode, setPaidMode] = useState('cash');
   const [paidBankId, setPaidBankId] = useState('');
   const [paidRef, setPaidRef] = useState('');
@@ -296,7 +301,10 @@ export function InvoiceForm({ variant = 'invoice', editing }: {
           supplyType,
         }).tax,
     );
-    const tax = sumTax(parts);
+    const full = sumTax(parts);
+    // Under reverse charge the invoice charges no GST (the buyer pays it); the amount is shown as the buyer's.
+    const rcmTax = reverseCharge ? totalTaxPaise(full) : 0;
+    const tax = reverseCharge ? { ...full, cgstPaise: 0, sgstPaise: 0, igstPaise: 0, cessPaise: 0 } : full;
     const grossBeforeDiscount = lines.reduce((t, l) => t + Math.round(l.ratePaise * l.qty), 0);
     const discount = grossBeforeDiscount - tax.taxablePaise;
     const tcsRate = tcsCode ? tcsHeads.find((h) => h.code === tcsCode) : undefined;
@@ -308,8 +316,8 @@ export function InvoiceForm({ variant = 'invoice', editing }: {
       tax.taxablePaise + totalTaxPaise(tax) + shipping + adjustment + tcs;
     const { rounded, roundOff } = roundToRupee(beforeRound);
     const qty = lines.reduce((t, l) => t + (l.qty || 0), 0);
-    return { tax, discount, grossBeforeDiscount, tcs, rounded, roundOff, qty };
-  }, [lines, supplyType, shipping, adjustment, tcsCode, tcsHeads, customer]);
+    return { tax, discount, grossBeforeDiscount, tcs, rounded, roundOff, qty, rcmTax };
+  }, [lines, supplyType, shipping, adjustment, tcsCode, tcsHeads, customer, reverseCharge]);
 
   const invoiceOptions = useMemo(
     () => (theirInvoices.data?.invoices ?? []).map((i) => ({ value: i.id, label: i.number, sublabel: `${i.date} · ${formatINR(i.totalPaise)}` })),
@@ -433,6 +441,8 @@ export function InvoiceForm({ variant = 'invoice', editing }: {
           shippingChargePaise: shipping,
           adjustmentPaise: adjustment,
           adjustmentLabel,
+          reverseCharge: reverseCharge || undefined,
+          billOfSupply: billOfSupply || undefined,
           tcsCode: tcsCode || null,
           lines: lines
             .filter((l) => l.qty > 0)
@@ -685,6 +695,24 @@ export function InvoiceForm({ variant = 'invoice', editing }: {
             placeholder="What this invoice is for"
           />
         </FormRow>
+        {(variant === 'invoice' || (ed && !ed.debitNote && !billOfSupply)) && !billOfSupply && (
+          <FormRow label="">
+            <label className="flex items-center gap-2 text-[13px]" data-slot="invoice-reverse-charge">
+              <Checkbox checked={reverseCharge} onCheckedChange={(v) => setReverseCharge(v === true)} />
+              This transaction is applicable for reverse charge
+            </label>
+            {reverseCharge && totals.rcmTax > 0 && (
+              <p className="mt-1 text-[12px] text-muted-foreground" data-slot="invoice-rcm-note">
+                The customer pays {formatINR(totals.rcmTax)} of GST to the government; this invoice charges none.
+              </p>
+            )}
+          </FormRow>
+        )}
+        {billOfSupply && (
+          <p className="rounded-md border border-dashed bg-muted/30 p-3 text-[13px] text-muted-foreground" data-slot="bill-of-supply-note">
+            A bill of supply carries no tax: use it for exempt, nil-rated or non-GST goods (or as a composition dealer). Every line must be at 0%.
+          </p>
+        )}
 
         <FormSectionRule label="GST" />
 

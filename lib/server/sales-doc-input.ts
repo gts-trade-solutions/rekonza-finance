@@ -17,11 +17,13 @@ export const LineInput = z.object({
   cessRatePct: z.number().min(0).max(300).optional(),
   /** A serial-tracked item coming back on a credit note: the number of each piece. */
   serials: z.array(z.string().trim().min(1).max(80)).max(5000).nullish(),
+  /** A credit note line's ACCOUNT (Zoho's column): the income head it comes back out of. */
+  accountId: z.union([z.string(), z.number()]).nullish(),
 });
 
 export const toNum = (v: string | number | null | undefined) => (v == null ? null : Number(v));
 export const mapLines = (lines: z.infer<typeof LineInput>[]) =>
-  lines.map((l) => ({ ...l, itemId: toNum(l.itemId) }));
+  lines.map((l) => ({ ...l, itemId: toNum(l.itemId), accountId: toNum(l.accountId || null) }));
 
 export const DATE = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Give the date as yyyy-mm-dd.');
 
@@ -32,6 +34,15 @@ const ZOHO = {
   salespersonId: ID,
   terms: z.string().max(5000).nullish(),
 };
+/** Zoho's Shipping Charges and Adjustment at the foot of the document (migration 124). */
+const EXTRAS = {
+  shippingChargePaise: z.number().int().min(0).optional(),
+  adjustmentPaise: z.number().int().optional(),
+  adjustmentLabel: z.string().trim().max(60).nullish(),
+};
+const extras = (input: { shippingChargePaise?: number; adjustmentPaise?: number; adjustmentLabel?: string | null }) => ({
+  shippingChargePaise: input.shippingChargePaise, adjustmentPaise: input.adjustmentPaise, adjustmentLabel: input.adjustmentLabel ?? null,
+});
 
 /** The Zoho fields of a body, as the services take them. */
 export function zohoInput(input: { referenceNumber?: string | null; salespersonId?: string | number | null; terms?: string | null }) {
@@ -51,7 +62,10 @@ export const CreateInput = z.discriminatedUnion('kind', [
     status: z.enum(['draft', 'sent']).optional(),
     voucherTypeId: z.union([z.string(), z.number()]).nullish(),
     projectId: ID,
+    reverseCharge: z.boolean().optional(),
+    retainerPct: z.number().positive().max(100).nullish(),
     ...ZOHO,
+    ...EXTRAS,
   }),
   z.object({
     kind: z.literal('sales-order'),
@@ -67,7 +81,9 @@ export const CreateInput = z.discriminatedUnion('kind', [
     paymentTerms: z.string().max(30).nullish(),
     deliveryMethod: z.string().max(100).nullish(),
     status: z.enum(['draft', 'open']).optional(),
+    reverseCharge: z.boolean().optional(),
     ...ZOHO,
+    ...EXTRAS,
   }),
   z.object({
     kind: z.literal('challan'),
@@ -82,6 +98,7 @@ export const CreateInput = z.discriminatedUnion('kind', [
     referenceNumber: ZOHO.referenceNumber,
     terms: ZOHO.terms,
     status: z.enum(['draft', 'open']).optional(),
+    ...EXTRAS,
   }),
   z.object({
     kind: z.literal('credit-note'),
@@ -96,7 +113,10 @@ export const CreateInput = z.discriminatedUnion('kind', [
     placeOfSupply: z.string().length(2).optional(),
     notes: z.string().nullish(),
     voucherTypeId: z.union([z.string(), z.number()]).nullish(),
+    /** Zoho's Save as Draft (posts nothing) or Save as Open. */
+    status: z.enum(['draft', 'open']).optional(),
     ...ZOHO,
+    ...EXTRAS,
   }),
   z.object({
     kind: z.literal('retainer'),
@@ -121,18 +141,20 @@ export function toSalesDocInput(input: SalesDocBody, branch: number): SalesDocIn
         lines: mapLines(input.lines), placeOfSupply: input.placeOfSupply,
         notes: input.notes, status: input.status, voucherTypeId: toNum(input.voucherTypeId),
         ...zohoInput(input), projectId: toNum(input.projectId || null),
+        reverseCharge: input.reverseCharge, retainerPct: input.retainerPct ?? null, ...extras(input),
       } };
     case 'sales-order':
       return { kind: 'sales-order', input: {
         branchId: branch, customerId, date: input.date, expectedShipDate: input.expectedShipDate ?? null,
         lines: mapLines(input.lines), placeOfSupply: input.placeOfSupply, notes: input.notes, voucherTypeId: toNum(input.voucherTypeId),
         ...zohoInput(input), paymentTerms: input.paymentTerms ?? null, deliveryMethod: input.deliveryMethod ?? null, status: input.status,
+        reverseCharge: input.reverseCharge, ...extras(input),
       } };
     case 'challan':
       return { kind: 'challan', input: {
         branchId: branch, customerId, date: input.date, challanType: input.challanType,
         lines: mapLines(input.lines), placeOfSupply: input.placeOfSupply, notes: input.notes, voucherTypeId: toNum(input.voucherTypeId),
-        referenceNumber: input.referenceNumber ?? null, terms: input.terms ?? null, status: input.status,
+        referenceNumber: input.referenceNumber ?? null, terms: input.terms ?? null, status: input.status, ...extras(input),
       } };
     case 'credit-note':
       return { kind: 'credit-note', input: {
@@ -140,7 +162,7 @@ export function toSalesDocInput(input: SalesDocBody, branch: number): SalesDocIn
         againstInvoiceId: toNum(input.againstInvoiceId), applyImmediately: input.applyImmediately,
         warehouseId: toNum(input.warehouseId),
         lines: mapLines(input.lines), placeOfSupply: input.placeOfSupply, notes: input.notes, voucherTypeId: toNum(input.voucherTypeId),
-        ...zohoInput(input),
+        ...zohoInput(input), status: input.status, ...extras(input),
       } };
     default:
       throw new Error('A retainer invoice is not edited here.');

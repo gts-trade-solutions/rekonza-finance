@@ -298,6 +298,9 @@ export interface InvoiceDetail {
   adjustmentPaise: number;
   adjustmentLabel: string | null;
   roundOffPaise: number;
+  /** Under reverse charge (the buyer pays the GST), and a bill of supply. */
+  reverseCharge?: boolean;
+  billOfSupply?: boolean;
   totalPaise: number;
   amountPaidPaise: number;
   balancePaise: number;
@@ -1202,9 +1205,19 @@ export interface EditableSalesDoc {
   againstInvoice?: { id: string; number: string } | null;
   invoices?: { id: string; number: string }[];
   challans?: { id: string; number: string }[];
+  /** A sales order's purchase orders; a quote's automatic retainer invoices. */
+  purchaseOrders?: { id: string; number: string }[];
+  retainers?: { id: string; number: string }[];
+  /** Zoho's Shipping Charges and Adjustment (migration 124). */
+  shippingChargePaise?: number; adjustmentPaise?: number; adjustmentLabel?: string | null;
+  /** Reverse charge (quotes and orders): the buyer pays the GST. */
+  reverseCharge?: boolean;
+  retainerPct?: number | null;
   lines: {
+    lineId?: string; accountId?: string | null;
     itemId: string | null; itemName?: string | null; sku?: string | null; description: string | null; hsnSac: string | null;
     qty: number; uqc: string | null; ratePaise: number; discountPct: number; gstRatePct: number; amountPaise?: number;
+    qtyInvoiced?: number; qtyDelivered?: number; qtyCancelled?: number;
   }[];
 }
 
@@ -1243,6 +1256,18 @@ export const salesDocuments = {
     api.patch<{ id: string; status: string }>('/api/sales-documents', {
       action: 'set-status', kind, id, status,
     }),
+  /** A draft credit note, posted (Zoho's Convert to Open). */
+  openCreditNote: (id: string) =>
+    api.patch<{ id: string; number: string; status: string }>('/api/sales-documents', { action: 'open-credit-note', id }),
+  /** Zoho's sales order Cancel Items: lines and quantities, or everything left when none are given. */
+  cancelItems: (id: string, lines?: { lineId: string; qty: number }[]) =>
+    api.patch<{ cancelled: number; status: string }>('/api/sales-documents', { action: 'cancel-items', id, lines }),
+  /** Zoho's sales order Convert to Purchase Order. */
+  toPurchaseOrder: (id: string, input: { vendorId: string; date: string; expectedDate?: string | null; lineIds?: string[] }) =>
+    api.patch<{ purchaseOrderId: string; number: string; totalPaise: number; skipped: number }>('/api/sales-documents', { action: 'to-purchase-order', id, ...input }),
+  /** Zoho's quote Create Project. */
+  createProject: (id: string, input: { name?: string | null; billingMethod?: 'fixed' | 'project_hours' | 'task_hours' | 'staff_hours'; ratePaise?: number }) =>
+    api.patch<{ projectId: string; name: string }>('/api/sales-documents', { action: 'create-project', id, ...input }),
   applyRetainer: (id: string, invoiceId: string, amountPaise?: number) =>
     api.patch<{ appliedPaise: number; journalEntryId: string }>('/api/sales-documents', {
       action: 'apply-retainer', id, invoiceId, amountPaise,

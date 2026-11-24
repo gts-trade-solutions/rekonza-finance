@@ -181,7 +181,7 @@ export async function gstr3bDocuments(ex: Executor, orgId: number, period: Gstr3
              b.state_code AS branch_state, c.display_name AS party, NULLIF(c.gstin, '') AS gstin, c.gst_treatment AS treatment,
              n.subtotal AS taxable, n.igst, n.cgst, n.sgst, n.cess
         FROM credit_notes n JOIN contacts c ON c.id = n.customer_id JOIN branches b ON b.id = n.branch_id
-       WHERE n.org_id = ${orgId} AND n.status <> 'void'
+       WHERE n.org_id = ${orgId} AND n.status NOT IN ('void', 'draft')
          AND n.note_date BETWEEN ${from} AND ${to} ${br('n')}
        ORDER BY n.note_date, n.id
     `.execute(ex),
@@ -189,7 +189,7 @@ export async function gstr3bDocuments(ex: Executor, orgId: number, period: Gstr3
       SELECT l.credit_note_id AS doc_id, l.gst_rate_pct AS rate, COALESCE(it.tax_pref, 'taxable') AS tax_pref,
              SUM(l.taxable) AS taxable, SUM(l.igst) AS igst, SUM(l.cgst) AS cgst, SUM(l.sgst) AS sgst, SUM(l.cess) AS cess
         FROM credit_note_lines l JOIN credit_notes n ON n.id = l.credit_note_id LEFT JOIN items it ON it.id = l.item_id
-       WHERE n.org_id = ${orgId} AND n.status <> 'void'
+       WHERE n.org_id = ${orgId} AND n.status NOT IN ('void', 'draft')
          AND n.note_date BETWEEN ${from} AND ${to} ${br('n')}
        GROUP BY l.credit_note_id, l.gst_rate_pct, COALESCE(it.tax_pref, 'taxable')
     `.execute(ex),

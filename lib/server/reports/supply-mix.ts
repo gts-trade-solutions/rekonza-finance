@@ -64,7 +64,7 @@ export async function supplyMix(ex: Executor, orgId: number, w: { from: string; 
         FROM credit_notes n
         JOIN credit_note_lines l ON l.credit_note_id = n.id
         LEFT JOIN items it ON it.id = l.item_id
-       WHERE n.org_id = ${orgId} AND n.status <> 'void'
+       WHERE n.org_id = ${orgId} AND n.status NOT IN ('void', 'draft')
          AND n.note_date BETWEEN ${w.from} AND ${w.to}
        GROUP BY 1
     ) x GROUP BY slot`.execute(ex);

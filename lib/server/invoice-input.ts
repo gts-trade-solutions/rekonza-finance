@@ -45,6 +45,9 @@ export const CreateInput = z.object({
   notes: z.string().nullish(),
   terms: z.string().nullish(),
   shippingChargePaise: z.number().int().optional(),
+  /** Zoho's reverse charge checkbox, and its New Bill Of Supply (migration 124). */
+  reverseCharge: z.boolean().optional(),
+  billOfSupply: z.boolean().optional(),
   adjustmentPaise: z.number().int().optional(),
   adjustmentLabel: z.string().nullish(),
   // The TCS head; the server applies the rate in force on the invoice date.
@@ -112,6 +115,8 @@ export function toInvoiceInput(input: InvoiceBody, role: RoleName | undefined): 
     notes: input.notes,
     terms: input.terms,
     shippingChargePaise: input.shippingChargePaise,
+    reverseCharge: input.reverseCharge,
+    billOfSupply: input.billOfSupply,
     adjustmentPaise: input.adjustmentPaise,
     adjustmentLabel: input.adjustmentLabel,
     tcsCode: input.tcsCode ?? null,

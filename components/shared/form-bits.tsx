@@ -68,12 +68,15 @@ export function MoneyInput({
   className,
   placeholder = '0.00',
   disabled,
+  allowNegative = false,
 }: {
   valuePaise: number;
   onChangePaise: (paise: number) => void;
   className?: string;
   placeholder?: string;
   disabled?: boolean;
+  /** An adjustment can take money off as well as add it. */
+  allowNegative?: boolean;
 }) {
   return (
     <div className="relative">
@@ -83,7 +86,7 @@ export function MoneyInput({
       <Input
         type="number"
         step="0.01"
-        min="0"
+        min={allowNegative ? undefined : '0'}
         disabled={disabled}
         className={cn('pl-6 text-right tabular', className)}
         placeholder={placeholder}

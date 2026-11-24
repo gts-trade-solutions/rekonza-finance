@@ -108,6 +108,9 @@ export function LineItemsEditor({
   showItcColumn = false,
   itcValues,
   onItcChange,
+  accountOptions,
+  accountValues,
+  onAccountChange,
   docDate,
   priceFor,
   discountFor,
@@ -133,6 +136,10 @@ export function LineItemsEditor({
   showItcColumn?: boolean;
   itcValues?: Record<string, 'eligible' | 'ineligible' | 'capital_goods'>;
   onItcChange?: (key: string, v: 'eligible' | 'ineligible' | 'capital_goods') => void;
+  /** Zoho's ACCOUNT column (a credit note's income head per line); shown when options are given. Empty is the item's own account. */
+  accountOptions?: { value: string; label: string }[];
+  accountValues?: Record<string, string>;
+  onAccountChange?: (key: string, accountId: string) => void;
 }) {
   const s = useAppStore();
   const batches = useApi<{ batches: { batchId: string; itemId: string; batchNo: string; expiryDate: string | null; qty: number }[] }>(
@@ -234,6 +241,7 @@ export function LineItemsEditor({
               <th className="w-[13%] px-2 py-2 text-right">Discount</th>
               <th className="w-[9%] px-2 py-2 text-right">Tax</th>
               {showItcColumn && <th className="w-[10%] px-2 py-2 text-left">ITC</th>}
+              {accountOptions && <th className="w-[14%] px-2 py-2 text-left">Account</th>}
               <th className="w-[13%] px-3 py-2 text-right">Amount</th>
               <th className="w-9 px-1 py-2" />
             </tr>
@@ -486,6 +494,16 @@ export function LineItemsEditor({
                           <SelectItem value="capital_goods">Capital goods</SelectItem>
                         </SelectContent>
                       </Select>
+                    </td>
+                  )}
+
+                  {accountOptions && (
+                    <td className="px-2 py-2" data-slot="line-account">
+                      <Combobox
+                        options={accountOptions} value={accountValues?.[line.key] ?? ''}
+                        onChange={(v) => onAccountChange?.(line.key, v)}
+                        placeholder="Item's account" searchPlaceholder="Search income accounts" showAvatar={false} clearable
+                      />
                     </td>
                   )}
 

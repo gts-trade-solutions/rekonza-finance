@@ -1020,7 +1020,7 @@ export interface CreditNotes {
   reference_number: string | null;
   salesperson_id: number | null;
   sgst: Generated<Decimal>;
-  status: Generated<"applied" | "open" | "refunded" | "void">;
+  status: Generated<"applied" | "draft" | "open" | "refunded" | "void">;
   subtotal: Generated<Decimal>;
   supply_type: "export_lut" | "export_with_tax" | "inter" | "intra" | "nil_or_exempt" | "sez";
   terms: string | null;
@@ -1030,6 +1030,9 @@ export interface CreditNotes {
   voided_at: Date | null;
   voided_by_user_id: number | null;
   warehouse_id: number | null;
+  adjustment: Generated<Decimal>;
+  adjustment_label: string | null;
+  shipping_charge: Generated<Decimal>;
 }
 
 export interface CustomFields {
@@ -1108,6 +1111,9 @@ export interface DeliveryChallans {
   terms: string | null;
   total: Generated<Decimal>;
   updated_at: Generated<Date>;
+  adjustment: Generated<Decimal>;
+  adjustment_label: string | null;
+  shipping_charge: Generated<Decimal>;
 }
 
 export interface DepreciationLines {
@@ -1150,6 +1156,16 @@ export interface Documents {
   reference: string | null;
   title: string;
   updated_at: Generated<Date>;
+}
+
+export interface DocumentPreferences {
+  doc_type: string;
+  notes: string | null;
+  org_id: number;
+  settings: Json | null;
+  terms: string | null;
+  updated_at: Generated<Date>;
+  updated_by_user_id: number | null;
 }
 
 export interface Einvoices {
@@ -1329,6 +1345,11 @@ export interface Estimates {
   terms: string | null;
   total: Generated<Decimal>;
   updated_at: Generated<Date>;
+  adjustment: Generated<Decimal>;
+  adjustment_label: string | null;
+  shipping_charge: Generated<Decimal>;
+  retainer_pct: Decimal | null;
+  reverse_charge: Generated<number>;
 }
 
 export interface EwayBillEvents {
@@ -1877,6 +1898,8 @@ export interface Invoices {
   voided_by_user_id: number | null;
   voucher_type_id: number | null;
   warehouse_id: number | null;
+  bill_of_supply: Generated<number>;
+  reverse_charge: Generated<number>;
 }
 
 export interface ItBlockOpenings {
@@ -2650,6 +2673,7 @@ export interface PurchaseOrders {
   vendor_response: "accepted" | "declined" | null;
   vendor_response_at: Date | null;
   vendor_response_note: string | null;
+  source_sales_order_id: number | null;
 }
 
 export interface ReclassifiedLines {
@@ -2824,6 +2848,7 @@ export interface RetainerInvoices {
   terms: string | null;
   status: Generated<"applied" | "draft" | "paid" | "partially_applied" | "sent" | "void">;
   updated_at: Generated<Date>;
+  source_estimate_id: number | null;
 }
 
 export interface SalesOrderLines {
@@ -2847,6 +2872,7 @@ export interface SalesOrderLines {
   sgst: Generated<Decimal>;
   taxable: Generated<Decimal>;
   uqc: string | null;
+  qty_cancelled: Generated<Decimal>;
 }
 
 export interface SalesOrders {
@@ -2881,6 +2907,10 @@ export interface SalesOrders {
   terms: string | null;
   total: Generated<Decimal>;
   updated_at: Generated<Date>;
+  adjustment: Generated<Decimal>;
+  adjustment_label: string | null;
+  shipping_charge: Generated<Decimal>;
+  reverse_charge: Generated<number>;
 }
 
 export interface SavedViews {
@@ -3497,6 +3527,7 @@ export interface DB {
   depreciation_lines: DepreciationLines;
   depreciation_runs: DepreciationRuns;
   documents: Documents;
+  document_preferences: DocumentPreferences;
   einvoices: Einvoices;
   email_log: EmailLog;
   email_templates: EmailTemplates;

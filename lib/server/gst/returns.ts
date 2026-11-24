@@ -174,7 +174,7 @@ export async function gstr1(ex: Executor, orgId: number, month: string, branchId
       FROM credit_notes n
       JOIN contacts c ON c.id = n.customer_id
       LEFT JOIN invoices i ON i.id = n.against_invoice_id
-     WHERE n.org_id = ${orgId} AND n.status <> 'void'
+     WHERE n.org_id = ${orgId} AND n.status NOT IN ('void', 'draft')
        AND n.note_date BETWEEN ${period.from} AND ${period.to}
        ${branchId ? sql`AND n.branch_id = ${branchId}` : sql``}
      ORDER BY n.note_date, n.id

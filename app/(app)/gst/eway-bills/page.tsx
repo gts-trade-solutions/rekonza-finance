@@ -71,17 +71,19 @@ export default function EwayBillsPage() {
 
   const generate = useApiAction(gst.generateEwayBill);
 
-  // ?invoice=<id>: arrived from an invoice's ⋯ → "Add e-Way Bill Details" (Zoho's): open its window.
-  const forInvoice = useSearchParams().get('invoice');
+  // ?invoice=<id> or ?challan=<id>: arrived from the document's ⋯ → "Add e-Way Bill Details" (Zoho's): open its window.
+  const params = useSearchParams();
+  const forInvoice = params.get('invoice');
+  const forChallan = params.get('challan');
   const [opened, setOpened] = useState(false);
   useEffect(() => {
-    if (!forInvoice || opened || !state.data) return;
+    if ((!forInvoice && !forChallan) || opened || !state.data) return;
     setOpened(true);
-    const row = state.data.ewayBills.find((r) => r.docKind === 'invoice' && r.docId === forInvoice);
-    if (!row) toast.info('That invoice is not listed here', { description: 'It carries no goods that need an e-way bill, or it is not issued yet.' });
+    const row = state.data.ewayBills.find((r) => (forInvoice ? r.docKind === 'invoice' && r.docId === forInvoice : r.docKind === 'challan' && r.docId === forChallan));
+    if (!row) toast.info(`That ${forInvoice ? 'invoice' : 'delivery challan'} is not listed here`, { description: forInvoice ? 'It carries no goods that need an e-way bill, or it is not issued yet.' : 'Only an open challan with goods is listed; a draft is marked open first.' });
     else if (row.status === 'generated') toast.info(`${row.number} already has e-way bill ${row.ewayBillNo ?? ''}`.trim());
     else setTarget(row);
-  }, [forInvoice, opened, state.data]);
+  }, [forInvoice, forChallan, opened, state.data]);
 
   const rows = state.data?.ewayBills ?? [];
   const generated = rows.filter((r) => r.status === 'generated');
