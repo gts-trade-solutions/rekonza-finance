@@ -301,7 +301,10 @@ function ReceivedMenu({ sort, onSort, onRefresh, onExportView }: {
           <DropdownMenuSub>
             <DropdownMenuSubTrigger><Upload className="mr-2 size-4 text-primary" /> Import</DropdownMenuSubTrigger>
             <DropdownMenuSubContent className="min-w-60">
-              {imports.map((m) => <DropdownMenuItem key={m.slug} onClick={() => router.push(`/import/${m.slug}`)} data-slot={`import-${m.slug}`}>{m.label}</DropdownMenuItem>)}
+              {imports.map((m, i) => (
+                <DropdownMenuItem key={m.slug} onClick={() => router.push(`/import/${m.slug}`)}
+                  data-slot={i === 0 ? 'module-import' : `import-${m.slug}`} data-import={m.slug}>{m.label}</DropdownMenuItem>
+              ))}
             </DropdownMenuSubContent>
           </DropdownMenuSub>
         )}
@@ -317,8 +320,8 @@ function ReceivedMenu({ sort, onSort, onRefresh, onExportView }: {
         <DropdownMenuSeparator />
         <DropdownMenuItem onClick={() => router.push('/settings?tab=custom-fields')}>Manage Custom Fields</DropdownMenuItem>
         <DropdownMenuItem onClick={() => router.push('/sales/payments/online')} data-slot="online-payments">Online Payments</DropdownMenuItem>
-        <DropdownMenuItem onClick={onRefresh}><RefreshCw className="mr-2 size-4 text-primary" /> Refresh List</DropdownMenuItem>
         <DropdownMenuItem onClick={() => resetColumnWidths()}>Reset Column Width</DropdownMenuItem>
+        <DropdownMenuItem onClick={onRefresh}><RefreshCw className="mr-2 size-4 text-primary" /> Refresh List</DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );
