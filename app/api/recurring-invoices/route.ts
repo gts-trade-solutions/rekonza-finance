@@ -1,7 +1,9 @@
 import { z } from 'zod';
 import { db, transaction } from '@/lib/server/db';
 import { route, body, query, asId, badRequest } from '@/lib/server/http';
-import { runRecurringInvoice } from '@/lib/server/services/recurring';
+import { runRecurringInvoice, type Frequency } from '@/lib/server/services/recurring';
+import { createProfile, repeatLabel } from '@/lib/server/services/recurring-profiles';
+import { CreateInput, toProfileInput } from './input';
 import '@/lib/server/jobs/boot';
 import { logAudit, auditMeta } from '@/lib/server/audit';
 import { mailStatus, siteUrl } from '@/lib/server/mail/mailer';
@@ -20,8 +22,6 @@ import { emailInvoice } from '@/lib/server/mail/documents';
 // numbering and the posting are identical to a hand-raised invoice.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const FREQUENCIES = ['weekly', 'monthly', 'quarterly', 'yearly'] as const;
-
 interface TemplateLine {
   itemId: number | null;
   description: string | null;
@@ -37,7 +37,7 @@ export const GET = route(
       .selectFrom('recurring_invoices as r')
       .innerJoin('contacts as c', 'c.id', 'r.customer_id')
       .select([
-        'r.id', 'r.profile_name', 'r.frequency', 'r.start_date', 'r.end_date', 'r.next_run',
+        'r.id', 'r.profile_name', 'r.frequency', 'r.repeat_every', 'r.start_date', 'r.end_date', 'r.next_run',
         'r.payment_terms', 'r.template', 'r.auto_send', 'r.is_active', 'r.last_generated_at', 'r.auto_run', 'r.last_error',
         'r.customer_id', 'c.display_name as customer_name',
       ])
@@ -62,6 +62,11 @@ export const GET = route(
           customerId: asId(r.customer_id),
           customerName: r.customer_name,
           frequency: r.frequency,
+          /** Zoho's FREQUENCY column: "Week", "2 Weeks", "Every 10 Days" (migration 123). */
+          every: Number(r.repeat_every) || 1,
+          repeatLabel: repeatLabel(r.frequency as Frequency, Number(r.repeat_every) || 1),
+          /** Zoho's STATUS: Active, Stopped, or Expired once past its end date. */
+          status: r.end_date && String(r.next_run).slice(0, 10) > String(r.end_date).slice(0, 10) ? 'expired' : r.is_active ? 'active' : 'stopped',
           startDate: String(r.start_date).slice(0, 10),
           endDate: r.end_date ? String(r.end_date).slice(0, 10) : null,
           nextRun: String(r.next_run).slice(0, 10),
@@ -83,73 +88,17 @@ export const GET = route(
   { permission: { module: 'sales', action: 'view' } },
 );
 
-const LineInput = z.object({
-  itemId: z.union([z.string(), z.number()]).nullish(),
-  description: z.string().nullish(),
-  qty: z.number().positive(),
-  ratePaise: z.number().int().nonnegative(),
-  gstRatePct: z.number().min(0).max(50).default(18),
-  hsnSac: z.string().nullish(),
-});
-
-const CreateInput = z.object({
-  name: z.string().trim().min(1, 'Give the profile a name.').max(200),
-  customerId: z.union([z.string(), z.number()]),
-  frequency: z.enum(FREQUENCIES),
-  startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use a yyyy-mm-dd date.'),
-  endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullish(),
-  paymentTerms: z.string().max(20).nullish(),
-  autoSend: z.boolean().optional(),
-  autoRun: z.boolean().optional(),
-  lines: z.array(LineInput).min(1, 'A profile needs at least one line.'),
-});
-
 export const POST = route(
   async ({ orgId, user, branchId, req }) => {
     const input = await body(req, CreateInput);
-    const customerId = Number(input.customerId);
-
-    const customer = await db
-      .selectFrom('contacts').select(['id', 'display_name'])
-      .where('id', '=', customerId).where('org_id', '=', orgId).executeTakeFirst();
-    if (!customer) throw badRequest('That customer does not exist.');
-
-    const template: TemplateLine[] = input.lines.map((l) => ({
-      itemId: l.itemId == null ? null : Number(l.itemId),
-      description: l.description ?? null,
-      qty: l.qty,
-      ratePaise: l.ratePaise,
-      gstRatePct: l.gstRatePct,
-      hsnSac: l.hsnSac ?? null,
-    }));
-
-    const inserted = await db
-      .insertInto('recurring_invoices')
-      .values({
-        org_id: orgId,
-        branch_id: branchId,
-        profile_name: input.name,
-        customer_id: customerId,
-        frequency: input.frequency,
-        start_date: input.startDate,
-        end_date: input.endDate ?? null,
-        next_run: input.startDate,
-        payment_terms: input.paymentTerms ?? 'net_30',
-        template: JSON.stringify(template),
-        auto_send: input.autoSend ? 1 : 0,
-        auto_run: input.autoRun ? 1 : 0,
-        is_active: 1,
-      })
-      .executeTakeFirstOrThrow();
-
-    const id = Number(inserted.insertId);
+    const id = await createProfile(db, orgId, toProfileInput(input, branchId));
+    const customer = await db.selectFrom('contacts').select('display_name').where('id', '=', Number(input.customerId)).executeTakeFirst();
     await logAudit({
       orgId, actorUserId: user.userId, actorName: user.name, action: 'create',
       targetType: 'recurring_invoice', targetId: id, targetLabel: input.name,
-      detail: `${input.frequency} profile for ${customer.display_name}, first run ${input.startDate}`,
+      detail: `${repeatLabel(input.frequency as Frequency, input.every ?? 1)} profile for ${customer?.display_name ?? 'a customer'}, first run ${input.startDate}`,
       ...auditMeta(req),
     });
-
     return { id: asId(id), name: input.name };
   },
   { permission: { module: 'sales', action: 'create' } },

@@ -801,7 +801,7 @@ if (!DEMO) {
   check('…with the status ribbon across its corner', (await page.locator('[data-slot=invoice-preview] [data-slot=status-ribbon]').count()) === 1);
   check('…and the logo, when the business has one', !tpl.business.logoUrl || (await page.locator('[data-slot=invoice-preview] [data-slot=invoice-logo]').count()) === 1);
   const line = (await page.locator('[data-slot=pdf-template-line]').innerText().catch(() => '')).trim();
-  check("…\"PDF Template : '…'\" under it, as in Zoho", /^(?:(?:Goods|Services|Export) Invoice · )?PDF Template : '.+'/.test(line), line);
+  check("…\"PDF Template : '…'\" under it, as in Zoho", /^(?:(?:Goods|Services?|Export) Invoice · )?PDF Template : '.+'/.test(line), line);
   check("…\"WHAT'S NEXT?\" while something is owed", (await page.locator('[data-slot=whats-next]').count()) === 1);
   check('…PDF/Print and Record Payment on the bar', (await page.locator('[data-slot=pdf-print]').count()) === 1 && (await page.locator('[data-slot=record-payment]').count()) === 1);
 
