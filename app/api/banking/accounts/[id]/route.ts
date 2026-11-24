@@ -24,7 +24,7 @@ export const GET = route(
       if (exists) throw forbidden('This account is limited to some users, and you are not one of them.');
       throw notFound('That account does not exist.');
     }
-    const lines = await db.selectFrom('bank_transactions').select(['id', 'status', 'applied_rule_id'])
+    const lines = await db.selectFrom('bank_transactions').select(['id', 'status', 'applied_rule_id', 'auto_excluded'])
       .where('org_id', '=', orgId).where('bank_account_id', '=', id).where('status', 'in', ['unmatched', 'excluded']).execute();
     const open = lines.filter((l) => l.status === 'unmatched');
     const best = await bestMatchesFor(db, orgId, open.map((l) => l.id));
@@ -41,6 +41,8 @@ export const GET = route(
         bestMatches: open.filter((l) => (best.get(l.id)?.length ?? 0) > 0).length,
         recognized: open.filter((l) => l.applied_rule_id).length,
         excluded: lines.length - open.length,
+        manuallyExcluded: lines.filter((l) => l.status === 'excluded' && !l.auto_excluded).length,
+        autoExcluded: lines.filter((l) => l.status === 'excluded' && !!l.auto_excluded).length,
         chequesPending: Number(cheques[0]?.n ?? 0),
       },
     };

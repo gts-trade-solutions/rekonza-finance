@@ -361,6 +361,7 @@ export interface BankAccounts {
   org_id: number;
   updated_at: Generated<Date>;
   user_ids: Json | null;
+  inbound_token: string | null;
 }
 
 export interface BankRules {
@@ -414,6 +415,37 @@ export interface BankTransactionLinks {
   target_type: string;
 }
 
+export interface BankingPreferences {
+  apply_rules_on_import: Generated<number>;
+  auto_match_on_import: Generated<number>;
+  default_expense_account_id: number | null;
+  default_income_account_id: number | null;
+  inbound_enabled: Generated<number>;
+  inbound_senders: string | null;
+  keep_duplicates: Generated<number>;
+  match_window_days: Generated<number>;
+  org_id: number;
+  show_payment_clearing: Generated<number>;
+  updated_at: Generated<Date>;
+}
+
+export interface InboundStatements {
+  bank_account_id: number | null;
+  error: string | null;
+  filename: string | null;
+  id: Generated<number>;
+  import_id: number | null;
+  org_id: number;
+  provider: string;
+  received_at: Generated<Date>;
+  recipient: string | null;
+  rows_duplicate: Generated<number>;
+  rows_imported: Generated<number>;
+  sender: string | null;
+  status: "failed" | "imported" | "refused";
+  subject: string | null;
+}
+
 export interface BankTransactions {
   applied_rule_id: number | null;
   bank_account_id: number;
@@ -421,6 +453,7 @@ export interface BankTransactions {
   dedupe_hash: string;
   deposit: Generated<Decimal>;
   exclude_reason: string | null;
+  auto_excluded: Generated<number>;
   id: Generated<number>;
   import_batch_id: number | null;
   matched_at: Date | null;
@@ -2667,6 +2700,7 @@ export interface RecurringInvoices {
   auto_send: Generated<number>;
   branch_id: number;
   create_as_draft: Generated<number>;
+  payment_link: Generated<number>;
   created_at: Generated<Date>;
   customer_id: number;
   end_date: ColumnType<string | null, string | null, string | null>;
@@ -2683,6 +2717,8 @@ export interface RecurringInvoices {
   profile_name: string;
   repeat_every: Generated<number>;
   salesperson_id: number | null;
+  price_list_id: number | null;
+  project_ids: Json | null;
   start_date: ColumnType<string, string, string>;
   template: Json;
   terms: string | null;
@@ -2806,6 +2842,7 @@ export interface RetainerInvoices {
   amount: Generated<Decimal>;
   amount_paid: Generated<Decimal>;
   applied_amount: Generated<Decimal>;
+  refunded_amount: Generated<Decimal>;
   branch_id: number;
   created_at: Generated<Date>;
   created_by_user_id: number | null;
@@ -3459,6 +3496,8 @@ export interface DB {
   bank_statement_imports: BankStatementImports;
   bank_transaction_links: BankTransactionLinks;
   bank_transactions: BankTransactions;
+  banking_preferences: BankingPreferences;
+  inbound_statements: InboundStatements;
   bank_transfers: BankTransfers;
   batches: Batches;
   bill_lines: BillLines;

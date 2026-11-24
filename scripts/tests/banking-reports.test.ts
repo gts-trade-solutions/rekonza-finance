@@ -136,9 +136,15 @@ test('re-importing an overlapping statement adds nothing twice', async () => {
     assert.equal(second.duplicates, 3, 'the three already there were skipped');
     assert.equal(second.imported, 1, 'only the genuinely new line was added');
 
+    // Lines in the reconciliation: no doubling. The three repeats are kept out
+    // of it, as Zoho's "Automatically Excluded", where they can be restored.
     const all = await trx.selectFrom('bank_transactions')
-      .select('id').where('org_id', '=', orgId).execute();
+      .select('id').where('org_id', '=', orgId).where('status', '<>', 'excluded').execute();
     assert.equal(all.length, 4, 'no doubling');
+    const kept = await trx.selectFrom('bank_transactions')
+      .select('id').where('org_id', '=', orgId).where('auto_excluded', '=', 1).execute();
+    assert.equal(kept.length, 3);
+    assert.equal(second.autoExcluded, 3);
   });
 });
 

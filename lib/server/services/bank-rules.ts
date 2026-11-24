@@ -5,10 +5,12 @@ import 'server-only';
 //
 // The form's choices are checked against what the server can actually do with
 // them (lib/bank-rules.ts): a rule records a line as one of the categories that
-// need only an account — an expense, a deposit, a transfer … — never a
-// customer's or vendor's payment, whose invoices or bills a rule cannot know.
-// Pointing a rule at receivables or payables is refused for the same reason:
-// those balances come from documents.
+// need only an account (an expense, a deposit, a transfer …) or as a Customer
+// Payment / Vendor Payment from or to the contact it names, which is set
+// against that contact's oldest open invoices or bills when it runs. Pointing
+// a rule at the receivables or payables account itself is refused: those
+// balances come from documents, and a payment rule reaches them through the
+// contact instead.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { sql } from 'kysely';
@@ -49,7 +51,13 @@ async function checked(trx: Trx, orgId: number, input: RuleInput) {
   const cat = categoryOf(input.recordAs as never)!;
   let accountId: number | null = null;
   let otherBankAccountId: number | null = null;
-  if (cat.engine === 'transfer') {
+  if (cat.engine === 'customer' || cat.engine === 'vendor') {
+    const want = cat.engine === 'customer' ? 'customer' : 'vendor';
+    if (!input.contactId) throw badRequest(`Choose the ${want}.`);
+    const c = await trx.selectFrom('contacts').select(['id', 'kind']).where('id', '=', input.contactId).where('org_id', '=', orgId).executeTakeFirst();
+    if (!c) throw notFound(`That ${want} does not exist.`);
+    if (c.kind !== want && c.kind !== 'both') throw badRequest(`Choose a ${want}.`);
+  } else if (cat.engine === 'transfer') {
     if (!input.otherBankAccountId) throw badRequest('Choose the account.');
     const other = await trx.selectFrom('bank_accounts').select(['id', 'kind']).where('id', '=', input.otherBankAccountId).where('org_id', '=', orgId).executeTakeFirst();
     if (!other) throw notFound('That account does not exist.');

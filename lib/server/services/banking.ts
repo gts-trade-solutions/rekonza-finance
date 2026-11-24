@@ -25,10 +25,14 @@ import { toPaiseFromSql, toSqlFromPaise } from '../money-sql';
 import { postEntry, reverseEntry, type DraftLine } from '../ledger/posting';
 import { CODE, accountIds, requireAccount } from '../ledger/chart-of-accounts';
 import { ApiError, badRequest, notFound } from '../http';
-import { ruleCatches, ruleShapeOf } from '../../bank-rules';
+import { PAYMENT_RECORD_AS, ruleCatches, ruleShapeOf } from '../../bank-rules';
 import type { BankCategoryKey } from '../../bank-categories';
 import { receivePayment } from './payments';
 import { undoLinks } from './bank-match';
+import { bankingPreferences } from './banking-preferences';
+
+/** Zoho's reason on a line kept out because it repeats one already imported. */
+export const DUPLICATE_REASON = 'Duplicate of a transaction already imported';
 
 export interface StatementRow {
   date: string;
@@ -75,6 +79,8 @@ export interface ImportResult {
   total: number;
   imported: number;
   duplicates: number;
+  /** Duplicates kept as Automatically Excluded (Banking Preferences), restorable. */
+  autoExcluded: number;
   autoMatched: number;
   periodFrom: string | null;
   periodTo: string | null;
@@ -139,7 +145,13 @@ export async function importStatement(
     .where('bank_account_id', '=', bankAccountId).execute();
   const seen = new Set(existing.map((r) => r.dedupe_hash));
 
+  const prefs = await bankingPreferences(trx, orgId);
   const fresh: { row: StatementRow; hash: string }[] = [];
+  // Zoho's "Automatically Excluded": a line already in the books is kept out of
+  // the reconciliation, with its reason, where a person can restore it if it
+  // was a second real payment after all. Once per line: importing the same
+  // statement again does not pile up more copies.
+  const repeats: { row: StatementRow; hash: string }[] = [];
   const times = new Map<string, number>();
   for (const row of rows) {
     // The how-many-th time this same line appears in this file (see fingerprint).
@@ -147,7 +159,11 @@ export async function importStatement(
     const n = times.get(base) ?? 0;
     times.set(base, n + 1);
     const hash = n ? fingerprint(bankAccountId, row, n) : base;
-    if (seen.has(hash)) continue;
+    if (seen.has(hash)) {
+      const dup = createHash('sha256').update(`${hash}:duplicate`).digest('hex');
+      if (prefs.keepDuplicates && !seen.has(dup)) { seen.add(dup); repeats.push({ row, hash: dup }); }
+      continue;
+    }
     seen.add(hash);
     fresh.push({ row, hash });
   }
@@ -173,8 +189,20 @@ export async function importStatement(
       .execute();
   }
 
-  const autoMatched = await applyRules(trx, orgId, userId, bankAccountId) + await matchInvoicePayments(trx, orgId, userId, bankAccountId)
-    + await matchEnteredPayments(trx, orgId, userId, bankAccountId);
+  if (repeats.length) {
+    await trx.insertInto('bank_transactions').values(repeats.map(({ row, hash }) => ({
+      org_id: orgId, bank_account_id: bankAccountId, txn_date: row.date, narration: row.narration.slice(0, 500),
+      reference: row.reference ?? null, deposit: toSqlFromPaise(row.depositPaise ?? 0), withdrawal: toSqlFromPaise(row.withdrawalPaise ?? 0),
+      running_balance: row.runningBalancePaise != null ? toSqlFromPaise(row.runningBalancePaise) : null,
+      status: 'excluded' as const, exclude_reason: DUPLICATE_REASON, auto_excluded: 1, import_batch_id: importId, dedupe_hash: hash,
+    }))).execute();
+  }
+
+  // Banking Preferences decide whether rules and matching run as the statement comes in.
+  const autoMatched = (prefs.applyRulesOnImport ? await applyRules(trx, orgId, userId, bankAccountId) : 0)
+    + (prefs.autoMatchOnImport
+      ? await matchInvoicePayments(trx, orgId, userId, bankAccountId) + await matchEnteredPayments(trx, orgId, userId, bankAccountId, prefs.matchWindowDays)
+      : 0);
 
   await trx
     .updateTable('bank_statement_imports')
@@ -187,6 +215,7 @@ export async function importStatement(
     total: rows.length,
     imported: fresh.length,
     duplicates: rows.length - fresh.length,
+    autoExcluded: repeats.length,
     autoMatched,
     periodFrom,
     periodTo,
@@ -195,12 +224,13 @@ export async function importStatement(
 
 /**
  * A statement line equal to a payment already entered — the same account, the
- * same amount, the same direction, within three days — is that payment, and is
+ * same amount, the same direction, within the days Banking Preferences allow
+ * (three unless changed) — is that payment, and is
  * matched to it. Only when exactly one payment fits and it is not matched to
  * another line already: two cheques of ₹10,000 the same week are left for a
  * person to tell apart.
  */
-export async function matchEnteredPayments(trx: Trx, orgId: number, userId: number | null, bankAccountId: number): Promise<number> {
+export async function matchEnteredPayments(trx: Trx, orgId: number, userId: number | null, bankAccountId: number, windowDays = 3): Promise<number> {
   const lines = await trx.selectFrom('bank_transactions').select(['id', 'txn_date', 'deposit', 'withdrawal'])
     .where('org_id', '=', orgId).where('bank_account_id', '=', bankAccountId).where('status', '=', 'unmatched').execute();
   if (!lines.length) return 0;
@@ -215,7 +245,7 @@ export async function matchEnteredPayments(trx: Trx, orgId: number, userId: numb
     const deposit = toPaiseFromSql(l.deposit);
     const amount = deposit || toPaiseFromSql(l.withdrawal);
     const fits = payments.filter((p) => !taken.has(Number(p.id)) && (p.kind === 'received') === deposit > 0
-      && toPaiseFromSql(p.amount) === amount && Math.abs(day(p.payment_date) - day(l.txn_date)) <= 3 * 86_400_000);
+      && toPaiseFromSql(p.amount) === amount && Math.abs(day(p.payment_date) - day(l.txn_date)) <= windowDays * 86_400_000);
     if (fits.length !== 1) continue;
     await matchToPayment(trx, orgId, userId, l.id, Number(fits[0].id));
     taken.add(Number(fits[0].id));
@@ -330,7 +360,7 @@ export async function applyRules(
       continue;
     }
     const rule = hit.rule;
-    if (rule.auto_confirm && (rule.action_account_id || rule.other_bank_account_id)) {
+    if (rule.auto_confirm && ruleCanRecord(rule)) {
       if (rule.record_as) {
         const { categoriseAs } = await import('./bank-match');
         await categoriseAs(trx, orgId, userId, txn.id, {
@@ -338,6 +368,7 @@ export async function applyRules(
           accountId: rule.action_account_id, otherBankAccountId: rule.other_bank_account_id, contactId: rule.contact_id,
           reference: rule.reference_mode === 'none' ? '' : txn.reference,
           notes: `Categorised by the rule "${rule.name}": ${txn.narration}`,
+          allocations: await paymentRuleAllocations(trx, orgId, rule, line.depositPaise || line.withdrawalPaise),
         });
         await trx.updateTable('bank_transactions').set({ applied_rule_id: rule.id }).where('id', '=', txn.id).execute();
       } else {
@@ -356,6 +387,41 @@ export async function applyRules(
   return matched;
 }
 
+/** A rule has what it needs to record a line: an account, the other account of a transfer, or the contact of a payment. */
+function ruleCanRecord(r: { record_as: string | null; action_account_id: number | null; other_bank_account_id: number | null; contact_id: number | null }): boolean {
+  if (r.record_as && (PAYMENT_RECORD_AS as string[]).includes(r.record_as)) return !!r.contact_id;
+  return !!(r.action_account_id || r.other_bank_account_id);
+}
+
+/**
+ * What a payment rule's money settles: the contact's oldest open invoices (or
+ * bills) first, by due date, as far as it goes. Whatever is left over stays on
+ * the payment as an advance, as a receipt with no invoice named does.
+ */
+export async function paymentRuleAllocations(
+  trx: Trx, orgId: number, rule: { record_as: string | null; contact_id: number | null }, amountPaise: Paise,
+): Promise<{ targetId: number; amountPaise: Paise }[] | undefined> {
+  if (!rule.record_as || !(PAYMENT_RECORD_AS as string[]).includes(rule.record_as) || !rule.contact_id) return undefined;
+  const open = rule.record_as === 'customer_payment'
+    ? await trx.selectFrom('invoices').select(['id', 'total', 'amount_paid'])
+      .where('org_id', '=', orgId).where('customer_id', '=', rule.contact_id).where('currency', '=', 'INR')
+      .where('status', 'in', ['approved', 'sent', 'overdue', 'partially_paid']).orderBy('due_date').orderBy('invoice_date').orderBy('id').execute()
+    : await trx.selectFrom('bills').select(['id', 'total', 'amount_paid'])
+      .where('org_id', '=', orgId).where('vendor_id', '=', rule.contact_id).where('currency', '=', 'INR')
+      .where('status', 'in', ['open', 'overdue', 'partially_paid']).orderBy('due_date').orderBy('bill_date').orderBy('id').execute();
+  const out: { targetId: number; amountPaise: Paise }[] = [];
+  let left = amountPaise;
+  for (const d of open) {
+    if (left <= 0) break;
+    const owing = toPaiseFromSql(d.total) - toPaiseFromSql(d.amount_paid);
+    if (owing <= 0) continue;
+    const take = Math.min(owing, left);
+    out.push({ targetId: d.id, amountPaise: take });
+    left -= take;
+  }
+  return out;
+}
+
 /**
  * Zoho's Categorize on a Recognized line: record it as the rule that
  * recognised it says. A line whose rule has gone, or names no account, is left
@@ -364,18 +430,19 @@ export async function applyRules(
 export async function applyRecognized(trx: Trx, orgId: number, userId: number | null, ids: number[]): Promise<{ applied: number; skipped: number }> {
   if (!ids.length) return { applied: 0, skipped: 0 };
   const lines = await trx.selectFrom('bank_transactions as t').innerJoin('bank_rules as r', 'r.id', 't.applied_rule_id')
-    .select(['t.id', 't.reference', 't.narration', 'r.id as rule_id', 'r.name as rule_name', 'r.record_as', 'r.action_account_id',
+    .select(['t.id', 't.reference', 't.narration', 't.deposit', 't.withdrawal', 'r.id as rule_id', 'r.name as rule_name', 'r.record_as', 'r.action_account_id',
       'r.other_bank_account_id', 'r.contact_id', 'r.reference_mode'])
     .where('t.org_id', '=', orgId).where('t.id', 'in', ids).where('t.status', '=', 'unmatched').execute();
   let applied = 0;
   for (const l of lines) {
-    if (!l.action_account_id && !l.other_bank_account_id) continue;
+    if (!ruleCanRecord(l)) continue;
     if (l.record_as) {
       const { categoriseAs } = await import('./bank-match');
       await categoriseAs(trx, orgId, userId, l.id, {
         category: l.record_as as BankCategoryKey, accountId: l.action_account_id, otherBankAccountId: l.other_bank_account_id,
         contactId: l.contact_id, reference: l.reference_mode === 'none' ? '' : l.reference,
         notes: `Categorised by the rule "${l.rule_name}": ${l.narration}`,
+        allocations: await paymentRuleAllocations(trx, orgId, l, toPaiseFromSql(l.deposit) || toPaiseFromSql(l.withdrawal)),
       });
     } else {
       await categoriseTransaction(trx, orgId, userId, l.id, { accountId: l.action_account_id!, contactId: l.contact_id, ruleId: l.rule_id });

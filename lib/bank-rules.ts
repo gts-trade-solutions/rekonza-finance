@@ -43,15 +43,19 @@ export const MATCH_MODES: { value: RuleMatchMode; label: string }[] = [
 ];
 
 /**
- * What a rule may record a line as: the categories that need only an account
- * (or the other account of a transfer). A customer's or vendor's payment needs
- * the invoices or bills it settles, which a rule cannot know, so those are
- * matched on the line itself.
+ * What a rule may record a line as (Zoho's Record As): the categories that
+ * need only an account (or the other account of a transfer), and a Customer
+ * Payment or Vendor Payment from or to the contact the rule names, set
+ * against that contact's oldest open invoices or bills, the rest kept as an
+ * advance (lib/server/services/banking.ts applyRules).
  */
 export const RULE_RECORD_AS: Record<RuleApplyTo, BankCategoryKey[]> = {
-  deposits: ['transfer_from', 'sales_without_invoice', 'interest_income', 'other_income', 'expense_refund', 'deposit_from_other', 'owner_contribution'],
-  withdrawals: ['expense', 'transfer_to', 'card_payment', 'owner_drawings', 'employee_reimbursement', 'deposit_to_other'],
+  deposits: ['customer_payment', 'transfer_from', 'sales_without_invoice', 'interest_income', 'other_income', 'expense_refund', 'deposit_from_other', 'owner_contribution'],
+  withdrawals: ['vendor_payment', 'expense', 'transfer_to', 'card_payment', 'owner_drawings', 'employee_reimbursement', 'deposit_to_other'],
 };
+
+/** A rule that records a payment from or to a contact, rather than into an account. */
+export const PAYMENT_RECORD_AS: BankCategoryKey[] = ['customer_payment', 'vendor_payment'];
 export const recordAsOptions = (applyTo: RuleApplyTo) =>
   RULE_RECORD_AS[applyTo].map((k) => BANK_CATEGORIES.find((c) => c.key === k)!).filter(Boolean);
 

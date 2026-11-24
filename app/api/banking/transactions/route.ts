@@ -1,3 +1,4 @@
+import { bankingPreferences } from '@/lib/server/services/banking-preferences';
 import { z } from 'zod';
 import { sql } from 'kysely';
 import { db, transaction } from '@/lib/server/db';
@@ -21,7 +22,8 @@ const ListQuery = z.object({
   /** Also suggest a category for each uncategorised line, learnt from past ones (bank-bulk.ts). */
   suggest: z.enum(['1']).optional(),
   /** Zoho's pills on an account's uncategorised lines: those with a Best Match, or those a rule Recognized. */
-  view: z.enum(['best', 'recognized']).optional(),
+  /** Excluded's two pills: kept out by a person, or as a duplicate at import (Zoho's Automatically Excluded). */
+  view: z.enum(['best', 'recognized', 'manually_excluded', 'auto_excluded']).optional(),
   limit: z.coerce.number().int().min(1).max(500).default(200),
   offset: z.coerce.number().int().min(0).default(0),
 });
@@ -41,6 +43,8 @@ export const GET = route(
     if (q.to) base = base.where('bank_transactions.txn_date', '<=', q.to);
     if (q.importId) base = base.where('bank_transactions.import_batch_id', '=', Number(q.importId));
     if (q.view === 'recognized') base = base.where('bank_transactions.applied_rule_id', 'is not', null);
+    if (q.view === 'auto_excluded') base = base.where('bank_transactions.status', '=', 'excluded').where('bank_transactions.auto_excluded', '=', 1);
+    if (q.view === 'manually_excluded') base = base.where('bank_transactions.status', '=', 'excluded').where('bank_transactions.auto_excluded', '=', 0);
 
     const [rows, counts] = await Promise.all([
       base
@@ -49,7 +53,7 @@ export const GET = route(
           'bank_transactions.reference', 'bank_transactions.deposit', 'bank_transactions.withdrawal',
           'bank_transactions.status', 'bank_transactions.matched_type', 'bank_transactions.matched_id',
           'bank_transactions.applied_rule_id', 'bank_transactions.bank_account_id',
-          'bank_transactions.running_balance', 'bank_transactions.exclude_reason',
+          'bank_transactions.running_balance', 'bank_transactions.exclude_reason', 'bank_transactions.auto_excluded',
           'bank_accounts.name as bank_name',
         ])
         .orderBy('bank_transactions.txn_date', 'desc')
@@ -78,7 +82,8 @@ export const GET = route(
     const rules = ruleIds.length
       ? await db.selectFrom('bank_rules as r').leftJoin('accounts as a', 'a.id', 'r.action_account_id')
           .leftJoin('bank_accounts as o', 'o.id', 'r.other_bank_account_id')
-          .select(['r.id', 'r.name', 'r.record_as', 'r.auto_confirm', 'a.name as account_name', 'o.name as other_name'])
+          .leftJoin('contacts as c', 'c.id', 'r.contact_id')
+          .select(['r.id', 'r.name', 'r.record_as', 'r.auto_confirm', 'a.name as account_name', 'o.name as other_name', 'c.display_name as contact_name'])
           .where('r.id', 'in', ruleIds).where('r.org_id', '=', orgId).execute()
       : [];
     const ruleBy = new Map(rules.map((r) => [r.id, r]));
@@ -103,10 +108,12 @@ export const GET = route(
         recognizedBy: r.applied_rule_id && ruleBy.get(r.applied_rule_id) ? {
           ruleName: ruleBy.get(r.applied_rule_id)!.name,
           recordAs: ruleBy.get(r.applied_rule_id)!.record_as,
-          accountName: ruleBy.get(r.applied_rule_id)!.account_name ?? ruleBy.get(r.applied_rule_id)!.other_name ?? null,
+          // A payment rule names its customer or vendor where another names its account.
+          accountName: ruleBy.get(r.applied_rule_id)!.account_name ?? ruleBy.get(r.applied_rule_id)!.other_name ?? ruleBy.get(r.applied_rule_id)!.contact_name ?? null,
         } : null,
         runningBalancePaise: r.running_balance == null ? null : toPaiseFromSql(r.running_balance),
         excludeReason: r.exclude_reason,
+        autoExcluded: !!r.auto_excluded,
         bankAccountId: asId(r.bank_account_id),
         bankName: r.bank_name,
       })),
@@ -203,9 +210,13 @@ export const POST = route(
     const input = await body(req, ActionInput);
     if (input.action === 'auto_match') {
       const bankAccountId = Number(input.bankAccountId);
-      const matched = await transaction(async (trx) => await applyRules(trx, orgId, user.userId, bankAccountId)
-        + await matchInvoicePayments(trx, orgId, user.userId, bankAccountId)
-        + await matchEnteredPayments(trx, orgId, user.userId, bankAccountId));
+      const matched = await transaction(async (trx) => {
+        // "Run rules now" runs everything, whatever Banking Preferences say about imports; the day window still applies.
+        const prefs = await bankingPreferences(trx, orgId);
+        return await applyRules(trx, orgId, user.userId, bankAccountId)
+          + await matchInvoicePayments(trx, orgId, user.userId, bankAccountId)
+          + await matchEnteredPayments(trx, orgId, user.userId, bankAccountId, prefs.matchWindowDays);
+      });
       await logAudit({
         orgId, actorUserId: user.userId, actorName: user.name, action: 'match', targetType: 'bank_account', targetId: bankAccountId,
         detail: `Automatic matching: ${matched} statement line${matched === 1 ? '' : 's'} matched`, ...auditMeta(req),

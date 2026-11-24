@@ -18,11 +18,12 @@
 // accounting software is not. Statement import is the honest route.
 
 import Link from 'next/link';
+import { InboundStatementsDialog } from '@/components/banking/inbound-statements';
 import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
 import {
   ArrowLeftRight, CalendarDays, ChevronDown, ChevronUp, CircleCheck, CreditCard, FileClock, FileSpreadsheet, HandCoins,
-  Landmark, ListChecks, ScrollText, Search, TrendingUp, X,
+  Landmark, ListChecks, Mail, ScrollText, Search, Settings2, TrendingUp, X,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip as ChartTooltip, XAxis, YAxis } from 'recharts';
@@ -96,6 +97,10 @@ export default function BankingPage() {
   const [scope, setScope] = useState('');
   const [status, setStatus] = useState<'active' | 'inactive' | 'all'>('active');
   const [chartOn, setChartOn] = useState(true);
+  const [inbound, setInbound] = useState(false);
+  // Banking Preferences: whether the Payment Clearing tile (and its line on the chart) shows.
+  const prefs = useApi<{ showPaymentClearing: boolean }>(() => api.get('/api/banking/preferences'), []);
+  const showTile = (k: TileKey) => k !== 'clearing' || prefs.data?.showPaymentClearing !== false;
   const [searching, setSearching] = useState(false);
   const [search, setSearch] = useState('');
   useEffect(() => { try { setChartOn(localStorage.getItem('rekonza-bank-chart') !== '0'); } catch { /* private mode */ } }, []);
@@ -144,8 +149,13 @@ export default function BankingPage() {
                 <Button variant="outline" size="sm" className="gap-1" data-slot="banking-more">More <ChevronDown className="size-3.5" /></Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-72">
+                {/* Zoho's three, in Zoho's order; Rekonza's own screens follow. */}
+                <DropdownMenuItem onClick={() => setInbound(true)} className="gap-2.5" data-slot="more-auto-upload"><Mail className="size-4" /> Auto-upload bank statements from email</DropdownMenuItem>
                 <DropdownMenuItem asChild>
                   <Link href="/banking/imports" className="gap-2.5" data-slot="more-import"><FileSpreadsheet className="size-4" /> Import Statement</Link>
+                </DropdownMenuItem>
+                <DropdownMenuItem asChild>
+                  <Link href="/banking/preferences" className="gap-2.5" data-slot="more-preferences"><Settings2 className="size-4" /> Preferences</Link>
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 {EXTRAS.map((x) => (
@@ -162,6 +172,7 @@ export default function BankingPage() {
         }
       />
 
+      <InboundStatementsDialog open={inbound} onOpenChange={setInbound} />
       <AsyncPage state={state} loading={<LoadingRows rows={6} />}>
         {(data) => (
           <>
@@ -191,7 +202,7 @@ export default function BankingPage() {
                 </DropdownMenu>
               </div>
               <div className="flex flex-wrap items-center gap-x-6 gap-y-4 px-5 py-6">
-                {data.tiles.map((t) => {
+                {data.tiles.filter((t) => showTile(t.key)).map((t) => {
                   const tile = TILE[t.key];
                   return (
                     <div key={t.key} className="flex items-center gap-3 pr-4" data-slot="banking-total" data-tile={t.key}
@@ -228,14 +239,14 @@ export default function BankingPage() {
                           <XAxis dataKey="day" tick={{ fontSize: 11, fill: '#6c718a' }} tickLine={false} axisLine={false} interval="preserveStartEnd" minTickGap={18} />
                           <YAxis tickFormatter={compact} tick={{ fontSize: 11, fill: '#6c718a' }} tickLine={false} axisLine={false} width={56} />
                           <ChartTooltip formatter={(v) => formatINR(Math.round(Number(v ?? 0) * 100))} />
-                          {(Object.keys(TILE) as TileKey[]).map((k) => (
+                          {(Object.keys(TILE) as TileKey[]).filter(showTile).map((k) => (
                             <Line key={k} type="monotone" dataKey={k} name={TILE[k].label} stroke={TILE[k].line} strokeWidth={1.6} dot={false} />
                           ))}
                         </LineChart>
                       </ResponsiveContainer>
                     </div>
                     <div className="mt-2 flex flex-wrap gap-4 pl-10 text-[13px]">
-                      {(Object.keys(TILE) as TileKey[]).map((k) => (
+                      {(Object.keys(TILE) as TileKey[]).filter(showTile).map((k) => (
                         <span key={k} className="inline-flex items-center gap-1.5"><span className="size-2 rounded-[2px]" style={{ background: TILE[k].line }} />{TILE[k].label}</span>
                       ))}
                     </div>

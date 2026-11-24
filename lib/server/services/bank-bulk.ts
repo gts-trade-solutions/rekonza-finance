@@ -66,7 +66,8 @@ export async function setExcluded(trx: Trx, orgId: number, ids: number[], exclud
   const from: Status = excluded ? 'unmatched' : 'excluded';
   // Zoho's REASON column under Excluded: what the person said, or that a person did it.
   const why = excluded ? (reason?.trim() || 'Excluded manually').slice(0, 255) : null;
-  const r = await trx.updateTable('bank_transactions').set({ status: excluded ? 'excluded' : 'unmatched', exclude_reason: why })
+  // Restoring one that was kept out as a duplicate makes it an ordinary line: auto_excluded goes with the reason.
+  const r = await trx.updateTable('bank_transactions').set({ status: excluded ? 'excluded' : 'unmatched', exclude_reason: why, auto_excluded: 0 })
     .where('org_id', '=', orgId).where('id', 'in', ids).where('status', '=', from).executeTakeFirst();
   return Number(r.numUpdatedRows);
 }
