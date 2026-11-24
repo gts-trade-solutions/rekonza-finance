@@ -19,6 +19,7 @@ import {
   cancelSalesOrderItems, openCreditNote, projectFromEstimate, purchaseOrderFromSalesOrder, retainerFromEstimate,
 } from '../../lib/server/services/sales-extras';
 import { gstr1PortalFile } from '../../lib/server/gst/gstr1-json';
+import { gstr1 } from '../../lib/server/gst/returns';
 import { reverseChargeProblem, reverseChargeTax } from '../../lib/tax/reverse-charge';
 import { toPaiseFromSql } from '../../lib/server/money-sql';
 
@@ -147,6 +148,10 @@ test('a credit note against a reverse-charge invoice gives back no GST, and GSTR
     assert.ok(row, 'reported in CDNR');
     assert.equal(row!.rchrg, 'Y');
     assert.equal(row!.itms[0].itm_det.camt + row!.itms[0].itm_det.samt, 180, 'the ₹180 the recipient reverses');
+    // The GSTR-1 screen marks both as reverse charge.
+    const screen = await gstr1(trx, orgId, '2026-11');
+    assert.equal(screen.b2b.find((r) => r.number === inv.number)?.reverseCharge, true);
+    assert.equal(screen.creditNotes.find((r) => r.number === cn.number)?.reverseCharge, true);
     // An ordinary invoice's note still charges GST.
     const plain = await createInvoice(trx, orgId, null, { branchId: f.branchId, customerId: f.customerId, date: '2026-11-05', dueDate: '2026-12-05', status: 'approved', lines: [line(f)] });
     const cn2 = await createCreditNote(trx, orgId, null, { branchId: f.branchId, customerId: f.customerId, date: '2026-11-08', reason: 'Sales Return', againstInvoiceId: plain.id, lines: [line(f, 1)] });

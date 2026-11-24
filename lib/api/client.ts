@@ -1688,6 +1688,8 @@ export interface Gstr1Row {
   noteType?: 'C' | 'D';
   againstNumber?: string | null;
   irnStatus?: string;
+  /** Reported with rchrg Y: the recipient pays the GST. */
+  reverseCharge?: boolean;
 }
 
 export interface Gstr1Response {
