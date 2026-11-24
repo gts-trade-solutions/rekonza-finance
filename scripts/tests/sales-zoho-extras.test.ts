@@ -134,6 +134,26 @@ test('a reverse-charge invoice posts no output GST and GSTR-1 reports it with rc
   });
 });
 
+test('a credit note against a reverse-charge invoice gives back no GST, and GSTR-1 reports it with rchrg Y', async () => {
+  await withFixture(async (f) => {
+    const { trx, orgId } = f;
+    const inv = await createInvoice(trx, orgId, null, { branchId: f.branchId, customerId: f.customerId, date: '2026-11-05', dueDate: '2026-12-05', status: 'approved', reverseCharge: true, lines: [line(f)] });
+    const cn = await createCreditNote(trx, orgId, null, { branchId: f.branchId, customerId: f.customerId, date: '2026-11-08', reason: 'Sales Return', againstInvoiceId: inv.id, lines: [line(f, 1)] });
+    assert.equal(cn.totalPaise, 100_000, 'the note follows its invoice: no GST on it');
+    assert.equal(await balance(trx, orgId, f.acc[CODE.GST_CGST]) + await balance(trx, orgId, f.acc[CODE.GST_SGST]), 0, 'no output tax was posted, and none is taken back');
+    assert.equal(await balance(trx, orgId, f.acc[CODE.AR]), 200_000 - 100_000);
+    const file = await gstr1PortalFile(trx, orgId, '2026-11') as unknown as { cdnr: { nt: { nt_num: string; rchrg: string; itms: { itm_det: { camt: number; samt: number; rt: number } }[] }[] }[] };
+    const row = file.cdnr.flatMap((c) => c.nt).find((n) => n.nt_num === cn.number);
+    assert.ok(row, 'reported in CDNR');
+    assert.equal(row!.rchrg, 'Y');
+    assert.equal(row!.itms[0].itm_det.camt + row!.itms[0].itm_det.samt, 180, 'the ₹180 the recipient reverses');
+    // An ordinary invoice's note still charges GST.
+    const plain = await createInvoice(trx, orgId, null, { branchId: f.branchId, customerId: f.customerId, date: '2026-11-05', dueDate: '2026-12-05', status: 'approved', lines: [line(f)] });
+    const cn2 = await createCreditNote(trx, orgId, null, { branchId: f.branchId, customerId: f.customerId, date: '2026-11-08', reason: 'Sales Return', againstInvoiceId: plain.id, lines: [line(f, 1)] });
+    assert.equal(cn2.totalPaise, 118_000);
+  });
+});
+
 test('the reverse-charge rules: a registered buyer and an ordinary taxable supply; the tax at the line’s rate', () => {
   assert.match(reverseChargeProblem({ buyerGstin: null, supplyType: 'intra' }) ?? '', /registered buyer/);
   assert.match(reverseChargeProblem({ buyerGstin: '33AAAAA1111A1Z5', supplyType: 'export_lut' }) ?? '', /export/);

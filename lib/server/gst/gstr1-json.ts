@@ -72,7 +72,7 @@ interface DocHead {
   totalPaise: Paise;
   /** An invoice, or a debit note kept with them (it is reported as a note). */
   kind?: 'invoice' | 'debit_note';
-  /** Invoices only: under reverse charge — reported with rchrg Y and the tax the recipient owes. */
+  /** Under reverse charge (an invoice, or a credit note against one): rchrg Y and the tax the recipient owes. */
   reverseCharge?: boolean;
   /** Notes only: the invoice it was raised against. */
   againstTotalPaise?: Paise | null;
@@ -203,10 +203,12 @@ export async function gstr1PortalFile(
     id: number; number: string; note_date: string; status: string; gstin: string | null;
     place_of_supply: string; supply_type: string; total: string; branch_state: string;
     against_total: string | null; against_date: string | null; against_supply_type: string | null;
+    against_rc: number | null;
   }>`
     SELECT n.id, n.number, n.note_date, n.status, NULLIF(c.gstin, '') AS gstin,
            n.place_of_supply, n.supply_type, n.total, b.state_code AS branch_state,
-           i.total AS against_total, i.invoice_date AS against_date, i.supply_type AS against_supply_type
+           i.total AS against_total, i.invoice_date AS against_date, i.supply_type AS against_supply_type,
+           i.reverse_charge AS against_rc
       FROM credit_notes n
       JOIN contacts c ON c.id = n.customer_id
       JOIN branches b ON b.id = n.branch_id
@@ -275,6 +277,8 @@ export async function gstr1PortalFile(
     againstTotalPaise: r.against_total == null ? null : toPaiseFromSql(r.against_total),
     againstDate: r.against_date == null ? null : String(r.against_date).slice(0, 10),
     againstSupplyType: r.against_supply_type,
+    // A note against a reverse-charge invoice is reported as the invoice was: rchrg Y.
+    reverseCharge: Number(r.against_rc ?? 0) === 1,
   }));
 
   // ── Sort every line into its table ────────────────────────────────────────
@@ -359,7 +363,14 @@ export async function gstr1PortalFile(
       // the credit, nil-rated lines included.
       const inv_typ = head.supplyType === 'sez' ? (lines.some((l) => l.igst > 0) ? 'SEWP' : 'SEWOP') : 'R';
       const list = cdnr.get(head.gstin) ?? [];
-      list.push({ ...base, pos: head.pos, rchrg: 'N', inv_typ, itms: wrapped(lines, 'all') });
+      // Reverse charge: the note gave back no GST; it reports the tax the recipient reverses.
+      const items = head.reverseCharge
+        ? lines.map((l) => {
+            const owed = reverseChargeTax(l.taxable, l.rate, head.pos === head.branchState);
+            return { ...l, cgst: owed.cgstPaise, sgst: owed.sgstPaise, igst: owed.igstPaise, cess: 0 as Paise };
+          })
+        : lines;
+      list.push({ ...base, pos: head.pos, rchrg: head.reverseCharge ? 'Y' : 'N', inv_typ, itms: wrapped(items, 'all') });
       cdnr.set(head.gstin, list);
       return;
     }

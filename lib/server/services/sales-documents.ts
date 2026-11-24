@@ -595,7 +595,14 @@ export async function createCreditNote(
   await checkPeople(trx, orgId, input);
   const draft = input.status === 'draft';
   const ctx = await partyContext(trx, orgId, input.branchId, input.customerId, input.placeOfSupply, input.date, { againstInvoiceId: input.againstInvoiceId });
-  const costed = await costLines(trx, orgId, ctx.supplyType, input.lines, 'sale_price', input.date);
+  // A credit note follows its invoice: against a reverse-charge invoice (which
+  // charged and posted no GST) it gives back no GST either; the recipient
+  // reverses the tax it paid, and GSTR-1 reports the note with rchrg Y.
+  const rcInvoice = input.againstInvoiceId
+    ? Number((await trx.selectFrom('invoices').select('reverse_charge').where('id', '=', input.againstInvoiceId).where('org_id', '=', orgId).executeTakeFirst())?.reverse_charge ?? 0) === 1
+    : false;
+  const costedAll = await costLines(trx, orgId, ctx.supplyType, input.lines, 'sale_price', input.date);
+  const costed = rcInvoice ? withoutTax(costedAll) : costedAll;
   const extras = extrasOf(input);
   const { rounded } = roundToRupee(costed.tax.taxablePaise + totalTaxPaise(costed.tax) + extras.shipping + extras.adjustment);
 
