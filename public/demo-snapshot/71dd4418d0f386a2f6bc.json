@@ -1,0 +1,1 @@
+{"account":{"id":"3","name":"Cash in Hand"},"openingPaise":0,"closingPaise":180000,"transactions":[{"entryId":"1","entryNo":1,"date":"2026-04-01","reference":"Opening balances as at 1 Apr 2026","party":null,"type":"Opening Balance","sourceType":"opening","sourceId":null,"status":"Manually Added","depositPaise":3500000,"withdrawalPaise":0,"runningBalancePaise":3500000}]}
