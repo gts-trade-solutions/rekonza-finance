@@ -1944,6 +1944,25 @@ export interface ItBlockOpenings {
   org_id: number;
 }
 
+export interface ItcReclaimLines {
+  cess: Generated<Decimal>;
+  cgst: Generated<Decimal>;
+  id: Generated<number>;
+  igst: Generated<Decimal>;
+  reclaim_id: number;
+  reversal_id: number;
+  sgst: Generated<Decimal>;
+}
+
+export interface ItcReclaims {
+  created_at: Generated<Date>;
+  created_by_user_id: number | null;
+  id: Generated<number>;
+  journal_entry_id: number | null;
+  org_id: number;
+  period: string;
+}
+
 export interface ItcReversals {
   bill_id: number | null;
   cess: Generated<Decimal>;
@@ -3612,6 +3631,8 @@ export interface DB {
   invoice_payment_links: InvoicePaymentLinks;
   invoices: Invoices;
   it_block_openings: ItBlockOpenings;
+  itc_reclaim_lines: ItcReclaimLines;
+  itc_reclaims: ItcReclaims;
   itc_reversals: ItcReversals;
   item_components: ItemComponents;
   item_groups: ItemGroups;

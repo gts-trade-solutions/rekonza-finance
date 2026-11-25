@@ -6,6 +6,7 @@ import {
   addLowerCertificate, cancelLowerCertificate, certificates, listLowerCertificates, recordCertificate, setPanStatus,
 } from '@/lib/server/tax/tds-certificates';
 import type { Quarter } from '@/lib/server/tax/tds-returns';
+import { deleteCertificate, deleteLowerCertificate, updateCertificate, updateLowerCertificate } from '@/lib/server/gst/changes';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Around the TDS return: the certificates sent to deductees and received from
@@ -129,4 +130,54 @@ export const POST = route(
     });
   },
   { permission: { module: 'gst', action: 'create' } },
+);
+
+const Id = z.union([z.string(), z.number()]).transform(Number);
+const Change = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('certificate'), id: Id, certificateNo: z.string().trim().min(4).max(30), issuedOn: DATE,
+    taxPaise: z.number().int().min(0), notes: z.string().trim().max(300).nullish(),
+  }),
+  z.object({
+    kind: z.literal('lower'), id: Id, contactId: Id, sectionCode: z.string().trim().min(1).max(10), certificateNo: z.string().trim().min(6).max(20),
+    ratePct: z.number().min(0).max(100), validFrom: DATE, validTo: DATE, limitPaise: z.number().int().positive().nullish(), notes: z.string().trim().max(300).nullish(),
+  }),
+]);
+
+/** Correct a certificate sent or received, or a lower-deduction certificate (gst/changes.ts). */
+export const PUT = route(
+  async ({ orgId, user, req }) => {
+    const input = await body(req, Change);
+    return transaction(async (trx) => {
+      const r = input.kind === 'certificate'
+        ? await updateCertificate(trx, orgId, input.id, input)
+        : await updateLowerCertificate(trx, orgId, input.id, input);
+      await logAudit({
+        trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'update',
+        targetType: input.kind === 'certificate' ? 'tds_certificate' : 'tds_lower_certificate', targetId: input.id, targetLabel: r.certificateNo,
+        detail: input.kind === 'certificate' ? `Certificate changed: tax ₹${(input.taxPaise / 100).toFixed(2)}, dated ${input.issuedOn}`
+          : `${input.sectionCode} at ${input.ratePct}% from ${input.validFrom} to ${input.validTo}`,
+        ...auditMeta(req),
+      });
+      return { id: asId(input.id) };
+    });
+  },
+  { permission: { module: 'gst', action: 'edit' } },
+);
+
+/** Delete a certificate recorded in error, or a lower-deduction certificate no bill used. */
+export const DELETE = route(
+  async ({ orgId, user, req }) => {
+    const q = query(req, z.object({ kind: z.enum(['certificate', 'lower']), id: Id }));
+    return transaction(async (trx) => {
+      const r = q.kind === 'certificate' ? await deleteCertificate(trx, orgId, q.id) : await deleteLowerCertificate(trx, orgId, q.id);
+      await logAudit({
+        trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'void',
+        targetType: q.kind === 'certificate' ? 'tds_certificate' : 'tds_lower_certificate', targetId: q.id, targetLabel: r.certificateNo,
+        detail: `${q.kind === 'certificate' ? 'Certificate' : 'Lower-deduction certificate'} ${r.certificateNo} deleted`, ...auditMeta(req),
+      });
+      return { id: asId(q.id), deleted: true };
+    });
+  },
+  { permission: { module: 'gst', action: 'void' } },
 );

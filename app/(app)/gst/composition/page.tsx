@@ -23,6 +23,7 @@ import { usePermission } from '@/lib/store/hooks';
 import { api } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
 import { downloadWorkbook } from '@/lib/xlsx';
+import { RowActions, reasonQuery, useConfirmDelete } from '@/components/shared/row-actions';
 
 interface Cmp08 {
   fy: number; quarter: 1 | 2 | 3 | 4; from: string; to: string; category: string | null; ratePct: number;
@@ -89,8 +90,24 @@ export default function CompositionPage() {
 
 function Quarters({ fy, composition }: { fy: number; composition: boolean }) {
   const canEdit = usePermission('gst', 'edit');
+  const canDelete = usePermission('gst', 'void');
   const state = useApi<Cmp08[]>(() => api.get('/api/composition', { view: 'cmp08', fy }), [fy]);
   const [busy, setBusy] = useState<number | null>(null);
+  const confirm = useConfirmDelete();
+  const undo = (q: Cmp08, reason: string | null) => api.delete(`/api/composition?fy=${fy}&quarter=${q.quarter}${reasonQuery(reason, false)}`);
+  // The tax is worked out from the quarter's invoices: Edit books it again on them as they are now.
+  const rebook = (q: Cmp08) => confirm.ask({
+    title: `Book ${QLABEL[q.quarter]} again?`,
+    description: 'What was booked is undone (its entry reversed, never erased) and the tax on turnover worked out and booked again on the quarter as it stands, as after an invoice was corrected.',
+    tone: 'default', confirmLabel: 'Undo and book again', failTitle: 'Not booked again',
+    run: async (reason) => { await undo(q, reason); await api.post('/api/composition', { action: 'book', fy, quarter: q.quarter }); },
+    done: `${QLABEL[q.quarter]} booked again`, onDone: () => void state.refetch(),
+  });
+  const remove = (q: Cmp08) => confirm.ask({
+    title: `Delete the tax booked for ${QLABEL[q.quarter]}?`,
+    description: 'Its entry is reversed in the ledger, never erased, and the quarter is ready to book again.',
+    run: (reason) => undo(q, reason), done: `${QLABEL[q.quarter]} no longer booked`, onDone: () => void state.refetch(),
+  });
   const book = async (q: Cmp08) => {
     setBusy(q.quarter);
     try {
@@ -142,9 +159,13 @@ function Quarters({ fy, composition }: { fy: number; composition: boolean }) {
                     {busy === q.quarter && <Loader2 className="size-3.5 animate-spin" />} Book the tax on turnover
                   </Button>
                 )}
+                {q.booked && (
+                  <RowActions className="justify-start" onEdit={canEdit && (() => rebook(q))} editLabel="Edit (book again)" onDelete={canDelete && (() => remove(q))} />
+                )}
               </Card>
             ))}
           </div>
+          {confirm.dialog}
           <p className="text-xs text-muted-foreground">
             The tax on turnover cannot be collected from buyers, so it is booked as Composition Tax, an expense, against
             output CGST and SGST payable. Reverse charge was booked with each bill and is paid with the same CMP-08.

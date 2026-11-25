@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { transaction } from '@/lib/server/db';
-import { route, body } from '@/lib/server/http';
+import { route, body, query } from '@/lib/server/http';
+import { deleteGstr2bPeriod } from '@/lib/server/gst/changes';
 import { logAudit, auditMeta } from '@/lib/server/audit';
 import { importGstr2b, parseGstr2b, setImsAction } from '@/lib/server/gst/gstr2b-import';
 
@@ -53,4 +54,24 @@ export const POST = route(
     return { updated };
   },
   { permission: { module: 'gst', action: 'edit' } },
+);
+
+/**
+ * Take out a month's GSTR-2B brought in (the wrong file, or to bring it in
+ * again from scratch), with the IMS actions recorded on it (gst/changes.ts).
+ */
+export const DELETE = route(
+  async ({ orgId, user, req }) => {
+    const q = query(req, z.object({ period: z.string().regex(/^\d{6}$/, 'Give the return period as mmyyyy.'), gstin: z.string().length(15).optional() }));
+    return transaction(async (trx) => {
+      const r = await deleteGstr2bPeriod(trx, orgId, q.period, q.gstin);
+      await logAudit({
+        trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'void',
+        targetType: 'gstr2b', targetLabel: `${q.gstin ?? 'all registrations'} ${q.period}`,
+        detail: `Deleted the GSTR-2B held for ${q.period}${q.gstin ? ` (${q.gstin})` : ''}: ${r.lines} line(s), with their IMS actions`, ...auditMeta(req),
+      });
+      return { deleted: r.lines };
+    });
+  },
+  { permission: { module: 'gst', action: 'void' } },
 );

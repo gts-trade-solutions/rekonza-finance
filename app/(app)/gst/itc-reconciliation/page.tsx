@@ -26,11 +26,12 @@ import { FetchGstr2bButton } from '@/components/gst/gstn-portal';
 import { Money } from '@/components/shared/money';
 import { StatTile } from '@/components/shared/stat-tile';
 import { AsyncPage } from '@/components/shared/async-state';
-import { gst, gstr2b, type ItcMatchRow } from '@/lib/api/client';
+import { api, gst, gstr2b, type ItcMatchRow } from '@/lib/api/client';
 import { useApi, useApiAction } from '@/lib/api/use-api';
 import { usePermission } from '@/lib/store/hooks';
 import { cn } from '@/lib/utils';
 import { formatINRCompact } from '@/lib/money';
+import { DeleteButton, reasonQuery, useConfirmDelete } from '@/components/shared/row-actions';
 
 const BUCKETS = {
   matched: {
@@ -189,6 +190,16 @@ export default function ItcReconciliationPage() {
     if (imported !== period) setPeriod(imported); else state.refetch();
   };
 
+  const canDelete = usePermission('gst', 'void');
+  const confirm = useConfirmDelete();
+  // A month's GSTR-2B brought in by mistake, or to bring in again from scratch.
+  const removeImport = () => confirm.ask({
+    title: `Delete the GSTR-2B held for ${period}?`,
+    description: 'Every supplier line brought in for the month goes, with the IMS actions recorded on them; the reconciliation shows your books alone until it is brought in again. Your bills are not touched.',
+    run: (reason) => api.delete(`/api/gst/gstr2b?period=${period.slice(5, 7)}${period.slice(0, 4)}${reasonQuery(reason, false)}`),
+    done: `GSTR-2B for ${period} deleted`, onDone: () => { setSelected(new Set()); state.refetch(); },
+  });
+
   const act = async (action: 'accepted' | 'rejected' | 'pending' | null) => {
     const r = await ims.run([...selected], action);
     if (!r) { toast.error(ims.error ?? 'Nothing was changed.'); return; }
@@ -227,9 +238,11 @@ export default function ItcReconciliationPage() {
                 </Button>
               </>
             )}
+            {canDelete && <DeleteButton onClick={removeImport} label="Delete the month's 2B" title="Take out the GSTR-2B brought in for this month" className="h-8" />}
           </>
         }
       />
+      {confirm.dialog}
 
       <AsyncPage state={state}>
         {(d) => {
