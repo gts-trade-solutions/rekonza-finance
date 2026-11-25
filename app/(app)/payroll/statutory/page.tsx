@@ -22,6 +22,7 @@ import { Download, Wallet } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { RowActions, reasonQuery, useConfirmDelete } from '@/components/shared/row-actions';
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -43,7 +44,7 @@ interface Line {
 }
 interface Due {
   month: string; component: Component; dueDate: string | null; duePaise: number; paidPaise: number; balancePaise: number;
-  payments: { id: string; paidOn: string; amountPaise: number; reference: string | null; bank: string }[];
+  payments: Payment[];
 }
 
 const LABEL: Record<Component, string> = { pf: 'Provident Fund', esi: 'ESI', pt: 'Professional Tax', lwf: 'Labour Welfare Fund' };
@@ -57,6 +58,8 @@ const fyStartMonth = () => {
 };
 
 /** A register: its columns (label and value), its rows, totals, and an export of exactly that. */
+interface Payment { id: string; paidOn: string; amountPaise: number; reference: string | null; bank: string; bankAccountId: string }
+
 function Register({ name, lines, cols, file }: {
   name: string; lines: Line[]; file: string;
   cols: { label: string; value: (l: Line) => string | number; money?: boolean }[];
@@ -114,6 +117,14 @@ export default function StatutoryRegistersPage() {
   const canApprove = usePermission('payroll', 'approve');
   const canBank = usePermission('banking', 'create');
   const canPay = canApprove && canBank;
+  const canBankEdit = usePermission('banking', 'edit');
+  const canPayrollVoid = usePermission('payroll', 'void');
+  const canBankVoid = usePermission('banking', 'void');
+  const canChange = canApprove && canBankEdit;
+  const canDelete = canPayrollVoid && canBankVoid;
+  const del = useConfirmDelete();
+  // The payment being corrected, in the same window as paying.
+  const [editing, setEditing] = useState<Payment | null>(null);
   const [from, setFrom] = useState(fyStartMonth());
   const [to, setTo] = useState(thisMonth());
   const state = useApi<{ lines: Line[]; dues: Due[] }>(() => api.get('/api/payroll/statutory', { from, to }), [from, to]);
@@ -125,14 +136,29 @@ export default function StatutoryRegistersPage() {
   const [reference, setReference] = useState('');
   const [busy, setBusy] = useState(false);
 
-  const openPay = (d: Due) => { setPaying(d); setAmount(d.balancePaise); setReference(''); setDate(new Date().toISOString().slice(0, 10)); setBankId(banks.data?.accounts[0]?.id ?? ''); };
+  const openPay = (d: Due) => { setEditing(null); setPaying(d); setAmount(d.balancePaise); setReference(''); setDate(new Date().toISOString().slice(0, 10)); setBankId(banks.data?.accounts[0]?.id ?? ''); };
+  const openEdit = (d: Due, x: Payment) => { setEditing(x); setPaying(d); setAmount(x.amountPaise); setReference(x.reference ?? ''); setDate(x.paidOn); setBankId(x.bankAccountId); };
+  const remove = (d: Due, x: Payment) => del.ask({
+    title: `Delete the ${LABEL[d.component]} payment for ${monthName(d.month)}?`,
+    description: 'Its entry is reversed in the ledger, never erased, and the due is open again. Refused while it is matched to the bank statement.',
+    reason: true,
+    run: (reason) => api.delete(`/api/payroll/statutory?id=${x.id}${reasonQuery(reason, false)}`),
+    done: 'Payment deleted', onDone: () => void state.refetch(),
+  });
   const pay = async () => {
     if (!paying) return;
     setBusy(true);
     try {
-      await api.post('/api/payroll/statutory', { component: paying.component, period: paying.month, amountPaise: amount, date, bankAccountId: bankId, reference: reference || null });
-      toast.success(`${LABEL[paying.component]} for ${monthName(paying.month)} paid`, { description: 'Posted: the payable is cleared against the bank.' });
+      const body = { component: paying.component, period: paying.month, amountPaise: amount, date, bankAccountId: bankId, reference: reference || null };
+      if (editing) {
+        await api.put('/api/payroll/statutory', { ...body, id: editing.id });
+        toast.success('Payment saved', { description: 'Its entry is reversed and posted again.' });
+      } else {
+        await api.post('/api/payroll/statutory', body);
+        toast.success(`${LABEL[paying.component]} for ${monthName(paying.month)} paid`, { description: 'Posted: the payable is cleared against the bank.' });
+      }
       setPaying(null);
+      setEditing(null);
       state.refetch();
     } catch (e) {
       toast.error('Not paid', { description: e instanceof Error ? e.message : String(e) });
@@ -209,7 +235,12 @@ export default function StatutoryRegistersPage() {
                             <td className="px-4 py-2 text-right"><Money value={x.paidPaise} /></td>
                             <td className="px-4 py-2 text-right font-medium"><Money value={x.balancePaise} /></td>
                             <td className="px-4 py-2 text-xs text-muted-foreground">
-                              {x.payments.map((p) => <span key={p.id} className="block">{p.paidOn} · ₹{(p.amountPaise / 100).toLocaleString('en-IN')} · {p.bank}{p.reference ? ` · ${p.reference}` : ''}</span>)}
+                              {x.payments.map((p) => (
+                                <span key={p.id} className="flex flex-wrap items-center gap-1.5 py-0.5" data-slot="statutory-payment">
+                                  <span>{p.paidOn} · ₹{(p.amountPaise / 100).toLocaleString('en-IN')} · {p.bank}{p.reference ? ` · ${p.reference}` : ''}</span>
+                                  <RowActions onEdit={canChange && (() => openEdit(x, p))} onDelete={canDelete && (() => remove(x, p))} />
+                                </span>
+                              ))}
                             </td>
                             <td className="px-4 py-2 text-right">
                               {canPay && x.balancePaise > 0 && <Button size="xs" className="gap-1" onClick={() => openPay(x)} data-slot="statutory-pay"><Wallet className="size-3" /> Pay</Button>}
@@ -256,8 +287,10 @@ export default function StatutoryRegistersPage() {
       <Dialog open={!!paying} onOpenChange={(o) => !o && setPaying(null)}>
         <DialogContent data-slot="statutory-pay-dialog">
           <DialogHeader>
-            <DialogTitle>Pay {paying ? `${LABEL[paying.component]} for ${monthName(paying.month)}` : ''}</DialogTitle>
-            <DialogDescription>Posts Dr {paying ? LABEL[paying.component] : ''} Payable, Cr the bank, and records the challan against the month.</DialogDescription>
+            <DialogTitle>{editing ? 'Edit the payment of' : 'Pay'} {paying ? `${LABEL[paying.component]} for ${monthName(paying.month)}` : ''}</DialogTitle>
+            <DialogDescription>
+              {editing ? 'The old entry is reversed and the payment posted again as it is now.' : `Posts Dr ${paying ? LABEL[paying.component] : ''} Payable, Cr the bank, and records the challan against the month.`}
+            </DialogDescription>
           </DialogHeader>
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="Amount" required><MoneyInput valuePaise={amount} onChangePaise={setAmount} /></Field>
@@ -271,10 +304,11 @@ export default function StatutoryRegistersPage() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setPaying(null)}>Cancel</Button>
-            <Button onClick={() => void pay()} disabled={busy || !amount || !bankId}>Pay</Button>
+            <Button onClick={() => void pay()} disabled={busy || !amount || !bankId}>{editing ? 'Save' : 'Pay'}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      {del.dialog}
     </>
   );
 }

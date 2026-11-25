@@ -19,10 +19,12 @@ import { useApi } from '@/lib/api/use-api';
 import { useAppStore } from '@/lib/store';
 import { usePermission } from '@/lib/store/hooks';
 import { cn } from '@/lib/utils';
+import { RowActions, reasonQuery, useConfirmDelete } from '@/components/shared/row-actions';
 
 interface Loan {
   id: string; employeeId: string; code: string; name: string; kind: 'advance' | 'loan'; amountPaise: number; instalmentPaise: number;
-  givenOn: string; firstMonth: string; status: 'active' | 'cancelled'; notes: string | null; recoveredPaise: number; balancePaise: number;
+  givenOn: string; firstMonth: string; status: 'active' | 'cancelled'; notes: string | null; bankAccountId: string | null;
+  recoveredPaise: number; balancePaise: number;
 }
 interface Employee { id: string; code: string; name: string; dateOfLeaving: string | null }
 
@@ -33,41 +35,59 @@ const dmy = (d: string) => new Date(`${d}T00:00:00`).toLocaleDateString('en-IN',
 
 export default function AdvancesPage() {
   const canApprove = usePermission('payroll', 'approve');
+  const canDelete = usePermission('payroll', 'void');
   const banks = useAppStore((s) => s.bankAccounts).filter((b) => b.kind === 'bank' || b.kind === 'cash');
   const state = useApi(() => api.get<{ loans: Loan[] }>('/api/payroll/loans'), []);
   const employees = useApi(() => api.get<{ employees: Employee[] }>('/api/payroll/employees'), []);
   const blank = { employeeId: '', kind: 'advance' as 'advance' | 'loan', amount: 0, instalment: 0, givenOn: today(), firstMonth: today().slice(0, 7), bankAccountId: '', notes: '' };
   const [f, setF] = useState(blank);
+  // The advance being edited, in the same form as giving one.
+  const [editing, setEditing] = useState<Loan | null>(null);
   const [busy, setBusy] = useState(false);
+  const del = useConfirmDelete();
 
   const give = async () => {
     setBusy(true);
+    const payload = {
+      employeeId: f.employeeId, kind: f.kind, amountPaise: f.amount, instalmentPaise: f.instalment, givenOn: f.givenOn,
+      firstMonth: f.firstMonth, bankAccountId: f.bankAccountId, notes: f.notes || null,
+    };
     try {
-      await api.post('/api/payroll/loans', {
-        employeeId: f.employeeId, kind: f.kind, amountPaise: f.amount, instalmentPaise: f.instalment, givenOn: f.givenOn,
-        firstMonth: f.firstMonth, bankAccountId: f.bankAccountId, notes: f.notes || null,
-      });
-      toast.success(f.kind === 'loan' ? 'Loan given' : 'Advance given', { description: 'Paid from the bank and recovered with each payroll from now.' });
+      if (editing) {
+        await api.put('/api/payroll/loans', { ...payload, id: editing.id });
+        toast.success('Saved', { description: 'A change to the amount, date or account reverses the payment out and posts it again.' });
+        setEditing(null);
+      } else {
+        await api.post('/api/payroll/loans', payload);
+        toast.success(f.kind === 'loan' ? 'Loan given' : 'Advance given', { description: 'Paid from the bank and recovered with each payroll from now.' });
+      }
       setF({ ...blank, bankAccountId: f.bankAccountId });
       await state.refetch();
     } catch (e) {
-      toast.error('Not given', { description: errorText(e) });
+      toast.error(editing ? 'Not saved' : 'Not given', { description: errorText(e) });
     } finally {
       setBusy(false);
     }
   };
 
-  const cancel = async (l: Loan) => {
-    const reason = window.prompt(`Cancel the ${l.kind} to ${l.name}? The payment out is reversed. Give the reason.`);
-    if (!reason) return;
-    try {
-      await api.patch('/api/payroll/loans', { id: l.id, reason });
-      toast.success('Cancelled');
-      await state.refetch();
-    } catch (e) {
-      toast.error('Not cancelled', { description: errorText(e) });
-    }
+  const edit = (l: Loan) => {
+    setEditing(l);
+    setF({
+      employeeId: l.employeeId, kind: l.kind, amount: l.amountPaise, instalment: l.instalmentPaise, givenOn: l.givenOn,
+      firstMonth: l.firstMonth, bankAccountId: l.bankAccountId ?? '', notes: l.notes ?? '',
+    });
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
+  const stopEditing = () => { setEditing(null); setF({ ...blank, bankAccountId: f.bankAccountId }); };
+
+  // Delete reverses the payment out; once payroll has recovered any of it, it stays.
+  const remove = (l: Loan) => del.ask({
+    title: `Delete the ${l.kind} to ${l.name}?`,
+    description: 'The payment out is reversed in the ledger (never erased) and the advance is kept as deleted. Refused once a posted payroll has recovered any of it, or while its payment is matched to the bank statement.',
+    reason: true,
+    run: (reason) => api.delete(`/api/payroll/loans?id=${l.id}${reasonQuery(reason, false)}`),
+    done: `The ${l.kind} to ${l.name} is deleted`, onDone: () => { if (editing?.id === l.id) stopEditing(); void state.refetch(); },
+  });
 
   const months = f.instalment > 0 ? Math.ceil(f.amount / f.instalment) : 0;
   return (
@@ -76,12 +96,17 @@ export default function AdvancesPage() {
       <div className="space-y-4">
         {canApprove && (
           <Card className="space-y-3 p-5">
-            <h3 className="text-sm font-semibold">Give an advance or a loan</h3>
+            <h3 className="text-sm font-semibold">{editing ? `Edit the ${editing.kind} to ${editing.name}` : 'Give an advance or a loan'}</h3>
+            {editing && editing.recoveredPaise > 0 && (
+              <p className="text-xs text-muted-foreground">
+                <Money value={editing.recoveredPaise} /> has been recovered already: it stays with {editing.name}, and the amount cannot go below that.
+              </p>
+            )}
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               <Field label="Employee" required>
                 <select value={f.employeeId} onChange={(e) => setF({ ...f, employeeId: e.target.value })} className={select}>
                   <option value="">Choose…</option>
-                  {(employees.data?.employees ?? []).filter((e) => !e.dateOfLeaving).map((e) => <option key={e.id} value={e.id}>{e.code} · {e.name}</option>)}
+                  {(employees.data?.employees ?? []).filter((e) => !e.dateOfLeaving || e.id === f.employeeId).map((e) => <option key={e.id} value={e.id}>{e.code} · {e.name}</option>)}
                 </select>
               </Field>
               <Field label="Kind">
@@ -104,9 +129,13 @@ export default function AdvancesPage() {
               </Field>
               <Field label="Note"><Input value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} placeholder="Medical emergency" /></Field>
             </div>
-            <Button size="sm" className="w-fit gap-1.5" disabled={busy || !f.employeeId || !f.amount || !f.instalment || !f.bankAccountId} onClick={() => void give()}>
-              {busy ? <Loader2 className="size-3.5 animate-spin" /> : <HandCoins className="size-3.5" />} Give it
-            </Button>
+            <div className="flex gap-2">
+              <Button size="sm" className="w-fit gap-1.5" disabled={busy || !f.employeeId || !f.amount || !f.instalment || !f.bankAccountId} onClick={() => void give()}
+                data-slot={editing ? 'loan-save' : 'loan-give'}>
+                {busy ? <Loader2 className="size-3.5 animate-spin" /> : <HandCoins className="size-3.5" />} {editing ? 'Save' : 'Give it'}
+              </Button>
+              {editing && <Button size="sm" variant="outline" onClick={stopEditing}>Cancel</Button>}
+            </div>
           </Card>
         )}
 
@@ -143,10 +172,12 @@ export default function AdvancesPage() {
                             : l.balancePaise === 0 ? <Badge variant="outline" className="border-emerald-500/40 text-[10px] text-emerald-700 dark:text-emerald-300">Recovered</Badge>
                               : <Money value={l.balancePaise} />}
                         </td>
-                        <td className="px-3 py-2 text-right">
-                          {canApprove && l.status === 'active' && l.recoveredPaise === 0 && (
-                            <Button size="xs" variant="ghost" onClick={() => void cancel(l)}>Cancel</Button>
-                          )}
+                        <td className="px-3 py-2 text-right no-underline">
+                          <RowActions
+                            onEdit={canApprove && l.status === 'active' && (() => edit(l))}
+                            onDelete={canDelete && l.recoveredPaise === 0 && (() => remove(l))}
+                            deleteTitle={l.status === 'cancelled' ? 'Cancelled already: delete takes it off the list' : undefined}
+                          />
                         </td>
                       </tr>
                     ))}
@@ -157,6 +188,7 @@ export default function AdvancesPage() {
           )}
         </AsyncPage>
       </div>
+      {del.dialog}
     </>
   );
 }

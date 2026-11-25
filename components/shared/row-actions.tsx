@@ -67,9 +67,18 @@ export function RowActions({ onEdit, onDelete, editLabel, deleteLabel, editTitle
 export interface DeleteAsk {
   title: string;
   description: ReactNode;
-  /** Offer a reason box (kept in the audit trail and on the deleted record). */
+  /**
+   * The reason box (kept in the audit trail and on the deleted record). Shown
+   * unless set false: every DELETE falls under a book's rule that each change
+   * gives a reason, and one typed here answers it.
+   */
   reason?: boolean;
+  /** The reason must be given (four letters or more): reopening a posted payroll. */
+  reasonRequired?: boolean;
   confirmLabel?: string;
+  /** For a confirm that is not a delete (Reopen, Undo payment): a plain button, and its own failure title. */
+  tone?: 'destructive' | 'default';
+  failTitle?: string;
   /** Does the delete. A thrown error is shown, and the dialog stays open. */
   run: (reason: string | null) => Promise<unknown>;
   /** The toast once done. */
@@ -107,7 +116,7 @@ export function useConfirmDelete(): { ask: (a: DeleteAsk) => void; dialog: React
       const text = message(e);
       // Cancelled at the reason prompt: nothing to report.
       if (!/a reason is needed/.test(text)) {
-        toast.error('Not deleted', { description: text });
+        toast.error(ask.failTitle ?? 'Not deleted', { description: text });
         setRefused(text);
       }
     } finally {
@@ -136,9 +145,9 @@ export function useConfirmDelete(): { ask: (a: DeleteAsk) => void; dialog: React
           <DialogTitle>{ask?.title}</DialogTitle>
           <DialogDescription>{ask?.description}</DialogDescription>
         </DialogHeader>
-        {ask?.reason && (
-          <Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Reason (optional): entered in error"
-            maxLength={300} data-slot="confirm-delete-reason" />
+        {ask && (ask.reason !== false || ask.reasonRequired) && (
+          <Input value={reason} onChange={(e) => setReason(e.target.value)} maxLength={300} data-slot="confirm-delete-reason"
+            placeholder={ask.reasonRequired ? 'Reason (needed): leave days were wrong' : 'Reason (optional): entered in error'} />
         )}
         {refused && (
           <p className="rounded-md border border-destructive/30 bg-destructive/5 p-2.5 text-xs leading-relaxed text-destructive" data-slot="confirm-delete-refused">
@@ -151,7 +160,8 @@ export function useConfirmDelete(): { ask: (a: DeleteAsk) => void; dialog: React
               {busy && <Loader2 className="size-3.5 animate-spin" />} {ask.instead.label}
             </Button>
           ) : (
-            <Button variant="destructive" disabled={busy} onClick={() => void go()} data-slot="confirm-delete-go">
+            <Button variant={ask?.tone === 'default' ? 'default' : 'destructive'} disabled={busy || (!!ask?.reasonRequired && reason.trim().length < 4)}
+              onClick={() => void go()} data-slot="confirm-delete-go">
               {busy && <Loader2 className="size-3.5 animate-spin" />} {ask?.confirmLabel ?? 'Delete'}
             </Button>
           )}

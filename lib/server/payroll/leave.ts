@@ -193,7 +193,7 @@ export async function unpaidDays(ex: Executor, orgId: number, month: string) {
 
 export async function leaveRegister(ex: Executor, orgId: number, opts: { employeeId?: number; from?: string } = {}) {
   let q = ex.selectFrom('leave_entries as e').innerJoin('employees as p', 'p.id', 'e.employee_id').innerJoin('leave_types as t', 't.id', 'e.leave_type_id')
-    .select(['e.id', 'e.kind', 'e.days', 'e.from_date', 'e.to_date', 'e.period', 'e.note', 'e.status', 'p.id as employee_id', 'p.name', 't.code', 't.name as type_name'])
+    .select(['e.id', 'e.kind', 'e.days', 'e.from_date', 'e.to_date', 'e.period', 'e.note', 'e.status', 'p.id as employee_id', 'p.name', 't.id as type_id', 't.code', 't.name as type_name'])
     .where('e.org_id', '=', orgId).where('e.kind', 'in', ['taken', 'opening', 'adjustment', 'encashed']);
   if (opts.employeeId) q = q.where('e.employee_id', '=', opts.employeeId);
   if (opts.from) q = q.where('e.from_date', '>=', opts.from);
@@ -201,6 +201,6 @@ export async function leaveRegister(ex: Executor, orgId: number, opts: { employe
   return rows.map((r) => ({
     id: String(r.id), kind: r.kind, days: num(r.days), from: r.from_date ? String(r.from_date).slice(0, 10) : null,
     to: r.to_date ? String(r.to_date).slice(0, 10) : null, note: r.note, status: r.status,
-    employeeId: String(r.employee_id), employeeName: r.name, typeCode: r.code, typeName: r.type_name,
+    employeeId: String(r.employee_id), employeeName: r.name, leaveTypeId: String(r.type_id), typeCode: r.code, typeName: r.type_name,
   }));
 }

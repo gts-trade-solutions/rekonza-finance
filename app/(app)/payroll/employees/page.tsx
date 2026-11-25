@@ -14,6 +14,7 @@ import { Money } from '@/components/shared/money';
 import { StatTile } from '@/components/shared/stat-tile';
 import { AsyncPage, LoadingRows } from '@/components/shared/async-state';
 import { EmployeeDialog, type EmployeeRow } from '@/components/payroll/employee-dialog';
+import { RowActions, reasonQuery, useConfirmDelete } from '@/components/shared/row-actions';
 import { api } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
 import { usePermission } from '@/lib/store/hooks';
@@ -25,8 +26,21 @@ const fmt = (iso: string | null) => (iso ? new Date(`${iso}T00:00:00`).toLocaleD
 export default function EmployeesPage() {
   const state = useApi<{ employees: EmployeeRow[] }>(() => api.get('/api/payroll/employees'), []);
   const canEdit = usePermission('payroll', 'edit');
+  const canDelete = usePermission('payroll', 'void');
   const [editing, setEditing] = useState<EmployeeRow | null>(null);
   const [adding, setAdding] = useState(false);
+  const del = useConfirmDelete();
+
+  // Zoho's Delete for a record nobody used. One on a payroll stays: the way
+  // out is a leaving date, which takes them off the next payroll.
+  const remove = (r: EmployeeRow) => del.ask({
+    title: `Delete ${r.name}?`,
+    description: 'Only an employee entered in error, never paid, can be deleted. One on a payroll, an advance or a claim stays — give a leaving date instead.',
+    run: (reason) => api.delete(`/api/payroll/employees?id=${r.id}${reasonQuery(reason, false)}`),
+    done: `${r.name} deleted`,
+    onDone: () => void state.refetch(),
+    instead: { label: 'Give a leaving date instead', run: () => setEditing(r) },
+  });
 
   const cols: Column<EmployeeRow>[] = [
     { key: 'code', header: 'Code', sortValue: (r) => r.code, cell: (r) => <span className="font-mono text-xs">{r.code}</span> },
@@ -54,6 +68,10 @@ export default function EmployeesPage() {
         : <Badge variant="outline" className="border-emerald-500/40 text-[10px] text-emerald-700 dark:text-emerald-300">Active</Badge>),
     },
     { key: 'gross', header: 'Monthly gross', align: 'right', sortValue: (r) => r.monthlyGrossPaise, cell: (r) => <Money value={r.monthlyGrossPaise} /> },
+    ...(canEdit || canDelete ? [{
+      key: 'actions', header: '', align: 'right' as const,
+      cell: (r: EmployeeRow) => <RowActions onEdit={canEdit && (() => setEditing(r))} onDelete={canDelete && (() => remove(r))} />,
+    }] : []),
   ];
 
   return (
@@ -82,6 +100,7 @@ export default function EmployeesPage() {
       </AsyncPage>
       <EmployeeDialog open={adding || !!editing} employee={editing} onClose={() => { setAdding(false); setEditing(null); }}
         onSaved={() => { setAdding(false); setEditing(null); void state.refetch(); }} />
+      {del.dialog}
     </>
   );
 }

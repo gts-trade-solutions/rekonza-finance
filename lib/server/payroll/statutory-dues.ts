@@ -63,7 +63,7 @@ export interface DueRow {
   duePaise: Paise;
   paidPaise: Paise;
   balancePaise: Paise;
-  payments: { id: string; paidOn: string; amountPaise: Paise; reference: string | null; bank: string }[];
+  payments: { id: string; paidOn: string; amountPaise: Paise; reference: string | null; bank: string; bankAccountId: string }[];
 }
 
 const p = toPaiseFromSql;
@@ -100,7 +100,7 @@ export async function statutoryRegister(ex: Executor, orgId: number, from: strin
         : c === 'pt' ? l.ptPaise : l.lwfEmployeePaise + l.lwfEmployerPaise;
   const months = [...new Set(lines.map((l) => l.month))];
   const paid = await ex.selectFrom('statutory_payments').innerJoin('bank_accounts', 'bank_accounts.id', 'statutory_payments.bank_account_id')
-    .select(['statutory_payments.id', 'statutory_payments.component', 'statutory_payments.period', 'statutory_payments.amount', 'statutory_payments.paid_on', 'statutory_payments.reference', 'bank_accounts.name as bank'])
+    .select(['statutory_payments.id', 'statutory_payments.component', 'statutory_payments.period', 'statutory_payments.amount', 'statutory_payments.paid_on', 'statutory_payments.reference', 'statutory_payments.bank_account_id', 'bank_accounts.name as bank'])
     .where('statutory_payments.org_id', '=', orgId).where('statutory_payments.period', '>=', from).where('statutory_payments.period', '<=', to)
     .orderBy('statutory_payments.paid_on').execute();
   const dues: DueRow[] = [];
@@ -113,7 +113,7 @@ export async function statutoryRegister(ex: Executor, orgId: number, from: strin
       dues.push({
         month, component: c, dueDate: c === 'pf' || c === 'esi' ? nextMonth15(month) : null,
         duePaise: due, paidPaise, balancePaise: due - paidPaise,
-        payments: pays.map((x) => ({ id: String(x.id), paidOn: String(x.paid_on).slice(0, 10), amountPaise: p(x.amount), reference: x.reference, bank: x.bank })),
+        payments: pays.map((x) => ({ id: String(x.id), paidOn: String(x.paid_on).slice(0, 10), amountPaise: p(x.amount), reference: x.reference, bank: x.bank, bankAccountId: String(x.bank_account_id) })),
       });
     }
   }

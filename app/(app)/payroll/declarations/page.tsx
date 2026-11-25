@@ -21,6 +21,7 @@ import { api } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
 import { usePermission } from '@/lib/store/hooks';
 import { cn } from '@/lib/utils';
+import { DeleteButton, EditButton, reasonQuery, useConfirmDelete } from '@/components/shared/row-actions';
 
 type Status = 'declared' | 'submitted' | 'accepted' | 'rejected';
 interface Declaration {
@@ -41,13 +42,29 @@ const TONE: Record<Status, string> = {
 export default function DeclarationsPage() {
   const canEdit = usePermission('payroll', 'edit');
   const canApprove = usePermission('payroll', 'approve');
+  const canDelete = usePermission('payroll', 'void');
   const [fy, setFy] = useState(currentFy());
   const state = useApi(() => api.get<Loaded>('/api/payroll/declarations', { fy }), [fy]);
   const employees = useApi(() => api.get<{ employees: { id: string; code: string; name: string; taxRegime: 'new' | 'old'; dateOfLeaving: string | null }[] }>('/api/payroll/employees'), []);
   const blank = { employeeId: '', section: '80C', description: '', declared: 0 };
   const [f, setF] = useState(blank);
+  // The declaration being corrected, in the same form as a new one.
+  const [editing, setEditing] = useState<Declaration | null>(null);
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState<string | null>(null);
+  const del = useConfirmDelete();
+  const edit = (r: Declaration) => {
+    setEditing(r);
+    setF({ employeeId: r.employeeId, section: r.section, description: r.description ?? '', declared: r.declaredPaise });
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+  const stopEditing = () => { setEditing(null); setF({ ...blank, employeeId: f.employeeId }); };
+  const remove = (r: Declaration) => del.ask({
+    title: `Delete the ${r.section} declaration of ${r.name}?`,
+    description: 'It no longer counts towards their TDS from the next payroll. One whose proof has been accepted stays: it counts towards the year and Form 16.',
+    run: (reason) => api.delete(`/api/payroll/declarations?id=${r.id}${reasonQuery(reason, false)}`),
+    done: 'Declaration deleted', onDone: () => { if (editing?.id === r.id) stopEditing(); void state.refetch(); },
+  });
 
   const call = async (fn: () => Promise<unknown>, done: string) => {
     setBusy(true);
@@ -96,12 +113,12 @@ export default function DeclarationsPage() {
             <div className="space-y-4">
               {canEdit && (
                 <Card className="space-y-3 p-5">
-                  <h3 className="text-sm font-semibold">Add a declaration for FY {fyLabel(d.fy)}</h3>
+                  <h3 className="text-sm font-semibold">{editing ? `Edit the ${editing.section} declaration of ${editing.name}` : `Add a declaration for FY ${fyLabel(d.fy)}`}</h3>
                   <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                     <Field label="Employee" required>
-                      <select value={f.employeeId} onChange={(e) => setF({ ...f, employeeId: e.target.value })} className={select}>
+                      <select value={f.employeeId} onChange={(e) => setF({ ...f, employeeId: e.target.value })} className={select} disabled={!!editing}>
                         <option value="">Choose…</option>
-                        {(employees.data?.employees ?? []).filter((e) => !e.dateOfLeaving).map((e) => (
+                        {(employees.data?.employees ?? []).filter((e) => !e.dateOfLeaving || e.id === f.employeeId).map((e) => (
                           <option key={e.id} value={e.id}>{e.code} · {e.name}{e.taxRegime === 'new' ? ' (new regime)' : ''}</option>
                         ))}
                       </select>
@@ -116,11 +133,14 @@ export default function DeclarationsPage() {
                     </Field>
                     <Field label="Details"><Input value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} placeholder={f.section === 'HRA' ? "Landlord's name and PAN" : 'PPF, LIC policy…'} /></Field>
                   </div>
-                  <Button size="sm" className="w-fit gap-1.5" disabled={busy || !f.employeeId} onClick={() => void call(() => api.post('/api/payroll/declarations', {
-                    employeeId: f.employeeId, fyStart: d.fy, section: f.section, description: f.description || null, declaredPaise: f.declared,
-                  }), 'Declared').then((ok) => ok && setF({ ...blank, employeeId: f.employeeId }))}>
-                    {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Plus className="size-3.5" />} Add
-                  </Button>
+                  <div className="flex gap-2">
+                    <Button size="sm" className="w-fit gap-1.5" disabled={busy || !f.employeeId} onClick={() => void call(() => api.post('/api/payroll/declarations', {
+                      id: editing?.id, employeeId: f.employeeId, fyStart: d.fy, section: f.section, description: f.description || null, declaredPaise: f.declared,
+                    }), editing ? 'Declaration saved' : 'Declared').then((ok) => { if (ok) { setEditing(null); setF({ ...blank, employeeId: f.employeeId }); } })}>
+                      {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Plus className="size-3.5" />} {editing ? 'Save' : 'Add'}
+                    </Button>
+                    {editing && <Button size="sm" variant="outline" onClick={stopEditing}>Cancel</Button>}
+                  </div>
                 </Card>
               )}
               {people.length === 0 ? (
@@ -155,6 +175,13 @@ export default function DeclarationsPage() {
                                     <Button size="xs" variant="ghost" onClick={() => review(r, false)}>Reject</Button>
                                   </>
                                 )}
+                                {/* An accepted proof fixes the declaration: it counts towards Form 16. */}
+                                {r.status !== 'accepted' && (
+                                  <span className="ml-1 inline-flex gap-1 align-middle">
+                                    {canEdit && <EditButton onClick={() => edit(r)} />}
+                                    {canDelete && <DeleteButton onClick={() => remove(r)} />}
+                                  </span>
+                                )}
                               </td>
                             </tr>
                             {open === r.id && (
@@ -173,6 +200,7 @@ export default function DeclarationsPage() {
           );
         }}
       </AsyncPage>
+      {del.dialog}
     </>
   );
 }

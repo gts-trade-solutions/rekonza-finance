@@ -18,6 +18,8 @@ import { DataTable, type Column } from '@/components/shared/data-table';
 import { Money } from '@/components/shared/money';
 import { AsyncPage, LoadingRows } from '@/components/shared/async-state';
 import { ReportTable } from '@/components/shared/report-shell';
+import { RowActions, reasonQuery, useConfirmDelete } from '@/components/shared/row-actions';
+import { RUN_DELETE } from '@/components/payroll/run-delete-text';
 import { api } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
 import { usePermission } from '@/lib/store/hooks';
@@ -37,7 +39,19 @@ const fyNow = () => (Number(today().slice(5, 7)) >= 4 ? Number(today().slice(0, 
 export default function PayrollRunsPage() {
   const router = useRouter();
   const canCreate = usePermission('payroll', 'create');
+  const canEdit = usePermission('payroll', 'edit');
+  const canDelete = usePermission('payroll', 'void');
+  const canApprove = usePermission('payroll', 'approve');
   const state = useApi<{ runs: RunRow[] }>(() => api.get('/api/payroll/runs'), []);
+  const del = useConfirmDelete();
+  const remove = (r: RunRow) => del.ask({
+    title: `Delete the payroll for ${monthName(r.month)}?`,
+    description: RUN_DELETE[r.status],
+    run: (reason) => api.delete(`/api/payroll/runs/${r.id}${reasonQuery(reason)}`),
+    done: `Payroll for ${monthName(r.month)} deleted`,
+    doneDescription: r.status === 'draft' ? undefined : 'Its entries are reversed in the ledger; the audit trail keeps both.',
+    onDone: () => void state.refetch(),
+  });
   const [month, setMonth] = useState(today().slice(0, 7));
   const [busy, setBusy] = useState(false);
 
@@ -58,6 +72,16 @@ export default function PayrollRunsPage() {
     { key: 'employees', header: 'Employees', align: 'right', sortValue: (r) => r.employees, cell: (r) => <span className="tabular-nums">{r.employees}</span> },
     { key: 'gross', header: 'Gross', align: 'right', sortValue: (r) => r.grossPaise, cell: (r) => <Money value={r.grossPaise} /> },
     { key: 'net', header: 'Net pay', align: 'right', sortValue: (r) => r.netPaise, cell: (r) => <Money value={r.netPaise} className="font-medium" /> },
+    ...(canEdit || canDelete ? [{
+      key: 'actions', header: '', align: 'right' as const,
+      cell: (r: RunRow) => (
+        <RowActions
+          onEdit={canEdit && (() => router.push(`/payroll/runs/${r.id}`))}
+          editTitle={r.status === 'draft' ? 'Open it to change days and extras' : 'Open it to reopen and correct it'}
+          onDelete={canDelete && (r.status === 'draft' || canApprove) && (() => remove(r))}
+        />
+      ),
+    }] : []),
   ];
 
   return (
@@ -89,6 +113,7 @@ export default function PayrollRunsPage() {
         </TabsContent>
         <TabsContent value="tds" className="mt-4"><SalaryTds /></TabsContent>
       </Tabs>
+      {del.dialog}
     </>
   );
 }

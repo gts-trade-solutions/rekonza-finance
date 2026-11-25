@@ -117,7 +117,7 @@ export async function cancelLoan(trx: Trx, orgId: number, userId: number | null,
 
 export async function listLoans(ex: Executor, orgId: number) {
   const rows = await ex.selectFrom('employee_loans as l').innerJoin('employees as e', 'e.id', 'l.employee_id')
-    .select(['l.id', 'l.employee_id', 'e.code', 'e.name', 'l.kind', 'l.amount', 'l.instalment', 'l.given_on', 'l.first_month', 'l.status', 'l.notes'])
+    .select(['l.id', 'l.employee_id', 'e.code', 'e.name', 'l.kind', 'l.amount', 'l.instalment', 'l.given_on', 'l.first_month', 'l.status', 'l.notes', 'l.paid_from_bank_id'])
     .where('l.org_id', '=', orgId).orderBy('l.given_on', 'desc').orderBy('l.id', 'desc').execute();
   const done = await recovered(ex, orgId, rows.map((r) => r.id));
   return rows.map((r) => {
@@ -125,7 +125,7 @@ export async function listLoans(ex: Executor, orgId: number) {
     return {
       id: String(r.id), employeeId: String(r.employee_id), code: r.code, name: r.name, kind: r.kind,
       amountPaise: p(r.amount), instalmentPaise: p(r.instalment), givenOn: String(r.given_on).slice(0, 10), firstMonth: r.first_month,
-      status: r.status, notes: r.notes, recoveredPaise, balancePaise: r.status === 'cancelled' ? 0 : p(r.amount) - recoveredPaise,
+      status: r.status, notes: r.notes, bankAccountId: r.paid_from_bank_id ? String(r.paid_from_bank_id) : null, recoveredPaise, balancePaise: r.status === 'cancelled' ? 0 : p(r.amount) - recoveredPaise,
     };
   });
 }
