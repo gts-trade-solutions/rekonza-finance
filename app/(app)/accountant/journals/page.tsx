@@ -9,6 +9,7 @@
 
 import { FoldNav } from '@/components/layout/nav-state';
 import { useEffect, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { BookOpen, CalendarClock, Clock, LayoutTemplate, Loader2, Pencil, Plus, Trash2, Undo2 } from 'lucide-react';
 import Link from 'next/link';
 import { toast } from 'sonner';
@@ -85,6 +86,17 @@ export default function JournalsPage() {
 
   const [open, setOpen] = useState(false);
   const [date, setDate] = useState(today());
+  // ?edit=<entry id>: arrived from a ledger row's ⋯ → Edit — that journal opens for editing.
+  const editParam = useSearchParams().get('edit');
+  const [editOpened, setEditOpened] = useState(false);
+  useEffect(() => {
+    if (!editParam || editOpened || !state.data) return;
+    setEditOpened(true);
+    const row = state.data.entries.find((e) => String(e.id) === editParam);
+    if (row) startEdit(row);
+    else toast.error('That journal is not in this list', { description: 'It may be reversed already, or older than the list shows.' });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editParam, editOpened, state.data]);
   const startEdit = (r: JournalEntryRow) => {
     setEditing(r);
     setDate(String(r.date).slice(0, 10));

@@ -14,9 +14,9 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import {
-  Building2, ChevronDown, ChevronLeft, ChevronRight, CreditCard, Database, Package, Palette, Search, Settings2, ShieldCheck, Users, Wrench, X,
+  Building2, ChevronDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, CreditCard, Database, Package, Palette, Search, Settings2, ShieldCheck, Users, Wrench, X,
   type LucideIcon,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -236,17 +236,57 @@ export function AllSettings() {
   );
 }
 
+// The settings menu folds like the main sidebar (the client asked for the
+// minimize option on every page, 2026-11-25), and the choice is remembered in
+// this browser, as the main sidebar's is.
+const SETTINGS_NAV_KEY = 'rekonza-settings-nav-collapsed';
+const settingsNavListeners = new Set<() => void>();
+function settingsNavCollapsed(): boolean {
+  try { return localStorage.getItem(SETTINGS_NAV_KEY) === '1'; } catch { return false; }
+}
+function setSettingsNavCollapsed(v: boolean) {
+  try { localStorage.setItem(SETTINGS_NAV_KEY, v ? '1' : '0'); } catch { /* private mode: it lasts this visit */ }
+  for (const l of settingsNavListeners) l();
+}
+function useSettingsNavCollapsed(): boolean {
+  return useSyncExternalStore(
+    (l) => { settingsNavListeners.add(l); return () => { settingsNavListeners.delete(l); }; },
+    settingsNavCollapsed,
+    () => false,
+  );
+}
+
 /** The left menu beside an open setting. */
 export function SettingsNav({ tab, href }: { tab?: string; href?: string }) {
   const visible = useVisible();
   const [open, setOpen] = useState<string | null>(null);
-  const current = SETTING_SECTIONS.flatMap((s) => s.groups).find((g) => g.links.some((l) => (tab && l.tab === tab) || (href && l.href === href)))?.title ?? null;
+  const folded = useSettingsNavCollapsed();
+  const current = SETTING_SECTIONS.flatMap((s) => s.groups).find((g) => g.links.some((l) => (tab && l.tab === tab) || (href && (l.href === href || href.startsWith(`${l.href}/`)))))?.title ?? null;
   useEffect(() => { setOpen(current); }, [current]);
+  if (folded) {
+    return (
+      <nav className="sticky top-0 flex max-h-[calc(100vh-75px)] w-[52px] shrink-0 flex-col items-center gap-2 border-r bg-surface py-4" data-slot="settings-nav" data-folded="1">
+        <button type="button" onClick={() => setSettingsNavCollapsed(false)} aria-label="Expand the menu" title="Expand"
+          className="grid h-8 w-10 place-items-center rounded-md text-muted-foreground hover:bg-row-hover" data-slot="settings-nav-fold">
+          <ChevronsRight className="size-4" />
+        </button>
+        <Link href="/settings" aria-label="All Settings" title="All Settings" className="grid h-8 w-10 place-items-center rounded-md text-link hover:bg-row-hover">
+          <ChevronLeft className="size-4" />
+        </Link>
+      </nav>
+    );
+  }
   return (
     <nav className="thin-scroll sticky top-0 max-h-[calc(100vh-75px)] w-[240px] shrink-0 overflow-y-auto border-r bg-surface py-4" data-slot="settings-nav">
-      <Link href="/settings" className="mx-3 mb-2 flex items-center gap-1 text-[13px] text-link hover:underline">
-        <ChevronLeft className="size-3.5" /> All Settings
-      </Link>
+      <div className="mx-3 mb-2 flex items-center justify-between">
+        <Link href="/settings" className="flex items-center gap-1 text-[13px] text-link hover:underline">
+          <ChevronLeft className="size-3.5" /> All Settings
+        </Link>
+        <button type="button" onClick={() => setSettingsNavCollapsed(true)} aria-label="Collapse the menu" title="Collapse"
+          className="grid h-8 w-10 place-items-center rounded-md text-muted-foreground hover:bg-row-hover" data-slot="settings-nav-fold">
+          <ChevronsLeft className="size-4" />
+        </button>
+      </div>
       {SETTING_SECTIONS.map((s) => (
         <div key={s.title} className="mt-3">
           <p className="px-4 pb-1 text-[11px] font-medium uppercase text-muted-foreground">{s.title}</p>
@@ -290,6 +330,19 @@ export function SettingsNav({ tab, href }: { tab?: string; href?: string }) {
         </div>
       ))}
     </nav>
+  );
+}
+
+/**
+ * A setting's page with the settings menu beside it, as every Zoho settings page
+ * has. Used by the settings pages that are routes of their own (their layout.tsx).
+ */
+export function SettingsFrame({ href, children }: { href: string; children: ReactNode }) {
+  return (
+    <div className="-mx-6 -mb-6 -mt-5 flex min-h-[calc(100vh-75px)]" data-slot="settings-frame">
+      <SettingsNav href={href} />
+      <div className="settings-page min-w-0 flex-1 space-y-5 px-6 pb-6 pt-5">{children}</div>
+    </div>
   );
 }
 

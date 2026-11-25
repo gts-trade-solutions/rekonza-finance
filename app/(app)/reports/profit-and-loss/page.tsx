@@ -90,7 +90,8 @@ function ProfitAndLoss() {
           const margin = income > 0 ? (pl.netProfitPaise / income) * 100 : 0;
           return (
             <>
-              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              {/* Compact figure boxes: the figures at a glance, the statement below them in view. */}
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4" data-slot="pl-figures">
                 {[
                   { label: 'Operating income', value: pl.operatingIncome.totalPaise, before: prev?.operatingIncome.totalPaise },
                   {
@@ -111,20 +112,21 @@ function ProfitAndLoss() {
                     before: prev ? Math.abs(prev.netProfitPaise) : undefined,
                   },
                 ].map((t) => (
-                  <Card key={t.label} className={`p-4 ${tileColors(t.label, t.tone === 'good' ? 'positive' : t.tone === 'bad' ? 'danger' : 'default').card}`}>
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0">
-                        <p className={`text-[10px] font-semibold uppercase tracking-[0.11em] ${tileColors(t.label, t.tone === 'good' ? 'positive' : t.tone === 'bad' ? 'danger' : 'default').label}`}>{t.label}</p>
-                        <p className={`mt-1 tabular text-[18px] font-medium ${t.tone === 'good' ? 'text-emerald-600 dark:text-emerald-400' : t.tone === 'bad' ? 'text-destructive' : ''}`}>
-                          <Money value={t.value} />
-                        </p>
-                        {t.hint && <p className="mt-0.5 text-xs text-muted-foreground">{t.hint}</p>}
-                        {t.before !== undefined && <p className="mt-0.5 text-xs text-muted-foreground">Against <Money value={t.before} /></p>}
-                      </div>
+                  <Card key={t.label} data-slot="pl-figure" className={`gap-0 px-3.5 py-2 ${tileColors(t.label, t.tone === 'good' ? 'positive' : t.tone === 'bad' ? 'danger' : 'default').card}`}>
+                    <div className="flex items-center justify-between gap-2">
+                      <p className={`truncate text-[12px] ${tileColors(t.label, t.tone === 'good' ? 'positive' : t.tone === 'bad' ? 'danger' : 'default').label}`} title={t.hint}>{t.label}</p>
                       {t.tone && (t.tone === 'good'
-                        ? <TrendingUp className="size-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
-                        : <TrendingDown className="size-4 shrink-0 text-destructive" />)}
+                        ? <TrendingUp className="size-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
+                        : <TrendingDown className="size-3.5 shrink-0 text-destructive" />)}
                     </div>
+                    <p className={`tabular text-[15px] font-medium leading-snug ${t.tone === 'good' ? 'text-emerald-600 dark:text-emerald-400' : t.tone === 'bad' ? 'text-destructive' : ''}`}>
+                      <Money value={t.value} />
+                    </p>
+                    {(t.hint || t.before !== undefined) && (
+                      <p className="truncate text-[11px] text-muted-foreground">
+                        {t.before !== undefined ? <>Against <Money value={t.before} /></> : t.hint}
+                      </p>
+                    )}
                   </Card>
                 ))}
               </div>

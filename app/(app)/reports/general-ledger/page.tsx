@@ -7,6 +7,7 @@
 // where you go when one of them looks wrong. The profit and loss, balance
 // sheet and trial balance link here with the account and range in the URL.
 
+import { LedgerEntryActions } from '@/components/reports/ledger-entry-actions';
 import { Suspense, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
@@ -58,6 +59,8 @@ function GeneralLedger() {
     () => (accountId ? reports.generalLedger(accountId, range.from, range.to) : Promise.resolve(null)),
     [accountId, range.from, range.to],
   );
+  // After an edit or delete from a row's ⋯: the ledger as it now stands.
+  const refresh = () => { void state.refetch(); };
 
   return (
     <ReportShell
@@ -125,6 +128,7 @@ function GeneralLedger() {
                     <th className="px-4 py-2.5 text-right font-semibold">Debit</th>
                     <th className="px-4 py-2.5 text-right font-semibold">Credit</th>
                     <th className="px-4 py-2.5 text-right font-semibold">Balance</th>
+                    <th className="w-10 px-2 py-2.5" aria-label="Actions" />
                   </tr>
                 </thead>
                 <tbody>
@@ -133,11 +137,12 @@ function GeneralLedger() {
                       Opening balance at {new Date(gl.from).toLocaleDateString('en-IN')}
                     </td>
                     <td className="px-4 py-2 text-right font-medium"><Money value={gl.openingPaise} /></td>
+                    <td />
                   </tr>
 
                   {gl.lines.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="px-4 py-10 text-center text-sm text-muted-foreground">
+                      <td colSpan={8} className="px-4 py-10 text-center text-sm text-muted-foreground">
                         Nothing moved through this account in the period.
                       </td>
                     </tr>
@@ -168,6 +173,7 @@ function GeneralLedger() {
                           <td className="px-4 py-2 text-right"><Money value={l.debitPaise} showZero={false} /></td>
                           <td className="px-4 py-2 text-right"><Money value={l.creditPaise} showZero={false} /></td>
                           <td className="px-4 py-2 text-right font-medium"><Money value={l.runningPaise} /></td>
+                          <td className="px-2 py-1 text-right no-print"><LedgerEntryActions row={l} onChanged={refresh} /></td>
                         </tr>
                       );
                     })
@@ -178,6 +184,7 @@ function GeneralLedger() {
                       Closing balance at {new Date(gl.to).toLocaleDateString('en-IN')}
                     </td>
                     <td className="px-4 py-3 text-right"><Money value={gl.closingPaise} /></td>
+                    <td />
                   </tr>
                 </tbody>
               </ReportTable>

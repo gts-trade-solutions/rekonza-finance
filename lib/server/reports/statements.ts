@@ -478,6 +478,10 @@ export interface LedgerLine {
   creditPaise: Paise;
   runningPaise: Paise;
   contactName: string | null;
+  /** This entry reverses another (an edit, a delete, an undone bank line): it is not edited by itself. */
+  reversalOf: { entryId: string; entryNo: number } | null;
+  /** This entry has been reversed already: editing or deleting it again would undo it twice. */
+  reversedBy: { entryId: string; entryNo: number } | null;
 }
 
 /** One account, in order, with a running balance — how an auditor reads it. */
@@ -514,6 +518,10 @@ export async function generalLedger(
       'journal_lines.description', 'journal_lines.entry_date',
       'journal_entries.entry_no', 'journal_entries.memo', 'journal_entries.source_type', 'journal_entries.source_id',
       'contacts.display_name as contact_name',
+      'journal_entries.reversal_of_entry_id',
+      sql<number | null>`(SELECT o.entry_no FROM journal_entries o WHERE o.id = journal_entries.reversal_of_entry_id)`.as('reversal_of_no'),
+      sql<number | null>`(SELECT r.id FROM journal_entries r WHERE r.org_id = journal_entries.org_id AND r.reversal_of_entry_id = journal_entries.id ORDER BY r.id LIMIT 1)`.as('reversed_by_id'),
+      sql<number | null>`(SELECT r.entry_no FROM journal_entries r WHERE r.org_id = journal_entries.org_id AND r.reversal_of_entry_id = journal_entries.id ORDER BY r.id LIMIT 1)`.as('reversed_by_no'),
     ])
     .where('journal_lines.org_id', '=', orgId)
     .where('journal_lines.account_id', '=', accountId)
@@ -540,6 +548,8 @@ export async function generalLedger(
       creditPaise,
       runningPaise: running,
       contactName: r.contact_name,
+      reversalOf: r.reversal_of_entry_id ? { entryId: String(r.reversal_of_entry_id), entryNo: Number(r.reversal_of_no) } : null,
+      reversedBy: r.reversed_by_id ? { entryId: String(r.reversed_by_id), entryNo: Number(r.reversed_by_no) } : null,
     };
   });
 

@@ -8,7 +8,8 @@
 // ids — so a page that needs the server's ids asks for them directly.
 
 import { FoldNav } from '@/components/layout/nav-state';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { Loader2, Pencil, Plus, Receipt, Tags, Trash2, Wallet } from 'lucide-react';
 import { TagsPanel } from '@/components/shared/tags-panel';
 import { CustomFieldsPanel } from '@/components/shared/custom-fields-panel';
@@ -84,6 +85,15 @@ export default function ExpensesPage() {
   const [deleting, setDeleting] = useState<ExpenseListItem | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  // ?edit=<id>: arrived from a ledger row's ⋯ → Edit — that expense opens for editing.
+  const editParam = useSearchParams().get('edit');
+  const [editOpened, setEditOpened] = useState(false);
+  useEffect(() => {
+    if (!editParam || editOpened) return;
+    setEditOpened(true);
+    void startEdit({ id: editParam } as ExpenseListItem);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editParam, editOpened]);
   const startEdit = async (r: ExpenseListItem) => {
     try {
       const e = await expenseApi.get(r.id);

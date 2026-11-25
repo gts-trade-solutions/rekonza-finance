@@ -39,7 +39,7 @@ import { QuickCreate } from './quick-create';
 import { GlobalSearch } from './global-search';
 import { CompanyMenu } from './company-menu';
 import { CreditsChip } from '@/components/ai/credits-chip';
-import { useNavCollapsed } from './nav-state';
+import { toggleNav, useNavCollapsed } from './nav-state';
 import { useListSearch, usePageTitle } from './page-context';
 
 /** A 32px icon button on the dark band, as Zoho's. */
@@ -201,6 +201,18 @@ export function Topbar() {
           <LogoMark size={24} onDark />
           {!folded && <span className="truncate text-[18px] font-medium leading-none text-topbar-foreground">{BRAND.short}</span>}
         </Link>
+
+        {/* Minimize / expand the sidebar, on every page: the same switch as the « at the sidebar's foot. */}
+        <button
+          type="button"
+          onClick={() => toggleNav()}
+          aria-label={folded ? 'Show the sidebar' : 'Minimize the sidebar'}
+          title={folded ? 'Show the sidebar' : 'Minimize the sidebar'}
+          data-slot="topbar-nav-fold"
+          className="ml-2 hidden size-8 shrink-0 place-items-center rounded-lg text-topbar-foreground hover:bg-white/10 lg:grid"
+        >
+          <Menu className="size-4" />
+        </button>
 
         <div className="flex min-w-0 flex-1 items-center gap-2 px-2 sm:px-4">
           <RecentPages />

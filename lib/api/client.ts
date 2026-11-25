@@ -2528,6 +2528,8 @@ export interface GeneralLedgerReport {
     entryId: string; entryNo: number; date: string; memo: string | null;
     description: string | null; sourceType: string; sourceId: string | null; debitPaise: number;
     creditPaise: number; runningPaise: number; contactName: string | null;
+    reversalOf?: { entryId: string; entryNo: number } | null;
+    reversedBy?: { entryId: string; entryNo: number } | null;
   }[];
 }
 

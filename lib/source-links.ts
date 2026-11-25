@@ -38,6 +38,8 @@ const LIST: Record<string, string> = {
   stock_valuation: '/inventory/stock',
   stock_opening: '/inventory/stock',
   bill_of_entry: '/purchases/bills-of-entry',
+  transfer: '/banking/transfers',
+  statutory_payment: '/payroll/statutory',
 };
 
 export function sourceHref(sourceType: string, sourceId: string | null): string | null {
