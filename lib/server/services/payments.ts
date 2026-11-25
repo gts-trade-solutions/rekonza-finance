@@ -766,7 +766,15 @@ async function paymentSnapshot(trx: Trx, orgId: number, paymentId: number) {
  * settled, its entry is reversed, and it is recorded again in place with the
  * same number.
  */
-export async function updatePayment(trx: Trx, orgId: number, userId: number | null, paymentId: number, input: RecordPaymentInput) {
+export async function updatePayment(
+  trx: Trx, orgId: number, userId: number | null, paymentId: number,
+  /**
+   * The payment as it is to be. A function is called once the payment is off
+   * what it settled and before it is recorded again: a sales receipt edits its
+   * invoice there, so the new total can be paid in full (sales-receipts.ts).
+   */
+  input: RecordPaymentInput | (() => Promise<RecordPaymentInput>),
+) {
   const p = await trx.selectFrom('payments').select(['id', 'number', 'kind', 'status', 'contact_id', 'journal_entry_id'])
     .where('id', '=', paymentId).where('org_id', '=', orgId).forUpdate().executeTakeFirst();
   if (!p) throw notFound('Payment not found.');
@@ -774,7 +782,8 @@ export async function updatePayment(trx: Trx, orgId: number, userId: number | nu
   if (blocked) throw new ApiError(409, blocked, 'locked_document');
   const before = await paymentSnapshot(trx, orgId, paymentId);
   await unpostPayment(trx, orgId, userId, p, `${p.number} edited: the entry as it was, reversed`);
-  const made = await recordPayment(trx, orgId, userId, input, p.kind as 'received' | 'made', { replace: { id: paymentId, number: p.number } });
+  const as = typeof input === 'function' ? await input() : input;
+  const made = await recordPayment(trx, orgId, userId, as, p.kind as 'received' | 'made', { replace: { id: paymentId, number: p.number } });
   return { ...made, before };
 }
 

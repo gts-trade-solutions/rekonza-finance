@@ -160,6 +160,17 @@ export function InvoiceForm({ variant = 'invoice', editing }: {
   const [paidMode, setPaidMode] = useState('cash');
   const [paidBankId, setPaidBankId] = useState('');
   const [paidRef, setPaidRef] = useState('');
+  // Editing a sales receipt: its counter payment is edited with it, starting as it was taken.
+  const receiptEdit = !!ed?.paidAtSale && variant === 'receipt';
+  const counterPaymentId = receiptEdit ? ed?.payments[0]?.id ?? null : null;
+  useEffect(() => {
+    if (!counterPaymentId) return;
+    let live = true;
+    api.get<{ mode: string; bankAccountId: string | null; reference: string | null }>(`/api/payments/${counterPaymentId}`)
+      .then((p) => { if (live) { setPaidMode(p.mode); setPaidBankId(p.bankAccountId ?? ''); setPaidRef(p.reference ?? ''); } })
+      .catch(() => { /* the form still offers the fields */ });
+    return () => { live = false; };
+  }, [counterPaymentId]);
   const [againstInvoiceId, setAgainstInvoiceId] = useState(ed?.debitNote?.against?.id ?? '');
   const [noteReason, setNoteReason] = useState(ed?.debitNote?.reason ?? '');
   const [saving, setSaving] = useState<false | 'draft' | 'send'>(false);
@@ -468,7 +479,7 @@ export function InvoiceForm({ variant = 'invoice', editing }: {
         };
     // An edit goes back over the invoice it came from; the server keeps its number and payments.
     const request = ed
-      ? invoiceApi.update(ed.id, { ...payload, number: undefined, paidAtSale: undefined, billExpenseIds: undefined })
+      ? invoiceApi.update(ed.id, { ...payload, number: undefined, paidAtSale: receiptEdit ? payload.paidAtSale : undefined, billExpenseIds: undefined })
       : api.post<{ id: string; number: string; totalPaise: number; journalEntryId: string | null }>('/api/invoices', payload);
     const created = await request
       .catch((err: unknown) => {

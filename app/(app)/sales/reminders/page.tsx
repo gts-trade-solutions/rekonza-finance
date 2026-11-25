@@ -20,6 +20,11 @@ import { api } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
 import { usePermission } from '@/lib/store/hooks';
 import { cn } from '@/lib/utils';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Field } from '@/components/shared/form-bits';
+import { DeleteConfirmDialog, RowActions } from '@/components/shared/row-actions';
 
 interface Reminder {
   id: string; invoiceId: string; number: string; customer: string; stageDays: number; channel: 'whatsapp' | 'email' | 'sms';
@@ -38,6 +43,9 @@ export default function RemindersPage() {
   const state = useApi(() => api.get<{ reminders: Reminder[] }>('/api/reminders', { status }), [status]);
   const policy = useApi(() => api.get<{ reminders?: { enabled: boolean; stages: number[]; channel: string } }>('/api/settings/policies'), []);
   const [busy, setBusy] = useState<string | null>(null);
+  // Edit a reminder before it goes (who to, what it says); Delete takes it off the queue.
+  const [editing, setEditing] = useState<Reminder | null>(null);
+  const [deleting, setDeleting] = useState<Reminder | null>(null);
 
   const mark = async (r: Reminder, to: 'sent' | 'skipped') => {
     await api.patch('/api/reminders', { id: r.id, status: to });
@@ -134,7 +142,8 @@ export default function RemindersPage() {
                           <Button size="xs" variant="ghost" onClick={() => void mark(r, 'sent')}>Mark sent</Button>
                         </>
                       )}
-                      <Button size="xs" variant="ghost" onClick={() => void mark(r, 'skipped')}>Skip</Button>
+                      <RowActions className="ml-auto" onEdit={() => setEditing(r)} onDelete={() => setDeleting(r)}
+                        editTitle="Change who it goes to or what it says" deleteTitle="Take it off the queue" />
                     </div>
                   )}
                 </Card>
@@ -143,6 +152,67 @@ export default function RemindersPage() {
           )}
         </AsyncPage>
       </div>
+      <EditReminder reminder={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); void state.refetch(); }} />
+      <DeleteConfirmDialog
+        open={!!deleting} onOpenChange={(v) => { if (!v) setDeleting(null); }}
+        title={`Delete the reminder to ${deleting?.customer ?? ''}?`}
+        description="It is taken off the queue and not sent. It moves to Skipped, so the nightly check does not queue it again for this stage."
+        withReason={false}
+        doneMessage="Reminder deleted from the queue"
+        onConfirm={() => api.delete(`/api/reminders?id=${deleting!.id}`)}
+        onDone={() => void state.refetch()}
+      />
     </>
+  );
+}
+
+/** Zoho's last look before a reminder goes: whom it is to, and its words. {link} becomes the invoice's link when it is sent. */
+function EditReminder({ reminder, onClose, onSaved }: { reminder: Reminder | null; onClose: () => void; onSaved: () => void }) {
+  const [to, setTo] = useState('');
+  const [subject, setSubject] = useState('');
+  const [message, setMessage] = useState('');
+  const [shown, setShown] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  if ((reminder?.id ?? null) !== shown) {
+    setShown(reminder?.id ?? null);
+    setTo(reminder?.to ?? ''); setSubject(reminder?.subject ?? ''); setMessage(reminder?.message ?? '');
+  }
+  const save = async () => {
+    if (!reminder) return;
+    setSaving(true);
+    try {
+      await api.put('/api/reminders', { id: reminder.id, to: to || null, subject: subject || null, message });
+      toast.success('Reminder saved', { description: 'It goes as you wrote it.' });
+      onSaved();
+    } catch (e) {
+      toast.error('Not saved', { description: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <Dialog open={!!reminder} onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="sm:max-w-lg" data-slot="reminder-edit">
+        <DialogHeader>
+          <DialogTitle>Edit the reminder to {reminder?.customer}</DialogTitle>
+          <DialogDescription>For {reminder?.number}. Keep {'{link}'} where the invoice&apos;s link should go.</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          <Field label={reminder?.channel === 'email' ? 'Email to' : 'Phone'}>
+            <Input value={to} onChange={(e) => setTo(e.target.value)} data-slot="reminder-edit-to" />
+          </Field>
+          {reminder?.channel === 'email' && (
+            <Field label="Subject"><Input value={subject} onChange={(e) => setSubject(e.target.value)} /></Field>
+          )}
+          <Field label="Message">
+            <Textarea rows={6} value={message} onChange={(e) => setMessage(e.target.value)} maxLength={2000} data-slot="reminder-edit-message" />
+          </Field>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button onClick={() => void save()} disabled={saving || !message.trim()} data-slot="reminder-edit-save">{saving ? 'Saving…' : 'Save'}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

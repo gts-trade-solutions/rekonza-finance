@@ -153,3 +153,46 @@ export async function onlinePayments(ex: Executor, orgId: number) {
     paymentNumber: r.payment_number ?? null, providerPaymentId: r.provider_payment_id ?? null,
   }));
 }
+
+// ── Deleting a link (Online Payments) ───────────────────────────────────────
+//
+// A link waiting to be paid lives at Razorpay too, so deleting it here first
+// cancels it there: the customer's copy then says it can no longer be paid. It
+// is kept here as cancelled, beside the invoice, as a record of what was sent.
+// A link already cancelled or expired asks nothing of Razorpay and is removed.
+// A paid one stands: the money arrived, and is changed through its payment.
+
+type CancelApi = (keyId: string, keySecret: string, linkId: string) => Promise<void>;
+const razorpayCancel: CancelApi = async (keyId, keySecret, linkId) => {
+  const res = await fetch(`https://api.razorpay.com/v1/payment_links/${encodeURIComponent(linkId)}/cancel`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Basic ${Buffer.from(`${keyId}:${keySecret}`).toString('base64')}` },
+  });
+  if (!res.ok) {
+    const data = (await res.json().catch(() => ({}))) as { error?: { description?: string } };
+    throw new ApiError(502, `Razorpay did not cancel the link: ${data.error?.description ?? res.statusText}`, 'gateway_error');
+  }
+};
+let cancelApi: CancelApi = razorpayCancel;
+/** Tests put a stand-in here, so no request leaves the machine. */
+export function setPaymentLinkCancelApi(fn: CancelApi | null) { cancelApi = fn ?? razorpayCancel; }
+
+export async function deletePaymentLink(trx: Trx, orgId: number, linkId: number): Promise<{ invoiceNumber: string; outcome: 'cancelled' | 'removed' }> {
+  const l = await trx.selectFrom('invoice_payment_links as l').innerJoin('invoices as i', 'i.id', 'l.invoice_id')
+    .leftJoin('payments as p', 'p.id', 'l.payment_id')
+    .select(['l.id', 'l.status', 'l.provider_link_id', 'i.number', 'p.number as payment_number'])
+    .where('l.id', '=', linkId).where('l.org_id', '=', orgId).forUpdate().executeTakeFirst();
+  if (!l) throw notFound('That payment link does not exist.');
+  if (l.status === 'paid') {
+    throw conflict(`The customer paid ${l.number} through this link${l.payment_number ? ` (${l.payment_number})` : ''}. ` +
+      'That payment stands; edit or delete it in Payments received.');
+  }
+  if (l.status === 'created') {
+    const g = await gateway(trx, orgId);
+    await cancelApi(g.key_id, g.keySecret, l.provider_link_id);
+    await trx.updateTable('invoice_payment_links').set({ status: 'cancelled' }).where('id', '=', linkId).execute();
+    return { invoiceNumber: l.number, outcome: 'cancelled' };
+  }
+  await trx.deleteFrom('invoice_payment_links').where('id', '=', linkId).execute();
+  return { invoiceNumber: l.number, outcome: 'removed' };
+}

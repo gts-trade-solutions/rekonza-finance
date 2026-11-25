@@ -6,7 +6,7 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { PhoneCall } from 'lucide-react';
+import { History, PhoneCall } from 'lucide-react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -24,6 +24,7 @@ import { api } from '@/lib/api/client';
 import { useApi, useApiAction } from '@/lib/api/use-api';
 import { usePermission } from '@/lib/store/hooks';
 import { formatINRCompact } from '@/lib/money';
+import { DeleteConfirmDialog, RowActions } from '@/components/shared/row-actions';
 
 interface Row {
   contactId: string; name: string; phone: string | null; email: string | null;
@@ -35,8 +36,16 @@ interface Row {
 
 const KINDS = ['call', 'whatsapp', 'email', 'visit', 'note'] as const;
 
+interface FollowUp {
+  id: string; kind: (typeof KINDS)[number]; note: string; by: string | null; at: string; invoiceNumber: string | null;
+  promisedDate: string | null; promisedPaise: number | null; nextFollowup: string | null;
+}
+
 export default function CollectionsPage() {
   const canLog = usePermission('sales', 'create');
+  const canEdit = usePermission('sales', 'edit');
+  // A customer's follow-ups, each with Edit and Delete (a call logged against the wrong customer, a promise typed wrong).
+  const [history, setHistory] = useState<Row | null>(null);
   const state = useApi(() => api.get<{ today: string; rows: Row[] }>('/api/collections'), []);
   const [filter, setFilter] = useState<'all' | 'due' | 'broken'>('due');
   const [who, setWho] = useState<Row | null>(null);
@@ -71,7 +80,16 @@ export default function CollectionsPage() {
     {
       key: 'last', header: 'Last follow-up', sortValue: (r) => r.lastFollowUp?.at ?? '',
       cell: (r) => (r.lastFollowUp
-        ? <div className="max-w-xs text-xs"><p className="truncate">{r.lastFollowUp.note}</p><p className="text-muted-foreground">{r.lastFollowUp.kind} · {new Date(r.lastFollowUp.at).toLocaleDateString('en-IN')}{r.lastFollowUp.by ? ` · ${r.lastFollowUp.by}` : ''}</p></div>
+        ? (
+          <div className="max-w-xs text-xs">
+            <p className="truncate">{r.lastFollowUp.note}</p>
+            <p className="text-muted-foreground">{r.lastFollowUp.kind} · {new Date(r.lastFollowUp.at).toLocaleDateString('en-IN')}{r.lastFollowUp.by ? ` · ${r.lastFollowUp.by}` : ''}</p>
+            <button type="button" className="mt-0.5 inline-flex items-center gap-1 text-link hover:underline" data-slot="followup-history"
+              onClick={(e) => { e.stopPropagation(); setHistory(r); }}>
+              <History className="size-3" /> All follow-ups{canEdit ? ' · edit or delete' : ''}
+            </button>
+          </div>
+        )
         : <span className="text-xs text-muted-foreground">Never chased</span>),
     },
     {
@@ -109,6 +127,7 @@ export default function CollectionsPage() {
           );
         }}
       </AsyncPage>
+      <FollowUpHistory customer={history} canEdit={canEdit} onClose={() => setHistory(null)} onChanged={() => void state.refetch()} />
       <Dialog open={!!who} onOpenChange={(o) => !o && setWho(null)}>
         <DialogContent className="max-w-md">
           <DialogHeader>
@@ -133,6 +152,96 @@ export default function CollectionsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+    </>
+  );
+}
+
+/** Every follow-up logged for a customer, newest first, each with Edit and Delete. */
+function FollowUpHistory({ customer, canEdit, onClose, onChanged }: { customer: Row | null; canEdit: boolean; onClose: () => void; onChanged: () => void }) {
+  const list = useApi<{ followUps: FollowUp[] }>(
+    () => (customer ? api.get('/api/collections', { contactId: customer.contactId }) : Promise.resolve({ followUps: [] })), [customer?.contactId]);
+  const [editing, setEditing] = useState<FollowUp | null>(null);
+  const [deleting, setDeleting] = useState<FollowUp | null>(null);
+  const [f, setF] = useState({ kind: 'call' as (typeof KINDS)[number], note: '', promisedDate: '', promisedPaise: 0, nextFollowup: '' });
+  const [saving, setSaving] = useState(false);
+  const startEdit = (x: FollowUp) => {
+    setEditing(x);
+    setF({ kind: x.kind, note: x.note, promisedDate: x.promisedDate ?? '', promisedPaise: x.promisedPaise ?? 0, nextFollowup: x.nextFollowup ?? '' });
+  };
+  const save = async () => {
+    if (!editing) return;
+    setSaving(true);
+    try {
+      await api.put(`/api/collections/${editing.id}`, {
+        kind: f.kind, note: f.note, promisedDate: f.promisedDate || null, promisedPaise: f.promisedPaise || null, nextFollowup: f.nextFollowup || null,
+      });
+      toast.success('Follow-up saved');
+      setEditing(null);
+      void list.refetch();
+      onChanged();
+    } catch (e) {
+      toast.error('Not saved', { description: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <>
+      <Dialog open={!!customer} onOpenChange={(o) => { if (!o) { setEditing(null); onClose(); } }}>
+        <DialogContent className="sm:max-w-2xl" data-slot="followup-history-dialog">
+          <DialogHeader>
+            <DialogTitle>{editing ? 'Edit follow-up' : `Follow-ups: ${customer?.name ?? ''}`}</DialogTitle>
+            <DialogDescription>{editing ? 'What was said, the promise to pay, and when to chase next.' : 'Newest first. The customer and the invoice a follow-up was about stay as logged.'}</DialogDescription>
+          </DialogHeader>
+          {editing ? (
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field label="How" className="sm:col-span-2">
+                <div className="flex flex-wrap gap-1">
+                  {KINDS.map((k) => <Button key={k} size="sm" variant={f.kind === k ? 'secondary' : 'ghost'} onClick={() => setF({ ...f, kind: k })} className="capitalize">{k}</Button>)}
+                </div>
+              </Field>
+              <Field label="What they said" required className="sm:col-span-2"><Textarea rows={3} value={f.note} onChange={(e) => setF({ ...f, note: e.target.value })} data-slot="followup-edit-note" /></Field>
+              <Field label="Promised to pay by"><Input type="date" value={f.promisedDate} onChange={(e) => setF({ ...f, promisedDate: e.target.value })} /></Field>
+              <Field label="Promised amount"><MoneyInput valuePaise={f.promisedPaise} onChangePaise={(p) => setF({ ...f, promisedPaise: p })} /></Field>
+              <Field label="Chase again on" className="sm:col-span-2" hint="Left empty, the promise date"><Input type="date" value={f.nextFollowup} onChange={(e) => setF({ ...f, nextFollowup: e.target.value })} /></Field>
+            </div>
+          ) : (
+            <div className="max-h-[60vh] space-y-2 overflow-y-auto">
+              {(list.data?.followUps ?? []).map((x) => (
+                <div key={x.id} className="flex items-start justify-between gap-3 rounded-md border p-3 text-sm" data-slot="followup-row">
+                  <div className="min-w-0">
+                    <p className="whitespace-pre-line">{x.note}</p>
+                    <p className="text-xs text-muted-foreground">
+                      <span className="capitalize">{x.kind}</span> · {new Date(x.at).toLocaleDateString('en-IN')}{x.by ? ` · ${x.by}` : ''}{x.invoiceNumber ? ` · ${x.invoiceNumber}` : ''}
+                      {x.promisedDate ? ` · promised ${x.promisedPaise ? `₹${(x.promisedPaise / 100).toLocaleString('en-IN')} ` : ''}by ${new Date(x.promisedDate).toLocaleDateString('en-IN')}` : ''}
+                      {x.nextFollowup ? ` · chase ${new Date(x.nextFollowup).toLocaleDateString('en-IN')}` : ''}
+                    </p>
+                  </div>
+                  <RowActions onEdit={canEdit ? () => startEdit(x) : null} onDelete={canEdit ? () => setDeleting(x) : null} />
+                </div>
+              ))}
+              {list.data && !list.data.followUps.length && <p className="text-sm text-muted-foreground">No follow-ups logged.</p>}
+            </div>
+          )}
+          <DialogFooter>
+            {editing ? (
+              <>
+                <Button variant="outline" onClick={() => setEditing(null)}>Back</Button>
+                <Button onClick={() => void save()} disabled={saving || !f.note.trim()} data-slot="followup-edit-save">{saving ? 'Saving…' : 'Save'}</Button>
+              </>
+            ) : <Button variant="outline" onClick={onClose}>Close</Button>}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <DeleteConfirmDialog
+        open={!!deleting} onOpenChange={(v) => { if (!v) setDeleting(null); }}
+        title="Delete this follow-up?"
+        description="It is removed from the customer's chase, with any promise to pay it recorded. The audit trail keeps a note of it."
+        withReason={false}
+        doneMessage="Follow-up deleted"
+        onConfirm={() => api.delete(`/api/collections/${deleting!.id}`)}
+        onDone={() => { void list.refetch(); onChanged(); }}
+      />
     </>
   );
 }

@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { db, transaction } from '@/lib/server/db';
 import { route, body, query } from '@/lib/server/http';
 import { logAudit, auditMeta } from '@/lib/server/audit';
-import { discountsFor, listPriceLists, pricesFor, savePriceList } from '@/lib/server/services/price-lists';
+import { deletePriceList, discountsFor, listPriceLists, pricesFor, savePriceList, setPriceListActive } from '@/lib/server/services/price-lists';
 
 // Price lists, and what a given customer is charged for each item.
 
@@ -49,4 +49,36 @@ export const POST = route(
     });
   },
   { permission: { module: 'sales', action: 'edit' } },
+);
+
+/** Zoho's "Mark as inactive" (or active again) on a price list. */
+export const PATCH = route(
+  async ({ orgId, user, req }) => {
+    const input = await body(req, z.object({ id: z.coerce.number().int().positive(), isActive: z.boolean() }));
+    return transaction(async (trx) => {
+      const r = await setPriceListActive(trx, orgId, input.id, input.isActive);
+      await logAudit({
+        trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'update', targetType: 'price_list', targetId: input.id,
+        targetLabel: r.name, detail: `Price list ${r.name} marked ${input.isActive ? 'active' : 'inactive'}`, ...auditMeta(req),
+      });
+      return { id: String(input.id), isActive: input.isActive };
+    });
+  },
+  { permission: { module: 'sales', action: 'edit' } },
+);
+
+/** Delete a price list nobody is on (?id=, ?reason=); one in use is refused with `in_use`. */
+export const DELETE = route(
+  async ({ orgId, user, req }) => {
+    const q = query(req, z.object({ id: z.coerce.number().int().positive(), reason: z.string().max(300).optional() }));
+    return transaction(async (trx) => {
+      const r = await deletePriceList(trx, orgId, q.id);
+      await logAudit({
+        trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'delete', targetType: 'price_list', targetId: q.id,
+        targetLabel: r.name, detail: `Price list ${r.name} deleted${q.reason ? ` — ${q.reason}` : ''}`, ...auditMeta(req),
+      });
+      return { deleted: true, name: r.name };
+    });
+  },
+  { permission: { module: 'sales', action: 'void' } },
 );

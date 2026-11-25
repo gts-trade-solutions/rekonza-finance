@@ -3,6 +3,7 @@ import { db, transaction } from '@/lib/server/db';
 import { route, body, idParam, asId, forbidden, notFound } from '@/lib/server/http';
 import { deleteInvoice, markInvoiceSent, setExportDetails, updateInvoice, voidInvoice } from '@/lib/server/services/sales';
 import { CreateInput, toInvoiceInput } from '@/lib/server/invoice-input';
+import { deleteSalesReceipt, updateSalesReceipt } from '@/lib/server/services/sales-receipts';
 import { queueIrns } from '@/lib/server/gst/auto-irn';
 import { writeOffInvoice } from '@/lib/server/services/journals';
 import { hasPermission } from '@/lib/rbac';
@@ -129,11 +130,19 @@ export const PUT = route(
     const id = idParam(params);
     const input = await body(req, CreateInput);
     const done = await transaction(async (trx) => {
-      const made = await updateInvoice(trx, orgId, user.userId, id, toInvoiceInput(input, role));
+      // A sales receipt sends its payment with it: the invoice and the counter payment change together.
+      const receipt = input.paidAtSale
+        ? !!(await trx.selectFrom('invoices').select('paid_at_sale').where('id', '=', id).where('org_id', '=', orgId).executeTakeFirst())?.paid_at_sale
+        : false;
+      const made = receipt && input.paidAtSale
+        ? await updateSalesReceipt(trx, orgId, user.userId, id, toInvoiceInput(input, role), {
+          mode: input.paidAtSale.mode, bankAccountId: Number(input.paidAtSale.bankAccountId), reference: input.paidAtSale.reference ?? null,
+        })
+        : await updateInvoice(trx, orgId, user.userId, id, toInvoiceInput(input, role));
       await logAudit({
         trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'update',
         targetType: 'invoice', targetId: id, targetLabel: made.number,
-        detail: `Edited ${made.number}`, payload: { before: made.before }, ...auditMeta(req),
+        detail: `Edited ${receipt ? 'sales receipt ' : ''}${made.number}`, payload: { before: made.before }, ...auditMeta(req),
       });
       return made;
     });
@@ -155,11 +164,14 @@ export const DELETE = route(
     const id = idParam(params);
     const reason = new URL(req.url).searchParams.get('reason');
     const done = await transaction(async (trx) => {
-      const gone = await deleteInvoice(trx, orgId, user.userId, id, reason);
+      // A sales receipt goes with its counter payment (services/sales-receipts.ts).
+      const receipt = !!(await trx.selectFrom('invoices').select('paid_at_sale').where('id', '=', id).where('org_id', '=', orgId).executeTakeFirst())?.paid_at_sale;
+      const gone = receipt ? await deleteSalesReceipt(trx, orgId, user.userId, id, reason) : { ...(await deleteInvoice(trx, orgId, user.userId, id, reason)), payments: [] as string[] };
       await logAudit({
         trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'delete',
         targetType: 'invoice', targetId: id, targetLabel: gone.number,
-        detail: `Deleted ${gone.number}`, ...auditMeta(req),
+        detail: receipt ? `Deleted sales receipt ${gone.number} with its payment ${gone.payments.join(', ') || '(none left)'}` : `Deleted ${gone.number}`,
+        ...auditMeta(req),
       });
       return gone;
     });

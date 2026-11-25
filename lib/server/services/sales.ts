@@ -904,7 +904,11 @@ export async function deleteInvoice(trx: Trx, orgId: number, userId: number | nu
   if (await trx.selectFrom('credit_note_applications').select('id').where('invoice_id', '=', invoiceId).executeTakeFirst()) refuse('a credit note was applied to it. Remove that credit first.');
   if (await trx.selectFrom('advance_tax_adjustments').select('id').where('invoice_id', '=', invoiceId).executeTakeFirst()) refuse('an advance was adjusted against it.');
   if (await trx.selectFrom('fixed_assets').select('id').where('disposal_invoice_id', '=', invoiceId).executeTakeFirst()) refuse('it sold a fixed asset. Undo the disposal first.');
-  if (await trx.selectFrom('invoice_interest_charges').select('id').where((eb) => eb.or([eb('invoice_id', '=', invoiceId), eb('charge_invoice_id', '=', invoiceId)])).executeTakeFirst()) refuse('overdue interest was charged on it.');
+  // Interest charged on this invoice is billed on another: that one goes first. An interest
+  // invoice itself (Sales → Overdue interest) can go, and its days are unbilled again below.
+  const charged = await trx.selectFrom('invoice_interest_charges as ic').innerJoin('invoices as ci', 'ci.id', 'ic.charge_invoice_id')
+    .select('ci.number').where('ic.invoice_id', '=', invoiceId).where('ic.charge_invoice_id', '<>', invoiceId).executeTakeFirst();
+  if (charged) refuse(`overdue interest on it was billed on ${charged.number}. Delete that interest invoice first.`);
   if (await trx.selectFrom('eway_bills').select('id').where('invoice_id', '=', invoiceId).executeTakeFirst()) refuse('an e-way bill is on record for it.');
   if (await trx.selectFrom('payment_allocations').select('id').where('org_id', '=', orgId).where('target_type', '=', 'invoice').where('target_id', '=', invoiceId).executeTakeFirst()) refuse('a payment is applied to it.');
   if (await trx.selectFrom('journal_allocations').select('id').where('org_id', '=', orgId).where('target_type', '=', 'invoice').where('target_id', '=', invoiceId).executeTakeFirst()) refuse('a journal entry is set against it.');
@@ -921,6 +925,8 @@ export async function deleteInvoice(trx: Trx, orgId: number, userId: number | nu
   await trx.deleteFrom('serial_moves').where('org_id', '=', orgId).where('doc_type', '=', 'invoice').where('doc_id', '=', invoiceId).execute();
   await trx.deleteFrom('payment_reminders').where('invoice_id', '=', invoiceId).execute();
   await trx.deleteFrom('invoice_payment_links').where('invoice_id', '=', invoiceId).execute();
+  // The interest it billed is owed again: Overdue interest works it out afresh.
+  await trx.deleteFrom('invoice_interest_charges').where('org_id', '=', orgId).where('charge_invoice_id', '=', invoiceId).execute();
   await unlinkDocument(trx, orgId, 'invoice', invoiceId);
   await recordDeletion(trx, {
     orgId, userId, docType: inv.doc_kind === 'debit_note' ? 'debit_note' : 'invoice', docId: invoiceId, number: inv.number,

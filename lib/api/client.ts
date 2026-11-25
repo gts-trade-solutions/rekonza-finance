@@ -598,6 +598,21 @@ export const goodsReceipts = {
     api.delete<{ deleted: true; number: string }>(`/api/goods-receipts/${id}${reason ? `?reason=${encodeURIComponent(reason)}` : ''}`),
 };
 
+/** A purchase order as saved, for its Edit window (GET /api/purchase-orders/[id]). */
+export interface PurchaseOrderForEdit {
+  id: string; number: string; status: string; branchId: string; vendorId: string; date: string; expectedDate: string | null;
+  notes: string | null; totalPaise: number; vendorResponse: 'accepted' | 'declined' | null;
+  lines: { itemId: string | null; description: string | null; hsnSac: string | null; qty: number; uqc: string | null; ratePaise: number; discountPct: number; gstRatePct: number }[];
+}
+
+/** Zoho Books' Edit and Delete on a purchase order, while nothing on it is received or billed. */
+export const purchaseOrders = {
+  get: (id: string) => api.get<PurchaseOrderForEdit>(`/api/purchase-orders/${id}`),
+  update: (id: string, input: unknown) => api.put<{ id: string; number: string; totalPaise: number }>(`/api/purchase-orders/${id}`, input),
+  remove: (id: string, reason?: string | null) =>
+    api.delete<{ deleted: true; number: string }>(`/api/purchase-orders/${id}${reason ? `?reason=${encodeURIComponent(reason)}` : ''}`),
+};
+
 export const expenses = {
   /** One expense as saved, for its Edit form. */
   get: (id: string) => api.get<ExpenseDetail>(`/api/expenses/${id}`),
@@ -2426,6 +2441,9 @@ export interface RecurringPurchaseRow {
   lastError: string | null;
   totalPaise: number;
   isDue: boolean;
+  /** For Edit: a bill profile's lines, an expense profile's expense, as written. */
+  lines: { itemId: string | null; accountId: string | null; description: string | null; qty: number; ratePaise: number; gstRatePct: number; hsnSac: string | null }[] | null;
+  expense: { accountId: string; amountPaise: number; gstRatePct: number; itcEligibility: 'eligible' | 'ineligible' | 'capital_goods'; notes: string | null; paidThroughBankAccountId: string | null } | null;
 }
 
 export const recurringPurchases = {
@@ -2435,7 +2453,9 @@ export const recurringPurchases = {
     api.patch<{ id: string; kind: 'bill' | 'expense'; docId: string; number: string; totalPaise: number }>('/api/recurring-purchases', { action: 'run', id, date }),
   toggle: (id: string, isActive: boolean) => api.patch<{ id: string }>('/api/recurring-purchases', { action: 'toggle', id, isActive }),
   auto: (id: string, autoRun: boolean) => api.patch<{ id: string }>('/api/recurring-purchases', { action: 'auto', id, autoRun }),
-  remove: (id: string) => api.delete<{ id: string }>(`/api/recurring-purchases?id=${encodeURIComponent(id)}`),
+  update: (id: string, input: unknown) => api.put<{ id: string; name: string; nextRun: string }>(`/api/recurring-purchases/${id}`, input),
+  remove: (id: string, reason?: string | null) =>
+    api.delete<{ deleted: true; name: string }>(`/api/recurring-purchases/${id}${reason ? `?reason=${encodeURIComponent(reason)}` : ''}`),
 };
 
 // ── Inventory ────────────────────────────────────────────────────────────────

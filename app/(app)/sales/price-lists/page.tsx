@@ -22,6 +22,7 @@ import { api } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
 import { useAppStore } from '@/lib/store';
 import { usePermission } from '@/lib/store/hooks';
+import { DeleteConfirmDialog, RowActions, withReasonQuery } from '@/components/shared/row-actions';
 
 interface PriceList {
   id: string; name: string; basis: 'percent' | 'per_item'; percent: number; isActive: boolean; customers: number;
@@ -32,7 +33,9 @@ interface PriceList {
 export default function PriceListsPage() {
   const state = useApi<{ lists: PriceList[] }>(() => api.get('/api/price-lists'), []);
   const canEdit = usePermission('sales', 'edit');
+  const canDelete = usePermission('sales', 'void');
   const [editing, setEditing] = useState<PriceList | 'new' | null>(null);
+  const [deleting, setDeleting] = useState<PriceList | null>(null);
 
   const cols: Column<PriceList>[] = [
     { key: 'name', header: 'Price list', sortValue: (r) => r.name, cell: (r) => <span className="font-medium">{r.name}</span> },
@@ -48,6 +51,11 @@ export default function PriceListsPage() {
     },
     { key: 'customers', header: 'Customers', align: 'right', sortValue: (r) => r.customers, cell: (r) => <span className="tabular-nums">{r.customers}</span> },
     { key: 'status', header: 'Status', cell: (r) => (r.isActive ? <Badge variant="outline" className="text-[10px]">Active</Badge> : <span className="text-xs text-muted-foreground">Inactive</span>) },
+    {
+      key: 'actions', header: '', align: 'right',
+      cell: (r) => <RowActions onEdit={canEdit ? () => setEditing(r) : null} onDelete={canDelete ? () => setDeleting(r) : null}
+        editTitle={`Edit ${r.name}`} deleteTitle={`Delete ${r.name}`} />,
+    },
   ];
 
   return (
@@ -61,6 +69,15 @@ export default function PriceListsPage() {
         )}
       </AsyncPage>
       <Editor list={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); void state.refetch(); }} />
+      <DeleteConfirmDialog
+        open={!!deleting} onOpenChange={(v) => { if (!v) setDeleting(null); }}
+        title={`Delete the price list ${deleting?.name ?? ''}?`}
+        description="It is removed with its item rates and discount rules. Invoices already raised keep their prices. A list a customer or a recurring invoice is on cannot be deleted; mark it inactive instead."
+        doneMessage={`${deleting?.name ?? 'Price list'} deleted`}
+        onConfirm={(reason) => api.delete(withReasonQuery(`/api/price-lists?id=${deleting!.id}`, reason))}
+        inUse={{ label: 'Mark as inactive', doneMessage: `${deleting?.name ?? 'Price list'} marked inactive`, run: () => api.patch('/api/price-lists', { id: deleting!.id, isActive: false }) }}
+        onDone={() => void state.refetch()}
+      />
     </>
   );
 }

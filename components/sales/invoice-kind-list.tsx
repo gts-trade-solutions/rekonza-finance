@@ -6,6 +6,7 @@
 // against a customer.
 
 import Link from 'next/link';
+import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { FilePlus2, Plus, ReceiptIndianRupee } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -22,6 +23,7 @@ import { invoices, type InvoiceListItem, type InvoiceListResponse } from '@/lib/
 import { useApi } from '@/lib/api/use-api';
 import { usePermission } from '@/lib/store/hooks';
 import { formatINRCompact } from '@/lib/money';
+import { DeleteConfirmDialog, RowActions } from '@/components/shared/row-actions';
 
 const COPY = {
   receipt: {
@@ -46,6 +48,10 @@ export function InvoiceKindList({ kind }: { kind: 'receipt' | 'debit_note' }) {
   const c = COPY[kind];
   const router = useRouter();
   const canCreate = usePermission('sales', 'create');
+  const canEdit = usePermission('sales', 'edit');
+  const canDelete = usePermission('sales', 'void');
+  // Edit and Delete on the row, as on the invoice's own page (a sales receipt changes with its counter payment).
+  const [deleting, setDeleting] = useState<InvoiceListItem | null>(null);
   const [range, setRange] = useReportRange();
   const state = useApi<InvoiceListResponse>(
     () => invoices.list({ kind, from: range.from, to: range.to, limit: 500 }),
@@ -61,6 +67,15 @@ export function InvoiceKindList({ kind }: { kind: 'receipt' | 'debit_note' }) {
     ...(kind === 'debit_note'
       ? [{ key: 'balance', header: 'Balance', align: 'right' as const, sortValue: (r: InvoiceListItem) => r.balancePaise, cell: (r: InvoiceListItem) => <Money value={r.balancePaise} showZero={false} /> }]
       : []),
+    {
+      key: 'actions', header: '', align: 'right' as const,
+      cell: (r: InvoiceListItem) => (
+        <RowActions
+          onEdit={canEdit && r.status !== 'void' ? () => router.push(`/sales/invoices/${r.id}/edit`) : null}
+          onDelete={canDelete ? () => setDeleting(r) : null}
+          editTitle={`Edit ${r.number}`} deleteTitle={`Delete ${r.number}`} />
+      ),
+    },
   ];
 
   return (
@@ -77,6 +92,16 @@ export function InvoiceKindList({ kind }: { kind: 'receipt' | 'debit_note' }) {
       <div className="flex justify-end">
         <DateRangePicker value={range} onChange={setRange} label="Period" />
       </div>
+      <DeleteConfirmDialog
+        open={!!deleting} onOpenChange={(v) => { if (!v) setDeleting(null); }}
+        title={`Delete ${kind === 'receipt' ? 'sales receipt' : 'debit note'} ${deleting?.number ?? ''}?`}
+        description={kind === 'receipt'
+          ? 'The sale and the money taken for it both go: the payment and the invoice entries are reversed in the ledger, and the number is kept as cancelled for GSTR-1. The audit trail keeps a copy. Refused if it has an IRN or an e-way bill, or the payment is matched in Banking.'
+          : 'It is removed and its entry reversed; the number is kept as cancelled for GSTR-1. Refused once anything is received against it.'}
+        doneMessage={`${deleting?.number ?? ''} deleted`}
+        onConfirm={(reason) => invoices.remove(deleting!.id, reason)}
+        onDone={() => void state.refetch()}
+      />
       <AsyncPage state={state}>
         {(d) => {
           const live = d.invoices.filter((r) => r.status !== 'void');
