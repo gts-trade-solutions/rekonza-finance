@@ -1,7 +1,8 @@
 'use client';
 
-// Zoho-style View / Edit / Delete on one row of the General Ledger (the client
-// asked for them there, 2026-11-25). A ledger row is one line of a journal
+// View / Edit / Delete on one row of the General Ledger (the client asked for
+// them there, 2026-11-25). They are buttons on the row, not a ⋯ menu: the
+// client looked for "edit and delete" and did not find them behind the dots. A ledger row is one line of a journal
 // entry; what can be changed is the document behind it, so each kind goes to
 // that document's own edit and delete — the same rules apply (a reason when the
 // book asks for one, refused once money is applied or the period is locked),
@@ -9,24 +10,22 @@
 //
 // - A reversal, or an entry already reversed, is shown as such and not offered
 //   again: undoing it twice would be wrong.
-// - A bank line categorised from Banking is undone (its entry reversed) for
-//   Delete; Edit undoes it and reopens the line to categorise it again.
+// - A bank line categorised from Banking: Delete undoes the categorisation (its
+//   entry is reversed; the bank's own line stays, uncategorised); Edit undoes
+//   it and reopens the line to categorise it again.
 // - Entries posted by their own screens (payroll, depreciation, statutory
 //   payments, opening balances, stock) open that screen, where they are changed.
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
-import { MoreHorizontal } from 'lucide-react';
+import { Eye, Pencil, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
-import {
-  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
 import { api } from '@/lib/api/client';
 import { usePermission } from '@/lib/store/hooks';
 import { sourceHref } from '@/lib/source-links';
@@ -116,7 +115,7 @@ export function LedgerEntryActions({ row, onChanged }: { row: LedgerRowRef; onCh
       }
       if (bank) {
         await undoBankLine();
-        toast.success(`Entry #${row.entryNo} undone`, { description: 'The bank line is uncategorised again; its entry is reversed in the ledger.' });
+        toast.success(`Entry #${row.entryNo} deleted`, { description: 'The bank line is uncategorised again; its entry is reversed in the ledger.' });
       } else {
         const r = reason.trim();
         await api.delete(`${kind!.del!(id!)}${r ? `?reason=${encodeURIComponent(r)}` : ''}`);
@@ -131,43 +130,48 @@ export function LedgerEntryActions({ row, onChanged }: { row: LedgerRowRef; onCh
     }
   };
 
+  const btn = 'inline-flex h-7 items-center gap-1 rounded-md border bg-background px-2 text-xs font-medium hover:bg-accent';
   return (
     <>
-      <DropdownMenu>
-        <DropdownMenuTrigger aria-label={`Actions for entry #${row.entryNo}`} data-slot="ledger-actions"
-          className="grid size-7 place-items-center rounded-md text-muted-foreground hover:bg-accent">
-          <MoreHorizontal className="size-4" />
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="min-w-40">
-          {bank && row.sourceId
-            ? <DropdownMenuItem onClick={() => void viewBankLine()} data-slot="ledger-view">View</DropdownMenuItem>
-            : view && <DropdownMenuItem asChild><Link href={view} data-slot="ledger-view">View</Link></DropdownMenuItem>}
-          {editable && (
-            <DropdownMenuItem data-slot="ledger-edit" onClick={() => (bank ? setConfirm('edit') : router.push(kind!.edit!(id!)))}>Edit</DropdownMenuItem>
-          )}
-          {deletable && (
-            <DropdownMenuItem data-slot="ledger-delete" className="text-destructive focus:text-destructive" onClick={() => setConfirm('delete')}>
-              {bank ? 'Undo categorisation' : 'Delete'}
-            </DropdownMenuItem>
-          )}
-        </DropdownMenuContent>
-      </DropdownMenu>
+      <div className="flex items-center justify-end gap-1" data-slot="ledger-actions" aria-label={`Actions for entry #${row.entryNo}`}>
+        {bank && row.sourceId ? (
+          <button type="button" onClick={() => void viewBankLine()} className="grid size-7 place-items-center rounded-md text-muted-foreground hover:bg-accent" aria-label={`View entry #${row.entryNo}`} title="View" data-slot="ledger-view">
+            <Eye className="size-4" />
+          </button>
+        ) : view && (
+          <Link href={view} className="grid size-7 place-items-center rounded-md text-muted-foreground hover:bg-accent" aria-label={`View entry #${row.entryNo}`} title="View" data-slot="ledger-view">
+            <Eye className="size-4" />
+          </Link>
+        )}
+        {editable && (
+          <button type="button" className={`${btn} text-link`} data-slot="ledger-edit" title={bank ? 'Undo the categorisation and choose it again' : `Edit the ${kind!.noun}`}
+            onClick={() => (bank ? setConfirm('edit') : router.push(kind!.edit!(id!)))}>
+            <Pencil className="size-3.5" /> Edit
+          </button>
+        )}
+        {deletable && (
+          <button type="button" className={`${btn} text-destructive`} data-slot="ledger-delete" title={bank ? 'Undo the categorisation; the bank line stays, uncategorised' : `Delete the ${kind!.noun}`}
+            onClick={() => setConfirm('delete')}>
+            <Trash2 className="size-3.5" /> Delete
+          </button>
+        )}
+      </div>
       <Dialog open={!!confirm} onOpenChange={(v) => { if (!v) { setConfirm(null); setReason(''); } }}>
         <DialogContent className="sm:max-w-md" data-slot="ledger-confirm">
           <DialogHeader>
             <DialogTitle>
-              {bank ? (confirm === 'edit' ? `Re-categorise entry #${row.entryNo}?` : `Undo entry #${row.entryNo}?`) : `Delete the ${kind?.noun} behind entry #${row.entryNo}?`}
+              {bank ? (confirm === 'edit' ? `Re-categorise entry #${row.entryNo}?` : `Delete entry #${row.entryNo}?`) : `Delete the ${kind?.noun} behind entry #${row.entryNo}?`}
             </DialogTitle>
             <DialogDescription>
               {bank
-                ? 'The bank line goes back to uncategorised and this entry is reversed in the ledger (the audit trail keeps both).' + (confirm === 'edit' ? ' It then opens for you to categorise it again.' : '')
+                ? 'This entry is reversed in the ledger and the bank line goes back to uncategorised; the line itself comes from the bank statement and stays (the audit trail keeps both).' + (confirm === 'edit' ? ' It then opens for you to categorise it again.' : '')
                 : 'Its entry is reversed in the ledger and the document is removed; its number is kept as deleted. Refused if money has been applied to it or its period is locked.'}
             </DialogDescription>
           </DialogHeader>
           {!bank && <Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Reason (optional): raised in error" data-slot="ledger-reason" />}
           <DialogFooter>
             <Button variant={confirm === 'delete' ? 'destructive' : 'default'} disabled={busy} onClick={() => void run()} data-slot="ledger-confirm-go">
-              {busy ? 'Working…' : bank ? (confirm === 'edit' ? 'Undo and re-categorise' : 'Undo') : 'Delete'}
+              {busy ? 'Working…' : bank && confirm === 'edit' ? 'Undo and re-categorise' : 'Delete'}
             </Button>
             <Button variant="outline" onClick={() => { setConfirm(null); setReason(''); }}>Cancel</Button>
           </DialogFooter>

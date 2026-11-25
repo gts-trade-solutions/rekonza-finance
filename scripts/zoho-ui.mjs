@@ -88,7 +88,8 @@ await open('/sales/invoices');
 check("Top bar is Zoho's navy #21263c", (await css('[data-slot=topbar]', 'backgroundColor')) === 'rgb(33, 38, 60)');
 check('Top bar is 48px tall', Math.round((await box('[data-slot=topbar]'))?.height ?? 0) === 48);
 check("Sidebar is Zoho's lavender #f7f7fe", (await css('[data-slot=sidebar]', 'backgroundColor')) === 'rgb(247, 247, 254)');
-check('Sidebar is 220px wide', Math.round((await box('aside'))?.width ?? 0) === 220);
+// Every page opens with the sidebar folded to the rail (the client, 2026-11-25); the top bar's ☰ opens it.
+check('A page opens with the sidebar folded to the 72px rail', Math.round((await box('aside'))?.width ?? 0) === 72);
 const font = await page.evaluate(() => ({ family: getComputedStyle(document.body).fontFamily, size: getComputedStyle(document.body).fontSize }));
 check('Body text is Inter at 13px', /Inter/i.test(font.family) && font.size === '13px', `${font.family.slice(0, 40)} ${font.size}`);
 check("Buttons are Zoho's blue #408dfb", (await css('[data-slot=page-actions] a[href="/sales/invoices/new"]', 'backgroundColor')) === 'rgb(64, 141, 251)');
@@ -96,6 +97,9 @@ check("Table headings are 11px uppercase grey", await page.locator('thead th').n
   const s = getComputedStyle(el); return s.fontSize === '11px' && s.textTransform === 'uppercase' && s.color === 'rgb(108, 113, 138)';
 }));
 
+await page.locator('[data-slot=topbar-nav-fold]').click();
+await page.waitForTimeout(400);
+check("The top bar's ☰ opens the 220px menu", Math.round((await box('aside'))?.width ?? 0) === 220);
 const zohoRows = await page.evaluate(() => {
   const nav = document.querySelector('[data-slot=sidebar] nav');
   const extras = nav.querySelector('[data-slot=sidebar-extras]');
@@ -123,12 +127,15 @@ await page.waitForTimeout(300);
 check('Opening Items closes Sales (one group open at a time)',
   (await page.locator('[data-slot=sidebar] a[href="/sales/price-lists"]').isVisible()) && !(await page.locator('[data-slot=sidebar] a[href="/sales/customers"]').isVisible()));
 
-// Fold to the rail, remembered.
+// Fold to the rail and open it again; the next page folds it again.
 await page.getByRole('button', { name: 'Collapse the menu' }).click();
 await page.waitForTimeout(400);
 check('The menu folds to the 72px rail', Math.round((await box('aside'))?.width ?? 0) === 72);
+await page.getByRole('button', { name: 'Expand the menu' }).click();
+await page.waitForTimeout(400);
+check('…and opens again on the same page', Math.round((await box('aside'))?.width ?? 0) === 220);
 await open('/sales/invoices');
-check('The rail is remembered after a reload', Math.round((await box('aside'))?.width ?? 0) === 72);
+check('Opening a page folds it again', Math.round((await box('aside'))?.width ?? 0) === 72);
 await page.locator('[data-slot=sidebar] button', { hasText: 'Purchases' }).hover();
 await page.waitForTimeout(600);
 const flyout = page.locator('[data-slot=popover-content] a[href="/purchases/bills"]');
@@ -137,6 +144,8 @@ if (await flyout.isVisible().catch(() => false)) {
   await flyout.click();
   await page.waitForURL('**/purchases/bills');
   check('Choosing from the rail menu opens the screen', page.url().endsWith('/purchases/bills'));
+  await page.waitForTimeout(400);
+  check('…with the sidebar folded, as every page opens', Math.round((await box('aside'))?.width ?? 0) === 72);
 }
 await page.getByRole('button', { name: 'Expand the menu' }).click();
 await page.waitForTimeout(400);
@@ -149,7 +158,7 @@ await open('/sales/invoices');
 check('The title is the view menu: "All Invoices"', (await page.locator('[data-slot=view-picker]').innerText()).trim() === 'All Invoices');
 check('The top bar searches this list', (await page.locator('[data-slot=topbar-search-input]').getAttribute('placeholder')) === 'Search in Invoices ( / )');
 check('The list has no second search box of its own', (await page.locator('[data-slot=data-table] input[placeholder^="Search"]').count()) === 0);
-check('The list runs edge to edge', Math.round((await box('[data-slot=data-table-grid]'))?.x ?? 0) === 220);
+check('The list runs edge to edge, from the sidebar', Math.round((await box('[data-slot=data-table-grid]'))?.x ?? 0) === Math.round((await box('aside'))?.width ?? -1));
 
 // Payment summary against the books.
 const openInv = await api('/api/invoices?open=true&limit=500');
@@ -221,9 +230,8 @@ for (const [list, re, label] of [
   await page.waitForSelector(`:is(${ROW})[data-active="1"]`, { timeout: 30000 }).catch(() => {});
   await page.waitForTimeout(800);
   check(`${label}: a record opens beside the list`, (await page.locator('[data-slot=split-list]').isVisible()) && (await page.locator(`:is(${ROW})[data-active="1"]`).count()) === 1);
-  // Zoho folds the sidebar beside a transaction (invoice, bill) and keeps it open beside a customer or vendor.
-  const folds = label === 'Invoices' || label === 'Bills';
-  check(`${label}: the sidebar ${folds ? 'folds to the rail' : 'stays open, as Zoho keeps it'} while it is open`, Math.round((await box('aside'))?.width ?? 0) === (folds ? 72 : 220));
+  // Every page, a record included, opens with the sidebar folded (the client, 2026-11-25).
+  check(`${label}: the sidebar is folded to the rail while it is open`, Math.round((await box('aside'))?.width ?? 0) === 72);
   if (label === 'Customers' || label === 'Vendors') {
     // Zoho's customer page has no grey bar: the name, Edit, the paperclip and More sit on white.
     check(`${label}: the record's own header, on white as Zoho's`, (await page.locator('[data-slot=contact-header]').count()) === 1 && (await css('.split-page > [data-slot=page-header] > [data-slot=page-actions]', 'backgroundColor')) === null);
@@ -244,7 +252,7 @@ for (const [list, re, label] of [
   await page.getByRole('link', { name: `Close and go back to ${label}` }).click();
   await page.waitForURL((u) => u.pathname === list, { timeout: 30000 });
   await page.waitForTimeout(500);
-  check(`${label}: X goes back to the list and unfolds the sidebar`, Math.round((await box('aside'))?.width ?? 0) === 220);
+  check(`${label}: X goes back to the list, the sidebar folded as on every page`, Math.round((await box('aside'))?.width ?? 0) === 72);
 }
 const inv1 = openInv.invoices[0]?.id ?? (await api('/api/invoices?limit=1')).invoices[0].id;
 await open(`/sales/invoices/${inv1}/print`);
@@ -543,7 +551,7 @@ await page.waitForTimeout(800);
 const itemId = page.url().split('/').pop();
 check('An item opens beside the list', (await page.locator('[data-slot=split-list]').isVisible()) && (await page.locator(`:is(${ROW})[data-active="1"]`).count()) === 1);
 check("…titled with the item's name", (await page.locator('[data-slot=item-title]').innerText()).trim() === firstName, firstName);
-check('…the sidebar stays open, as Zoho keeps it beside an item', Math.round((await box('aside'))?.width ?? 0) === 220);
+check('…the sidebar folded, as on every page', Math.round((await box('aside'))?.width ?? 0) === 72);
 check('…and the top bar searches the items beside it', (await page.locator('[data-slot=topbar-search-input]').getAttribute('placeholder')) === 'Search in Items ( / )');
 check("The item's pencil and More sit in its title band, as Zoho's do", (await page.locator('[data-slot=item-edit]').count()) === 1 && (await page.locator('[data-slot=item-more]').count()) === 1
   && (await page.locator('.split-page > [data-slot=page-header]').count()) === 0);
@@ -692,7 +700,7 @@ const reportHref = await firstReport.getAttribute('href');
 await firstReport.click();
 await page.waitForURL((u) => u.pathname === reportHref.split('?')[0], { timeout: 30000 });
 await page.waitForTimeout(600);
-check('Leaving the Reports Center unfolds the sidebar', Math.round((await box('aside'))?.width ?? 0) === 220);
+check('The report opens with the sidebar folded too', Math.round((await box('aside'))?.width ?? 0) === 72);
 await open('/reports');
 check('Last Visited records the report just opened', (await page.locator('[data-slot=report-row]').first().locator('td').nth(3).innerText()).trim().length > 0);
 
@@ -706,7 +714,7 @@ await page.locator('[data-slot=banking-more]').click();
 await page.waitForTimeout(300);
 check("More holds Rekonza's banking tools", (await page.locator('[data-slot=dropdown-menu-content] a').count()) >= 6);
 await page.keyboard.press('Escape');
-check('Banking Overview keeps the sidebar open, as Zoho does', (await page.locator('aside [data-slot=sidebar]').getAttribute('data-folded')) !== '1');
+check('Banking Overview opens with the sidebar folded, as every page', (await page.locator('aside [data-slot=sidebar]').getAttribute('data-folded')) === '1');
 if (banks.accounts[0]) {
   await open(`/banking/transactions?account_id=${banks.accounts[0].id}`);
   check("An account's page folds the sidebar and has Zoho's tabs", (await page.locator('aside [data-slot=sidebar]').getAttribute('data-folded')) === '1'
@@ -725,13 +733,17 @@ await page.locator('[data-slot=settings-search]').fill('');
 await page.locator('[data-slot=settings-link]', { hasText: /^Profile$/ }).click();
 await page.waitForURL('**/settings?tab=org');
 await page.waitForTimeout(800);
-check('A setting opens with the settings menu beside it', (await page.locator('[data-slot=settings-nav] a[data-active="1"]').innerText()).trim() === 'Profile');
+check('A setting opens with the settings menu folded', (await page.locator('[data-slot=settings-nav]').getAttribute('data-folded')) === '1');
+await page.locator('[data-slot=settings-nav-fold]').click();
+await page.waitForTimeout(300);
+check('…» opens it, with the setting marked', (await page.locator('[data-slot=settings-nav] a[data-active="1"]').innerText()).trim() === 'Profile');
 check('…under its Zoho title', (await page.locator('h1').first().innerText()).trim() === 'Organization Profile');
 await page.locator('[data-slot=settings-nav] button', { hasText: 'Users & Roles' }).click();
 await page.locator('[data-slot=settings-nav] a', { hasText: /^Users$/ }).click();
 await page.waitForURL('**/settings?tab=users');
 await page.waitForTimeout(800);
 check('The settings menu moves between settings', (await page.locator('h1').first().innerText()).trim() === 'Users & Roles');
+check('…and the next setting opens with it folded again', (await page.locator('[data-slot=settings-nav]').getAttribute('data-folded')) === '1');
 await page.locator('[data-slot=close-settings]').click();
 await page.waitForURL('**/dashboard');
 await page.waitForTimeout(500);

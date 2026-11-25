@@ -128,7 +128,8 @@ function GeneralLedger() {
                     <th className="px-4 py-2.5 text-right font-semibold">Debit</th>
                     <th className="px-4 py-2.5 text-right font-semibold">Credit</th>
                     <th className="px-4 py-2.5 text-right font-semibold">Balance</th>
-                    <th className="w-10 px-2 py-2.5" aria-label="Actions" />
+                    {/* Pinned to the right edge, so Edit and Delete show however wide the table runs. */}
+                    <th className="sticky right-0 w-[176px] bg-table-head px-2 py-2.5 text-right font-semibold no-print" data-slot="ledger-actions-head">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -137,7 +138,7 @@ function GeneralLedger() {
                       Opening balance at {new Date(gl.from).toLocaleDateString('en-IN')}
                     </td>
                     <td className="px-4 py-2 text-right font-medium"><Money value={gl.openingPaise} /></td>
-                    <td />
+                    <td className="no-print" />
                   </tr>
 
                   {gl.lines.length === 0 ? (
@@ -151,13 +152,13 @@ function GeneralLedger() {
                       const route = sourceHref(l.sourceType, l.sourceId);
                       return (
                         <tr key={`${l.entryId}-${i}`} className="border-b last:border-0 hover:bg-accent/40">
-                          <td className="px-4 py-2 tabular text-xs">
+                          <td className="whitespace-nowrap px-4 py-2 tabular text-xs">
                             {new Date(l.date).toLocaleDateString('en-IN', {
                               day: '2-digit', month: 'short', year: '2-digit',
                             })}
                           </td>
                           <td className="px-4 py-2 text-xs text-muted-foreground">#{l.entryNo}</td>
-                          <td className="px-4 py-2">
+                          <td className="min-w-[200px] px-4 py-2 [overflow-wrap:anywhere]">
                             {l.description ?? l.memo ?? '—'}
                             <span className="ml-2 text-xs capitalize text-muted-foreground">
                               {route ? (
@@ -173,7 +174,7 @@ function GeneralLedger() {
                           <td className="px-4 py-2 text-right"><Money value={l.debitPaise} showZero={false} /></td>
                           <td className="px-4 py-2 text-right"><Money value={l.creditPaise} showZero={false} /></td>
                           <td className="px-4 py-2 text-right font-medium"><Money value={l.runningPaise} /></td>
-                          <td className="px-2 py-1 text-right no-print"><LedgerEntryActions row={l} onChanged={refresh} /></td>
+                          <td className="sticky right-0 bg-card px-2 py-1 text-right shadow-[-8px_0_8px_-8px_rgba(0,0,0,0.12)] no-print"><LedgerEntryActions row={l} onChanged={refresh} /></td>
                         </tr>
                       );
                     })
@@ -184,7 +185,7 @@ function GeneralLedger() {
                       Closing balance at {new Date(gl.to).toLocaleDateString('en-IN')}
                     </td>
                     <td className="px-4 py-3 text-right"><Money value={gl.closingPaise} /></td>
-                    <td />
+                    <td className="no-print" />
                   </tr>
                 </tbody>
               </ReportTable>

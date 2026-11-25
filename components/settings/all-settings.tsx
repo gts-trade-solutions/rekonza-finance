@@ -13,7 +13,7 @@
 // after Zoho's.
 
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import {
   Building2, ChevronDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, CreditCard, Database, Package, Palette, Search, Settings2, ShieldCheck, Users, Wrench, X,
@@ -236,37 +236,38 @@ export function AllSettings() {
   );
 }
 
-// The settings menu folds like the main sidebar (the client asked for the
-// minimize option on every page, 2026-11-25), and the choice is remembered in
-// this browser, as the main sidebar's is.
-const SETTINGS_NAV_KEY = 'rekonza-settings-nav-collapsed';
+// The settings menu folds like the main sidebar: every setting opens with it
+// folded (the client, 2026-11-25: the sidebar should close on every page),
+// » opens it there, and the next setting folds it again. A setting is its
+// address and, on /settings, its tab.
+let settingsNavOpenOn: string | null = null;
 const settingsNavListeners = new Set<() => void>();
-function settingsNavCollapsed(): boolean {
-  try { return localStorage.getItem(SETTINGS_NAV_KEY) === '1'; } catch { return false; }
-}
-function setSettingsNavCollapsed(v: boolean) {
-  try { localStorage.setItem(SETTINGS_NAV_KEY, v ? '1' : '0'); } catch { /* private mode: it lasts this visit */ }
+function setSettingsNavOpenOn(key: string | null) {
+  settingsNavOpenOn = key;
   for (const l of settingsNavListeners) l();
 }
-function useSettingsNavCollapsed(): boolean {
-  return useSyncExternalStore(
+/** Whether the menu is folded on this setting, and the key that opens it here. */
+function useSettingsNavFold(tab?: string): { folded: boolean; key: string } {
+  const key = `${usePathname()}|${tab ?? ''}`;
+  const openOn = useSyncExternalStore(
     (l) => { settingsNavListeners.add(l); return () => { settingsNavListeners.delete(l); }; },
-    settingsNavCollapsed,
-    () => false,
+    () => settingsNavOpenOn,
+    () => null,
   );
+  return { folded: openOn !== key, key };
 }
 
 /** The left menu beside an open setting. */
 export function SettingsNav({ tab, href }: { tab?: string; href?: string }) {
   const visible = useVisible();
   const [open, setOpen] = useState<string | null>(null);
-  const folded = useSettingsNavCollapsed();
+  const { folded, key: here } = useSettingsNavFold(tab);
   const current = SETTING_SECTIONS.flatMap((s) => s.groups).find((g) => g.links.some((l) => (tab && l.tab === tab) || (href && (l.href === href || href.startsWith(`${l.href}/`)))))?.title ?? null;
   useEffect(() => { setOpen(current); }, [current]);
   if (folded) {
     return (
       <nav className="sticky top-0 flex max-h-[calc(100vh-75px)] w-[52px] shrink-0 flex-col items-center gap-2 border-r bg-surface py-4" data-slot="settings-nav" data-folded="1">
-        <button type="button" onClick={() => setSettingsNavCollapsed(false)} aria-label="Expand the menu" title="Expand"
+        <button type="button" onClick={() => setSettingsNavOpenOn(here)} aria-label="Expand the menu" title="Expand"
           className="grid h-8 w-10 place-items-center rounded-md text-muted-foreground hover:bg-row-hover" data-slot="settings-nav-fold">
           <ChevronsRight className="size-4" />
         </button>
@@ -282,7 +283,7 @@ export function SettingsNav({ tab, href }: { tab?: string; href?: string }) {
         <Link href="/settings" className="flex items-center gap-1 text-[13px] text-link hover:underline">
           <ChevronLeft className="size-3.5" /> All Settings
         </Link>
-        <button type="button" onClick={() => setSettingsNavCollapsed(true)} aria-label="Collapse the menu" title="Collapse"
+        <button type="button" onClick={() => setSettingsNavOpenOn(null)} aria-label="Collapse the menu" title="Collapse"
           className="grid h-8 w-10 place-items-center rounded-md text-muted-foreground hover:bg-row-hover" data-slot="settings-nav-fold">
           <ChevronsLeft className="size-4" />
         </button>

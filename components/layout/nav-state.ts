@@ -1,34 +1,29 @@
 'use client';
 
-// Whether the sidebar is folded down to Zoho's icon rail.
+// Whether the sidebar is folded down to the icon rail.
 //
-// Two reasons it folds, kept apart because they last differently:
-// - the person pressed the fold button at the foot of the sidebar, which is
-//   remembered in this browser (localStorage), as Zoho remembers it;
-// - a record is open in the split view (list on the left, record on the
-//   right). Zoho folds the sidebar for as long as a record is open and unfolds
-//   it when the record closes, so the record gets the room. That is a "force"
-//   held by whichever screen needs it and released when it unmounts, so it
-//   never overwrites what the person chose.
-// - Pressing Expand while a screen holds it folded opens it anyway, for as
-//   long as that screen stays open (Zoho's rail opens on the same button).
-//   Before this, the button did nothing there and the menu could not be had.
+// Every page opens with it folded (the client, 2026-11-25: "when I entered the
+// page the sidebar should close for all the pages"), so the page gets the
+// room. The top bar's menu button, or the rail's expand button, opens it; it
+// stays open on that page and folds again when the next page opens. Before
+// this the choice was remembered in the browser, as Zoho remembers it.
+//
+// A screen can also hold it folded while it is on screen (a record open in
+// the split view, an entry window): a "force" taken by that screen and
+// released when it unmounts. Opening the menu over such a screen opens it
+// anyway, for as long as that screen stays.
 
 import { useEffect, useSyncExternalStore } from 'react';
+import { usePathname } from 'next/navigation';
 
-const KEY = 'rekonza-nav-collapsed';
-let chosen: boolean | null = null;
+/** The page the person opened the sidebar on; it folds again on any other. */
+let openedOn: string | null = null;
 let forced = 0;
 /** The person opened the menu over a screen that folds it; cleared when the last such screen closes. */
 let overridden = false;
 const listeners = new Set<() => void>();
 
-function readChosen(): boolean {
-  if (chosen === null) {
-    try { chosen = typeof window !== 'undefined' && localStorage.getItem(KEY) === '1'; } catch { chosen = false; }
-  }
-  return chosen;
-}
+const here = () => (typeof window === 'undefined' ? '' : window.location.pathname);
 
 function emit() { for (const l of listeners) l(); }
 
@@ -37,35 +32,34 @@ function subscribe(l: () => void) {
   return () => { listeners.delete(l); };
 }
 
-/** The sidebar is folded: by choice, or while a record is open. */
+// One string, so a change to any part re-renders (useSyncExternalStore compares snapshots).
+const snapshot = () => `${forced > 0 && !overridden ? '1' : '0'}${openedOn ?? ''}`;
+
+/** The sidebar is folded: on every page until the person opens it there, and while a screen holds it. */
 export function useNavCollapsed(): boolean {
-  return useSyncExternalStore(subscribe, () => readChosen() || (forced > 0 && !overridden), () => false);
+  const pathname = usePathname();
+  const s = useSyncExternalStore(subscribe, snapshot, () => '0');
+  return s[0] === '1' || s.slice(1) !== pathname;
 }
 
-/** Only the person's own choice, for the fold button's state. */
-export function useNavChosenCollapsed(): boolean {
-  return useSyncExternalStore(subscribe, () => readChosen(), () => false);
-}
-
+/** Open (false) or fold (true) the sidebar on the page that is open. */
 export function setNavCollapsed(value: boolean) {
-  chosen = value;
-  // Expand over a folding screen opens it there too; Collapse gives the fold back.
+  openedOn = value ? null : here();
+  // Opening it over a screen that holds it folded opens it there too.
   overridden = !value && forced > 0;
-  try { localStorage.setItem(KEY, value ? '1' : '0'); } catch { /* private mode: it lasts this visit */ }
   emit();
 }
 
 /** The fold button: open the menu if it is folded for any reason, fold it if it is open. */
 export function toggleNav() {
-  const folded = readChosen() || (forced > 0 && !overridden);
+  const folded = openedOn !== here() || (forced > 0 && !overridden);
   setNavCollapsed(!folded);
 }
 
-// Entering a transaction folds it too, as the client asked on 2026-11-23 ("when
-// ledgering the sidebar should minimized"): the entry gets the room. The pages
-// that are an entry form are matched here; entry windows over a list put
-// <FoldNav /> inside them. Masters (customers, vendors, items) keep it open, as
-// Zoho keeps it open beside them.
+// The pages that are a transaction's entry form (the client's first ask, on
+// 2026-11-23: "when ledgering the sidebar should minimized"). Every page folds
+// it now; entry windows over a list still put <FoldNav /> inside them, so a
+// menu opened over the list folds again when the window opens.
 const ENTRY_MODULES = [
   'sales/(?:invoices|estimates|sales-orders|challans|credit-notes|debit-notes|sales-receipts|payments|recurring|retainers)',
   'purchases/(?:bills|expenses|purchase-orders|vendor-credits|payments|recurring|goods-receipts|bills-of-entry)',
