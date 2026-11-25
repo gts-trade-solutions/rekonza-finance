@@ -180,14 +180,14 @@ export function RowActions({
   const showEdit = canEdit && !!onEdit;
   const showDelete = canDelete && !!onDelete;
   if (!showEdit && !showDelete && !extra) return null;
+  // The dialog sits inside the same element: React carries a click inside it (in its portal) up
+  // through this element, so it must stop here too, or a clickable table row would open behind it.
   return (
-    <>
-      <div className={cn('flex items-center justify-end gap-1', className)} data-slot="row-actions" aria-label={`Actions for ${label}`}
-        onClick={(e) => e.stopPropagation()}>
-        {extra}
-        {showEdit && <EditButton onClick={onEdit!} label={editLabel} title={editTitle ?? `Edit ${label}`} />}
-        {showDelete && <DeleteButton onClick={() => setAsking(true)} label={deleteLabel} title={deleteTitleAttr ?? `Delete ${label}`} />}
-      </div>
+    <div className={cn('flex items-center justify-end gap-1', className)} data-slot="row-actions" aria-label={`Actions for ${label}`}
+      onClick={(e) => e.stopPropagation()}>
+      {extra}
+      {showEdit && <EditButton onClick={onEdit!} label={editLabel} title={editTitle ?? `Edit ${label}`} />}
+      {showDelete && <DeleteButton onClick={() => setAsking(true)} label={deleteLabel} title={deleteTitleAttr ?? `Delete ${label}`} />}
       {showDelete && (
         <ConfirmDelete
           open={asking}
@@ -201,6 +201,6 @@ export function RowActions({
           withReasonField={withReasonField}
         />
       )}
-    </>
+    </div>
   );
 }

@@ -200,7 +200,9 @@ const CHANGES = new Set(['PATCH', 'PUT', 'DELETE']);
 const NO_REASON = /^\/api\/(notifications|auth|ai|exceptions)(\/|$)/;
 
 function readReason(req: Request): string | null {
-  const raw = req.headers.get('x-change-reason');
+  // A delete sends the reason typed in its own confirm dialog as ?reason= (doc-delete's routes keep it
+  // on the deleted record too); it counts as the change's reason, so the person is not asked twice.
+  const raw = req.headers.get('x-change-reason') ?? (req.method === 'DELETE' ? new URL(req.url).searchParams.get('reason') : null);
   if (!raw) return null;
   let text = raw;
   try { text = decodeURIComponent(raw); } catch { /* sent plain */ }
