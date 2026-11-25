@@ -28,9 +28,10 @@ import { sql } from 'kysely';
 import type { Executor, Trx } from '../db';
 import type { Paise } from '../../types';
 import { toPaiseFromSql, toSqlFromPaise } from '../money-sql';
-import { badRequest, conflict, notFound } from '../http';
+import { ApiError, badRequest, conflict, notFound } from '../http';
 import { createInvoice, type InvoiceLineInput } from './sales';
 import { getPolicies } from './org-settings';
+import { plain, unlinkDocument } from './doc-delete';
 
 export type BillingMethod = 'fixed' | 'project_hours' | 'task_hours' | 'staff_hours';
 
@@ -77,16 +78,17 @@ export async function saveProject(trx: Trx, orgId: number, userId: number | null
     gst_rate_pct: String(input.gstRatePct ?? 18),
     start_date: input.startDate || null,
     end_date: input.endDate || null,
-    status: input.status ?? 'active',
   };
   let id: number;
   if (input.id) {
     const found = await trx.selectFrom('projects').select('id').where('id', '=', input.id).where('org_id', '=', orgId).executeTakeFirst();
     if (!found) throw notFound('That project does not exist.');
     id = found.id;
-    await trx.updateTable('projects').set(values).where('id', '=', id).execute();
+    // An edit without a status keeps the one it has: the Edit window does not
+    // send it, and saving a completed or archived project must not reopen it.
+    await trx.updateTable('projects').set({ ...values, ...(input.status ? { status: input.status } : {}) }).where('id', '=', id).execute();
   } else {
-    id = Number((await trx.insertInto('projects').values({ org_id: orgId, created_by_user_id: userId, ...values }).executeTakeFirstOrThrow()).insertId);
+    id = Number((await trx.insertInto('projects').values({ org_id: orgId, created_by_user_id: userId, ...values, status: input.status ?? 'active' }).executeTakeFirstOrThrow()).insertId);
   }
 
   if (input.tasks) {
@@ -227,6 +229,145 @@ export async function deleteTime(trx: Trx, orgId: number, id: number) {
   if (!row) throw notFound('That time entry does not exist.');
   if (row.invoice_id) throw conflict('That time has been billed. Void the invoice first if it should not have been.');
   await trx.deleteFrom('time_entries').where('id', '=', id).execute();
+}
+
+export interface TimeEditInput {
+  taskId?: number | null;
+  date: string;
+  minutes: number;
+  notes?: string | null;
+  billable?: boolean;
+}
+
+/**
+ * Edit logged time, as Zoho's timesheet Edit: the day, the task, how long,
+ * the note and whether it is billable. It stays on its project and with its
+ * person. Time already billed is the invoice's record and is refused: the
+ * invoice is voided or deleted first, which frees it (voidInvoice, deleteInvoice).
+ *
+ * With timesheet approval on, an edited entry that had been approved or turned
+ * back goes back to waiting: what was approved was the old figure, not this one.
+ */
+export async function updateTime(trx: Trx, orgId: number, id: number, input: TimeEditInput) {
+  if (!Number.isInteger(input.minutes) || input.minutes <= 0 || input.minutes > 1440) throw badRequest('Log between one minute and 24 hours.');
+  const row = await trx.selectFrom('time_entries').selectAll().where('id', '=', id).where('org_id', '=', orgId).forUpdate().executeTakeFirst();
+  if (!row) throw notFound('That time entry does not exist.');
+  if (row.invoice_id) throw conflict('That time has been billed. Void or delete the invoice first, then edit the time.');
+  const project = await trx.selectFrom('projects').select(['id', 'status', 'billing_method']).where('id', '=', row.project_id).executeTakeFirstOrThrow();
+  if (project.status === 'archived') throw conflict('That project is archived. Reopen it to change the time logged to it.');
+  let billable = input.billable !== false;
+  const taskId = input.taskId ?? null;
+  if (taskId) {
+    const task = await trx.selectFrom('project_tasks').select(['id', 'billable', 'is_active']).where('id', '=', taskId).where('project_id', '=', project.id).executeTakeFirst();
+    // A task since set inactive can stay on the time already logged to it; it cannot be newly picked.
+    if (!task || (!task.is_active && task.id !== row.task_id)) throw notFound('That task is not on this project.');
+    if (!task.billable) billable = false;
+  } else if (project.billing_method === 'task_hours') {
+    throw badRequest('This project is billed by task: pick the task the time was spent on.');
+  }
+  const before = { date: String(row.entry_date).slice(0, 10), minutes: row.minutes, taskId: row.task_id, notes: row.notes, billable: !!row.billable, approval: row.approval_status };
+  const approvalOn = (await getPolicies(trx, orgId)).controls.timesheetApproval;
+  const reset = approvalOn && (row.approval_status === 'approved' || row.approval_status === 'rejected');
+  await trx.updateTable('time_entries').set({
+    task_id: taskId, entry_date: input.date, minutes: input.minutes, notes: input.notes?.trim().slice(0, 500) || null, billable: billable ? 1 : 0,
+    ...(reset ? { approval_status: 'pending' as const, approved_by_user_id: null, approved_at: null, approval_note: null } : {}),
+  }).where('id', '=', id).execute();
+  const after = await trx.selectFrom('time_entries').select(['approval_status']).where('id', '=', id).executeTakeFirstOrThrow();
+  return { id, before, approvalStatus: after.approval_status, userId: row.user_id, projectId: row.project_id };
+}
+
+// ── Tasks ───────────────────────────────────────────────────────────────────
+
+/** Change one task's name, rate or whether it is billable. Hours already billed keep the rate they were billed at. */
+export async function updateTask(trx: Trx, orgId: number, projectId: number, taskId: number, input: { name: string; ratePaise?: Paise; billable?: boolean }) {
+  if (!input.name.trim()) throw badRequest('Give the task a name.');
+  if (input.ratePaise != null && (!Number.isInteger(input.ratePaise) || input.ratePaise < 0)) throw badRequest('A rate is a whole number of paise, not below zero.');
+  const task = await trx.selectFrom('project_tasks').select(['id', 'name']).where('id', '=', taskId).where('project_id', '=', projectId)
+    .where('org_id', '=', orgId).executeTakeFirst();
+  if (!task) throw notFound('That task is not on this project.');
+  await trx.updateTable('project_tasks').set({
+    name: input.name.trim().slice(0, 200),
+    ...(input.ratePaise != null ? { rate: toSqlFromPaise(input.ratePaise) } : {}),
+    ...(input.billable != null ? { billable: input.billable ? 1 : 0 } : {}),
+  }).where('id', '=', taskId).execute();
+  return { id: taskId, before: task.name };
+}
+
+/**
+ * Delete a task. One with time logged to it (or a timer running on it) is set
+ * inactive instead, as the project's own Edit does when a task is taken off:
+ * its hours stay where they are, billed or waiting to be, and it is no longer
+ * offered for new time. A task nobody has used goes.
+ */
+export async function deleteTask(trx: Trx, orgId: number, projectId: number, taskId: number): Promise<{ name: string; removed: boolean }> {
+  const task = await trx.selectFrom('project_tasks').select(['id', 'name']).where('id', '=', taskId).where('project_id', '=', projectId)
+    .where('org_id', '=', orgId).forUpdate().executeTakeFirst();
+  if (!task) throw notFound('That task is not on this project.');
+  const used = await trx.selectFrom('time_entries').select('id').where('task_id', '=', taskId).executeTakeFirst()
+    ?? await trx.selectFrom('time_timers').select('id').where('task_id', '=', taskId).executeTakeFirst();
+  if (used) {
+    await trx.updateTable('project_tasks').set({ is_active: 0 }).where('id', '=', taskId).execute();
+    return { name: task.name, removed: false };
+  }
+  await trx.deleteFrom('project_tasks').where('id', '=', taskId).execute();
+  return { name: task.name, removed: true };
+}
+
+// ── Deleting a project ──────────────────────────────────────────────────────
+
+/**
+ * What still rests on a project, so it cannot be deleted: time logged to it,
+ * a running timer, an expense or bill booked to it, an invoice, quote or
+ * retainer raised for it, a recurring invoice set to bill its hours. Zoho
+ * refuses the same and offers Mark as Inactive; here that is archiving it.
+ */
+async function projectInUse(trx: Trx, orgId: number, projectId: number): Promise<string | null> {
+  const count = async (table: 'time_entries' | 'time_timers' | 'expenses' | 'bills' | 'invoices' | 'estimates' | 'retainer_invoices') =>
+    Number((await trx.selectFrom(table).select(sql<string>`COUNT(*)`.as('n')).where('org_id', '=', orgId).where('project_id', '=', projectId).executeTakeFirst())?.n ?? 0);
+  const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+  const found: string[] = [];
+  const time = await count('time_entries');
+  if (time) found.push(plural(time, 'time entry', 'time entries'));
+  if (await count('time_timers')) found.push('a running timer');
+  const expenses = await count('expenses');
+  if (expenses) found.push(plural(expenses, 'expense', 'expenses'));
+  const bills = await count('bills');
+  if (bills) found.push(plural(bills, 'bill', 'bills'));
+  const invoices = await count('invoices');
+  if (invoices) found.push(plural(invoices, 'invoice', 'invoices'));
+  const quotes = await count('estimates');
+  if (quotes) found.push(plural(quotes, 'quote', 'quotes'));
+  const retainers = await count('retainer_invoices');
+  if (retainers) found.push(plural(retainers, 'retainer invoice', 'retainer invoices'));
+  const recurring = (await sql<{ n: string }>`
+    SELECT COUNT(*) AS n FROM recurring_invoices
+     WHERE org_id = ${orgId} AND project_ids IS NOT NULL
+       AND (JSON_CONTAINS(project_ids, CAST(${projectId} AS JSON)) OR JSON_CONTAINS(project_ids, JSON_QUOTE(${String(projectId)})))
+  `.execute(trx)).rows[0]?.n;
+  if (Number(recurring ?? 0)) found.push(plural(Number(recurring), 'recurring invoice', 'recurring invoices'));
+  return found.length ? found.join(', ') : null;
+}
+
+/**
+ * Delete a project, as Zoho Books' Delete: only while nothing has been logged,
+ * booked or billed to it. Its tasks, people, comments and custom field values
+ * go with it; files attached to it stay in Documents, unlinked. Refused with
+ * `in_use` otherwise, so the screen can offer archiving instead.
+ */
+export async function deleteProject(trx: Trx, orgId: number, projectId: number): Promise<{ name: string; snapshot: unknown }> {
+  const p = await trx.selectFrom('projects').selectAll().where('id', '=', projectId).where('org_id', '=', orgId).forUpdate().executeTakeFirst();
+  if (!p) throw notFound('That project does not exist.');
+  const inUse = await projectInUse(trx, orgId, projectId);
+  if (inUse) {
+    throw new ApiError(409, `${p.name} cannot be deleted: it has ${inUse}. Archive it instead, so it stops being offered but its history stays.`, 'in_use');
+  }
+  const tasks = await trx.selectFrom('project_tasks').selectAll().where('project_id', '=', projectId).execute();
+  const users = await trx.selectFrom('project_users').selectAll().where('project_id', '=', projectId).execute();
+  await trx.deleteFrom('project_tasks').where('project_id', '=', projectId).execute();
+  await trx.deleteFrom('project_users').where('project_id', '=', projectId).execute();
+  await unlinkDocument(trx, orgId, 'project', projectId);
+  await trx.deleteFrom('projects').where('id', '=', projectId).where('org_id', '=', orgId).execute();
+  return { name: p.name, snapshot: { project: plain(p), tasks: tasks.map(plain), users: users.map(plain) } };
 }
 
 // ── What is unbilled, and billing it ────────────────────────────────────────

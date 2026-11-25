@@ -25,7 +25,7 @@ export const GET = route(
     let rows = db.selectFrom('time_entries as t').innerJoin('projects as p', 'p.id', 't.project_id')
       .innerJoin('contacts as c', 'c.id', 'p.customer_id').innerJoin('users as u', 'u.id', 't.user_id')
       .leftJoin('project_tasks as k', 'k.id', 't.task_id').leftJoin('invoices as i', 'i.id', 't.invoice_id').leftJoin('users as a', 'a.id', 't.approved_by_user_id')
-      .select(['t.id', 't.entry_date', 't.minutes', 't.notes', 't.billable', 't.invoice_id', 't.project_id', 't.user_id',
+      .select(['t.id', 't.entry_date', 't.minutes', 't.notes', 't.billable', 't.invoice_id', 't.project_id', 't.user_id', 't.task_id',
         'p.name as project_name', 'c.display_name as customer_name', 'u.name as user_name', 'k.name as task_name', 'i.number as invoice_number',
         't.approval_status', 't.approval_note', 'a.name as approved_by'])
       .where('t.org_id', '=', orgId);
@@ -40,7 +40,7 @@ export const GET = route(
       entries: list.map((e) => ({
         id: asId(e.id), date: String(e.entry_date).slice(0, 10), minutes: e.minutes, notes: e.notes, billable: !!e.billable,
         projectId: asId(e.project_id), projectName: e.project_name, customerName: e.customer_name,
-        userId: asId(e.user_id), userName: e.user_name, taskName: e.task_name,
+        userId: asId(e.user_id), userName: e.user_name, taskId: e.task_id ? asId(e.task_id) : null, taskName: e.task_name,
         invoiceId: e.invoice_id ? asId(e.invoice_id) : null, invoiceNumber: e.invoice_number,
         approvalStatus: e.approval_status, approvalNote: e.approval_note, approvedBy: e.approved_by,
       })),

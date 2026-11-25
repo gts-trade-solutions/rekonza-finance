@@ -7,7 +7,7 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
-import { Plus, ReceiptText, Timer, Trash2 } from 'lucide-react';
+import { Plus, ReceiptText, Timer } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -27,7 +27,10 @@ import { ProjectDialog, METHOD_LABEL } from '@/components/projects/project-dialo
 import { CustomFieldsPanel } from '@/components/shared/custom-fields-panel';
 import { ActivityPanel } from '@/components/shared/activity-panel';
 import { LogTimeDialog, hoursText } from '@/components/projects/log-time-dialog';
-import { projects, timeEntries, type ProjectDetail, type TimeEntryRow } from '@/lib/api/client';
+import { TimeEntryActions } from '@/components/projects/time-entry-actions';
+import { DeleteProjectDialog, TaskActions } from '@/components/projects/project-actions';
+import { DeleteButton } from '@/components/shared/row-actions';
+import { projects, type ProjectDetail, type TimeEntryRow } from '@/lib/api/client';
 import { useApi, useApiAction } from '@/lib/api/use-api';
 import { usePermission } from '@/lib/store/hooks';
 import { formatINR, formatINRCompact } from '@/lib/money';
@@ -42,13 +45,14 @@ export default function ProjectPage() {
   const state = useApi<ProjectDetail>(() => projects.get(id), [id]);
   const canLog = usePermission('projects', 'create');
   const canEdit = usePermission('projects', 'edit');
+  const canDelete = usePermission('projects', 'void');
+  const [deleting, setDeleting] = useState(false);
   const canBill = usePermission('sales', 'create');
   const [editing, setEditing] = useState(false);
   const [logging, setLogging] = useState(false);
   const [billing, setBilling] = useState(false);
   const [bill, setBill] = useState({ date: today(), dueDate: plusDays(today(), 15), through: today(), includeExpenses: true, fixedPaise: 0, issue: false });
   const billAction = useApiAction(projects.bill);
-  const remove = useApiAction(timeEntries.remove);
   const status = useApiAction(projects.setStatus);
 
   const timeCols: Column<TimeEntryRow>[] = [
@@ -64,12 +68,11 @@ export default function ProjectPage() {
         : r.billable ? <Badge variant="outline" className="text-[10px]">Unbilled</Badge> : <span className="text-xs text-muted-foreground">Not billable</span>,
     },
     {
+      // Edit and Delete as buttons on the row (components/projects/time-entry-actions.tsx); none once billed.
       key: 'x', header: '', sortValue: () => 0,
-      cell: (r) => (!r.invoiceId && canLog ? (
-        <Button size="icon-sm" variant="ghost" aria-label="Remove entry"
-          onClick={async (e) => { e.stopPropagation(); if (await remove.run(r.id)) { toast.info('Entry removed'); state.refetch(); } else toast.error(remove.error ?? 'Not removed'); }}>
-          <Trash2 className="size-4" />
-        </Button>
+      cell: (r) => (state.data ? (
+        <TimeEntryActions entry={r} projectId={id} onChanged={() => void state.refetch()}
+          project={{ billingMethod: state.data.project.billingMethod, tasks: state.data.tasks }} />
       ) : null),
     },
   ];
@@ -97,7 +100,8 @@ export default function ProjectPage() {
               description={`${p.customerName} · ${METHOD_LABEL[p.billingMethod]}${p.billingMethod === 'project_hours' ? ` at ${formatINR(p.ratePaise)} an hour` : p.billingMethod === 'fixed' ? `, ${formatINR(p.fixedAmountPaise)}` : ''} · ${p.status}`}
               actions={
                 <>
-                  {canEdit && <Button size="sm" variant="outline" onClick={() => setEditing(true)}>Edit</Button>}
+                  {canEdit && <Button size="sm" variant="outline" onClick={() => setEditing(true)} data-slot="project-edit">Edit</Button>}
+                  {canDelete && <DeleteButton onClick={() => setDeleting(true)} slot="project-delete" title="Delete this project" className="h-[30px]" />}
                   {canEdit && p.status === 'active' && (
                     <Button size="sm" variant="ghost" onClick={async () => { if (await status.run(id, 'completed')) state.refetch(); }}>Mark completed</Button>
                   )}
@@ -182,10 +186,13 @@ export default function ProjectPage() {
                 <Card className="p-4">
                   <p className="mb-2 text-sm font-semibold">Tasks</p>
                   {d.tasks.filter((t) => t.isActive).map((t) => (
-                    <p key={t.id} className="flex justify-between border-t py-1.5 text-sm">
+                    <div key={t.id} className="flex items-center justify-between gap-2 border-t py-1.5 text-sm" data-slot="project-task">
                       <span>{t.name}{!t.billable && <span className="text-xs text-muted-foreground"> · not billable</span>}</span>
-                      {p.billingMethod === 'task_hours' && <Money value={t.ratePaise} />}
-                    </p>
+                      <span className="flex items-center gap-2">
+                        {p.billingMethod === 'task_hours' && <Money value={t.ratePaise} />}
+                        <TaskActions projectId={p.id} task={t} showRate={p.billingMethod === 'task_hours'} onChanged={() => void state.refetch()} />
+                      </span>
+                    </div>
                   ))}
                   {!d.tasks.length && <p className="text-sm text-muted-foreground">No tasks.</p>}
                 </Card>
@@ -203,6 +210,8 @@ export default function ProjectPage() {
             </Tabs>
 
             <ProjectDialog open={editing} onOpenChange={setEditing} existing={d} onSaved={() => state.refetch()} />
+            <DeleteProjectDialog project={{ id: p.id, name: p.name, status: p.status }} open={deleting} onOpenChange={setDeleting}
+              onDeleted={() => router.push('/projects')} onArchived={() => void state.refetch()} />
             <LogTimeDialog open={logging} onOpenChange={setLogging} projectId={p.id} onLogged={() => state.refetch()} />
             <Dialog open={billing} onOpenChange={setBilling}>
               <DialogContent className="max-w-md">

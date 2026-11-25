@@ -5,17 +5,17 @@
 
 import { useMemo, useState } from 'react';
 import Link from 'next/link';
-import { ChevronLeft, ChevronRight, Plus, Trash2 } from 'lucide-react';
-import { toast } from 'sonner';
+import { ChevronLeft, ChevronRight, Plus } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { PageHeader } from '@/components/shared/page-header';
 import { AsyncPage } from '@/components/shared/async-state';
 import { LogTimeDialog, hoursText } from '@/components/projects/log-time-dialog';
+import { TimeEntryActions } from '@/components/projects/time-entry-actions';
 import { ApprovalsPanel, TimerCard } from '@/components/projects/timer';
 import { timeEntries } from '@/lib/api/client';
-import { useApi, useApiAction } from '@/lib/api/use-api';
+import { useApi } from '@/lib/api/use-api';
 import { usePermission } from '@/lib/store/hooks';
 import { today } from '@/lib/selectors';
 
@@ -28,7 +28,6 @@ export default function TimesheetPage() {
   const [week, setWeek] = useState(() => monday(today()));
   const [open, setOpen] = useState(false);
   const state = useApi(() => timeEntries.list({ from: week, to: plus(week, 6) }), [week]);
-  const remove = useApiAction(timeEntries.remove);
   const days = useMemo(() => Array.from({ length: 7 }, (_, i) => plus(week, i)), [week]);
   const [showApprovals, setShowApprovals] = useState(false);
 
@@ -80,17 +79,13 @@ export default function TimesheetPage() {
                             {e.notes && <p className="mt-0.5">{e.notes}</p>}
                             {e.approvalStatus === 'pending' && <Badge variant="outline" className="mt-1 border-amber-500/40 text-[9px] text-amber-700 dark:text-amber-300">Waiting for approval</Badge>}
                             {e.approvalStatus === 'approved' && <Badge variant="outline" className="mt-1 text-[9px]" title={e.approvedBy ? `By ${e.approvedBy}` : undefined}>Approved</Badge>}
-                            {e.approvalStatus === 'rejected' && <p className="mt-1 text-[10px] text-destructive">Turned back{e.approvedBy ? ` by ${e.approvedBy}` : ''}: {e.approvalNote}. Remove it and log it again, corrected.</p>}
+                            {e.approvalStatus === 'rejected' && <p className="mt-1 text-[10px] text-destructive">Turned back{e.approvedBy ? ` by ${e.approvedBy}` : ''}: {e.approvalNote}. Edit it to put it right; it goes for approval again.</p>}
                             <div className="mt-1 flex items-center justify-between">
                               {e.invoiceId ? <Badge variant="outline" className="text-[9px]">Billed {e.invoiceNumber}</Badge>
                                 : e.billable ? <Badge variant="outline" className="text-[9px]">Unbilled</Badge> : <span className="text-muted-foreground">Not billable</span>}
-                              {!e.invoiceId && canLog && (
-                                <Button size="icon-sm" variant="ghost" aria-label="Remove entry"
-                                  onClick={async () => { if (await remove.run(e.id)) { toast.info('Entry removed'); state.refetch(); } else toast.error(remove.error ?? 'Not removed'); }}>
-                                  <Trash2 className="size-3.5" />
-                                </Button>
-                              )}
                             </div>
+                            {/* Edit and Delete with their words (components/projects/time-entry-actions.tsx); none once billed. */}
+                            <TimeEntryActions entry={e} projectId={e.projectId ?? ''} onChanged={() => void state.refetch()} className="mt-1.5 justify-start" />
                           </div>
                         ))}
                       </div>

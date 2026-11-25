@@ -53,6 +53,7 @@ import { Attachments } from '@/components/shared/attachments';
 import { CustomFieldsPanel } from '@/components/shared/custom-fields-panel';
 import { PortalAccess } from '@/components/shared/portal-access';
 import { ContactAddresses } from '@/components/shared/contact-addresses';
+import { ContactPersonActions } from '@/components/contacts/contact-person-actions';
 import { MergeContactButton } from '@/components/shared/merge-contact';
 import { statementSheet } from '@/components/shared/party-statement';
 import { StatementPrint } from '@/components/print/statement-print';
@@ -328,11 +329,13 @@ function Overview({ d, side, canEdit, onChanged }: { d: ContactDetail; side: Sid
           {(persons.data?.persons ?? []).length ? (
             <ul className="space-y-2">
               {persons.data!.persons.map((p) => (
-                <li key={p.id} className="flex items-start gap-2">
+                <li key={p.id} className="flex items-start gap-2" data-slot="contact-person">
                   <User className="mt-0.5 size-3.5 text-muted-foreground" />
-                  <span className="min-w-0">
+                  <span className="min-w-0 flex-1">
                     <span className="block font-medium">{[p.salutation, p.name].filter(Boolean).join(' ')}{p.isPrimary && <span className="ml-1 text-[11px] text-muted-foreground">(Primary)</span>}</span>
                     {[p.email, p.phone, p.mobile].filter(Boolean).map((x) => <span key={x} className="block text-[12px] text-muted-foreground">{x}</span>)}
+                    {/* Zoho's Edit and Delete on each person, as buttons with their words. */}
+                    {canEdit && <ContactPersonActions contactId={c.id} person={p} onChanged={() => void persons.refetch()} />}
                   </span>
                 </li>
               ))}

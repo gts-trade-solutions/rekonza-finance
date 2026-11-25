@@ -18,7 +18,10 @@ import { AsyncPage } from '@/components/shared/async-state';
 import { EmptyState } from '@/components/shared/empty-state';
 import { ProjectDialog, METHOD_LABEL } from '@/components/projects/project-dialog';
 import { hoursText } from '@/components/projects/log-time-dialog';
-import { projects, type ProjectRow } from '@/lib/api/client';
+import { projects, type ProjectDetail, type ProjectRow } from '@/lib/api/client';
+import { RowActions } from '@/components/shared/row-actions';
+import { DeleteProjectDialog } from '@/components/projects/project-actions';
+import { toast } from 'sonner';
 import { useApi } from '@/lib/api/use-api';
 import { usePermission } from '@/lib/store/hooks';
 import { formatINRCompact } from '@/lib/money';
@@ -28,6 +31,16 @@ const STATUSES = ['active', 'completed', 'archived', 'all'] as const;
 export default function ProjectsPage() {
   const router = useRouter();
   const canCreate = usePermission('projects', 'create');
+  const canEdit = usePermission('projects', 'edit');
+  const canDelete = usePermission('projects', 'void');
+  // Zoho's Edit and Delete on each row: Edit opens the project's own set-up window.
+  const [editing, setEditing] = useState<ProjectDetail | null>(null);
+  const [deleting, setDeleting] = useState<ProjectRow | null>(null);
+  const startEdit = async (r: ProjectRow) => {
+    try { setEditing(await projects.get(r.id)); } catch (e) {
+      toast.error('That project could not be opened', { description: e instanceof Error ? e.message : String(e) });
+    }
+  };
   const [status, setStatus] = useState<(typeof STATUSES)[number]>('active');
   const [open, setOpen] = useState(false);
   const state = useApi(() => projects.list({ status }), [status]);
@@ -56,6 +69,13 @@ export default function ProjectsPage() {
     { key: 'billed', header: 'Billed', align: 'right', sortValue: (r) => r.billedPaise, cell: (r) => <Money value={r.billedPaise} showZero={false} /> },
     { key: 'profit', header: 'Profit', align: 'right', sortValue: (r) => r.profitPaise, cell: (r) => <Money value={r.profitPaise} className={r.profitPaise < 0 ? 'text-destructive' : undefined} /> },
     { key: 'status', header: 'Status', sortValue: (r) => r.status, cell: (r) => <Badge variant={r.status === 'active' ? 'secondary' : 'outline'} className="text-[10px] capitalize">{r.status}</Badge> },
+    {
+      key: 'actions', header: '', align: 'right',
+      cell: (r) => (
+        <RowActions onEdit={canEdit ? () => void startEdit(r) : null} onDelete={canDelete ? () => setDeleting(r) : null}
+          editTitle={`Edit ${r.name}`} deleteTitle={`Delete ${r.name}`} />
+      ),
+    },
   ];
 
   return (
@@ -94,6 +114,9 @@ export default function ProjectsPage() {
         )}
       </AsyncPage>
       <ProjectDialog open={open} onOpenChange={setOpen} onSaved={(id) => router.push(`/projects/${id}`)} />
+      <ProjectDialog open={!!editing} onOpenChange={(o) => { if (!o) setEditing(null); }} existing={editing} onSaved={() => { setEditing(null); void state.refetch(); }} />
+      <DeleteProjectDialog project={deleting} open={!!deleting} onOpenChange={(o) => { if (!o) setDeleting(null); }}
+        onDeleted={() => { setDeleting(null); void state.refetch(); }} />
     </>
   );
 }
