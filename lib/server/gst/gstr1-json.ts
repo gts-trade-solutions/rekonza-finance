@@ -521,8 +521,26 @@ export async function gstr1PortalFile(
        ${branchFilter('d')}
   `.execute(ex);
   const cancelled = (type: string) => gone.filter((g) => g.doc_type === type).map((g) => ({ number: g.number, status: 'void' }));
+  // Table 13 item 2, invoices for inward supply from an unregistered person:
+  // the self-invoices raised on reverse-charge bills. A void or deleted bill's
+  // self-invoice number was issued all the same, so it counts as cancelled.
+  const { rows: selfInvoices } = await sql<{ number: string; status: string }>`
+    SELECT b.self_invoice_no AS number, b.status FROM bills b
+     WHERE b.org_id = ${orgId} AND b.is_rcm = 1 AND b.self_invoice_no IS NOT NULL AND b.status <> 'draft'
+       AND b.bill_date BETWEEN ${period.from} AND ${period.to}
+       ${branchFilter('b')}
+    UNION ALL
+    SELECT JSON_UNQUOTE(JSON_EXTRACT(d.snapshot, '$.bill.self_invoice_no')) AS number, 'void' AS status FROM deleted_documents d
+     WHERE d.org_id = ${orgId} AND d.doc_type = 'bill'
+       AND JSON_UNQUOTE(JSON_EXTRACT(d.snapshot, '$.bill.self_invoice_no')) IS NOT NULL
+       AND JSON_UNQUOTE(JSON_EXTRACT(d.snapshot, '$.bill.self_invoice_no')) <> 'null'
+       AND JSON_UNQUOTE(JSON_EXTRACT(d.snapshot, '$.bill.status')) <> 'draft'
+       AND d.doc_date BETWEEN ${period.from} AND ${period.to}
+       ${branchFilter('d')}
+  `.execute(ex);
   const docDet = [
     { doc_num: 1, docs: seriesRanges([...invoices, ...cancelled('invoice')]) },
+    { doc_num: 2, docs: seriesRanges(selfInvoices.map((s) => ({ number: s.number, status: s.status === 'void' ? 'void' : 'issued' }))) },
     { doc_num: 4, docs: seriesRanges([...debitNotes, ...cancelled('debit_note')]) },
     { doc_num: 5, docs: seriesRanges([...notes, ...cancelled('credit_note')]) },
   ].filter((d) => d.docs.length);

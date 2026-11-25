@@ -20,7 +20,7 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import type { Column } from '@/components/shared/data-table';
-import { api, payments as paymentsApi, salesDocuments, type EditableSalesKind } from '@/lib/api/client';
+import { api, bills as billsApi, payments as paymentsApi, salesDocuments, vendorCredits, type EditableSalesKind } from '@/lib/api/client';
 import { formatINR } from '@/lib/money';
 import { usePermission } from '@/lib/store/hooks';
 import { whatsappNumber } from '@/components/sales/send-invoice';
@@ -36,6 +36,8 @@ const DELETABLE: Partial<Record<PrintKind, (id: string, reason?: string) => Prom
   'credit-note': (id, r) => salesDocuments.remove('credit-note', id, r),
   'payment-received': (id, r) => paymentsApi.remove(id, r),
   'payment-made': (id, r) => paymentsApi.remove(id, r),
+  bill: (id, r) => billsApi.remove(id, r),
+  'vendor-credit': (id, r) => vendorCredits.remove(id, r),
 };
 /** Edit opens the form; kinds a page edits itself are shown by its onEdit. */
 export const EDITABLE_KINDS: PrintKind[] = ['estimate', 'sales-order', 'challan', 'credit-note', 'payment-received', 'payment-made'];
@@ -49,7 +51,7 @@ export function DeleteDocumentDialog({ kind, id, number, open, onOpenChange, onD
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const del = DELETABLE[kind];
-  const posted = kind === 'credit-note' || kind === 'payment-received' || kind === 'payment-made';
+  const posted = kind === 'credit-note' || kind === 'payment-received' || kind === 'payment-made' || kind === 'bill' || kind === 'vendor-credit';
   return (
     <Dialog open={open} onOpenChange={(v) => { onOpenChange(v); if (!v) { setError(null); setReason(''); } }}>
       <DialogContent onClick={(e) => e.stopPropagation()} data-slot="delete-document-dialog">
@@ -260,12 +262,14 @@ export function documentMenuColumn<T extends { id: string; number: string; statu
   kind: PrintKind, onChanged?: () => void,
   /** Zoho's Edit on the row: the page opens its form for it. */
   onEdit?: (row: T) => void,
+  /** Rows Edit is offered on, beyond not being void (a refunded credit, say, is not). */
+  editable?: (row: T) => boolean,
 ): Column<T> {
   return {
     key: 'document-menu', header: '', align: 'right', className: 'w-8',
     cell: (r) => (
       <DocumentMenu kind={kind} id={r.id} number={r.number} onChanged={onChanged}
-        onEdit={onEdit ? () => onEdit(r) : undefined} canChange={r.status !== 'void'} />
+        onEdit={onEdit && (!editable || editable(r)) ? () => onEdit(r) : undefined} canChange={r.status !== 'void'} />
     ),
   };
 }

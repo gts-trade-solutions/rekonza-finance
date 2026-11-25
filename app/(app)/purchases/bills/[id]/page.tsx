@@ -8,9 +8,9 @@
 // check that a blocked credit was actually blocked.
 
 import Link from 'next/link';
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import { useState } from 'react';
-import { AlertTriangle, ArrowLeft, Ban, Copy, FileText, Loader2, MoreHorizontal, Printer, Receipt } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, Ban, Copy, FileText, Loader2, MoreHorizontal, Pencil, Printer, Receipt, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -18,7 +18,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
-  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
@@ -42,6 +42,7 @@ import { today } from '@/lib/selectors';
 import { formatINR } from '@/lib/money';
 import { stateTaxLabel } from '@/lib/tax/gst';
 import { VoidedNote } from '@/components/shared/voided-note';
+import { refreshSplitList } from '@/components/shared/record-split';
 
 const d = (s: string) =>
   new Date(s).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
@@ -97,13 +98,19 @@ function MatchCard({ bill, onAccepted }: { bill: BillDetail; onAccepted: () => v
 
 export default function BillDetailPage() {
   const params = useParams<{ id: string }>();
+  const router = useRouter();
   const canEdit = usePermission('purchases', 'edit');
   const canCreate = usePermission('purchases', 'create');
+  const canVoid = usePermission('purchases', 'void');
 
   const state = useApi<BillDetail>(() => billApi.get(params.id), [params.id]);
   const voidIt = useApiAction(billApi.void);
   const [voiding, setVoiding] = useState(false);
   const [reason, setReason] = useState('');
+  // Zoho's Delete: reversed, the record kept (services/purchase-changes.ts).
+  const removeIt = useApiAction(billApi.remove);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteReason, setDeleteReason] = useState('');
 
   return (
     <AsyncPage state={state}>
@@ -128,6 +135,11 @@ export default function BillDetailPage() {
                   <Button variant="outline" size="sm" asChild>
                     <Link href="/purchases/bills"><ArrowLeft className="mr-1.5 size-3.5" /> Bills</Link>
                   </Button>
+                  {canEdit && bill.status !== 'void' && (
+                    <Button variant="outline" size="sm" asChild className="gap-1.5">
+                      <Link href={`/purchases/bills/${bill.id}/edit`} data-slot="edit-bill"><Pencil className="size-3.5" /> Edit</Link>
+                    </Button>
+                  )}
                   <Button variant="outline" size="sm" asChild className="gap-1.5">
                     <Link href={`/print/bill/${bill.id}`} data-slot="print-bill"><Printer className="size-3.5" /> Print</Link>
                   </Button>
@@ -136,15 +148,25 @@ export default function BillDetailPage() {
                       <Link href={`/purchases/bills/new?clone=${bill.id}`} data-slot="clone-bill"><Copy className="size-3.5" /> Clone</Link>
                     </Button>
                   )}
-                  {canEdit && bill.status !== 'void' && (
+                  {((canEdit && bill.status !== 'void') || canVoid) && (
                     <DropdownMenu>
-                      <DropdownMenuTrigger aria-label="More actions" className="grid size-9 place-items-center rounded-[3px] border transition-colors hover:bg-accent">
+                      <DropdownMenuTrigger aria-label="More actions" data-slot="bill-more" className="grid size-9 place-items-center rounded-[3px] border transition-colors hover:bg-accent">
                         <MoreHorizontal className="size-4" />
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end">
-                        <DropdownMenuItem onClick={() => setVoiding(true)}>
-                          <Ban className="mr-2 size-4" /> Void bill
-                        </DropdownMenuItem>
+                        {canEdit && bill.status !== 'void' && (
+                          <DropdownMenuItem onClick={() => setVoiding(true)} data-slot="void-bill">
+                            <Ban className="mr-2 size-4" /> Void bill
+                          </DropdownMenuItem>
+                        )}
+                        {canVoid && bill.amountPaidPaise === 0 && (
+                          <>
+                            {canEdit && bill.status !== 'void' && <DropdownMenuSeparator />}
+                            <DropdownMenuItem onClick={() => setDeleting(true)} className="text-destructive focus:text-destructive" data-slot="delete-bill">
+                              <Trash2 className="mr-2 size-4" /> Delete
+                            </DropdownMenuItem>
+                          </>
+                        )}
                       </DropdownMenuContent>
                     </DropdownMenu>
                   )}
@@ -444,6 +466,43 @@ export default function BillDetailPage() {
                     className="gap-1.5"
                   >
                     {voidIt.busy && <Loader2 className="size-3.5 animate-spin" />} Void bill
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+
+            <Dialog open={deleting} onOpenChange={setDeleting}>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Delete {bill.internalNo}?</DialogTitle>
+                  <DialogDescription>
+                    The bill is removed{bill.journalEntryId ? ' and its entry is reversed in the ledger, taking its input credit out of GSTR-3B' : ''}.
+                    {bill.match.poId || bill.match.grnId ? ' The order or receipt note it came from is open for billing again.' : ''}{' '}
+                    The audit trail keeps a copy of it as it was.
+                  </DialogDescription>
+                </DialogHeader>
+                <Field label="Reason" hint="Optional. Kept with the record of what was deleted">
+                  <Input value={deleteReason} onChange={(e) => setDeleteReason(e.target.value)} placeholder="Entered twice" data-slot="delete-reason" />
+                </Field>
+                {removeIt.error && <p className="text-sm text-destructive" data-slot="delete-error">{removeIt.error}</p>}
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setDeleting(false)}>Cancel</Button>
+                  <Button
+                    variant="destructive"
+                    disabled={removeIt.busy}
+                    data-slot="confirm-delete"
+                    onClick={async () => {
+                      const ok = await removeIt.run(bill.id, deleteReason.trim() || undefined);
+                      if (ok) {
+                        toast.success(`${bill.internalNo} deleted`);
+                        setDeleting(false);
+                        refreshSplitList();
+                        router.push('/purchases/bills');
+                      }
+                    }}
+                    className="gap-1.5"
+                  >
+                    {removeIt.busy && <Loader2 className="size-3.5 animate-spin" />} Delete
                   </Button>
                 </DialogFooter>
               </DialogContent>

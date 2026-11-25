@@ -312,6 +312,12 @@ export async function receiveGoods(
     branchId: number; vendorId: number; date: string; vendorChallanNo?: string | null; warehouseId?: number | null;
     sourcePoId?: number | null; notes?: string | null; lines: ReceiptLineInput[];
   },
+  /**
+   * Zoho's Edit (services/purchase-changes.ts): the same row and number, its
+   * lines written again. The caller has reversed its entry and taken its old
+   * lines, serial moves and order quantities away.
+   */
+  opts: { replace?: { id: number; number: string } } = {},
 ): Promise<CreatedDocument> {
   if (!input.lines.length) throw badRequest('A receipt note needs at least one line.');
   const vendor = await trx.selectFrom('contacts').select(['id', 'display_name'])
@@ -357,14 +363,25 @@ export async function receiveGoods(
     batchIds.push(await findOrCreateBatch(trx, orgId, l.itemId, l.batch));
   }
 
-  const number = await allocateNumber(trx, orgId, input.branchId, 'GRN', fyLabelFor(input.date), { prefix: 'GRN' });
-  const id = Number((await trx.insertInto('goods_receipts').values({
-    org_id: orgId, branch_id: input.branchId, number, vendor_id: input.vendorId,
-    source_po_id: input.sourcePoId ?? null, receipt_date: input.date,
-    vendor_challan_no: input.vendorChallanNo?.trim() || null, status: 'open',
-    total: toSqlFromPaise(total), notes: input.notes ?? null, created_by_user_id: userId,
-    warehouse_id: await checkGodown(trx, orgId, input.branchId, input.warehouseId),
-  }).executeTakeFirstOrThrow()).insertId);
+  const number = opts.replace?.number ?? await allocateNumber(trx, orgId, input.branchId, 'GRN', fyLabelFor(input.date), { prefix: 'GRN' });
+  const warehouseId = await checkGodown(trx, orgId, input.branchId, input.warehouseId);
+  let id: number;
+  if (opts.replace) {
+    await trx.updateTable('goods_receipts').set({
+      branch_id: input.branchId, vendor_id: input.vendorId, source_po_id: input.sourcePoId ?? null, receipt_date: input.date,
+      vendor_challan_no: input.vendorChallanNo?.trim() || null, status: 'open', total: toSqlFromPaise(total),
+      notes: input.notes ?? null, warehouse_id: warehouseId, journal_entry_id: null,
+    }).where('id', '=', opts.replace.id).where('org_id', '=', orgId).execute();
+    id = opts.replace.id;
+  } else {
+    id = Number((await trx.insertInto('goods_receipts').values({
+      org_id: orgId, branch_id: input.branchId, number, vendor_id: input.vendorId,
+      source_po_id: input.sourcePoId ?? null, receipt_date: input.date,
+      vendor_challan_no: input.vendorChallanNo?.trim() || null, status: 'open',
+      total: toSqlFromPaise(total), notes: input.notes ?? null, created_by_user_id: userId,
+      warehouse_id: warehouseId,
+    }).executeTakeFirstOrThrow()).insertId);
+  }
 
   await trx.insertInto('goods_receipt_lines').values(priced.map((l, i) => ({
     org_id: orgId, receipt_id: id, po_line_id: l.poLineId ?? null, line_no: i + 1,
