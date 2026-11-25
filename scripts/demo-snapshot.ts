@@ -83,6 +83,9 @@ const DIALOGS = [
   // Edit, from a row's ⋯ or a record's toolbar: each document as saved, which the edit window opens with.
   ...(['estimate', 'sales-order', 'challan', 'credit-note'] as const).map((k) => ({ list: `/api/sales-documents?kind=${k}`, detail: `/api/sales-documents/${k}/[id]` })),
   { list: '/api/expenses?limit=500', detail: '/api/expenses/[id]' },
+  // Purchases: a vendor credit's and a goods receipt's Edit window (a bill's opens on its own page).
+  { list: '/api/purchase-documents?kind=vendor-credit', detail: '/api/vendor-credits/[id]' },
+  { list: '/api/goods-receipts', detail: '/api/goods-receipts/[id]' },
 ];
 
 /**

@@ -28,9 +28,10 @@ import { StatusBadge } from '@/components/shared/status-badge';
 import { EmptyState } from '@/components/shared/empty-state';
 import { AsyncPage } from '@/components/shared/async-state';
 import { Field, MoneyInput } from '@/components/shared/form-bits';
+import { Input } from '@/components/ui/input';
 import {
-  bills as billsApi, purchaseDocuments,
-  type PurchaseDocListResponse, type PurchaseDocRow,
+  ApiError, bills as billsApi, purchaseDocuments, vendorCredits,
+  type PurchaseDocListResponse, type PurchaseDocRow, type VendorCreditForEdit,
 } from '@/lib/api/client';
 import { useApi, useApiAction } from '@/lib/api/use-api';
 import { useAppStore } from '@/lib/store';
@@ -63,6 +64,26 @@ export default function VendorCreditsPage() {
   const [amount, setAmount] = useState(0);
   const [gstRate, setGstRate] = useState(18);
   const [itcClaimed, setItcClaimed] = useState(true);
+  const [date, setDate] = useState(today());
+  // Zoho's Edit: the same window, filled with the credit as entered (PUT /api/vendor-credits/[id]).
+  const [editing, setEditing] = useState<VendorCreditForEdit | null>(null);
+  const [loadingEdit, setLoadingEdit] = useState(false);
+
+  const startNew = () => {
+    setEditing(null); setVendorId(''); setBillId(''); setReason(REASONS[0]); setAmount(0); setGstRate(18); setItcClaimed(true); setDate(today());
+  };
+  const startEdit = async (r: PurchaseDocRow) => {
+    setLoadingEdit(true);
+    try {
+      const vc = await vendorCredits.get(r.id);
+      setEditing(vc);
+      setVendorId(vc.vendorId); setBillId(vc.againstBillId ?? ''); setReason(vc.reason); setAmount(vc.amountPaise);
+      setGstRate(vc.gstRatePct); setItcClaimed(vc.itcClaimed); setDate(vc.date);
+      setOpen(true);
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : 'That vendor credit could not be opened.');
+    } finally { setLoadingEdit(false); }
+  };
 
   // Only this vendor's open bills — a credit can only reduce something owed.
   const vendorBills = useApi(
@@ -71,6 +92,9 @@ export default function VendorCreditsPage() {
   );
 
   const create = useApiAction(purchaseDocuments.create);
+  const update = useApiAction(vendorCredits.update);
+  const saving = create.busy || update.busy;
+  const saveError = editing ? update.error : create.error;
   const refund = useApiAction(purchaseDocuments.refundVendorCredit);
 
   const save = async () => {
@@ -78,27 +102,22 @@ export default function VendorCreditsPage() {
       toast.error('Pick a vendor and enter an amount.');
       return;
     }
-    const result = await create.run({
-      kind: 'vendor-credit',
-      branchId,
-      vendorId,
-      date: today(),
-      reason,
-      againstBillId: billId || null,
-      amountPaise: amount,
-      gstRatePct: gstRate,
-      itcClaimed,
-    });
+    const input = {
+      vendorId, date, reason, againstBillId: billId || null, amountPaise: amount, gstRatePct: gstRate, itcClaimed,
+    };
+    const result = editing
+      ? await update.run(editing.id, { ...input, branchId: editing.branchId })
+      : await create.run({ kind: 'vendor-credit', branchId, ...input });
     if (!result) return;
-    toast.success(`${result.number} recorded`, {
-      description: itcClaimed
-        ? 'Payable reduced, cost reversed, and the input credit given back.'
-        : 'Payable reduced and the cost reversed.',
+    toast.success(editing ? `${result.number} saved` : `${result.number} recorded`, {
+      description: editing
+        ? 'The entry as it was is reversed and the credit posted again.'
+        : itcClaimed
+          ? 'Payable reduced, cost reversed, and the input credit given back.'
+          : 'Payable reduced and the cost reversed.',
     });
     setOpen(false);
-    setVendorId('');
-    setBillId('');
-    setAmount(0);
+    startNew();
     state.refetch();
   };
 
@@ -167,19 +186,24 @@ export default function VendorCreditsPage() {
         description="Money a supplier owes you back — returns, shortfalls, or over-billing."
         actions={
           canCreate && (
-            <Dialog open={open} onOpenChange={setOpen}>
+            <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) startNew(); }}>
               <DialogTrigger asChild>
-                <Button size="sm" className="gap-1.5"><Plus className="size-4" /> New vendor credit</Button>
+                <Button size="sm" className="gap-1.5" onClick={startNew}><Plus className="size-4" /> New vendor credit</Button>
               </DialogTrigger>
-              <DialogContent>
+              <DialogContent data-slot="vendor-credit-dialog">
                 <DialogHeader>
-                  <DialogTitle>New vendor credit</DialogTitle>
+                  <DialogTitle>{editing ? `Edit vendor credit ${editing.number}` : 'New vendor credit'}</DialogTitle>
                   <FoldNav />
                   <DialogDescription>
-                    Leave the bill blank to keep the credit on the supplier&apos;s account for next time.
+                    {editing
+                      ? 'Its entry is reversed and it is posted again under the same number; set against a bill, it is set against it again.'
+                      : <>Leave the bill blank to keep the credit on the supplier&apos;s account for next time.</>}
                   </DialogDescription>
                 </DialogHeader>
                 <div className="space-y-4">
+                  <Field label="Date" required>
+                    <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} data-slot="vendor-credit-date" />
+                  </Field>
                   <Field label="Vendor" required>
                     <ContactPicker
                       kind="vendor"
@@ -193,12 +217,18 @@ export default function VendorCreditsPage() {
                     hint={vendorId ? 'Only bills with a balance can be credited' : 'Pick a vendor first'}
                   >
                     <Combobox
-                      options={(vendorBills.data?.bills ?? []).map((b) => ({
-                        value: b.id,
-                        label: b.internalNo,
-                        sublabel: b.vendorInvoiceNo,
-                        meta: formatINR(b.balancePaise),
-                      }))}
+                      options={[
+                        // The bill it is set against, which may now show no balance.
+                        ...(editing?.againstBillId && editing.vendorId === vendorId && !(vendorBills.data?.bills ?? []).some((b) => b.id === editing.againstBillId)
+                          ? [{ value: editing.againstBillId, label: editing.againstBillNo ?? `Bill #${editing.againstBillId}`, sublabel: editing.againstBillRef ?? undefined }]
+                          : []),
+                        ...(vendorBills.data?.bills ?? []).map((b) => ({
+                          value: b.id,
+                          label: b.internalNo,
+                          sublabel: b.vendorInvoiceNo,
+                          meta: formatINR(b.balancePaise + (editing && b.id === editing.againstBillId ? editing.appliedPaise : 0)),
+                        })),
+                      ]}
                       value={billId}
                       onChange={setBillId}
                       placeholder="Standalone"
@@ -209,7 +239,7 @@ export default function VendorCreditsPage() {
                   </Field>
                   <Field label="Reason" required>
                     <Combobox
-                      options={REASONS.map((r) => ({ value: r, label: r }))}
+                      options={[...(REASONS.includes(reason) ? [] : [reason]), ...REASONS].map((r) => ({ value: r, label: r }))}
                       value={reason}
                       onChange={setReason}
                       showAvatar={false}
@@ -245,12 +275,12 @@ export default function VendorCreditsPage() {
                       className="font-semibold"
                     />
                   </div>
-                  {create.error && <p className="text-sm text-destructive">{create.error}</p>}
+                  {saveError && <p className="text-sm text-destructive" data-slot="vendor-credit-error">{saveError}</p>}
                 </div>
                 <DialogFooter>
                   <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
-                  <Button onClick={save} disabled={create.busy}>
-                    {create.busy ? 'Saving…' : 'Record credit'}
+                  <Button onClick={save} disabled={saving} data-slot="vendor-credit-save">
+                    {saving ? 'Saving…' : editing ? 'Save' : 'Record credit'}
                   </Button>
                 </DialogFooter>
               </DialogContent>
@@ -269,7 +299,8 @@ export default function VendorCreditsPage() {
           ) : (
             <DataTable
               rows={d.documents}
-              columns={[...columns, documentMenuColumn('vendor-credit', state.refetch)]}
+              columns={[...columns, documentMenuColumn<PurchaseDocRow>('vendor-credit', state.refetch,
+                (r) => { if (!loadingEdit) void startEdit(r); }, (r) => r.status !== 'refunded')]}
               getRowId={(r) => r.id}
               selectable
               bulkActions={(selected) => <BulkPrintButton kind="vendor-credit" ids={selected.map((r) => r.id)} />}

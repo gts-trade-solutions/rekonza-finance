@@ -186,7 +186,7 @@ async function releaseBillQuantities(trx: Trx, orgId: number, userId: number | n
  */
 export async function updateBill(trx: Trx, orgId: number, userId: number | null, billId: number, input: CreateBillInput) {
   const bill = await trx.selectFrom('bills')
-    .select(['id', 'internal_no', 'self_invoice_no', 'status', 'branch_id', 'bill_date', 'is_rcm', 'cgst', 'sgst', 'igst', 'cess',
+    .select(['id', 'internal_no', 'self_invoice_no', 'status', 'branch_id', 'vendor_id', 'bill_date', 'is_rcm', 'cgst', 'sgst', 'igst', 'cess',
       'tds_amount', 'amount_paid', 'total', 'journal_entry_id', 'source_po_id', 'source_grn_id'])
     .where('id', '=', billId).where('org_id', '=', orgId).forUpdate().executeTakeFirst();
   if (!bill) throw notFound('Bill not found.');
@@ -202,6 +202,12 @@ export async function updateBill(trx: Trx, orgId: number, userId: number | null,
       throw badRequest(`"${l.description ?? 'A line'}" was billed from ${l.source_line_type === 'goods_receipt' ? 'a goods receipt' : 'a purchase order'}: ` +
         'keep it at its quantity. To bill a different quantity, delete this bill and bill the order again.');
     }
+  }
+  if ((linked.length || bill.source_po_id || bill.source_grn_id) && (input.vendorId !== bill.vendor_id || input.branchId !== bill.branch_id)) {
+    throw badRequest(`${bill.internal_no} was raised from an order or a receipt note: it stays with that vendor and branch.`);
+  }
+  if (toPaiseFromSql(bill.amount_paid) > 0 && input.vendorId !== bill.vendor_id) {
+    throw badRequest(`${bill.internal_no} has payments from this vendor on it: it stays with them. Remove the payments to move it.`);
   }
   const sources = new Set(linked.map((l) => `${l.source_line_type}|${l.source_line_id}`));
   for (const src of input.lineSources ?? []) {
@@ -313,16 +319,23 @@ export async function vendorCreditForEdit(trx: Executor, orgId: number, creditId
       gstRatePct = [0, 0.1, 0.25, 1.5, 3, 5, 6, 7.5, 12, 18, 28, 40].reduce((best, r) => (Math.abs(r - raw) < Math.abs(best - raw) ? r : best), 0);
     }
   }
+  const against = vc.against_bill_id
+    ? await trx.selectFrom('bills').select(['internal_no', 'vendor_invoice_no']).where('id', '=', vc.against_bill_id).executeTakeFirst()
+    : undefined;
   return {
     id: String(vc.id), number: vc.number, status: vc.status, branchId: String(vc.branch_id), vendorId: String(vc.vendor_id),
     date: ymd(vc.credit_date), reason: vc.reason, againstBillId: vc.against_bill_id ? String(vc.against_bill_id) : null,
+    againstBillNo: against?.internal_no ?? null, againstBillRef: against?.vendor_invoice_no ?? null,
     amountPaise, gstRatePct, itcClaimed, totalPaise: toPaiseFromSql(vc.total), appliedPaise: toPaiseFromSql(vc.applied_amount),
   };
 }
 
-async function vendorCreditBlocker(trx: Trx, orgId: number, vc: { number: string; status: string; credit_date: string; branch_id: number }, what: 'edit' | 'delete') {
+async function vendorCreditBlocker(trx: Trx, orgId: number, vc: { id: number; number: string; status: string; credit_date: string; branch_id: number }, what: 'edit' | 'delete') {
   if (vc.status === 'void') return what === 'edit' ? `${vc.number} is void.` : null;
-  if (vc.status === 'refunded') return `${vc.number} was refunded in cash. Delete the refund first, or leave the credit as it is.`;
+  if (vc.status === 'refunded') return `${vc.number} was refunded in cash, so it can no longer be ${what === 'edit' ? 'edited' : 'deleted'}.`;
+  const allocated = await trx.selectFrom('payment_allocations').select('id').where('org_id', '=', orgId)
+    .where('target_type', '=', 'vendor_credit').where('target_id', '=', vc.id).executeTakeFirst();
+  if (allocated) return `${vc.number} has a payment set against it. Remove that first.`;
   if (await filedGstr3b(trx, orgId, vc.branch_id, ymd(vc.credit_date))) {
     return `GSTR-3B for ${ymd(vc.credit_date).slice(0, 7)} is filed with ${vc.number} in it.`;
   }
@@ -356,7 +369,8 @@ export async function updateVendorCredit(trx: Trx, orgId: number, userId: number
   const before = plain(vc);
   await reverseForChange(trx, orgId, vc.journal_entry_id, { memo: `Vendor credit ${vc.number} edited: the entry as it was, reversed`, userId, module: 'purchases' });
   await unapplyVendorCredit(trx, orgId, vc);
-  const made = await createVendorCredit(trx, orgId, userId, { ...input, applyImmediately: input.applyImmediately ?? toPaiseFromSql(vc.applied_amount) > 0 }, { replace: { id: creditId, number: vc.number } });
+  // Set against its bill again, as New does whenever a bill is named.
+  const made = await createVendorCredit(trx, orgId, userId, input, { replace: { id: creditId, number: vc.number } });
   return { ...made, before };
 }
 

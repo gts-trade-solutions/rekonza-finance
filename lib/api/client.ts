@@ -499,10 +499,20 @@ export interface BillDetail {
     qty: number; uqc: string | null; ratePaise: number; discountPct: number; gstRatePct: number;
     taxablePaise: number; cgstPaise: number; sgstPaise: number; igstPaise: number;
     totalPaise: number; itcEligibility: string;
+    /** For Edit: the line as entered. */
+    cessRatePct?: number;
+    sourceLineType?: 'purchase_order' | 'goods_receipt' | null;
+    sourceLineId?: string | null;
+    /** In the bill's own currency, for one priced in another. */
+    ratePaiseFc?: number | null;
+    batch?: { batchNo: string; mfgDate: string | null; expiryDate: string | null } | null;
+    serials?: string[];
   }[];
   payments: { id: string; number: string; date: string; mode: string; amountPaise: number }[];
   journalEntryId: string | null;
   journalLines: InvoiceJournalLine[];
+  /** For Edit: what the form needs that the record does not show. */
+  edit?: { costCentreId: string | null; warehouseId: string | null; currency: string; exchangeRate: number };
 }
 
 export interface ExpenseListItem {
@@ -544,6 +554,48 @@ export const bills = {
     ),
   void: (id: string, reason?: string) =>
     api.post<{ id: string; status: string }>(`/api/bills/${id}`, { action: 'void', reason }),
+  /** Zoho's Edit: the bill written again in place (PUT /api/bills/[id]). */
+  update: (id: string, input: unknown) =>
+    api.put<{ id: string; internalNo: string; totalPaise: number; journalEntryId: string | null; warnings?: string[] }>(`/api/bills/${id}`, input),
+  /** Zoho's Delete: reversed, kept in deleted documents. */
+  remove: (id: string, reason?: string | null) =>
+    api.delete<{ deleted: true; number: string }>(`/api/bills/${id}${reason ? `?reason=${encodeURIComponent(reason)}` : ''}`),
+};
+
+/** A vendor credit as it was entered: what its Edit window opens with. */
+export interface VendorCreditForEdit {
+  id: string; number: string; status: string; branchId: string; vendorId: string; date: string; reason: string;
+  againstBillId: string | null; againstBillNo: string | null; againstBillRef: string | null;
+  amountPaise: number; gstRatePct: number; itcClaimed: boolean; totalPaise: number; appliedPaise: number;
+}
+
+/** Zoho's Edit and Delete on a vendor credit (services/purchase-changes.ts). */
+export const vendorCredits = {
+  get: (id: string) => api.get<VendorCreditForEdit>(`/api/vendor-credits/${id}`),
+  update: (id: string, input: {
+    branchId: string; vendorId: string; date: string; reason: string; againstBillId: string | null;
+    amountPaise: number; gstRatePct: number; itcClaimed: boolean;
+  }) => api.put<{ id: string; number: string; totalPaise: number; journalEntryId: string | null }>(`/api/vendor-credits/${id}`, input),
+  remove: (id: string, reason?: string | null) =>
+    api.delete<{ deleted: true; number: string }>(`/api/vendor-credits/${id}${reason ? `?reason=${encodeURIComponent(reason)}` : ''}`),
+};
+
+/** A receipt note with its lines as entered: what its Edit window opens with. */
+export interface GoodsReceiptForEdit {
+  id: string; number: string; status: string; branchId: string; vendorId: string; warehouseId: string | null; date: string;
+  vendorChallanNo: string | null; notes: string | null; sourcePoId: string | null;
+  lines: {
+    poLineId: string | null; itemId: string | null; description: string | null; hsnSac: string | null; qty: number; uqc: string | null;
+    ratePaise: number; gstRatePct: number; batch: { batchNo: string; mfgDate: string | null; expiryDate: string | null } | null; serials: string[];
+  }[];
+}
+
+/** Zoho's Edit and Delete on a goods receipt, while nothing on it is billed. */
+export const goodsReceipts = {
+  get: (id: string) => api.get<GoodsReceiptForEdit>(`/api/goods-receipts/${id}`),
+  update: (id: string, input: unknown) => api.put<{ id: string; number: string; totalPaise: number }>(`/api/goods-receipts/${id}`, input),
+  remove: (id: string, reason?: string | null) =>
+    api.delete<{ deleted: true; number: string }>(`/api/goods-receipts/${id}${reason ? `?reason=${encodeURIComponent(reason)}` : ''}`),
 };
 
 export const expenses = {
