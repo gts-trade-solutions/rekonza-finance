@@ -200,7 +200,11 @@ const CHANGES = new Set(['PATCH', 'PUT', 'DELETE']);
 const NO_REASON = /^\/api\/(notifications|auth|ai|exceptions)(\/|$)/;
 
 function readReason(req: Request): string | null {
-  const raw = req.headers.get('x-change-reason');
+  // A delete asks for its reason in its own dialog and sends it as ?reason=
+  // (components/shared/row-actions.tsx); that answers the book's rule too, so
+  // nobody is asked a second time.
+  const raw = req.headers.get('x-change-reason')
+    ?? (req.method === 'DELETE' ? new URL(req.url).searchParams.get('reason') : null);
   if (!raw) return null;
   let text = raw;
   try { text = decodeURIComponent(raw); } catch { /* sent plain */ }

@@ -111,9 +111,14 @@ export async function fnfStatement(ex: Executor, orgId: number, input: FnfInput)
   };
 }
 
-/** Post the settlement: the entry, the leave encashed, and the employee's last day. */
-export async function postFnf(trx: Trx, orgId: number, userId: number | null, input: FnfInput) {
-  const open = await trx.selectFrom('fnf_settlements').select('id').where('org_id', '=', orgId).where('employee_id', '=', input.employeeId).where('status', '!=', 'reversed').executeTakeFirst();
+/**
+ * Post the settlement: the entry, the leave encashed, and the employee's last
+ * day. With `replaceId` it rewrites that settlement in place, for an edit whose
+ * old entry the caller has already reversed (payroll/changes.ts).
+ */
+export async function postFnf(trx: Trx, orgId: number, userId: number | null, input: FnfInput, opts: { replaceId?: number } = {}) {
+  const open = await trx.selectFrom('fnf_settlements').select('id').where('org_id', '=', orgId).where('employee_id', '=', input.employeeId).where('status', '!=', 'reversed')
+    .$if(!!opts.replaceId, (qb) => qb.where('id', '<>', opts.replaceId!)).executeTakeFirst();
   if (open) throw conflict('This employee already has a settlement.');
   const s = await fnfStatement(trx, orgId, input);
   const acc = await accountIds(trx, orgId);
@@ -133,13 +138,19 @@ export async function postFnf(trx: Trx, orgId: number, userId: number | null, in
   if (lines.length < 2) throw badRequest('Nothing to settle: no gratuity, leave, notice or other amount.');
   const entry = await postEntry(trx, {
     orgId, branchId: branch.branch_id, date: s.lastDay, memo: `Full and final settlement: ${s.name}`,
-    sourceType: 'fnf', userId, module: 'accountant', lines,
+    sourceType: 'fnf', sourceId: opts.replaceId ?? null, userId, module: 'accountant', lines,
   });
-  const id = Number((await trx.insertInto('fnf_settlements').values({
-    org_id: orgId, employee_id: s.employeeId, last_day: s.lastDay, components: JSON.stringify(s), net_amount: toSqlFromPaise(s.netPaise),
-    journal_entry_id: entry.id, created_by_user_id: userId,
-  }).executeTakeFirstOrThrow()).insertId);
-  await trx.updateTable('journal_entries').set({ source_id: id }).where('id', '=', entry.id).execute();
+  const values = { last_day: s.lastDay, components: JSON.stringify(s), net_amount: toSqlFromPaise(s.netPaise), journal_entry_id: entry.id };
+  let id: number;
+  if (opts.replaceId) {
+    id = opts.replaceId;
+    await trx.updateTable('fnf_settlements').set({ ...values, status: 'posted' }).where('id', '=', id).where('org_id', '=', orgId).execute();
+  } else {
+    id = Number((await trx.insertInto('fnf_settlements').values({
+      org_id: orgId, employee_id: s.employeeId, ...values, created_by_user_id: userId,
+    }).executeTakeFirstOrThrow()).insertId);
+    await trx.updateTable('journal_entries').set({ source_id: id }).where('id', '=', entry.id).execute();
+  }
   if (s.encashDays > 0) {
     const type = await trx.selectFrom('leave_types').select('id').where('org_id', '=', orgId).where('encashable', '=', 1).orderBy('id').executeTakeFirst();
     if (type) {

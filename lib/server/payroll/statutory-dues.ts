@@ -120,30 +120,55 @@ export async function statutoryRegister(ex: Executor, orgId: number, from: strin
   return { lines, dues };
 }
 
-/** Pay a month's PF, ESI, PT or LWF: Dr the payable, Cr the bank, kept against the month. */
-export async function payStatutory(trx: Trx, orgId: number, userId: number | null, input: {
+export interface StatutoryPaymentInput {
   component: StatutoryComponent; period: string; amountPaise: number; date: string; bankAccountId: number; reference?: string | null;
-}): Promise<{ id: number; entryId: number }> {
+}
+
+/**
+ * Whether a payment can be made: a due for the month, no more than is left
+ * (leaving out the payment an edit replaces), a bank account of this book.
+ * Asked before anything is posted, so an edit refused here changes nothing.
+ */
+export async function checkStatutoryPayment(trx: Trx, orgId: number, input: StatutoryPaymentInput, opts: { replaceId?: number } = {}) {
   if (!/^\d{4}-\d{2}$/.test(input.period)) throw badRequest('Give the month the dues are for.');
   if (!(input.amountPaise > 0)) throw badRequest('Give the amount paid.');
   if (input.date < `${input.period}-01`) throw badRequest('Dues for a month cannot be paid before that month begins.');
   const { dues } = await statutoryRegister(trx, orgId, input.period, input.period);
   const due = dues.find((d) => d.component === input.component);
   if (!due || due.duePaise <= 0) throw badRequest(`No ${COMPONENT_LABEL[input.component]} is due for ${input.period}: post that month's payroll first.`);
-  if (input.amountPaise > due.balancePaise) {
-    throw badRequest(`Only ₹${(due.balancePaise / 100).toLocaleString('en-IN', { minimumFractionDigits: 2 })} of ${COMPONENT_LABEL[input.component]} is left to pay for ${input.period}.`);
+  const replaced = opts.replaceId ? due.payments.find((x) => x.id === String(opts.replaceId))?.amountPaise ?? 0 : 0;
+  const left = due.balancePaise + replaced;
+  if (input.amountPaise > left) {
+    throw badRequest(`Only ₹${(left / 100).toLocaleString('en-IN', { minimumFractionDigits: 2 })} of ${COMPONENT_LABEL[input.component]} is left to pay for ${input.period}.`);
   }
   const bank = await trx.selectFrom('bank_accounts').select(['ledger_account_id', 'name']).where('id', '=', input.bankAccountId).where('org_id', '=', orgId).executeTakeFirst();
   if (!bank) throw notFound('That bank account does not exist.');
+  return bank;
+}
+
+/**
+ * Pay a month's PF, ESI, PT or LWF: Dr the payable, Cr the bank, kept against
+ * the month. With `replaceId` it rewrites that payment in place, for an edit
+ * whose old entry the caller has already reversed (payroll/changes.ts): what
+ * it paid before does not count against what is left to pay.
+ */
+export async function payStatutory(trx: Trx, orgId: number, userId: number | null, input: StatutoryPaymentInput, opts: { replaceId?: number } = {}): Promise<{ id: number; entryId: number }> {
+  const bank = await checkStatutoryPayment(trx, orgId, input, opts);
   const acc = await accountIds(trx, orgId);
   const branch = (await trx.selectFrom('branches').select('id').where('org_id', '=', orgId).orderBy('is_primary', 'desc').executeTakeFirstOrThrow()).id;
   const label = `${COMPONENT_LABEL[input.component]} for ${input.period}`;
   // The payment first, so its entry can name it; the ledger is never edited after posting.
-  const id = Number((await trx.insertInto('statutory_payments').values({
-    org_id: orgId, component: input.component, period: input.period, amount: toSqlFromPaise(input.amountPaise as Paise),
-    paid_on: input.date, bank_account_id: input.bankAccountId, reference: input.reference?.trim() || null,
-    journal_entry_id: null, created_by_user_id: userId,
-  }).executeTakeFirstOrThrow()).insertId);
+  const values = {
+    component: input.component, period: input.period, amount: toSqlFromPaise(input.amountPaise as Paise),
+    paid_on: input.date, bank_account_id: input.bankAccountId, reference: input.reference?.trim() || null, journal_entry_id: null,
+  };
+  let id: number;
+  if (opts.replaceId) {
+    id = opts.replaceId;
+    await trx.updateTable('statutory_payments').set(values).where('id', '=', id).where('org_id', '=', orgId).execute();
+  } else {
+    id = Number((await trx.insertInto('statutory_payments').values({ org_id: orgId, ...values, created_by_user_id: userId }).executeTakeFirstOrThrow()).insertId);
+  }
   const entry = await postEntry(trx, {
     orgId, branchId: branch, date: input.date, memo: `${label} paid from ${bank.name}${input.reference ? ` (${input.reference})` : ''}`,
     sourceType: 'statutory_payment', sourceId: id, userId, module: 'banking',

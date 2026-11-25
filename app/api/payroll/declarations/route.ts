@@ -4,6 +4,7 @@ import { route, body, query, asId, forbidden } from '@/lib/server/http';
 import { hasPermission } from '@/lib/rbac';
 import { logAudit, auditMeta } from '@/lib/server/audit';
 import { SECTIONS, listDeclarations, reviewProof, saveDeclaration, submitProof } from '@/lib/server/payroll/declarations';
+import { deleteDeclaration } from '@/lib/server/payroll/changes';
 
 // Investment declarations for the year, and the proofs that follow them.
 
@@ -60,4 +61,20 @@ export const PATCH = route(
     });
   },
   { permission: { module: 'payroll', action: 'edit' } },
+);
+
+/** Delete a declaration whose proof has not been accepted (payroll/changes.ts). */
+export const DELETE = route(
+  async ({ orgId, user, req }) => {
+    const { id } = query(req, z.object({ id: Id }));
+    return transaction(async (trx) => {
+      const r = await deleteDeclaration(trx, orgId, id);
+      await logAudit({
+        trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'void', targetType: 'tax_declaration', targetId: id,
+        targetLabel: `${r.section} declaration`, detail: `Deleted the ${r.section} declaration`, ...auditMeta(req),
+      });
+      return { id: asId(id), deleted: true };
+    });
+  },
+  { permission: { module: 'payroll', action: 'void' } },
 );

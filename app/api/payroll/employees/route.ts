@@ -1,8 +1,9 @@
 import { z } from 'zod';
 import { db, transaction } from '@/lib/server/db';
-import { route, body } from '@/lib/server/http';
+import { route, body, query } from '@/lib/server/http';
 import { logAudit, auditMeta } from '@/lib/server/audit';
 import { createEmployee, listEmployees, setSalary, updateEmployee, type EmployeeInput } from '@/lib/server/payroll/employees';
+import { deleteEmployee } from '@/lib/server/payroll/changes';
 
 // Employees and their salary structure. Salaries are confidential, so every
 // call needs payroll rights, which only admins and accountants have.
@@ -85,4 +86,23 @@ export const POST = route(
     });
   },
   { permission: { module: 'payroll', action: 'edit' } },
+);
+
+/**
+ * Delete an employee entered in error (payroll/changes.ts). One that payroll
+ * has touched is refused, with the leaving date offered instead.
+ */
+export const DELETE = route(
+  async ({ orgId, user, req }) => {
+    const { id } = query(req, z.object({ id: z.coerce.number().int().positive() }));
+    return transaction(async (trx) => {
+      const e = await deleteEmployee(trx, orgId, id);
+      await logAudit({
+        trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'void', targetType: 'employee', targetId: id,
+        targetLabel: e.name, detail: `Employee ${e.code} ${e.name} deleted`, ...auditMeta(req),
+      });
+      return { id: String(id), deleted: true };
+    });
+  },
+  { permission: { module: 'payroll', action: 'void' } },
 );

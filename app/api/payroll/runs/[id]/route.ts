@@ -1,9 +1,12 @@
 import { z } from 'zod';
 import { db, transaction } from '@/lib/server/db';
 import { route, body, idParam, forbidden } from '@/lib/server/http';
+import { changeReason } from '@/lib/server/request-context';
 import { hasPermission } from '@/lib/rbac';
 import { logAudit, auditMeta } from '@/lib/server/audit';
 import { employedDays, payRun, postRun, prepareRun, reopenRun, runDetail } from '@/lib/server/payroll/payroll';
+import { deleteRun, unpayRun } from '@/lib/server/payroll/changes';
+import { monthLabel } from '@/lib/date-range';
 
 // One month's payroll: its lines, and what can be done to it.
 
@@ -37,9 +40,14 @@ const Input = z.discriminatedUnion('action', [
   z.object({ action: z.literal('post') }),
   z.object({ action: z.literal('pay'), bankAccountId: z.coerce.number().int().positive(), date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }),
   z.object({ action: z.literal('reopen'), reason: z.string().max(300) }),
+  // A paid month's salary payment taken back, so the month can be reopened and corrected.
+  z.object({ action: z.literal('unpay'), reason: z.string().max(300).nullish() }),
 ]);
 
-const DETAIL = { recompute: 'Payroll recomputed', attendance: 'Attendance imported', post: 'Payroll posted', pay: 'Salaries paid', reopen: 'Payroll reopened' } as const;
+const DETAIL = {
+  recompute: 'Payroll recomputed', attendance: 'Attendance imported', post: 'Payroll posted', pay: 'Salaries paid', reopen: 'Payroll reopened',
+  unpay: 'Salary payment undone',
+} as const;
 
 export const POST = route(
   async ({ orgId, user, role, req, params }) => {
@@ -71,6 +79,8 @@ export const POST = route(
         await postRun(trx, orgId, user.userId, id);
       } else if (input.action === 'pay') {
         await payRun(trx, orgId, user.userId, id, { bankAccountId: input.bankAccountId, date: input.date });
+      } else if (input.action === 'unpay') {
+        await unpayRun(trx, orgId, user.userId, id, input.reason ?? changeReason());
       } else {
         await reopenRun(trx, orgId, user.userId, id, input.reason);
       }
@@ -78,11 +88,40 @@ export const POST = route(
         trx, orgId, actorUserId: user.userId, actorName: user.name, action: input.action === 'post' ? 'approve' : 'update',
         targetType: 'payroll', targetId: id, targetLabel: `Payroll ${run.month}`,
         detail: input.action === 'pay' ? `${DETAIL.pay} on ${input.date}` : input.action === 'reopen' ? `${DETAIL.reopen}: ${input.reason}`
-          : input.action === 'attendance' ? `${DETAIL.attendance}: ${input.rows.length - unmatched.length} employee(s)` : DETAIL[input.action],
+          : input.action === 'attendance' ? `${DETAIL.attendance}: ${input.rows.length - unmatched.length} employee(s)`
+            : input.action === 'unpay' && input.reason ? `${DETAIL.unpay}: ${input.reason}` : DETAIL[input.action],
         ...auditMeta(req),
       });
       return { ...(await runDetail(trx, orgId, id)), unmatched };
     });
   },
   { permission: { module: 'payroll', action: 'edit' } },
+);
+
+/**
+ * Delete a month's payroll (payroll/changes.ts): a draft goes; a posted or paid
+ * one has its entries reversed and is kept in deleted_documents. Deleting what
+ * was posted takes the payroll's own approval right as well as the void right,
+ * as posting and paying do.
+ */
+export const DELETE = route(
+  async ({ orgId, user, role, req, params }) => {
+    const id = idParam(params);
+    const reason = changeReason();
+    return transaction(async (trx) => {
+      const run = await trx.selectFrom('payroll_runs').select(['status', 'month']).where('id', '=', id).where('org_id', '=', orgId).executeTakeFirst();
+      if (run && run.status !== 'draft' && !hasPermission(role, 'payroll', 'approve')) {
+        throw forbidden('Deleting a posted payroll needs approval rights in payroll.');
+      }
+      const r = await deleteRun(trx, orgId, user.userId, id, reason);
+      await logAudit({
+        trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'void', targetType: 'payroll', targetId: id,
+        targetLabel: `Payroll ${r.month}`,
+        detail: `Payroll for ${monthLabel(r.month)} deleted (${r.status})${r.status === 'draft' ? '' : '; its entries reversed'}${reason ? `: ${reason}` : ''}`,
+        ...auditMeta(req),
+      });
+      return { id: String(id), deleted: true };
+    });
+  },
+  { permission: { module: 'payroll', action: 'void' } },
 );

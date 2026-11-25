@@ -26,7 +26,10 @@ const MATRIX: Record<RoleName, Record<string, Action[]>> = {
     purchases: ['view', 'create', 'edit', 'approve', 'void'],
     banking: ['view', 'create', 'edit', 'approve', 'void'],
     accountant: ['view', 'create', 'edit', 'approve', 'void'],
-    gst: ['view', 'create', 'edit', 'approve'],
+    // Deleting a GST or payroll record (a challan, a pay run, a statutory
+    // payment) reverses what it posted, as deleting a sales or purchase
+    // document does: the same 'void' right (2026-11-25).
+    gst: ['view', 'create', 'edit', 'approve', 'void'],
     inventory: ['view', 'create', 'edit'],
     reports: ['view'],
     settings: ['view'],
@@ -35,7 +38,7 @@ const MATRIX: Record<RoleName, Record<string, Action[]>> = {
     // that connector is part of looking after the books.
     tally: ['view', 'edit'],
     // Salaries are confidential: only admins and accountants see payroll.
-    payroll: ['view', 'create', 'edit', 'approve'],
+    payroll: ['view', 'create', 'edit', 'approve', 'void'],
     // Analytics works on copies, never the ledger, so building reports is
     // open to anyone who can see the figures they are built from.
     analytics: ['view', 'create', 'edit', 'void'],
@@ -142,9 +145,9 @@ export const PERMISSION_MODULES: { key: string; label: string; actions: Action[]
   { key: 'purchases', label: 'Purchases', actions: ['view', 'create', 'edit', 'approve', 'void', 'print', 'export'] },
   { key: 'banking', label: 'Banking', actions: ['view', 'create', 'edit', 'approve', 'void', 'print', 'export'] },
   { key: 'accountant', label: 'Accountant (journals, chart, period close)', actions: ['view', 'create', 'edit', 'approve', 'void', 'print', 'export'] },
-  { key: 'gst', label: 'GST & taxes', actions: ['view', 'create', 'edit', 'approve', 'print', 'export'] },
+  { key: 'gst', label: 'GST & taxes', actions: ['view', 'create', 'edit', 'approve', 'void', 'print', 'export'] },
   { key: 'inventory', label: 'Inventory', actions: ['view', 'create', 'edit', 'print', 'export'] },
-  { key: 'payroll', label: 'Payroll', actions: ['view', 'create', 'edit', 'approve', 'print', 'export'] },
+  { key: 'payroll', label: 'Payroll', actions: ['view', 'create', 'edit', 'approve', 'void', 'print', 'export'] },
   { key: 'reports.financial', label: 'Reports: financial statements', actions: ['view', 'print', 'export'] },
   { key: 'reports.sales', label: 'Reports: sales', actions: ['view', 'print', 'export'] },
   { key: 'reports.purchases', label: 'Reports: purchases', actions: ['view', 'print', 'export'] },
