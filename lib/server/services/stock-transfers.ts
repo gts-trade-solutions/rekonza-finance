@@ -42,7 +42,12 @@ export interface TransferInput {
   notes?: string | null;
 }
 
-export async function createTransfer(trx: Trx, orgId: number, userId: number | null, input: TransferInput) {
+/**
+ * What New and Edit both check: two different godowns of one GST
+ * registration, and stocked goods in quantities above zero. Returns the two
+ * godowns and the lines worth keeping.
+ */
+export async function checkTransfer(trx: Trx, orgId: number, input: TransferInput) {
   if (input.fromWarehouseId === input.toWarehouseId) throw badRequest('A transfer goes from one godown to another.');
   const lines = input.lines.filter((l) => l.qty > 0);
   if (!lines.length) throw badRequest('Add the items and quantities being moved.');
@@ -61,6 +66,11 @@ export async function createTransfer(trx: Trx, orgId: number, userId: number | n
     if (!it) throw notFound('One of the items does not exist.');
     if (it.kind !== 'goods' || !it.track_inventory) throw badRequest(`${it.name} is not stock that can be moved.`);
   }
+  return { from, to, lines };
+}
+
+export async function createTransfer(trx: Trx, orgId: number, userId: number | null, input: TransferInput) {
+  const { from, lines } = await checkTransfer(trx, orgId, input);
   // Goods not at the godown cannot leave it: the book's negative-stock rule decides how firmly.
   const warnings: string[] = [];
   if (from.branch_id) await checkStock(trx, orgId, from.branch_id, input.date, lines, warnings);

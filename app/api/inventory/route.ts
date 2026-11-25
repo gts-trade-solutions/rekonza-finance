@@ -1,8 +1,8 @@
 import { z } from 'zod';
-import { findOrCreateBatch } from '@/lib/server/services/batches';
-import { recordSerials } from '@/lib/server/services/serials';
+import { createAdjustment } from '@/lib/server/services/stock-changes';
+import { AdjustInput, toAdjustment } from '@/lib/server/adjustment-input';
 import { db, transaction } from '@/lib/server/db';
-import { route, body, query, asId, badRequest, conflict } from '@/lib/server/http';
+import { route, body, query, asId } from '@/lib/server/http';
 import { toPaiseFromSql } from '@/lib/server/money-sql';
 import { stockByGodown, stockPosition } from '@/lib/server/reports/stock';
 import { logAudit, auditMeta } from '@/lib/server/audit';
@@ -163,19 +163,6 @@ export const GET = route(
   { permission: { module: 'inventory', action: 'view' } },
 );
 
-const AdjustInput = z.object({
-  itemId: z.union([z.string(), z.number()]),
-  warehouseId: z.union([z.string(), z.number()]).nullish(),
-  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use a yyyy-mm-dd date.'),
-  qtyDelta: z.number().refine((v) => v !== 0, 'An adjustment of zero changes nothing.'),
-  reason: z.enum(['damage', 'theft', 'stocktake', 'expiry', 'sample', 'opening', 'other', 'issued']),
-  notes: z.string().trim().max(500).nullish(),
-  /** A batch-tracked item: which batch, made if new (with its dates) on an opening or a found count. */
-  batch: z.object({ batchNo: z.string().trim().min(1).max(40), mfgDate: z.string().nullish(), expiryDate: z.string().nullish() }).nullish(),
-  /** A serial-tracked item: the number of each piece found or written off. */
-  serials: z.array(z.string().trim().min(1).max(80)).max(5000).nullish(),
-});
-
 /**
  * Adjust stock.
  *
@@ -189,61 +176,20 @@ const AdjustInput = z.object({
 export const POST = route(
   async ({ orgId, user, req }) => {
     const input = await body(req, AdjustInput);
-    const itemId = Number(input.itemId);
-
-    const item = await db
-      .selectFrom('items')
-      .select(['id', 'name', 'kind', 'purchase_price', 'is_archived', 'track_inventory', 'track_batches'])
-      .where('id', '=', itemId).where('org_id', '=', orgId).executeTakeFirst();
-    if (!item) throw badRequest('That item does not exist.');
-    if (item.kind !== 'goods') throw badRequest('Only goods carry stock. A service has none to adjust.');
-    if (item.is_archived) throw conflict(`${item.name} is archived.`);
-    if (!item.track_inventory) {
-      throw conflict(`${item.name} does not track stock. Turn on stock tracking for it first.`);
-    }
-
-    // Shown for information: the value at the catalogue price.
-    const valuePaise = Math.round(Math.abs(input.qtyDelta) * toPaiseFromSql(item.purchase_price));
-
-    if (item.track_batches && !input.batch) throw badRequest(`${item.name} is tracked by batch: say which batch.`);
-
-    const inserted = await transaction(async (trx) => {
-      const batchId = item.track_batches && input.batch ? await findOrCreateBatch(trx, orgId, itemId, input.batch) : null;
-      const row = await trx
-        .insertInto('stock_adjustments')
-        .values({
-          org_id: orgId,
-          batch_id: batchId,
-          warehouse_id: input.warehouseId ? Number(input.warehouseId) : null,
-          item_id: itemId,
-          adjust_date: input.date,
-          qty_delta: String(input.qtyDelta),
-          reason: input.reason,
-          notes: input.notes ?? null,
-          journal_entry_id: null,
-          created_by_user_id: user.userId,
-        })
-        .executeTakeFirstOrThrow();
-      // Numbered pieces found (opening stock, a count) or written off.
-      await recordSerials(trx, orgId, { type: 'adjustment', id: Number(row.insertId) }, input.qtyDelta > 0 ? 1 : -1,
-        [{ lineId: null, itemId, qty: input.qtyDelta, serials: input.serials }], { check: true });
-      return row;
+    return transaction(async (trx) => {
+      const made = await createAdjustment(trx, orgId, user.userId, toAdjustment(input));
+      // Shown for information: the value at the catalogue price.
+      const item = await trx.selectFrom('items').select('purchase_price').where('id', '=', Number(input.itemId)).executeTakeFirstOrThrow();
+      const valuePaise = Math.round(Math.abs(input.qtyDelta) * toPaiseFromSql(item.purchase_price));
+      await logAudit({
+        trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'create',
+        targetType: 'stock_adjustment', targetId: made.id, targetLabel: made.itemName,
+        detail: `${input.qtyDelta > 0 ? '+' : ''}${input.qtyDelta} ${made.itemName} (${input.reason}), ` +
+          `value ${(valuePaise / 100).toFixed(2)}`,
+        ...auditMeta(req),
+      });
+      return { id: asId(made.id), valuePaise, journalEntryId: null };
     });
-    const result = { id: Number(inserted.insertId), journalEntryId: null as number | null };
-
-    await logAudit({
-      orgId, actorUserId: user.userId, actorName: user.name, action: 'create',
-      targetType: 'stock_adjustment', targetId: result.id, targetLabel: item.name,
-      detail: `${input.qtyDelta > 0 ? '+' : ''}${input.qtyDelta} ${item.name} (${input.reason}), ` +
-        `value ${(valuePaise / 100).toFixed(2)}`,
-      ...auditMeta(req),
-    });
-
-    return {
-      id: asId(result.id),
-      valuePaise,
-      journalEntryId: result.journalEntryId === null ? null : asId(result.journalEntryId),
-    };
   },
   { permission: { module: 'inventory', action: 'edit' } },
 );

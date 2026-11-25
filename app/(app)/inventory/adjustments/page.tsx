@@ -12,7 +12,7 @@
 // skipping it leaves the balance sheet carrying inventory that is not there.
 
 import { FoldNav } from '@/components/layout/nav-state';
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { ClipboardList, Plus } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card } from '@/components/ui/card';
@@ -29,9 +29,11 @@ import { Money } from '@/components/shared/money';
 import { EmptyState } from '@/components/shared/empty-state';
 import { AsyncPage } from '@/components/shared/async-state';
 import { Field } from '@/components/shared/form-bits';
+import { DeleteConfirmDialog, RowActions, withReasonQuery } from '@/components/shared/row-actions';
 import {
-  inventory, type StockAdjustmentRow, type StockResponse, type WarehouseRow,
+  api, inventory, type StockAdjustmentRow, type StockResponse, type WarehouseRow,
 } from '@/lib/api/client';
+import { toastWarnings } from '@/lib/api/warnings';
 import { useApi, useApiAction } from '@/lib/api/use-api';
 import { usePermission } from '@/lib/store/hooks';
 import { useAppStore } from '@/lib/store';
@@ -60,8 +62,40 @@ export default function StockAdjustmentsPage() {
 
   const [open, setOpen] = useState(false);
   const [f, setF] = useState(BLANK);
+  // Zoho's Edit: the same window, filled with the adjustment as entered (PUT /api/inventory/adjustments/[id]).
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<StockAdjustmentRow | null>(null);
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
 
   const adjust = useApiAction(inventory.adjust);
+
+  const startEdit = useCallback(async (id: string) => {
+    try {
+      const a = await api.get<{
+        itemId: string; warehouseId: string | null; date: string; qtyDelta: number; reason: string; notes: string | null;
+        batch: { batchNo: string; expiryDate: string | null } | null; serials: string[];
+      }>(`/api/inventory/adjustments/${id}`);
+      setF({
+        itemId: a.itemId, warehouseId: a.warehouseId ?? '', date: a.date, qtyDelta: a.qtyDelta, reason: a.reason, notes: a.notes ?? '',
+        batchNo: a.batch?.batchNo ?? '', expiryDate: a.batch?.expiryDate ?? '', serials: a.serials.join('\n'),
+      });
+      setEditError(null);
+      setEditingId(id);
+      setOpen(true);
+    } catch (e) {
+      toast.error('That adjustment could not be opened', { description: e instanceof Error ? e.message : String(e) });
+    }
+  }, []);
+  // ?edit=<id> (a ledger or stock screen pointing here): open that adjustment's Edit window.
+  useEffect(() => {
+    const id = new URLSearchParams(window.location.search).get('edit');
+    if (id && canEdit) void startEdit(id);
+  }, [canEdit, startEdit]);
+  const closeDialog = (o: boolean) => {
+    setOpen(o);
+    if (!o) { setEditingId(null); setF(BLANK); setEditError(null); }
+  };
 
   const picked = stock.data?.items.find((i) => i.itemId === f.itemId);
   // Batch- and serial-tracked items say which batch, and which pieces.
@@ -77,7 +111,7 @@ export default function StockAdjustmentsPage() {
       toast.error('Say which batch.');
       return;
     }
-    const done = await adjust.run({
+    const payload = {
       itemId: f.itemId,
       warehouseId: f.warehouseId || null,
       date: f.date,
@@ -86,7 +120,27 @@ export default function StockAdjustmentsPage() {
       notes: f.notes || null,
       batch: master?.trackBatches ? { batchNo: f.batchNo.trim(), expiryDate: f.expiryDate || null } : null,
       serials: master?.trackSerials && serialList.length ? serialList : null,
-    });
+    };
+    if (editingId) {
+      setSavingEdit(true);
+      setEditError(null);
+      try {
+        const r = await api.put<{ warnings?: string[] }>(`/api/inventory/adjustments/${editingId}`, payload);
+        toastWarnings(r);
+        toast.success('Adjustment changed', { description: 'The stock figures now count it as edited.' });
+        closeDialog(false);
+        state.refetch();
+        stock.refetch();
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        setEditError(message);
+        toast.error('Not saved', { description: message });
+      } finally {
+        setSavingEdit(false);
+      }
+      return;
+    }
+    const done = await adjust.run(payload);
     if (!done) {
       toast.error(adjust.error ?? 'The adjustment was not recorded');
       return;
@@ -142,6 +196,13 @@ export default function StockAdjustmentsPage() {
       key: 'value', header: 'Value', align: 'right', sortValue: (r) => r.valuePaise,
       cell: (r) => <Money value={r.valuePaise} colored />,
     },
+    {
+      key: 'actions', header: '', align: 'right',
+      cell: (r) => (canEdit ? (
+        <RowActions onEdit={() => void startEdit(r.id)} onDelete={() => setDeleting(r)}
+          editTitle="Edit this adjustment" deleteTitle="Delete this adjustment" />
+      ) : null),
+    },
   ];
 
   return (
@@ -151,16 +212,18 @@ export default function StockAdjustmentsPage() {
         description="Breakage, theft, stocktake corrections — the movements no document explains."
         actions={
           canEdit && (
-            <Dialog open={open} onOpenChange={setOpen}>
+            <Dialog open={open} onOpenChange={closeDialog}>
               <DialogTrigger asChild>
-                <Button size="sm" className="gap-1.5"><Plus className="size-4" /> Adjust stock</Button>
+                <Button size="sm" className="gap-1.5" onClick={() => { setEditingId(null); setF(BLANK); }}><Plus className="size-4" /> Adjust stock</Button>
               </DialogTrigger>
-              <DialogContent>
+              <DialogContent data-slot={editingId ? 'adjustment-edit' : 'adjustment-new'}>
                 <DialogHeader>
-                  <DialogTitle>Adjust stock</DialogTitle>
+                  <DialogTitle>{editingId ? 'Edit adjustment' : 'Adjust stock'}</DialogTitle>
                   <FoldNav />
                   <DialogDescription>
-                    A negative quantity writes stock off and posts the loss. A positive one corrects it upward.
+                    {editingId
+                      ? 'Saved over the adjustment as it was: the stock figures count it as edited, from its date. Refused if goods it brought in have been used since.'
+                      : 'A negative quantity writes stock off and posts the loss. A positive one corrects it upward.'}
                   </DialogDescription>
                 </DialogHeader>
                 <div className="space-y-4">
@@ -241,7 +304,7 @@ export default function StockAdjustmentsPage() {
                     </Field>
                   )}
 
-                  {picked && (
+                  {picked && !editingId && (
                     <div className="rounded-md border bg-muted/40 p-3 text-xs text-muted-foreground">
                       {picked.name}: {picked.qty} on hand → {picked.qty + f.qtyDelta} after this.
                       {picked.unitCostPaise > 0 && (
@@ -256,12 +319,12 @@ export default function StockAdjustmentsPage() {
                       )}
                     </div>
                   )}
-                  {adjust.error && <p className="text-sm text-destructive">{adjust.error}</p>}
+                  {(editingId ? editError : adjust.error) && <p className="text-sm text-destructive">{editingId ? editError : adjust.error}</p>}
                 </div>
                 <DialogFooter>
-                  <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
-                  <Button onClick={save} disabled={adjust.busy}>
-                    {adjust.busy ? 'Saving…' : 'Record adjustment'}
+                  <Button variant="outline" onClick={() => closeDialog(false)}>Cancel</Button>
+                  <Button onClick={save} disabled={adjust.busy || savingEdit} data-slot="adjustment-save">
+                    {adjust.busy || savingEdit ? 'Saving…' : editingId ? 'Save changes' : 'Record adjustment'}
                   </Button>
                 </DialogFooter>
               </DialogContent>
@@ -300,6 +363,19 @@ export default function StockAdjustmentsPage() {
           )
         }
       </AsyncPage>
+
+      <DeleteConfirmDialog
+        open={!!deleting}
+        onOpenChange={(o) => { if (!o) setDeleting(null); }}
+        title={deleting ? `Delete the adjustment of ${deleting.qtyDelta > 0 ? '+' : ''}${deleting.qtyDelta} ${deleting.itemName}?` : 'Delete the adjustment?'}
+        description="Its quantity comes off the stock figures, from its date, as if it had never been entered. Refused if goods it brought in have been sold or used since, or a numbered piece on it has moved. The audit trail keeps a copy of it."
+        onConfirm={async (reason) => {
+          const r = await api.delete<{ warnings?: string[] }>(withReasonQuery(`/api/inventory/adjustments/${deleting!.id}`, reason));
+          toastWarnings(r);
+        }}
+        doneMessage="Adjustment deleted"
+        onDone={() => { state.refetch(); stock.refetch(); }}
+      />
     </>
   );
 }
