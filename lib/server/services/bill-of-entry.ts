@@ -39,7 +39,11 @@ export interface BillOfEntryInput {
   notes?: string | null;
 }
 
-export async function recordBillOfEntry(trx: Trx, orgId: number, userId: number | null, input: BillOfEntryInput) {
+export async function recordBillOfEntry(
+  trx: Trx, orgId: number, userId: number | null, input: BillOfEntryInput,
+  /** Edit (purchase-changes.ts updateBillOfEntry): write over this row, its old entry already reversed. */
+  opts: { replace?: { id: number } } = {},
+) {
   const boeNo = input.boeNo.trim();
   if (!/^\d{6,8}$/.test(boeNo)) throw badRequest('A bill of entry number is 6 to 8 digits.');
   const port = input.portCode.trim().toUpperCase();
@@ -64,7 +68,8 @@ export async function recordBillOfEntry(trx: Trx, orgId: number, userId: number 
     if (input.vendorId && bill.vendor_id !== input.vendorId) throw badRequest('The bill is from a different supplier.');
   }
   const dupe = await trx.selectFrom('bills_of_entry').select('id').where('org_id', '=', orgId)
-    .where('boe_no', '=', boeNo).where('boe_date', '=', input.boeDate).where('port_code', '=', port).where('status', '<>', 'void').executeTakeFirst();
+    .where('boe_no', '=', boeNo).where('boe_date', '=', input.boeDate).where('port_code', '=', port).where('status', '<>', 'void')
+    .$if(!!opts.replace, (q) => q.where('id', '<>', opts.replace!.id)).executeTakeFirst();
   if (dupe) throw conflict(`Bill of entry ${boeNo} of ${input.boeDate} at ${port} is already recorded.`);
 
   const eligibility = input.itcEligibility ?? 'eligible';
@@ -78,14 +83,20 @@ export async function recordBillOfEntry(trx: Trx, orgId: number, userId: number 
   if (claim && cess) lines.push({ accountId: requireAccount(acc, CODE.ITC_CESS), debit: cess, description: `Cess on import, BE ${boeNo}` });
   lines.push({ accountId: bank.ledger_account_id, credit: total, contactId: input.vendorId ?? null, description: `Paid at customs from ${bank.name}` });
 
-  const inserted = await trx.insertInto('bills_of_entry').values({
-    org_id: orgId, branch_id: input.branchId, vendor_id: input.vendorId ?? null, bill_id: input.billId ?? null,
+  const row = {
+    branch_id: input.branchId, vendor_id: input.vendorId ?? null, bill_id: input.billId ?? null,
     boe_no: boeNo, boe_date: input.boeDate, port_code: port,
     assessable_value: toSqlFromPaise(input.assessablePaise), customs_duty: toSqlFromPaise(input.customsDutyPaise),
     igst: toSqlFromPaise(input.igstPaise), cess: toSqlFromPaise(cess), itc_eligibility: eligibility,
-    duty_account_id: duty.id, paid_through_bank_account_id: bank.id, notes: input.notes?.trim() || null, created_by_user_id: userId,
-  }).executeTakeFirstOrThrow();
-  const id = Number(inserted.insertId);
+    duty_account_id: duty.id, paid_through_bank_account_id: bank.id, notes: input.notes?.trim() || null,
+  };
+  let id: number;
+  if (opts.replace) {
+    id = opts.replace.id;
+    await trx.updateTable('bills_of_entry').set({ ...row, status: 'recorded', void_reason: null, journal_entry_id: null }).where('id', '=', id).where('org_id', '=', orgId).execute();
+  } else {
+    id = Number((await trx.insertInto('bills_of_entry').values({ org_id: orgId, ...row, created_by_user_id: userId }).executeTakeFirstOrThrow()).insertId);
+  }
   const entry = await postEntry(trx, {
     orgId, branchId: input.branchId, date: input.boeDate, memo: `Bill of entry ${boeNo} — ${port}`,
     sourceType: 'bill_of_entry', sourceId: id, userId, module: 'purchases', lines,

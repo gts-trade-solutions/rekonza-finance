@@ -10,7 +10,7 @@
 import { FoldNav } from '@/components/layout/nav-state';
 import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { ArrowRight, Ban, MoreHorizontal, PackageCheck, Pencil, Plus, Trash2 } from 'lucide-react';
+import { ArrowRight, Ban, PackageCheck, Plus } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -33,10 +33,8 @@ import { useAppStore } from '@/lib/store';
 import { usePermission } from '@/lib/store/hooks';
 import { itemOptions } from '@/lib/options';
 import { GodownPicker } from '@/components/forms/godown-picker';
-import {
-  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
 import { DeleteGoodsReceiptDialog, EditGoodsReceiptDialog } from '@/components/purchases/goods-receipt-edit';
+import { RowActions } from '@/components/shared/row-actions';
 
 const today = () => new Date().toISOString().slice(0, 10);
 const inDays = (n: number) => { const d = new Date(); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
@@ -140,30 +138,16 @@ export default function GoodsReceiptsPage() {
               Record bill <ArrowRight className="size-3" />
             </Button>
           )}
-          {((canEdit && r.status === 'open') || (canVoid && (r.status === 'open' || r.status === 'cancelled'))) && (
-            <DropdownMenu>
-              <DropdownMenuTrigger aria-label={`More for ${r.number}`} data-slot="grn-menu"
-                className="inline-flex size-7 items-center justify-center rounded-[3px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground">
-                <MoreHorizontal className="size-4" />
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="min-w-44">
-                {canEdit && r.status === 'open' && (
-                  <>
-                    <DropdownMenuItem onClick={() => setEditingId(r.id)} data-slot="grn-edit"><Pencil className="mr-2 size-4" /> Edit</DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => void cancel(r)} data-slot="grn-cancel"><Ban className="mr-2 size-4" /> Cancel</DropdownMenuItem>
-                  </>
-                )}
-                {canVoid && (r.status === 'open' || r.status === 'cancelled') && (
-                  <>
-                    {canEdit && r.status === 'open' && <DropdownMenuSeparator />}
-                    <DropdownMenuItem onClick={() => setDeleting(r)} className="text-destructive focus:text-destructive" data-slot="grn-delete">
-                      <Trash2 className="mr-2 size-4" /> Delete
-                    </DropdownMenuItem>
-                  </>
-                )}
-              </DropdownMenuContent>
-            </DropdownMenu>
+          {/* Edit and Delete as buttons on the row: the client did not find them behind a ⋯. */}
+          {canEdit && r.status === 'open' && (
+            <Button size="xs" variant="ghost" className="gap-1" onClick={() => void cancel(r)} data-slot="grn-cancel">
+              <Ban className="size-3" /> Cancel
+            </Button>
           )}
+          <RowActions
+            onEdit={canEdit && r.status === 'open' ? () => setEditingId(r.id) : null}
+            onDelete={canVoid && (r.status === 'open' || r.status === 'cancelled') ? () => setDeleting(r) : null}
+            editTitle={`Edit ${r.number}`} deleteTitle={`Delete ${r.number}`} />
         </div>
       ),
     },

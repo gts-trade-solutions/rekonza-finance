@@ -2,6 +2,8 @@ import { z } from 'zod';
 import { db, transaction } from '@/lib/server/db';
 import { route, body, query, asId, badRequest } from '@/lib/server/http';
 import { runRecurringPurchase, type BillTemplateLine, type ExpenseTemplate } from '@/lib/server/services/recurring';
+import { RecurringPurchaseBody, recurringPurchaseValues } from '@/lib/server/recurring-purchase-input';
+import { deleteRecurringPurchase } from '@/lib/server/services/recurring-purchases';
 import '@/lib/server/jobs/boot';
 import { logAudit, auditMeta } from '@/lib/server/audit';
 
@@ -12,7 +14,6 @@ import { logAudit, auditMeta } from '@/lib/server/audit';
 // period at a time, by hand or on its date by the scheduler.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const FREQUENCIES = ['weekly', 'monthly', 'quarterly', 'yearly'] as const;
 const DATE = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use a yyyy-mm-dd date.');
 const id = z.union([z.string(), z.number()]);
 
@@ -53,6 +54,16 @@ export const GET = route(
           lastError: r.last_error,
           totalPaise,
           isDue: !!r.is_active && String(r.next_run).slice(0, 10) <= today,
+          // For Edit: the profile as written.
+          lines: r.kind === 'bill' ? (t as BillTemplateLine[]).map((l) => ({
+            itemId: l.itemId ? asId(l.itemId) : null, accountId: l.accountId ? asId(l.accountId) : null, description: l.description,
+            qty: l.qty, ratePaise: l.ratePaise, gstRatePct: l.gstRatePct, hsnSac: l.hsnSac,
+          })) : null,
+          expense: r.kind === 'expense' ? {
+            accountId: asId((t as ExpenseTemplate).accountId), amountPaise: (t as ExpenseTemplate).amountPaise, gstRatePct: (t as ExpenseTemplate).gstRatePct,
+            itcEligibility: (t as ExpenseTemplate).itcEligibility, notes: (t as ExpenseTemplate).notes,
+            paidThroughBankAccountId: r.paid_through_bank_account_id ? asId(r.paid_through_bank_account_id) : null,
+          } : null,
         };
       }),
     };
@@ -60,74 +71,13 @@ export const GET = route(
   { permission: { module: 'purchases', action: 'view' } },
 );
 
-const BillLine = z.object({
-  itemId: id.nullish(),
-  accountId: id.nullish(),
-  description: z.string().trim().max(500).nullish(),
-  qty: z.number().positive(),
-  ratePaise: z.number().int().nonnegative(),
-  gstRatePct: z.number().min(0).max(50).default(18),
-  hsnSac: z.string().trim().max(10).nullish(),
-});
-
-const CreateInput = z.object({
-  kind: z.enum(['bill', 'expense']),
-  name: z.string().trim().min(1, 'Give the profile a name.').max(200),
-  vendorId: id.nullish(),
-  frequency: z.enum(FREQUENCIES),
-  startDate: DATE,
-  endDate: DATE.nullish(),
-  dueDays: z.number().int().min(0).max(365).default(30),
-  autoRun: z.boolean().optional(),
-  lines: z.array(BillLine).max(100).optional(),
-  expense: z.object({
-    accountId: id,
-    paidThroughBankAccountId: id,
-    amountPaise: z.number().int().positive('Enter an amount above zero.'),
-    gstRatePct: z.number().min(0).max(50).default(0),
-    itcEligibility: z.enum(['eligible', 'ineligible', 'capital_goods']).default('eligible'),
-    notes: z.string().trim().max(500).nullish(),
-  }).optional(),
-});
-
 export const POST = route(
   async ({ orgId, user, branchId, req }) => {
-    const input = await body(req, CreateInput);
-    const vendorId = input.vendorId ? Number(input.vendorId) : null;
-    if (vendorId) {
-      const v = await db.selectFrom('contacts').select('id').where('id', '=', vendorId).where('org_id', '=', orgId).executeTakeFirst();
-      if (!v) throw badRequest('That vendor does not exist.');
-    }
-    if (input.endDate && input.endDate < input.startDate) throw badRequest('The profile cannot end before it starts.');
-
-    let template: BillTemplateLine[] | ExpenseTemplate;
-    let paidThrough: number | null = null;
-    if (input.kind === 'bill') {
-      if (!vendorId) throw badRequest('A recurring bill needs the vendor it comes from.');
-      if (!input.lines?.length) throw badRequest('A recurring bill needs at least one line.');
-      if (input.lines.some((l) => !l.itemId && !l.accountId)) throw badRequest('Each line needs an item, or the account it is booked to.');
-      template = input.lines.map((l) => ({
-        itemId: l.itemId ? Number(l.itemId) : null, accountId: l.accountId ? Number(l.accountId) : null,
-        description: l.description ?? null, qty: l.qty, ratePaise: l.ratePaise, gstRatePct: l.gstRatePct, hsnSac: l.hsnSac ?? null,
-      }));
-    } else {
-      if (!input.expense) throw badRequest('Say what the expense is booked to, what it is paid from and how much.');
-      const e = input.expense;
-      const [acc, bank] = await Promise.all([
-        db.selectFrom('accounts').select(['id', 'type']).where('id', '=', Number(e.accountId)).where('org_id', '=', orgId).executeTakeFirst(),
-        db.selectFrom('bank_accounts').select('id').where('id', '=', Number(e.paidThroughBankAccountId)).where('org_id', '=', orgId).executeTakeFirst(),
-      ]);
-      if (!acc || acc.type !== 'expense') throw badRequest('Book a recurring expense to an expense account.');
-      if (!bank) throw badRequest('That account to pay from does not exist.');
-      paidThrough = bank.id;
-      template = { accountId: acc.id, amountPaise: e.amountPaise, gstRatePct: e.gstRatePct, itcEligibility: e.itcEligibility, notes: e.notes ?? null };
-    }
-
+    const input = await body(req, RecurringPurchaseBody);
+    const values = await recurringPurchaseValues(db, orgId, input);
     const inserted = await db.insertInto('recurring_purchases').values({
-      org_id: orgId, branch_id: branchId, kind: input.kind, profile_name: input.name, vendor_id: vendorId,
-      frequency: input.frequency, start_date: input.startDate, end_date: input.endDate ?? null, next_run: input.startDate,
-      due_days: input.dueDays, paid_through_bank_account_id: paidThrough, template: JSON.stringify(template),
-      auto_run: input.autoRun ? 1 : 0, is_active: 1, created_by_user_id: user.userId,
+      org_id: orgId, branch_id: branchId, kind: input.kind, ...values, next_run: input.startDate,
+      is_active: 1, created_by_user_id: user.userId,
     }).executeTakeFirstOrThrow();
     const newId = Number(inserted.insertId);
     await logAudit({
@@ -181,20 +131,20 @@ export const PATCH = route(
   { permission: { module: 'purchases', action: 'create' } },
 );
 
+/** The old address of Delete (?id=); the same as DELETE /api/recurring-purchases/[id]. */
 export const DELETE = route(
   async ({ orgId, user, req }) => {
     const { id: raw } = query(req, z.object({ id: z.string() }));
     const pid = Number(raw);
-    const profile = await db.selectFrom('recurring_purchases').select(['id', 'profile_name'])
-      .where('id', '=', pid).where('org_id', '=', orgId).executeTakeFirst();
-    if (!profile) throw badRequest('That profile does not exist.');
-    await db.deleteFrom('recurring_purchases').where('id', '=', pid).where('org_id', '=', orgId).execute();
-    await logAudit({
-      orgId, actorUserId: user.userId, actorName: user.name, action: 'void',
-      targetType: 'recurring_purchase', targetId: pid, targetLabel: profile.profile_name,
-      detail: 'Profile deleted. Bills and expenses it already raised are unaffected.', ...auditMeta(req),
+    return transaction(async (trx) => {
+      const r = await deleteRecurringPurchase(trx, orgId, pid);
+      await logAudit({
+        trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'delete',
+        targetType: 'recurring_purchase', targetId: pid, targetLabel: r.name,
+        detail: `Recurring ${r.kind} profile deleted. The ${r.raised} it raised stay as they are.`, ...auditMeta(req),
+      });
+      return { id: asId(pid) };
     });
-    return { id: asId(pid) };
   },
-  { permission: { module: 'purchases', action: 'edit' } },
+  { permission: { module: 'purchases', action: 'void' } },
 );

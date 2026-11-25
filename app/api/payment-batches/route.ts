@@ -1,9 +1,10 @@
 import { z } from 'zod';
 import { db, transaction } from '@/lib/server/db';
-import { route, body, query, asId } from '@/lib/server/http';
+import { route, body, query, asId, forbidden } from '@/lib/server/http';
+import { hasPermission } from '@/lib/rbac';
 import { logAudit, auditMeta } from '@/lib/server/audit';
 import {
-  bankFile, cancelBatch, createBatch, listBatches, markBatchPaid, payableBills, submitBatch,
+  bankFile, cancelBatch, createBatch, deleteBatch, listBatches, markBatchPaid, payableBills, submitBatch, updateBatch,
 } from '@/lib/server/services/payment-batches';
 
 // Payment batches: choose bills, release them (with a second person where an
@@ -31,6 +32,14 @@ const Id = z.union([z.string(), z.number()]);
 const Input = z.discriminatedUnion('action', [
   z.object({
     action: z.literal('create'),
+    bankAccountId: Id,
+    payDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    notes: z.string().max(500).nullish(),
+    lines: z.array(z.object({ billId: Id, amountPaise: z.number().int().positive() })).min(1, 'Choose at least one bill to pay.'),
+  }),
+  z.object({
+    action: z.literal('update'),
+    id: Id,
     bankAccountId: Id,
     payDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     notes: z.string().max(500).nullish(),
@@ -66,6 +75,20 @@ export const POST = route(
         return { id: asId(made.id), number: made.number };
       }
       const id = Number(input.id);
+      if (input.action === 'update') {
+        // Making a batch is 'create'; changing one is 'edit', as for any document.
+        if (!hasPermission(user.role, 'purchases', 'edit', user.permissions ?? null)) throw forbidden(`Your role (${user.role}) cannot edit in purchases.`);
+        const made = await updateBatch(trx, orgId, id, {
+          bankAccountId: Number(input.bankAccountId), payDate: input.payDate, notes: input.notes,
+          lines: input.lines.map((l) => ({ billId: Number(l.billId), amountPaise: l.amountPaise })),
+        });
+        await logAudit({
+          trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'update', targetType: 'payment_batch', targetId: id,
+          targetLabel: made.number, detail: `Batch ${made.number} edited: ${input.lines.length} bill(s) for ${(made.totalPaise / 100).toFixed(2)}, paying ${input.payDate}`,
+          payload: { before: made.before }, ...meta,
+        });
+        return { id: asId(id), number: made.number, status: 'draft' as const };
+      }
       if (input.action === 'submit') {
         const r = await submitBatch(trx, orgId, user.userId, id);
         await audit(id, r.status === 'pending' ? `Submitted for ${r.approverRole} approval` : 'Released to the bank (no approval rule covers it)', r.status === 'approved' ? 'approve' : 'update');
@@ -89,4 +112,24 @@ export const POST = route(
     });
   },
   { permission: { module: 'purchases', action: 'create' } },
+);
+
+/**
+ * Delete a batch that has not been released or paid (?id=, ?reason=). Its
+ * bills are free for another batch, and can be edited or deleted again.
+ */
+export const DELETE = route(
+  async ({ orgId, user, req }) => {
+    const q = query(req, z.object({ id: z.string(), reason: z.string().max(300).optional() }));
+    const id = Number(q.id);
+    return transaction(async (trx) => {
+      const gone = await deleteBatch(trx, orgId, user.userId, id, q.reason);
+      await logAudit({
+        trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'delete', targetType: 'payment_batch', targetId: id,
+        targetLabel: gone.number, detail: `Batch ${gone.number} deleted${q.reason ? ` — ${q.reason}` : ''}; its bills are free for another`, ...auditMeta(req),
+      });
+      return { deleted: true, number: gone.number };
+    });
+  },
+  { permission: { module: 'purchases', action: 'void' } },
 );

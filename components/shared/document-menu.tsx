@@ -20,7 +20,7 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import type { Column } from '@/components/shared/data-table';
-import { api, bills as billsApi, payments as paymentsApi, salesDocuments, vendorCredits, type EditableSalesKind } from '@/lib/api/client';
+import { api, bills as billsApi, payments as paymentsApi, purchaseOrders, salesDocuments, vendorCredits, type EditableSalesKind } from '@/lib/api/client';
 import { formatINR } from '@/lib/money';
 import { usePermission } from '@/lib/store/hooks';
 import { whatsappNumber } from '@/components/sales/send-invoice';
@@ -38,6 +38,7 @@ const DELETABLE: Partial<Record<PrintKind, (id: string, reason?: string) => Prom
   'payment-made': (id, r) => paymentsApi.remove(id, r),
   bill: (id, r) => billsApi.remove(id, r),
   'vendor-credit': (id, r) => vendorCredits.remove(id, r),
+  'purchase-order': (id, r) => purchaseOrders.remove(id, r),
 };
 /** Edit opens the form; kinds a page edits itself are shown by its onEdit. */
 export const EDITABLE_KINDS: PrintKind[] = ['estimate', 'sales-order', 'challan', 'credit-note', 'payment-received', 'payment-made'];

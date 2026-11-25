@@ -10,7 +10,8 @@
 import { FoldNav } from '@/components/layout/nav-state';
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { Loader2, Pencil, Plus, Receipt, Tags, Trash2, Wallet } from 'lucide-react';
+import { Loader2, Plus, Receipt, Tags, Wallet } from 'lucide-react';
+import { DeleteButton, EditButton } from '@/components/shared/row-actions';
 import { TagsPanel } from '@/components/shared/tags-panel';
 import { CustomFieldsPanel } from '@/components/shared/custom-fields-panel';
 import { toast } from 'sonner';
@@ -251,18 +252,10 @@ export default function ExpensesPage() {
     {
       key: 'change', header: '', align: 'right', sortValue: () => 0,
       cell: (r) => (
-        <div className="flex justify-end gap-0.5">
-          {canEdit && (
-            <Button size="icon-sm" variant="ghost" aria-label={`Edit ${r.number}`} onClick={() => void startEdit(r)} data-slot="edit-expense">
-              <Pencil className="size-3.5" />
-            </Button>
-          )}
-          {canDelete && (
-            <Button size="icon-sm" variant="ghost" aria-label={`Delete ${r.number}`} className="text-destructive hover:text-destructive"
-              onClick={() => { setDeleteError(null); setDeleting(r); }} data-slot="delete-expense">
-              <Trash2 className="size-3.5" />
-            </Button>
-          )}
+        // The words beside the icons: the client looks for "Edit" and "Delete".
+        <div className="flex justify-end gap-1">
+          {canEdit && <EditButton onClick={() => void startEdit(r)} slot="edit-expense" title={`Edit ${r.number}`} />}
+          {canDelete && <DeleteButton onClick={() => { setDeleteError(null); setDeleting(r); }} slot="delete-expense" title={`Delete ${r.number}`} />}
         </div>
       ),
     },

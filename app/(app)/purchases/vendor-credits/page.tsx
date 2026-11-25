@@ -22,7 +22,8 @@ import {
 } from '@/components/ui/dialog';
 import { PageHeader } from '@/components/shared/page-header';
 import { DataTable, type Column } from '@/components/shared/data-table';
-import { BulkPrintButton, documentMenuColumn } from '@/components/shared/document-menu';
+import { BulkPrintButton, DeleteDocumentDialog, documentMenuColumn } from '@/components/shared/document-menu';
+import { RowActions } from '@/components/shared/row-actions';
 import { Money } from '@/components/shared/money';
 import { StatusBadge } from '@/components/shared/status-badge';
 import { EmptyState } from '@/components/shared/empty-state';
@@ -53,6 +54,8 @@ const short = (d: string) => new Date(d).toLocaleDateString('en-IN');
 export default function VendorCreditsPage() {
   const canCreate = usePermission('purchases', 'create');
   const canEdit = usePermission('purchases', 'edit');
+  const canDelete = usePermission('purchases', 'void');
+  const [deleting, setDeleting] = useState<PurchaseDocRow | null>(null);
   const branchId = useAppStore((s) => s.activeBranchId);
   const bankAccounts = useAppStore((s) => s.bankAccounts);
 
@@ -169,19 +172,20 @@ export default function VendorCreditsPage() {
       key: 'actions', header: '', align: 'right',
       cell: (r) => {
         const unapplied = r.totalPaise - r.appliedPaise;
-        if (r.status === 'void') return <span className="text-xs text-muted-foreground">Void</span>;
-        if (r.status === 'refunded') return <span className="text-xs text-muted-foreground">Refunded</span>;
-        if (unapplied <= 0 || !canCreate) return null;
+        // Edit and Delete as buttons on the row, beside the ⋯: the client looks for the words.
         return (
-          <Button
-            variant="outline"
-            size="xs"
-            className="gap-1"
-            disabled={refund.busy}
-            onClick={() => void doRefund(r)}
-          >
-            <Undo2 className="size-3" /> Refund received
-          </Button>
+          <RowActions
+            onEdit={canEdit && r.status !== 'void' && r.status !== 'refunded' ? () => { if (!loadingEdit) void startEdit(r.id); } : null}
+            onDelete={canDelete && r.status !== 'refunded' ? () => setDeleting(r) : null}
+            editTitle={`Edit ${r.number}`} deleteTitle={`Delete ${r.number}`}>
+            {r.status === 'void' ? <span className="text-xs text-muted-foreground">Void</span>
+              : r.status === 'refunded' ? <span className="text-xs text-muted-foreground">Refunded</span>
+              : unapplied > 0 && canCreate ? (
+                <Button variant="outline" size="xs" className="gap-1" disabled={refund.busy} onClick={() => void doRefund(r)}>
+                  <Undo2 className="size-3" /> Refund received
+                </Button>
+              ) : null}
+          </RowActions>
         );
       },
     },
@@ -298,6 +302,8 @@ export default function VendorCreditsPage() {
           )
         }
       />
+      <DeleteDocumentDialog kind="vendor-credit" id={deleting?.id ?? ''} number={deleting?.number ?? ''} open={!!deleting}
+        onOpenChange={(v) => { if (!v) setDeleting(null); }} onDeleted={() => void state.refetch()} />
       <AsyncPage state={state}>
         {(d) =>
           d.documents.length === 0 ? (

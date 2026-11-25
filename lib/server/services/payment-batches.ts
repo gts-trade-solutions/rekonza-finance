@@ -29,6 +29,7 @@ import { makePayment } from './payments';
 import { mayApprove, recordApprovalAction, ruleFor } from './approvals';
 import { fyLabelFor } from './sales';
 import { seal, unseal } from '../crypto/fields';
+import { plain, recordDeletion, unlinkDocument } from './doc-delete';
 
 /** RTGS carries ₹2 lakh and above; below that a transfer goes by NEFT. */
 export const RTGS_FROM: Paise = 2_00_000_00;
@@ -204,6 +205,65 @@ export async function cancelBatch(trx: Trx, orgId: number, id: number) {
   const b = await load(trx, orgId, id);
   if (b.status === 'paid' || b.status === 'cancelled') throw conflict(`${b.number} is ${b.status}.`);
   await trx.updateTable('payment_batches').set({ status: 'cancelled' }).where('id', '=', id).execute();
+}
+
+// ── Edit and Delete ─────────────────────────────────────────────────────────
+//
+// A batch is a list of bills to pay; it posts nothing until it is marked paid,
+// when a payment is recorded for each supplier. So it can be edited freely
+// while it is a draft or sent back, and deleted until it is released. Once
+// released its file may already be with the bank: cancel it first. Once paid
+// the payments stand (they are changed in Payments made, not here).
+
+const STATE: Record<string, string> = { pending: 'waiting for approval', approved: 'released', paid: 'paid', cancelled: 'cancelled', rejected: 'sent back', draft: 'a draft' };
+
+/** Edit a draft or sent-back batch: its bank, date, note and bills. It is a draft again, to be released afresh. */
+export async function updateBatch(trx: Trx, orgId: number, id: number, input: Omit<BatchInput, 'branchId'>) {
+  const b = await load(trx, orgId, id);
+  if (b.status !== 'draft' && b.status !== 'rejected') {
+    throw conflict(`${b.number} is ${STATE[b.status] ?? b.status}; only a draft or a batch sent back can be edited.` +
+      (b.status === 'pending' || b.status === 'approved' ? ' Cancel it and make a new one.' : ''));
+  }
+  if (!input.lines.length) throw badRequest('Choose at least one bill to pay.');
+  if (new Set(input.lines.map((l) => l.billId)).size !== input.lines.length) throw badRequest('A bill appears twice in the batch.');
+  const bank = await trx.selectFrom('bank_accounts').select(['id', 'kind', 'is_active'])
+    .where('id', '=', input.bankAccountId).where('org_id', '=', orgId).executeTakeFirst();
+  if (!bank || bank.kind !== 'bank' || !bank.is_active) throw badRequest('Pay from one of your bank accounts.');
+  const lines = [];
+  for (const l of input.lines) {
+    const bill = await payable(trx, orgId, l.billId, l.amountPaise, id);
+    lines.push({ billId: bill.id, vendorId: bill.vendor_id, amountPaise: l.amountPaise });
+  }
+  const before = { ...b, lines: await trx.selectFrom('payment_batch_lines').selectAll().where('batch_id', '=', id).execute() };
+  const total = lines.reduce((t, l) => t + l.amountPaise, 0);
+  await trx.deleteFrom('payment_batch_lines').where('batch_id', '=', id).execute();
+  await trx.insertInto('payment_batch_lines').values(lines.map((l) => ({
+    batch_id: id, org_id: orgId, vendor_id: l.vendorId, bill_id: l.billId, amount: toSqlFromPaise(l.amountPaise),
+  }))).execute();
+  await trx.updateTable('payment_batches').set({
+    bank_account_id: bank.id, pay_date: input.payDate, notes: input.notes ?? null, total_amount: toSqlFromPaise(total),
+    status: 'draft', rejection_reason: null,
+  }).where('id', '=', id).execute();
+  return { id, number: b.number, totalPaise: total, before };
+}
+
+/** Delete a batch that has not been released or paid; its bills are free for another. The record is kept. */
+export async function deleteBatch(trx: Trx, orgId: number, userId: number | null, id: number, reason?: string | null) {
+  const b = await load(trx, orgId, id);
+  if (b.status === 'paid') {
+    throw conflict(`${b.number} is paid: the bank made the transfers and a payment is recorded for each supplier. Those stand, so the batch does too.`);
+  }
+  if (b.status === 'approved') throw conflict(`${b.number} has been released, and its bank file may be with the bank. Cancel it first, then delete it.`);
+  const lines = await trx.selectFrom('payment_batch_lines').selectAll().where('batch_id', '=', id).execute();
+  await unlinkDocument(trx, orgId, 'payment_batch', id);
+  await recordDeletion(trx, {
+    orgId, userId, docType: 'payment_batch', docId: id, number: b.number, date: ymd(b.pay_date),
+    totalPaise: toPaiseFromSql(b.total_amount), branchId: b.branch_id, reason,
+    snapshot: { batch: plain(b), lines: lines.map(plain) },
+  });
+  await trx.deleteFrom('payment_batch_lines').where('batch_id', '=', id).execute();
+  await trx.deleteFrom('payment_batches').where('id', '=', id).where('org_id', '=', orgId).execute();
+  return { number: b.number };
 }
 
 interface Transfer { vendorId: number; beneficiary: string; accountNo: string; ifsc: string; amountPaise: Paise; bills: { lineId: number; billId: number; number: string; amountPaise: Paise }[] }

@@ -8,7 +8,7 @@
 // about it.
 
 import { FoldNav } from '@/components/layout/nav-state';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { ArrowRight, ClipboardList, PackageCheck, Plus } from 'lucide-react';
 import { toast } from 'sonner';
 import { useRouter } from 'next/navigation';
@@ -28,13 +28,15 @@ import { StatusBadge } from '@/components/shared/status-badge';
 import { EmptyState } from '@/components/shared/empty-state';
 import { AsyncPage } from '@/components/shared/async-state';
 import { Field, MoneyInput } from '@/components/shared/form-bits';
-import { orderFlow, purchaseDocuments, type PurchaseDocListResponse, type PurchaseDocRow } from '@/lib/api/client';
+import { orderFlow, purchaseDocuments, purchaseOrders, type PurchaseDocListResponse, type PurchaseDocRow } from '@/lib/api/client';
 import { LinePickDialog } from '@/components/shared/line-pick-dialog';
 import { useApi, useApiAction } from '@/lib/api/use-api';
 import { useAppStore } from '@/lib/store';
 import { usePermission } from '@/lib/store/hooks';
 import { itemOptions } from '@/lib/options';
 import { VoucherTypePicker } from '@/components/forms/voucher-type-picker';
+import { DeleteConfirmDialog, RowActions } from '@/components/shared/row-actions';
+import { EditPurchaseOrderDialog } from '@/components/purchases/purchase-order-edit';
 
 const today = () => new Date().toISOString().slice(0, 10);
 const short = (d: string | null) => (d ? new Date(d).toLocaleDateString('en-IN') : '—');
@@ -48,6 +50,17 @@ function inDays(n: number): string {
 export default function PurchaseOrdersPage() {
   const router = useRouter();
   const canCreate = usePermission('purchases', 'create');
+  const canEdit = usePermission('purchases', 'edit');
+  const canDelete = usePermission('purchases', 'void');
+  // Zoho's Edit and Delete, while nothing on the order is received or billed (the server says when it is).
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<PurchaseDocRow | null>(null);
+  const closeEdit = useCallback(() => setEditingId(null), []);
+  // ?edit=<id>: open that order's Edit window.
+  useEffect(() => {
+    const id = new URLSearchParams(window.location.search).get('edit');
+    if (id && canEdit) setEditingId(id);
+  }, [canEdit]);
   const branchId = useAppStore((s) => s.activeBranchId);
   const items = useAppStore((s) => s.items);
 
@@ -147,21 +160,31 @@ export default function PurchaseOrdersPage() {
     { key: 'total', header: 'Order value', align: 'right', sortValue: (r) => r.totalPaise, cell: (r) => <Money value={r.totalPaise} className="font-medium" /> },
     {
       key: 'actions', header: '', align: 'right',
-      cell: (r) =>
-        r.status === 'billed' ? (
-          <span className="text-xs text-muted-foreground">Billed</span>
-        ) : r.status === 'cancelled' ? (
-          <span className="text-xs text-muted-foreground">Cancelled</span>
-        ) : canCreate && r.status !== 'draft' && r.status !== 'closed' ? (
-          <div className="flex justify-end gap-1.5">
-            <Button size="xs" variant="outline" className="gap-1" onClick={() => openStep(r, 'receive')}>
-              <PackageCheck className="size-3" /> Receive
-            </Button>
-            <Button size="xs" className="gap-1" onClick={() => openStep(r, 'bill')}>
-              Record bill <ArrowRight className="size-3" />
-            </Button>
-          </div>
-        ) : null,
+      cell: (r) => {
+        // Nothing billed on it yet: Zoho's Edit and Delete (a receipt on it is refused by the server, with why).
+        const untouched = r.appliedPaise === 0 && r.status !== 'billed' && r.status !== 'partially_billed';
+        return (
+          <RowActions
+            onEdit={canEdit && untouched && r.status !== 'cancelled' ? () => setEditingId(r.id) : null}
+            onDelete={canDelete && untouched ? () => setDeleting(r) : null}
+            editTitle={`Edit ${r.number}`} deleteTitle={`Delete ${r.number}`}>
+            {r.status === 'billed' ? (
+              <span className="text-xs text-muted-foreground">Billed</span>
+            ) : r.status === 'cancelled' ? (
+              <span className="text-xs text-muted-foreground">Cancelled</span>
+            ) : canCreate && r.status !== 'draft' && r.status !== 'closed' ? (
+              <>
+                <Button size="xs" variant="outline" className="gap-1" onClick={() => openStep(r, 'receive')}>
+                  <PackageCheck className="size-3" /> Receive
+                </Button>
+                <Button size="xs" className="gap-1" onClick={() => openStep(r, 'bill')}>
+                  Record bill <ArrowRight className="size-3" />
+                </Button>
+              </>
+            ) : null}
+          </RowActions>
+        );
+      },
     },
   ];
 
@@ -270,7 +293,8 @@ export default function PurchaseOrdersPage() {
             ) : (
               <DataTable
                 rows={d.documents}
-                columns={[...columns, documentMenuColumn('purchase-order', state.refetch)]}
+                columns={[...columns, documentMenuColumn<PurchaseDocRow>('purchase-order', state.refetch,
+                  (r) => setEditingId(r.id), (r) => r.appliedPaise === 0 && r.status !== 'cancelled' && r.status !== 'billed' && r.status !== 'partially_billed')]}
                 getRowId={(r) => r.id}
                 selectable
                 bulkActions={(selected) => <BulkPrintButton kind="purchase-order" ids={selected.map((r) => r.id)} />}
@@ -282,6 +306,16 @@ export default function PurchaseOrdersPage() {
           </>
         )}
       </AsyncPage>
+
+      <EditPurchaseOrderDialog orderId={editingId} onClose={closeEdit} onSaved={() => void state.refetch()} />
+      <DeleteConfirmDialog
+        open={!!deleting} onOpenChange={(v) => { if (!v) setDeleting(null); }}
+        title={`Delete purchase order ${deleting?.number ?? ''}?`}
+        description="It is removed. An order posts nothing, so the ledger does not change; the audit trail keeps a copy of it as it was. Refused once goods are received or a bill is raised on it."
+        doneMessage={`Purchase order ${deleting?.number ?? ''} deleted`}
+        onConfirm={(reason) => purchaseOrders.remove(deleting!.id, reason)}
+        onDone={() => void state.refetch()}
+      />
 
       <LinePickDialog
         open={!!step}
