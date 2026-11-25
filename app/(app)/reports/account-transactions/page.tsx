@@ -13,6 +13,7 @@ import { downloadCsv, ReportShell, useReportRange } from '@/components/shared/re
 import { ReportGrid, gridCsv, type GridColumn } from '@/components/shared/report-grid';
 import { AsyncPage } from '@/components/shared/async-state';
 import { journal, type JournalResponse } from '@/lib/api/client';
+import { journalRowRef, LedgerEntryActions, type LedgerRowRef } from '@/components/reports/ledger-entry-actions';
 import { useApi } from '@/lib/api/use-api';
 import { toRupees } from '@/lib/money';
 
@@ -32,6 +33,8 @@ interface Row {
   sourceId: string | null;
   debit: number;
   credit: number;
+  /** The entry, for the row's View, Edit and Delete. */
+  ref: LedgerRowRef;
 }
 
 function flatten(d: JournalResponse): Row[] {
@@ -49,13 +52,14 @@ function flatten(d: JournalResponse): Row[] {
         sourceId: e.sourceId,
         debit: l.debitPaise,
         credit: l.creditPaise,
+        ref: journalRowRef(e),
       });
     }
   }
   return out;
 }
 
-const columns: GridColumn<Row>[] = [
+const baseColumns: GridColumn<Row>[] = [
   { key: 'date', header: 'Date', cell: (r) => <span className="tabular text-xs">{new Date(r.date).toLocaleDateString('en-IN')}</span>, csv: (r) => r.date },
   { key: 'je', header: 'JE#', cell: (r) => <span className="tabular text-xs text-muted-foreground">#{r.entryNo}</span>, csv: (r) => r.entryNo },
   {
@@ -91,6 +95,15 @@ export default function AccountTransactionsPage() {
     () => journal.list({ from: range.from, to: range.to, limit: 500 }),
     [range.from, range.to],
   );
+  // View, Edit and Delete on each line's entry, as on the General Ledger (not exported to CSV).
+  const columns: GridColumn<Row>[] = [
+    ...baseColumns,
+    {
+      key: 'actions', header: 'Actions', align: 'right',
+      className: 'sticky right-0 w-[176px] bg-card px-2 py-1 shadow-[-8px_0_8px_-8px_rgba(0,0,0,0.12)] no-print',
+      cell: (r) => <LedgerEntryActions row={r.ref} onChanged={() => void state.refetch()} />,
+    },
+  ];
 
   return (
     <ReportShell
@@ -99,7 +112,7 @@ export default function AccountTransactionsPage() {
       range={range}
       onRangeChange={setRange}
       onExport={() => {
-        if (state.data) downloadCsv('account-transactions.csv', gridCsv(flatten(state.data), columns));
+        if (state.data) downloadCsv('account-transactions.csv', gridCsv(flatten(state.data), baseColumns));
       }}
     >
       <AsyncPage state={state}>

@@ -15,6 +15,7 @@ import { Money } from '@/components/shared/money';
 import { downloadCsv, ReportShell, ReportTable, useReportRange } from '@/components/shared/report-shell';
 import { AsyncPage, LoadingRows } from '@/components/shared/async-state';
 import { journal, type JournalEntryRow, type JournalResponse } from '@/lib/api/client';
+import { journalRowRef, LedgerEntryActions } from '@/components/reports/ledger-entry-actions';
 import { useApi } from '@/lib/api/use-api';
 import { toRupees } from '@/lib/money';
 
@@ -106,6 +107,8 @@ export default function DayBookPage() {
                           <th className="px-4 py-2 text-left font-semibold">Narration</th>
                           <th className="px-4 py-2 text-left font-semibold">Accounts touched</th>
                           <th className="px-4 py-2 text-right font-semibold">Value</th>
+                          {/* Pinned to the right edge, so Edit and Delete show however wide the table runs. */}
+                          <th className="sticky right-0 w-[176px] bg-table-head px-2 py-2 text-right font-semibold no-print">Actions</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -123,6 +126,9 @@ export default function DayBookPage() {
                             </td>
                             <td className="px-4 py-2 text-right font-medium">
                               <Money value={e.totalDebitPaise} />
+                            </td>
+                            <td className="sticky right-0 bg-card px-2 py-1 text-right shadow-[-8px_0_8px_-8px_rgba(0,0,0,0.12)] no-print">
+                              <LedgerEntryActions row={journalRowRef(e)} onChanged={() => void state.refetch()} />
                             </td>
                           </tr>
                         ))}

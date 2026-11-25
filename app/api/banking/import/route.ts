@@ -124,5 +124,5 @@ export const DELETE = route(
     });
     return result;
   },
-  { permission: { module: 'banking', action: 'edit' } },
+  { permission: { module: 'banking', action: 'void' } },
 );

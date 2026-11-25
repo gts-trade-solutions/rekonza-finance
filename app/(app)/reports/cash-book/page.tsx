@@ -17,19 +17,28 @@ import { Field } from '@/components/shared/form-bits';
 import { downloadCsv, ReportShell, ReportTable, useReportRange } from '@/components/shared/report-shell';
 import { AsyncPage, LoadingRows } from '@/components/shared/async-state';
 import { api } from '@/lib/api/client';
+import { LedgerEntryActions } from '@/components/reports/ledger-entry-actions';
+import { RowActions, withReason } from '@/components/shared/row-actions';
 import { useApi } from '@/lib/api/use-api';
 import { useAppStore } from '@/lib/store';
 import { usePermission } from '@/lib/store/hooks';
 import { today } from '@/lib/selectors';
 import { toRupees } from '@/lib/money';
 
-interface Line { entryId: string; entryNo: number; memo: string | null; sourceType: string; party: string | null; against: string; receiptPaise: number; paymentPaise: number }
+interface Line {
+  entryId: string; entryNo: number; memo: string | null; sourceType: string; party: string | null; against: string; receiptPaise: number; paymentPaise: number;
+  sourceId?: string | null; reversalOf?: { entryId: string; entryNo: number } | null; reversedBy?: { entryId: string; entryNo: number } | null;
+}
 interface Day { date: string; openingPaise: number; lines: Line[]; receiptsPaise: number; paymentsPaise: number; closingPaise: number }
 interface Book {
   account: { id: string; name: string; kind: string }; from: string; to: string; openingPaise: number; closingPaise: number;
   receiptsPaise: number; paymentsPaise: number; negativeDays: string[]; days: Day[];
-  counts: { id: string; date: string; countedPaise: number; bookPaise: number; differencePaise: number; note: string | null; by: string | null }[];
+  counts: CountRow[];
 }
+
+interface CountRow { id: string; date: string; countedPaise: number; bookPaise: number; differencePaise: number; note: string | null; by: string | null; pieces?: Record<string, number> }
+/** A count being edited: counted again in its place. */
+interface Recount { id: string; date: string; note: string | null; pieces?: Record<string, number> }
 
 const DENOMINATIONS = [500, 200, 100, 50, 20, 10, 5, 2, 1];
 /** The balance after a day's i-th line. */
@@ -47,7 +56,18 @@ export default function CashBookPage() {
     [accountId, range.from, range.to],
   );
   const canCount = usePermission('banking', 'create');
+  const canEditCount = usePermission('banking', 'edit');
+  const canDeleteCount = usePermission('banking', 'void');
   const [counting, setCounting] = useState(false);
+  const [recount, setRecount] = useState<Recount | null>(null);
+  // ?count=<id>, from a ledger row's Edit on a cash count: its account, and the count open to edit.
+  useEffect(() => {
+    const id = new URLSearchParams(window.location.search).get('count');
+    if (!id) return;
+    api.get<{ count: Recount & { bankAccountId: string } }>('/api/cash-book', { count: id })
+      .then((r) => { setAccountId(r.count.bankAccountId); setRecount(r.count); setCounting(true); })
+      .catch((e: Error) => toast.error('That count could not be opened', { description: e.message }));
+  }, []);
 
   const exportCsv = () => {
     const d = state.data;
@@ -104,12 +124,14 @@ export default function CashBookPage() {
                   <thead><tr className="border-b">
                     <th className={`${th} text-left`}>Particulars</th><th className={`${th} text-left`}>Against</th>
                     <th className={`${th} text-right`}>Receipt</th><th className={`${th} text-right`}>Payment</th><th className={`${th} text-right`}>Balance</th>
+                    <th className={`${th} sticky right-0 w-[176px] bg-table-head text-right no-print`}>Actions</th>
                   </tr></thead>
                   {d.days.map((day) => (
                     <tbody key={day.date} className="divide-y border-b">
                       <tr className="rpt-head" data-slot="rpt-heading">
                         <td className="px-3 py-1.5 text-xs" colSpan={4}>{fmt(day.date)}</td>
                         <td className="px-3 py-1.5 text-right text-xs text-muted-foreground"><Money value={day.openingPaise} /></td>
+                        <td className="no-print" />
                       </tr>
                       {day.lines.map((l, i) => (
                         <tr key={`${l.entryId}-${i}`}>
@@ -118,6 +140,10 @@ export default function CashBookPage() {
                           <td className="px-3 py-1.5 text-right"><Money value={l.receiptPaise} showZero={false} /></td>
                           <td className="px-3 py-1.5 text-right"><Money value={l.paymentPaise} showZero={false} /></td>
                           <td className="px-3 py-1.5 text-right tabular-nums"><Money value={running(day, i)} className={running(day, i) < 0 ? 'text-red-600' : ''} /></td>
+                          <td className="sticky right-0 bg-card px-2 py-1 text-right shadow-[-8px_0_8px_-8px_rgba(0,0,0,0.12)] no-print">
+                            <LedgerEntryActions row={{ entryId: l.entryId, entryNo: l.entryNo, sourceType: l.sourceType, sourceId: l.sourceId ?? null, reversalOf: l.reversalOf ?? null, reversedBy: l.reversedBy ?? null }}
+                              onChanged={() => void state.refetch()} />
+                          </td>
                         </tr>
                       ))}
                       <tr className="rpt-total text-xs" data-slot="rpt-total">
@@ -125,6 +151,7 @@ export default function CashBookPage() {
                         <td className="px-3 py-1.5 text-right"><Money value={day.receiptsPaise} /></td>
                         <td className="px-3 py-1.5 text-right"><Money value={day.paymentsPaise} /></td>
                         <td className="px-3 py-1.5 text-right"><Money value={day.closingPaise} className={day.closingPaise < 0 ? 'text-red-600' : ''} /></td>
+                        <td className="no-print" />
                       </tr>
                     </tbody>
                   ))}
@@ -143,13 +170,25 @@ export default function CashBookPage() {
                         {c.differencePaise === 0 ? 'Agreed' : <>{c.differencePaise > 0 ? 'Excess' : 'Short'} <Money value={Math.abs(c.differencePaise)} /></>}
                       </span>
                       <span className="text-xs text-muted-foreground">{[c.by, c.note].filter(Boolean).join(' · ')}</span>
+                      <RowActions
+                        className="ml-auto"
+                        label={`the cash count of ${fmt(c.date)}`}
+                        canEdit={canEditCount}
+                        canDelete={canDeleteCount}
+                        editTitle="Count again in its place"
+                        onEdit={() => { setRecount({ id: c.id, date: c.date, note: c.note, pieces: c.pieces }); setCounting(true); }}
+                        onDelete={async (reason) => { await api.delete(withReason(`/api/cash-book?id=${c.id}`, reason)); await state.refetch(); }}
+                        done="Cash count deleted"
+                        deleteDescription="Its short or excess is reversed on its own date, so Cash Short & Excess goes back; the count is kept on record for the audit trail."
+                      />
                     </li>
                   ))}
                 </ul>
               </Card>
             )}
-            <CountDialog open={counting} accountId={d.account.id} accountName={d.account.name} onClose={() => setCounting(false)}
-              onDone={() => { setCounting(false); void state.refetch(); }} />
+            <CountDialog key={recount?.id ?? 'new'} open={counting} accountId={d.account.id} accountName={d.account.name} editing={recount}
+              onClose={() => { setCounting(false); setRecount(null); }}
+              onDone={() => { setCounting(false); setRecount(null); void state.refetch(); }} />
           </div>
         )}
       </AsyncPage>
@@ -157,19 +196,22 @@ export default function CashBookPage() {
   );
 }
 
-function CountDialog({ open, accountId, accountName, onClose, onDone }: { open: boolean; accountId: string; accountName: string; onClose: () => void; onDone: () => void }) {
-  const [pieces, setPieces] = useState<Record<string, string>>({});
-  const [date, setDate] = useState(today());
-  const [note, setNote] = useState('');
+function CountDialog({ open, accountId, accountName, onClose, onDone, editing }: {
+  open: boolean; accountId: string; accountName: string; onClose: () => void; onDone: () => void; editing?: Recount | null;
+}) {
+  const [pieces, setPieces] = useState<Record<string, string>>(() => Object.fromEntries(Object.entries(editing?.pieces ?? {}).map(([k, n]) => [k, String(n)])));
+  const [date, setDate] = useState(editing?.date ?? today());
+  const [note, setNote] = useState(editing?.note ?? '');
   const [busy, setBusy] = useState(false);
   const total = DENOMINATIONS.reduce((t, d) => t + d * (Number(pieces[d]) || 0), 0);
   const save = async () => {
     setBusy(true);
     try {
-      const r = await api.post<{ differencePaise: number }>('/api/cash-book', {
-        bankAccountId: accountId, date, note: note || null,
-        pieces: Object.fromEntries(DENOMINATIONS.map((d) => [String(d), Number(pieces[d]) || 0]).filter(([, n]) => n)),
-      });
+      const counted = Object.fromEntries(DENOMINATIONS.map((d) => [String(d), Number(pieces[d]) || 0]).filter(([, n]) => n));
+      // Editing: the count as it was is undone and the cash counted again with these figures.
+      const r = editing
+        ? await api.put<{ differencePaise: number }>(`/api/cash-book?id=${editing.id}`, { date, note: note || null, pieces: counted })
+        : await api.post<{ differencePaise: number }>('/api/cash-book', { bankAccountId: accountId, date, note: note || null, pieces: counted });
       toast.success(r.differencePaise === 0 ? 'The cash agrees with the books' : `${r.differencePaise > 0 ? 'Excess' : 'Shortage'} of ₹${(Math.abs(r.differencePaise) / 100).toLocaleString('en-IN')} posted to Cash Short & Excess`);
       setPieces({});
       setNote('');
@@ -184,7 +226,7 @@ function CountDialog({ open, accountId, accountName, onClose, onDone }: { open: 
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Count {accountName}</DialogTitle>
+          <DialogTitle>{editing ? `Edit the count of ${fmt(editing.date)}` : `Count ${accountName}`}</DialogTitle>
           <DialogDescription>The number of each note and coin. A difference from the books is posted to Cash Short &amp; Excess.</DialogDescription>
         </DialogHeader>
         <div className="grid grid-cols-3 gap-2">

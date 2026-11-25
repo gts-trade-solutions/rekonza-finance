@@ -238,6 +238,14 @@ export async function bookTransactions(
     claimed.has(`journal_entry:${r.entry_id}`) || (r.source_id != null && (claimed.has(`${r.source_type}:${r.source_id}`)
       || (r.source_type.startsWith('payment') && claimed.has(`payment:${r.source_id}`))));
 
+  // Each row's document and reversal links, for its View, Edit and Delete (reports/entry-refs.ts).
+  const { entryLinks, missingSourceIds } = await import('../reports/entry-refs');
+  const [links, sources] = await Promise.all([
+    entryLinks(ex, orgId, rows.map((r) => r.entry_id)),
+    missingSourceIds(ex, orgId, rows.map((r) => ({ entryId: r.entry_id, sourceType: r.source_type, sourceId: r.source_id }))),
+  ]);
+  for (const r of rows) if (r.source_id == null && sources.has(r.entry_id)) r.source_id = Number(sources.get(r.entry_id));
+
   let balance = opening;
   const all = rows.map((r) => {
     const deposit = toPaiseFromSql(r.debit);
@@ -249,6 +257,7 @@ export async function bookTransactions(
       // Typed in on the account (Add Transaction): its memo starts with what it was ("Expense Refund: …").
       type: r.source_type === 'bank_entry' ? (r.memo?.split(':')[0]?.trim() || 'Deposit') : sourceLabel(r.source_type), sourceType: r.source_type, sourceId: r.source_id == null ? null : String(r.source_id),
       status, depositPaise: deposit, withdrawalPaise: withdrawal, runningBalancePaise: balance,
+      reversalOf: links.get(r.entry_id)?.reversalOf ?? null, reversedBy: links.get(r.entry_id)?.reversedBy ?? null,
     };
   });
   const kept = opts.direction ? all.filter((t) => (opts.direction === 'in' ? t.depositPaise > 0 : t.withdrawalPaise > 0)) : all;

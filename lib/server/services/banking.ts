@@ -30,6 +30,7 @@ import type { BankCategoryKey } from '../../bank-categories';
 import { receivePayment } from './payments';
 import { undoLinks } from './bank-match';
 import { bankingPreferences } from './banking-preferences';
+import { postTransferEntry, transferSides } from './banking-changes';
 
 /** Zoho's reason on a line kept out because it repeats one already imported. */
 export const DUPLICATE_REASON = 'Duplicate of a transaction already imported';
@@ -635,33 +636,10 @@ export async function createTransfer(
   }
   if (input.amountPaise <= 0) throw badRequest('Enter an amount above zero.');
 
-  const accounts = await trx
-    .selectFrom('bank_accounts').select(['id', 'name', 'ledger_account_id'])
-    .where('org_id', '=', orgId)
-    .where('id', 'in', [input.fromBankAccountId, input.toBankAccountId])
-    .execute();
-  const from = accounts.find((a) => a.id === input.fromBankAccountId);
-  const to = accounts.find((a) => a.id === input.toBankAccountId);
-  if (!from || !to) throw notFound('One of those accounts does not exist.');
+  await transferSides(trx, orgId, input);
 
-  const branch = await trx
-    .selectFrom('branches').select('id')
-    .where('org_id', '=', orgId).where('is_primary', '=', 1).executeTakeFirstOrThrow();
-
-  const entry = await postEntry(trx, {
-    orgId,
-    branchId: branch.id,
-    date: input.date,
-    memo: `Transfer ${from.name} to ${to.name}`,
-    sourceType: 'transfer',
-    userId,
-    module: 'banking',
-    lines: [
-      { accountId: to.ledger_account_id, debit: input.amountPaise, description: `From ${from.name}` },
-      { accountId: from.ledger_account_id, credit: input.amountPaise, description: `To ${to.name}` },
-    ],
-  });
-
+  // The transfer first, so its entry names it (source id): the ledger's rows
+  // then reach the transfer itself, to view, edit or delete it.
   const row = await trx
     .insertInto('bank_transfers')
     .values({
@@ -671,12 +649,15 @@ export async function createTransfer(
       transfer_date: input.date,
       amount: toSqlFromPaise(input.amountPaise),
       reference: input.reference ?? null,
-      journal_entry_id: entry.id,
+      journal_entry_id: null,
       created_by_user_id: userId,
     })
     .executeTakeFirstOrThrow();
+  const id = Number(row.insertId);
+  const entry = await postTransferEntry(trx, orgId, userId, id, input);
+  await trx.updateTable('bank_transfers').set({ journal_entry_id: entry.id }).where('id', '=', id).execute();
 
-  return { id: Number(row.insertId), journalEntryId: entry.id };
+  return { id, journalEntryId: entry.id };
 }
 
 /**

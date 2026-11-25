@@ -14,6 +14,7 @@ export const GET = route(
       .select([
         'bank_transfers.id', 'bank_transfers.transfer_date', 'bank_transfers.amount',
         'bank_transfers.reference', 'bank_transfers.journal_entry_id',
+        'bank_transfers.from_bank_account_id', 'bank_transfers.to_bank_account_id',
         'src.name as from_name', 'dst.name as to_name',
       ])
       .where('bank_transfers.org_id', '=', orgId)
@@ -27,6 +28,8 @@ export const GET = route(
         date: r.transfer_date,
         fromName: r.from_name,
         toName: r.to_name,
+        fromBankAccountId: asId(r.from_bank_account_id),
+        toBankAccountId: asId(r.to_bank_account_id),
         reference: r.reference,
         amountPaise: toPaiseFromSql(r.amount),
         journalEntryId: r.journal_entry_id ? asId(r.journal_entry_id) : null,

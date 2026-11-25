@@ -15,11 +15,15 @@ import type { Executor, Trx } from '../db';
 import type { Paise } from '../../types';
 import { toPaiseFromSql, toSqlFromPaise } from '../money-sql';
 import { badRequest, notFound } from '../http';
-import { postEntry } from '../ledger/posting';
+import { postEntry, reverseEntry } from '../ledger/posting';
 import { CODE, accountIds, requireAccount } from '../ledger/chart-of-accounts';
 
 export interface CashBookLine {
   entryId: string; entryNo: number; memo: string | null; sourceType: string; party: string | null;
+  /** The document behind the entry, and its reversal links: for the row's View, Edit and Delete. */
+  sourceId?: string | null;
+  reversalOf?: { entryId: string; entryNo: number } | null;
+  reversedBy?: { entryId: string; entryNo: number } | null;
   /** The other side: the accounts the money came from or went to. */
   against: string; receiptPaise: Paise; paymentPaise: Paise;
 }
@@ -46,10 +50,10 @@ export async function cashBook(ex: Executor, orgId: number, bankAccountId: numbe
   const acct = await accountOf(ex, orgId, bankAccountId);
   const opening = await balanceOn(ex, orgId, acct.ledger_account_id, from);
   const { rows } = await sql<{
-    entry_id: number; entry_no: number; entry_date: string; memo: string | null; source_type: string;
+    entry_id: number; entry_no: number; entry_date: string; memo: string | null; source_type: string; source_id: number | null;
     party: string | null; debit: string; credit: string; against: string | null;
   }>`
-    SELECT e.id AS entry_id, e.entry_no, jl.entry_date, e.memo, e.source_type,
+    SELECT e.id AS entry_id, e.entry_no, jl.entry_date, e.memo, e.source_type, e.source_id,
            (SELECT c.display_name FROM journal_lines x JOIN contacts c ON c.id = x.contact_id
              WHERE x.entry_id = e.id AND x.contact_id IS NOT NULL LIMIT 1) AS party,
            jl.debit, jl.credit,
@@ -60,6 +64,13 @@ export async function cashBook(ex: Executor, orgId: number, bankAccountId: numbe
        AND jl.entry_date BETWEEN ${from} AND ${to}
      ORDER BY jl.entry_date, e.entry_no, jl.id
   `.execute(ex);
+
+  // Each line's document and reversal links, for its View, Edit and Delete.
+  const { entryLinks, missingSourceIds } = await import('./entry-refs');
+  const [links, sources] = await Promise.all([
+    entryLinks(ex, orgId, rows.map((r) => r.entry_id)),
+    missingSourceIds(ex, orgId, rows.map((r) => ({ entryId: r.entry_id, sourceType: r.source_type, sourceId: r.source_id }))),
+  ]);
 
   const days: CashBookDay[] = [];
   let running = opening;
@@ -74,6 +85,8 @@ export async function cashBook(ex: Executor, orgId: number, bankAccountId: numbe
     const payment = toPaiseFromSql(r.credit);
     day.lines.push({
       entryId: String(r.entry_id), entryNo: r.entry_no, memo: r.memo, sourceType: r.source_type, party: r.party,
+      sourceId: r.source_id ? String(r.source_id) : sources.get(r.entry_id) ?? null,
+      reversalOf: links.get(r.entry_id)?.reversalOf ?? null, reversedBy: links.get(r.entry_id)?.reversedBy ?? null,
       against: r.against ?? '', receiptPaise: receipt, paymentPaise: payment,
     });
     day.receiptsPaise += receipt;
@@ -109,35 +122,72 @@ export async function countCash(
   }, 0);
   const book = await balanceOn(trx, orgId, acct.ledger_account_id, nextDay(o.date));
   const difference = counted - book;
+  // The count first, so a short or excess entry names it (source id) and its
+  // ledger rows reach the count, to view or delete it.
+  const id = Number((await trx.insertInto('cash_counts').values({
+    org_id: orgId, bank_account_id: o.bankAccountId, counted_on: o.date, denominations: JSON.stringify(o.pieces),
+    counted: toSqlFromPaise(counted), book: toSqlFromPaise(book), difference: toSqlFromPaise(difference),
+    note: o.note ?? null, journal_entry_id: null, created_by_user_id: userId,
+  }).executeTakeFirstOrThrow()).insertId);
   let journalEntryId: number | null = null;
   if (difference !== 0) {
     const acc = await accountIds(trx, orgId);
     const branch = (await trx.selectFrom('branches').select('id').where('org_id', '=', orgId).orderBy('is_primary', 'desc').executeTakeFirstOrThrow()).id;
     const shortExcess = requireAccount(acc, CODE.CASH_SHORT_EXCESS);
     const entry = await postEntry(trx, {
-      orgId, branchId: branch, date: o.date, userId, module: 'banking', sourceType: 'cash_count', sourceId: null,
+      orgId, branchId: branch, date: o.date, userId, module: 'banking', sourceType: 'cash_count', sourceId: id,
       memo: `${acct.name} counted: ${difference > 0 ? 'excess' : 'short'} of ₹${(Math.abs(difference) / 100).toLocaleString('en-IN')}${o.note ? ` — ${o.note}` : ''}`,
       lines: difference > 0
         ? [{ accountId: acct.ledger_account_id, debit: difference }, { accountId: shortExcess, credit: difference }]
         : [{ accountId: shortExcess, debit: -difference }, { accountId: acct.ledger_account_id, credit: -difference }],
     });
     journalEntryId = entry.id;
+    await trx.updateTable('cash_counts').set({ journal_entry_id: entry.id }).where('id', '=', id).execute();
   }
-  const id = Number((await trx.insertInto('cash_counts').values({
-    org_id: orgId, bank_account_id: o.bankAccountId, counted_on: o.date, denominations: JSON.stringify(o.pieces),
-    counted: toSqlFromPaise(counted), book: toSqlFromPaise(book), difference: toSqlFromPaise(difference),
-    note: o.note ?? null, journal_entry_id: journalEntryId, created_by_user_id: userId,
-  }).executeTakeFirstOrThrow()).insertId);
   return { id: String(id), countedPaise: counted, bookPaise: book, differencePaise: difference, journalEntryId: journalEntryId ? String(journalEntryId) : null };
+}
+
+/**
+ * Count again in place of a count made wrongly (Edit on a count): what it
+ * posted is reversed on its own date, the count removed, and the cash counted
+ * with the figures given, against the books as they then stand.
+ */
+export async function recountCash(
+  trx: Trx, orgId: number, userId: number | null, id: number,
+  o: { date: string; pieces: Record<string, number>; note?: string | null },
+) {
+  const old = await trx.selectFrom('cash_counts').select(['id', 'bank_account_id', 'journal_entry_id', 'counted_on'])
+    .where('id', '=', id).where('org_id', '=', orgId).forUpdate().executeTakeFirst();
+  if (!old) throw notFound('That cash count was not found.');
+  if (old.journal_entry_id) {
+    const done = await trx.selectFrom('journal_entries').select('id').where('org_id', '=', orgId).where('reversal_of_entry_id', '=', old.journal_entry_id).executeTakeFirst();
+    if (!done) await reverseEntry(trx, orgId, old.journal_entry_id, { memo: `Cash count of ${String(old.counted_on).slice(0, 10)} edited: the count as it was, reversed`, userId, module: 'banking' });
+  }
+  await trx.deleteFrom('cash_counts').where('id', '=', id).execute();
+  return countCash(trx, orgId, userId, { bankAccountId: old.bank_account_id, ...o });
 }
 
 export async function cashCounts(ex: Executor, orgId: number, bankAccountId: number) {
   const rows = await ex.selectFrom('cash_counts as c').leftJoin('users as u', 'u.id', 'c.created_by_user_id')
-    .select(['c.id', 'c.counted_on', 'c.counted', 'c.book', 'c.difference', 'c.note', 'u.name'])
+    .select(['c.id', 'c.counted_on', 'c.counted', 'c.book', 'c.difference', 'c.note', 'c.denominations', 'u.name'])
     .where('c.org_id', '=', orgId).where('c.bank_account_id', '=', bankAccountId)
     .orderBy('c.counted_on', 'desc').orderBy('c.id', 'desc').limit(50).execute();
   return rows.map((r) => ({
     id: String(r.id), date: String(r.counted_on).slice(0, 10), countedPaise: toPaiseFromSql(r.counted), bookPaise: toPaiseFromSql(r.book),
-    differencePaise: toPaiseFromSql(r.difference), note: r.note, by: r.name,
+    differencePaise: toPaiseFromSql(r.difference), note: r.note, by: r.name, pieces: piecesOf(r.denominations),
   }));
+}
+
+/** The notes and coins of a count, as they were entered (for Edit). */
+function piecesOf(v: unknown): Record<string, number> {
+  const o = typeof v === 'string' ? (() => { try { return JSON.parse(v); } catch { return {}; } })() : v;
+  return o && typeof o === 'object' ? Object.fromEntries(Object.entries(o as Record<string, unknown>).map(([k, n]) => [k, Number(n) || 0])) : {};
+}
+
+/** One count, wherever it is opened from (a ledger row's Edit): its account, date, pieces and note. */
+export async function cashCountById(ex: Executor, orgId: number, id: number) {
+  const r = await ex.selectFrom('cash_counts').select(['id', 'bank_account_id', 'counted_on', 'note', 'denominations'])
+    .where('id', '=', id).where('org_id', '=', orgId).executeTakeFirst();
+  if (!r) throw notFound('That cash count was not found.');
+  return { id: String(r.id), bankAccountId: String(r.bank_account_id), date: String(r.counted_on).slice(0, 10), note: r.note, pieces: piecesOf(r.denominations) };
 }

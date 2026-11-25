@@ -94,7 +94,15 @@ export default function JournalsPage() {
     setEditOpened(true);
     const row = state.data.entries.find((e) => String(e.id) === editParam);
     if (row) startEdit(row);
-    else toast.error('That journal is not in this list', { description: 'It may be reversed already, or older than the list shows.' });
+    // A journal of another kind (a recurring journal's entry, a bank account's own entry), or older than
+    // the list: fetched on its own, from a report row's Edit.
+    else {
+      void journal.list({ entryId: editParam, limit: 1 }).then((r) => {
+        const one = r.entries[0];
+        if (one && !one.reversalOf && !one.reversedBy) startEdit(one);
+        else toast.error('That journal cannot be edited here', { description: one ? 'It is reversed already, or is itself a reversal.' : 'It was not found.' });
+      }, (e: Error) => toast.error('That journal could not be opened', { description: e.message }));
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editParam, editOpened, state.data]);
   const startEdit = (r: JournalEntryRow) => {

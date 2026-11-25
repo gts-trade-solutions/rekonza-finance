@@ -40,6 +40,7 @@ import { formatINR } from '@/lib/money';
 import { api, ApiError } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
 import { cn } from '@/lib/utils';
+import { RowActions } from '@/components/shared/row-actions';
 
 type TileKey = 'bank' | 'card' | 'cash' | 'clearing';
 interface AccountRow {
@@ -279,7 +280,7 @@ export default function BankingPage() {
                         <th className="px-4 py-2.5 font-semibold">Uncategorized</th>
                         <th className="px-4 py-2.5 text-right font-semibold">Amount in Bank</th>
                         <th className="px-4 py-2.5 text-right font-semibold">Amount in Rekonza</th>
-                        <th className="w-24 px-4 py-2 text-right">
+                        <th className="w-[230px] px-4 py-2 text-right">
                           {searching ? (
                             <span className="inline-flex items-center gap-1">
                               <Input autoFocus value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search" className="h-7 w-40 text-[12px] normal-case" data-slot="accounts-search" />
@@ -318,7 +319,24 @@ export default function BankingPage() {
                               {a.amountInBankPaise == null ? <span className="text-muted-foreground">—</span> : formatINR(a.amountInBankPaise)}
                             </td>
                             <td className="px-4 py-3 text-right tabular">{formatINR(a.balancePaise)}</td>
-                            <td className="px-4 py-3 text-right">
+                            <td className="whitespace-nowrap px-4 py-3 text-right">
+                              <span className="inline-flex items-center gap-1">
+                              <RowActions
+                                label={a.name}
+                                canEdit={canEdit}
+                                canDelete={canDelete}
+                                onEdit={() => router.push(`/banking/${a.id}/edit`)}
+                                onDelete={async () => { await api.delete(`/api/banking/accounts/${a.id}`); await Promise.all([state.refetch(), active.refetch()]); }}
+                                done={`${a.name} deleted`}
+                                withReasonField={false}
+                                deleteDescription="Only an account nothing has been posted to, and with no statement lines, can be deleted. One with transactions is kept for its history: mark it as inactive instead."
+                                alternative={a.isActive && canEdit ? {
+                                  label: 'Mark as inactive',
+                                  note: 'Inactive: it leaves the lists and pickers; its history stays.',
+                                  run: async () => { await api.patch(`/api/banking/accounts/${a.id}`, { isActive: false }); await Promise.all([state.refetch(), active.refetch()]); },
+                                  done: `${a.name} marked as inactive`,
+                                } : undefined}
+                              />
                               <DropdownMenu>
                                 <DropdownMenuTrigger aria-label={`More for ${a.name}`} className="inline-grid size-6 place-items-center rounded-full border text-muted-foreground outline-none hover:text-foreground" data-slot="account-row-menu">
                                   <ChevronDown className="size-3.5" />
@@ -331,11 +349,9 @@ export default function BankingPage() {
                                   {canEdit && (a.isActive
                                     ? <DropdownMenuItem onClick={() => void act(() => api.patch(`/api/banking/accounts/${a.id}`, { isActive: false }), `${a.name} marked as inactive`)}>Mark as Inactive</DropdownMenuItem>
                                     : <DropdownMenuItem onClick={() => void act(() => api.patch(`/api/banking/accounts/${a.id}`, { isActive: true }), `${a.name} marked as active`)}>Mark as Active</DropdownMenuItem>)}
-                                  {canDelete && <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={() => {
-                                    if (window.confirm(`Delete ${a.name}? Only an account nothing has been posted to can be deleted.`)) void act(() => api.delete(`/api/banking/accounts/${a.id}`), `${a.name} deleted`);
-                                  }}>Delete</DropdownMenuItem>}
                                 </DropdownMenuContent>
                               </DropdownMenu>
+                              </span>
                             </td>
                           </tr>
                         );

@@ -531,6 +531,10 @@ export async function generalLedger(
     .orderBy('journal_entries.entry_no')
     .execute();
 
+  // An older transfer or cash count names no document on its entry: found from the document's side.
+  const { missingSourceIds } = await import('./entry-refs');
+  const sources = await missingSourceIds(ex, orgId, rows.map((r) => ({ entryId: r.entry_id, sourceType: r.source_type, sourceId: r.source_id })));
+
   let running = openingPaise;
   const lines: LedgerLine[] = rows.map((r) => {
     const debitPaise = toPaiseFromSql(r.debit);
@@ -543,7 +547,7 @@ export async function generalLedger(
       memo: r.memo,
       description: r.description,
       sourceType: r.source_type,
-      sourceId: r.source_id ? String(r.source_id) : null,
+      sourceId: r.source_id ? String(r.source_id) : sources.get(r.entry_id) ?? null,
       debitPaise,
       creditPaise,
       runningPaise: running,

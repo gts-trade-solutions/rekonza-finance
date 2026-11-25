@@ -37,6 +37,9 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { BankLinePanel, MatchedLinePanel } from '@/components/banking/bank-line-panel';
+import { StatementLineActions } from '@/components/banking/line-actions';
+import { LedgerEntryActions } from '@/components/reports/ledger-entry-actions';
+import { ConfirmDelete, DeleteButton, EditButton } from '@/components/shared/row-actions';
 import { AddTransactionMenu, AddTransactionSheet, type AddKind } from '@/components/banking/add-transaction';
 import { useForceNavCollapsed } from '@/components/layout/nav-state';
 import { LoadingRows } from '@/components/shared/async-state';
@@ -62,6 +65,7 @@ interface Line {
 interface Book {
   entryId: string; entryNo: number; date: string; reference: string | null; party: string | null; type: string;
   sourceType: string; sourceId: string | null; status: string; depositPaise: number; withdrawalPaise: number; runningBalancePaise: number;
+  reversalOf?: { entryId: string; entryNo: number } | null; reversedBy?: { entryId: string; entryNo: number } | null;
 }
 interface Masters {
   accounts: { id: string; code: string; name: string; type: string }[];
@@ -131,6 +135,7 @@ export function BankAccountPage() {
   const [excluding, setExcluding] = useState(false);
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
+  const [deletingAccount, setDeletingAccount] = useState(false);
   useEffect(() => { setPill('all'); setDirection(''); setOpenLine(null); setPicked(new Set()); }, [accountId]);
 
   const masters = useApi<Masters>(() => api.get('/api/masters'), []);
@@ -215,6 +220,9 @@ export function BankAccountPage() {
           {canCreate && account.isActive && account.kind !== 'card' && (
             <Button variant="outline" size="sm" data-slot="record-deposit" onClick={() => { setDepositFrom(clearing?.id); setAdding('transfer_from'); }}>Record Deposit</Button>
           )}
+          {/* Edit and Delete in words; the ⚙ menu keeps them too, with the rest. */}
+          {canEdit && <EditButton onClick={() => router.push(`/banking/${account.id}/edit`)} title={`Edit ${account.name}`} className="h-[30px]" />}
+          {canDelete && <DeleteButton onClick={() => setDeletingAccount(true)} title={`Delete ${account.name}`} className="h-[30px]" />}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="outline" size="icon-sm" aria-label="Account settings" data-slot="account-settings"><Settings className="size-4" /></Button>
@@ -229,11 +237,7 @@ export function BankAccountPage() {
                 try { await api.patch(`/api/banking/accounts/${account.id}`, { isActive: !account.isActive }); toast.success(account.isActive ? 'Marked as inactive' : 'Marked as active'); await head.refetch(); }
                 catch (e) { toast.error(e instanceof ApiError ? e.message : 'That did not work.'); }
               }}>{account.isActive ? 'Mark as Inactive' : 'Mark as Active'}</DropdownMenuItem>}
-              {canDelete && <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={async () => {
-                if (!window.confirm(`Delete ${account.name}? Only an account nothing has been posted to can be deleted.`)) return;
-                try { await api.delete(`/api/banking/accounts/${account.id}`); toast.success(`${account.name} deleted`); router.push('/banking'); }
-                catch (e) { toast.error(e instanceof ApiError ? e.message : 'That did not work.'); }
-              }}>Delete</DropdownMenuItem>}
+              {canDelete && <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={() => setDeletingAccount(true)}>Delete</DropdownMenuItem>}
             </DropdownMenuContent>
           </DropdownMenu>
           <Link href="/banking" aria-label="Close" className="grid size-8 place-items-center text-destructive hover:opacity-80" data-slot="account-close"><X className="size-5" strokeWidth={1.6} /></Link>
@@ -351,7 +355,7 @@ export function BankAccountPage() {
                     <th className="px-4 py-2.5 text-right font-semibold">Deposits</th>
                     <th className="px-4 py-2.5 text-right font-semibold">Withdrawals</th>
                     {tab === 'uncategorized' && pill !== 'recognized' && <th className="px-4 py-2.5 text-right font-semibold">Running Balance</th>}
-                    <th className="w-10 px-3 py-2 text-right">
+                    <th className="w-[170px] px-3 py-2 text-right">
                       {searching ? (
                         <span className="inline-flex items-center gap-1"><Input autoFocus value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search" className="h-7 w-36 text-[12px] normal-case" data-slot="line-search" />
                           <button type="button" aria-label="Close search" onClick={() => { setSearching(false); setSearch(''); }}><X className="size-3.5" /></button></span>
@@ -387,6 +391,7 @@ export function BankAccountPage() {
                               onClick={() => void post({ action: 'include', transactionIds: [l.id] }, 'Restored to Uncategorized')}>Restore</button>}
                             {tab === 'uncategorized' && pill === 'recognized' && canCreate && l.recognizedBy && <button type="button" className="text-link hover:underline" data-slot="apply-rule"
                               onClick={() => void post({ action: 'apply_rules', transactionIds: [l.id] }, 'Categorized as the rule says')}>Categorize</button>}
+                            <StatementLineActions className="mt-1" line={l} onChanged={() => void refresh()} onReopen={(id) => setOpenLine(id)} />
                           </td>
                         </tr>
                         {open && (
@@ -431,6 +436,7 @@ export function BankAccountPage() {
                   <th className="px-4 py-2.5 text-right font-semibold">Deposits</th>
                   <th className="px-4 py-2.5 text-right font-semibold">Withdrawals</th>
                   <th className="px-4 py-2.5 text-right font-semibold">Running Balance</th>
+                  <th className="sticky right-0 w-[176px] bg-table-head px-2 py-2.5 text-right font-semibold" data-slot="books-actions-head">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -446,11 +452,15 @@ export function BankAccountPage() {
                       <td className="px-4 py-3 text-right tabular">{b.depositPaise ? formatINR(b.depositPaise) : ''}</td>
                       <td className="px-4 py-3 text-right tabular">{b.withdrawalPaise ? formatINR(b.withdrawalPaise) : ''}</td>
                       <td className="px-4 py-3 text-right tabular">{formatINR(b.runningBalancePaise)}</td>
+                      <td className="sticky right-0 bg-card px-2 py-1 text-right shadow-[-8px_0_8px_-8px_rgba(0,0,0,0.12)]">
+                        <LedgerEntryActions row={{ entryId: b.entryId, entryNo: b.entryNo, sourceType: b.sourceType, sourceId: b.sourceId, reversalOf: b.reversalOf ?? null, reversedBy: b.reversedBy ?? null }}
+                          onChanged={() => void refresh()} />
+                      </td>
                     </tr>
                   );
                 })}
                 {(books.data?.transactions ?? []).length === 0 && (
-                  <tr><td colSpan={7} className="px-5 py-16 text-center text-[14px] text-muted-foreground" data-slot="books-empty">
+                  <tr><td colSpan={8} className="px-5 py-16 text-center text-[14px] text-muted-foreground" data-slot="books-empty">
                     There are no transactions recorded for this account. Begin by adding new transactions or simply import your latest account statement.
                   </td></tr>
                 )}
@@ -459,6 +469,22 @@ export function BankAccountPage() {
           )
         )}
       </div>
+
+      <ConfirmDelete
+        open={deletingAccount}
+        onClose={() => setDeletingAccount(false)}
+        title={`Delete ${account.name}?`}
+        description="Only an account nothing has been posted to, and with no statement lines, can be deleted. One with transactions is kept for its history: mark it as inactive instead."
+        withReasonField={false}
+        onConfirm={async () => { await api.delete(`/api/banking/accounts/${account.id}`); router.push('/banking'); }}
+        done={`${account.name} deleted`}
+        alternative={account.isActive && canEdit ? {
+          label: 'Mark as inactive',
+          note: 'Inactive: it leaves the lists and pickers; its history stays.',
+          run: async () => { await api.patch(`/api/banking/accounts/${account.id}`, { isActive: false }); await head.refetch(); },
+          done: `${account.name} marked as inactive`,
+        } : undefined}
+      />
 
       <AddTransactionSheet kind={adding} account={account} preset={{ otherBankAccountId: depositFrom }}
         onClose={() => setAdding(null)} onDone={() => { setAdding(null); void refresh(); }} />

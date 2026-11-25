@@ -21,12 +21,13 @@ import { FileClock, Plus } from 'lucide-react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { RowActions, withReason } from '@/components/shared/row-actions';
 import { Input } from '@/components/ui/input';
 import { Combobox } from '@/components/ui/combobox';
 import { ContactPicker } from '@/components/forms/quick-create';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
-  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger,
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
 import { PageHeader } from '@/components/shared/page-header';
 import { DataTable, type Column } from '@/components/shared/data-table';
@@ -94,6 +95,10 @@ const BLANK = {
 
 export default function ChequesPage() {
   const canEdit = usePermission('banking', 'edit');
+  const canDelete = usePermission('banking', 'void');
+  // The cheque being edited (the same form as recording one); null while recording a new one.
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [savingEdit, setSavingEdit] = useState(false);
 
   const state = useApi<ChequesResponse>(() => api.get('/api/banking/cheques'), []);
   const [open, setOpen] = useState(false);
@@ -106,9 +111,31 @@ export default function ChequesPage() {
     api.patch<{ id: string; status: string }>('/api/banking/cheques', input),
   );
 
+  const startEdit = (r: ChequeRow) => {
+    setEditingId(r.id);
+    setF({ kind: r.kind, contactId: r.contactId, chequeNo: r.chequeNo, bankName: r.bankName ?? '', amount: r.amountPaise, maturityDate: r.maturityDate, notes: r.notes ?? '' });
+    setOpen(true);
+  };
   const save = async () => {
     if (!f.contactId || !f.chequeNo.trim() || f.amount <= 0) {
       toast.error('Pick a party, and enter a cheque number and amount.');
+      return;
+    }
+    if (editingId) {
+      setSavingEdit(true);
+      try {
+        await api.put(`/api/banking/cheques/${editingId}`, {
+          kind: f.kind, contactId: f.contactId, chequeNo: f.chequeNo.trim(), bankName: f.bankName || null,
+          amountPaise: f.amount, maturityDate: f.maturityDate, notes: f.notes || null,
+        });
+        toast.success(`Cheque ${f.chequeNo.trim()} saved`);
+        setOpen(false); setEditingId(null); setF(BLANK);
+        state.refetch();
+      } catch (e) {
+        toast.error('Not saved', { description: e instanceof Error ? e.message : String(e) });
+      } finally {
+        setSavingEdit(false);
+      }
       return;
     }
     const done = await create.run({
@@ -223,10 +250,11 @@ export default function ChequesPage() {
       ),
     },
     {
-      key: 'actions', header: '', align: 'right',
-      cell: (r) =>
-        !canEdit || r.status === 'bounced' || r.status === 'cancelled' ? null : (
-          <div className="flex justify-end gap-1.5">
+      key: 'actions', header: 'Actions', align: 'right',
+      cell: (r) => (
+        <div className="flex flex-wrap justify-end gap-1.5">
+          {canEdit && r.status !== 'bounced' && r.status !== 'cancelled' && (
+          <>
             {r.status === 'in_hand' && (
               <Button size="xs" variant="ghost" disabled={setStatus.busy} onClick={() => void mark(r, 'deposited')}>
                 Deposited
@@ -245,8 +273,20 @@ export default function ChequesPage() {
                 Cancel
               </Button>
             )}
-          </div>
-        ),
+          </>
+          )}
+          {/* Edit while it is still paper (in hand or deposited); Delete unless it has cleared or come back. */}
+          <RowActions
+            label={`cheque ${r.chequeNo}`}
+            canEdit={canEdit && (r.status === 'in_hand' || r.status === 'deposited')}
+            canDelete={canDelete && r.status !== 'cleared' && r.status !== 'bounced'}
+            onEdit={() => startEdit(r)}
+            onDelete={async (reason) => { await api.delete(withReason(`/api/banking/cheques/${r.id}`, reason)); state.refetch(); }}
+            done={`Cheque ${r.chequeNo} deleted`}
+            deleteDescription="It posted nothing, so it simply leaves the register. A cleared cheque (the record of its payment) or a returned one (its reversal and charges posted) stays."
+          />
+        </div>
+      ),
     },
   ];
 
@@ -257,13 +297,11 @@ export default function ChequesPage() {
         description="A register for cheques in hand, PDCs waiting to mature, and any that bounced."
         actions={
           canEdit && (
-            <Dialog open={open} onOpenChange={setOpen}>
-              <DialogTrigger asChild>
-                <Button size="sm" className="gap-1.5"><Plus className="size-4" /> Record cheque</Button>
-              </DialogTrigger>
-              <DialogContent>
+            <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) { setEditingId(null); setF(BLANK); } }}>
+              <Button size="sm" className="gap-1.5" onClick={() => { setEditingId(null); setF(BLANK); setOpen(true); }}><Plus className="size-4" /> Record cheque</Button>
+              <DialogContent data-slot="cheque-dialog">
                 <DialogHeader>
-                  <DialogTitle>Record a cheque</DialogTitle>
+                  <DialogTitle>{editingId ? `Edit cheque ${f.chequeNo}` : 'Record a cheque'}</DialogTitle>
                   <FoldNav />
                   <DialogDescription>
                     Nothing posts to the ledger here. Record the payment against the invoice or bill it settles,
@@ -323,9 +361,9 @@ export default function ChequesPage() {
                   {create.error && <p className="text-sm text-destructive">{create.error}</p>}
                 </div>
                 <DialogFooter>
-                  <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
-                  <Button onClick={save} disabled={create.busy}>
-                    {create.busy ? 'Saving…' : 'Record cheque'}
+                  <Button variant="outline" onClick={() => { setOpen(false); setEditingId(null); setF(BLANK); }}>Cancel</Button>
+                  <Button onClick={save} disabled={create.busy || savingEdit} data-slot="cheque-save">
+                    {create.busy || savingEdit ? 'Saving…' : editingId ? 'Save' : 'Record cheque'}
                   </Button>
                 </DialogFooter>
               </DialogContent>

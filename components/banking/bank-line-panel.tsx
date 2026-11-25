@@ -18,6 +18,7 @@ import { Combobox } from '@/components/ui/combobox';
 import { Money } from '@/components/shared/money';
 import { Field, MoneyInput } from '@/components/shared/form-bits';
 import { LoadingRows } from '@/components/shared/async-state';
+import { ConfirmDelete, DeleteButton, EditButton } from '@/components/shared/row-actions';
 import { api } from '@/lib/api/client';
 import { useApi, useApiAction } from '@/lib/api/use-api';
 import { formatINR } from '@/lib/money';
@@ -494,9 +495,11 @@ function CategorizeTab({ detail, masters, onDone, lineId }: { detail: LineDetail
 }
 
 /** A categorized line: what it is matched to, and the way back. */
-export function MatchedLinePanel({ lineId, onDone }: { lineId: string; onDone: () => void }) {
+export function MatchedLinePanel({ lineId, onDone, onReopen }: { lineId: string; onDone: () => void; onReopen?: (lineId: string) => void }) {
   const detail = useApi<LineDetail>(() => api.get(`/api/banking/transactions/${lineId}`), [lineId]);
   const act = useApiAction((input: unknown) => api.post('/api/banking/transactions', input));
+  // Delete (undo the categorisation) is asked first; Edit undoes it and reopens the line to categorise again.
+  const [asking, setAsking] = useState(false);
   const d = detail.data;
   if (!d) return <Card className="p-5"><LoadingRows rows={3} /></Card>;
   const category = d.links.find((l) => l.category)?.category;
@@ -522,13 +525,28 @@ export function MatchedLinePanel({ lineId, onDone }: { lineId: string; onDone: (
           : 'It was already in the books, so undoing only lets the line go; nothing is reversed.'}
       </p>
       {act.error && <p className="text-sm text-destructive">{act.error}</p>}
-      <Button variant="outline" size="sm" disabled={act.busy} data-slot="unmatch-button" onClick={async () => {
-        if (!(await act.run({ action: 'unmatch', transactionId: lineId }))) return toast.error(act.error ?? 'Could not undo that.');
-        toast.info(category ? 'Uncategorized' : 'Unmatched');
-        onDone();
-      }}>
-        {act.busy && <Loader2 className="size-3.5 animate-spin" />} {category ? 'Uncategorize' : 'Unmatch'}
-      </Button>
+      <div className="flex flex-wrap items-center gap-2" data-slot="matched-actions">
+        <EditButton title="Undo it and choose the category or match again" disabled={act.busy} onClick={async () => {
+          if (!(await act.run({ action: 'unmatch', transactionId: lineId }))) return toast.error(act.error ?? 'Could not undo that.');
+          toast.success('Undone: choose its category again');
+          onDone();
+          onReopen?.(lineId);
+        }} />
+        <DeleteButton title={category ? 'Delete the categorisation (Uncategorize)' : 'Delete the match (Unmatch)'} disabled={act.busy} onClick={() => setAsking(true)} />
+        {act.busy && <Loader2 className="size-3.5 animate-spin text-muted-foreground" />}
+      </div>
+      <ConfirmDelete
+        open={asking}
+        onClose={() => setAsking(false)}
+        title={category ? 'Delete this categorisation?' : 'Delete this match?'}
+        description={recorded
+          ? 'What it recorded is voided or reversed, and the line goes back to Uncategorized. The line itself comes from the bank statement and stays.'
+          : 'It was already in the books, so only the match goes; nothing is reversed. The line goes back to Uncategorized.'}
+        withReasonField={false}
+        confirmLabel={category ? 'Delete (Uncategorize)' : 'Delete (Unmatch)'}
+        onConfirm={async () => { await api.post('/api/banking/transactions', { action: 'unmatch', transactionId: lineId }); onDone(); }}
+        done={category ? 'Uncategorized' : 'Unmatched'}
+      />
     </Card>
   );
 }

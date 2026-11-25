@@ -27,6 +27,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Combobox } from '@/components/ui/combobox';
 import { BankLinePanel, MatchedLinePanel } from '@/components/banking/bank-line-panel';
+import { StatementLineActions } from '@/components/banking/line-actions';
 import { PageHeader } from '@/components/shared/page-header';
 import { Money } from '@/components/shared/money';
 import { EmptyState } from '@/components/shared/empty-state';
@@ -246,9 +247,16 @@ function ReconcileInner() {
                     Pick a line on the left to match or categorize it.
                   </Card>
                 ) : tab === 'matched' || selected.status === 'matched' ? (
-                  <MatchedLinePanel key={selected.id} lineId={selected.id} onDone={refresh} />
+                  <MatchedLinePanel key={selected.id} lineId={selected.id} onDone={refresh} onReopen={(id) => { setTab('unmatched'); setSelectedId(id); }} />
                 ) : masters.data ? (
-                  <BankLinePanel key={selected.id} lineId={selected.id} masters={masters.data} onDone={refresh} />
+                  <>
+                    {/* The line itself: corrected (a mis-read date or amount) or deleted (imported by mistake). */}
+                    <Card className="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5" data-slot="line-own-actions">
+                      <span className="text-xs text-muted-foreground">This statement line</span>
+                      <StatementLineActions line={selected} onChanged={() => { setSelectedId(null); refresh(); }} />
+                    </Card>
+                    <BankLinePanel key={selected.id} lineId={selected.id} masters={masters.data} onDone={refresh} />
+                  </>
                 ) : (
                   <Card className="p-6"><LoadingRows rows={4} /></Card>
                 )}

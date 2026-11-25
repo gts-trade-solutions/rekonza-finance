@@ -18,6 +18,7 @@ import { Money } from '@/components/shared/money';
 import { downloadCsv, ReportShell, useReportRange } from '@/components/shared/report-shell';
 import { AsyncPage, LoadingRows } from '@/components/shared/async-state';
 import { journal, type JournalResponse } from '@/lib/api/client';
+import { journalRowRef, LedgerEntryActions } from '@/components/reports/ledger-entry-actions';
 import { useApi } from '@/lib/api/use-api';
 import { toRupees } from '@/lib/money';
 
@@ -111,6 +112,8 @@ export default function JournalReportPage() {
                             Out of balance
                           </Badge>
                         )}
+                        {/* View, Edit and Delete on the entry's document, as on the General Ledger. */}
+                        <span className="ml-auto no-print"><LedgerEntryActions row={journalRowRef(e)} onChanged={() => void state.refetch()} /></span>
                       </div>
 
                       <table className="w-full text-sm">

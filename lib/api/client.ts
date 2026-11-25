@@ -2865,6 +2865,9 @@ export interface JournalEntryRow {
   reversalOf: string | null;
   /** The entry number of this entry's reversal, once reversed. */
   reversedBy?: number | null;
+  /** The same links with entry id and number (a report row's View / Edit / Delete reads them). */
+  reversalOfRef?: { entryId: string; entryNo: number } | null;
+  reversedByRef?: { entryId: string; entryNo: number } | null;
   totalDebitPaise: number;
   totalCreditPaise: number;
   postedAt: string;

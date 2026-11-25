@@ -157,7 +157,9 @@ export async function reverseJournal(
 // The journals list leaves such pairs out unless asked to show them.
 
 /** Entries that stand on their own; a document's entry goes with its document. */
-export const JOURNAL_EDITABLE = new Set(['manual', 'opening', 'opening_balance', 'reclassification', 'recurring', 'doubtful_debts', 'tally_import', 'fx_revaluation']);
+// bank_entry: money in or out typed in on a bank account (Add Transaction) as an entry of its own; it is
+// changed as a journal is, and refused while a statement line is matched to it (journalForChange).
+export const JOURNAL_EDITABLE = new Set(['manual', 'opening', 'opening_balance', 'reclassification', 'recurring', 'doubtful_debts', 'tally_import', 'fx_revaluation', 'bank_entry']);
 
 async function journalForChange(trx: Trx, orgId: number, entryId: number) {
   const e = await trx.selectFrom('journal_entries')

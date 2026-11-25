@@ -1,6 +1,8 @@
 import { z } from 'zod';
-import { db } from '@/lib/server/db';
-import { route, query, idParam, asId } from '@/lib/server/http';
+import { db, transaction } from '@/lib/server/db';
+import { route, body, query, idParam, asId } from '@/lib/server/http';
+import { logAudit, auditMeta } from '@/lib/server/audit';
+import { deleteStatementLine, editStatementLine } from '@/lib/server/services/banking-changes';
 import { toPaiseFromSql } from '@/lib/server/money-sql';
 import { findMatches, linksOf } from '@/lib/server/services/bank-match';
 
@@ -75,4 +77,50 @@ export const GET = route(
     };
   },
   { permission: { module: 'banking', action: 'view' } },
+);
+
+const LineInput = z.object({
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use a yyyy-mm-dd date.'),
+  narration: z.string().trim().min(1, 'Give the line its narration.').max(500),
+  reference: z.string().trim().max(100).nullish(),
+  depositPaise: z.number().int().min(0),
+  withdrawalPaise: z.number().int().min(0),
+});
+
+/**
+ * Correct an uncategorised statement line: its date, narration, reference or
+ * amount (services/banking-changes.ts). A categorised one is refused until
+ * its categorisation is undone.
+ */
+export const PATCH = route(
+  async ({ orgId, user, req, params }) => {
+    const id = idParam(params);
+    const input = await body(req, LineInput);
+    await transaction(async (trx) => {
+      const r = await editStatementLine(trx, orgId, id, input);
+      await logAudit({
+        trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'update', targetType: 'bank_txn', targetId: id,
+        detail: `Statement line edited: ${input.date}, ${input.narration.slice(0, 80)}`, payload: { before: r.before }, ...auditMeta(req),
+      });
+    });
+    return { id: asId(id) };
+  },
+  { permission: { module: 'banking', action: 'edit' } },
+);
+
+/** Delete one uncategorised or excluded statement line (imported by mistake). */
+export const DELETE = route(
+  async ({ orgId, user, req, params }) => {
+    const id = idParam(params);
+    const reason = new URL(req.url).searchParams.get('reason');
+    await transaction(async (trx) => {
+      const gone = await deleteStatementLine(trx, orgId, id);
+      await logAudit({
+        trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'delete', targetType: 'bank_txn', targetId: id,
+        detail: `Deleted the statement line of ${gone.date}: ${gone.narration.slice(0, 80)}${reason ? ` — ${reason}` : ''}`, ...auditMeta(req),
+      });
+    });
+    return { deleted: true };
+  },
+  { permission: { module: 'banking', action: 'void' } },
 );

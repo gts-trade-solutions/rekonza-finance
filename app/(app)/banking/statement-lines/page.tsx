@@ -23,6 +23,9 @@ import { api, ApiError } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
 import { usePermission } from '@/lib/store/hooks';
 import { cn } from '@/lib/utils';
+import { StatementLineActions } from '@/components/banking/line-actions';
+import { ConfirmDelete } from '@/components/shared/row-actions';
+import { useRouter } from 'next/navigation';
 
 type Status = 'unmatched' | 'excluded' | 'matched' | 'all';
 
@@ -54,6 +57,9 @@ const day = (d: string) => new Date(`${String(d).slice(0, 10)}T00:00:00`).toLoca
 
 export default function StatementLinesPage() {
   const canEdit = usePermission('banking', 'edit');
+  const router = useRouter();
+  // The ticked lines' Delete, asked first.
+  const [bulkDeleting, setBulkDeleting] = useState(false);
   const [status, setStatus] = useState<Status>('unmatched');
   const [bankAccountId, setBankAccountId] = useState('');
   // Zoho's Quick Categorize opens here from an account's page, on that account (?account=).
@@ -191,16 +197,22 @@ export default function StatementLinesPage() {
               </Button>
             )}
             {status !== 'matched' && (
-              <Button size="sm" variant="ghost" disabled={!!busy} className="gap-1.5 text-destructive hover:text-destructive" onClick={() => {
-                if (!window.confirm(`Delete ${chosen.length} line(s)? Only uncategorised and excluded lines are deleted.`)) return;
-                void act('delete', { action: 'delete', transactionIds: ids }, (r) => `${r.deleted} line(s) deleted${r.kept ? `; ${r.kept} categorised were kept` : ''}`);
-              }}>
+              <Button size="sm" variant="ghost" disabled={!!busy} className="gap-1.5 text-destructive hover:text-destructive" onClick={() => setBulkDeleting(true)}>
                 <Trash2 className="size-3.5" /> Delete
               </Button>
             )}
           </div>
         </Card>
       )}
+
+      <ConfirmDelete
+        open={bulkDeleting}
+        onClose={() => setBulkDeleting(false)}
+        title={`Delete ${chosen.length} line${chosen.length === 1 ? '' : 's'}?`}
+        description="Only uncategorised and excluded lines are deleted; categorised ones are kept (undo their categorisation first). Their import fingerprints stay, so the same statement imported again does not bring them back twice."
+        withReasonField={false}
+        onConfirm={() => act('delete', { action: 'delete', transactionIds: ids }, (r) => `${r.deleted} line(s) deleted${r.kept ? `; ${r.kept} categorised were kept` : ''}`)}
+      />
 
       <AsyncPage state={state}>
         {(d) => (
@@ -223,11 +235,12 @@ export default function StatementLinesPage() {
                     <th className="px-3 py-2 text-right font-semibold">Withdrawal</th>
                     <th className="px-3 py-2 text-right font-semibold">Deposit</th>
                     <th className="px-3 py-2 text-left font-semibold">{status === 'unmatched' ? 'Suggested category' : 'Status'}</th>
+                    <th className="w-[170px] px-3 py-2 text-right font-semibold">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {d.transactions.length === 0 && (
-                    <tr><td colSpan={6} className="px-3 py-6 text-center text-muted-foreground">
+                    <tr><td colSpan={7} className="px-3 py-6 text-center text-muted-foreground">
                       {status === 'unmatched' ? 'Nothing waiting to be categorised.' : 'No lines here.'}
                     </td></tr>
                   )}
@@ -261,6 +274,10 @@ export default function StatementLinesPage() {
                               {l.status === 'matched' ? 'Categorised' : l.status === 'excluded' ? 'Excluded' : l.status}
                             </Badge>
                           )}
+                        </td>
+                        <td className="whitespace-nowrap px-3 py-2">
+                          <StatementLineActions line={l} onChanged={() => void state.refetch()}
+                            onReopen={(id) => router.push(`/banking/reconcile?account=${l.bankAccountId}&line=${id}`)} />
                         </td>
                       </tr>
                     );

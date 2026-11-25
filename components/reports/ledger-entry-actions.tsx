@@ -29,6 +29,7 @@ import {
 import { api } from '@/lib/api/client';
 import { usePermission } from '@/lib/store/hooks';
 import { sourceHref } from '@/lib/source-links';
+import { withReason } from '@/components/shared/row-actions';
 
 export interface LedgerRowRef {
   entryId: string;
@@ -37,6 +38,19 @@ export interface LedgerRowRef {
   sourceId: string | null;
   reversalOf?: { entryId: string; entryNo: number } | null;
   reversedBy?: { entryId: string; entryNo: number } | null;
+}
+
+/** A journal list's entry (api/journal) as a ledger row: what its View, Edit and Delete need. */
+export function journalRowRef(e: {
+  id: string; entryNo: number; sourceType: string; sourceId: string | null;
+  reversalOfRef?: { entryId: string; entryNo: number } | null; reversedByRef?: { entryId: string; entryNo: number } | null;
+  reversalOf?: string | null; reversedBy?: number | null;
+}): LedgerRowRef {
+  return {
+    entryId: e.id, entryNo: e.entryNo, sourceType: e.sourceType, sourceId: e.sourceId,
+    reversalOf: e.reversalOfRef ?? (e.reversalOf ? { entryId: e.reversalOf, entryNo: 0 } : null),
+    reversedBy: e.reversedByRef ?? (e.reversedBy ? { entryId: '', entryNo: e.reversedBy } : null),
+  };
 }
 
 type Module = 'sales' | 'purchases' | 'accountant' | 'banking';
@@ -66,6 +80,16 @@ export const LEDGER_KINDS: Record<string, Kind> = {
   // refused by the server ("Delete the bill first"), with its reason shown.
   goods_receipt: { noun: 'goods receipt', module: 'purchases', edit: (id) => `/purchases/goods-receipts?edit=${id}`, del: (id) => `/api/goods-receipts/${id}` },
   bank_txn: { noun: 'bank line categorisation', module: 'banking' },
+  // Banking and the accountant's own entries (2026-11-25): a transfer between two accounts is edited
+  // and deleted as a transfer (reversed and reposted); a cash count's short or excess goes with its
+  // count; money typed in on a bank account (Add Transaction), a recurring journal's entry, an
+  // imported journal and a reclassification are journals, changed as one is.
+  transfer: { noun: 'transfer', module: 'banking', edit: (id) => `/banking/transfers?edit=${id}`, del: (id) => `/api/banking/transfers/${id}` },
+  cash_count: { noun: 'cash count', module: 'banking', edit: (id) => `/reports/cash-book?count=${id}`, del: (id) => `/api/cash-book?id=${id}` },
+  bank_entry: { noun: 'bank transaction', module: 'accountant', byEntry: true, edit: (id) => `/accountant/journals?edit=${id}`, del: (id) => `/api/journal/${id}` },
+  recurring: { noun: 'journal', module: 'accountant', byEntry: true, edit: (id) => `/accountant/journals?edit=${id}`, del: (id) => `/api/journal/${id}` },
+  tally_import: { noun: 'journal', module: 'accountant', byEntry: true, edit: (id) => `/accountant/journals?edit=${id}`, del: (id) => `/api/journal/${id}` },
+  reclassification: { noun: 'journal', module: 'accountant', byEntry: true, edit: (id) => `/accountant/journals?edit=${id}`, del: (id) => `/api/journal/${id}` },
 };
 
 export function LedgerEntryActions({ row, onChanged }: { row: LedgerRowRef; onChanged: () => void }) {
@@ -118,7 +142,7 @@ export function LedgerEntryActions({ row, onChanged }: { row: LedgerRowRef; onCh
         toast.success(`Entry #${row.entryNo} deleted`, { description: 'The bank line is uncategorised again; its entry is reversed in the ledger.' });
       } else {
         const r = reason.trim();
-        await api.delete(`${kind!.del!(id!)}${r ? `?reason=${encodeURIComponent(r)}` : ''}`);
+        await api.delete(withReason(kind!.del!(id!), r));
         toast.success(`The ${kind!.noun} behind entry #${row.entryNo} is deleted`, { description: 'Its entry is reversed in the ledger; the audit trail keeps it.' });
       }
       setConfirm(null); setReason('');

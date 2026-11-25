@@ -22,7 +22,9 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import Papa from 'papaparse';
 import { readXls } from '@/lib/imports/xls';
-import { CheckCircle2, Download, FileSpreadsheet, Info, ListChecks, Loader2, Settings2, Trash2, Undo2, Upload, X } from 'lucide-react';
+import { RowActions } from '@/components/shared/row-actions';
+import { useRouter } from 'next/navigation';
+import { CheckCircle2, Download, FileSpreadsheet, Info, ListChecks, Loader2, Settings2, Trash2, Upload, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -128,6 +130,8 @@ function fromGrid(base: { name: string; format: StatementFormat; grid: null; map
 export default function BankImportsPage() {
   const canImport = usePermission('banking', 'create');
   const canEdit = usePermission('banking', 'edit');
+  const canDelete = usePermission('banking', 'void');
+  const router = useRouter();
   const fileRef = useRef<HTMLInputElement>(null);
   const [defaultAccount, setDefaultAccount] = useState('');
   // Import Statement from an account's page or row menu comes with that account (?account=).
@@ -203,14 +207,11 @@ export default function BankImportsPage() {
     });
   };
 
+  // Delete (Zoho's Undo import), asked first by the row's dialog: its lines still uncategorised go.
   const undo = async (imp: ImportRow) => {
-    try {
-      const r = await api.delete<{ removed: number; kept: number }>(`/api/banking/import?id=${imp.id}`);
-      toast.success(`Import undone: ${r.removed} line(s) removed`, { description: r.kept ? `${r.kept} line(s) already matched were kept.` : undefined });
-      history.refetch();
-    } catch (e) {
-      toast.error(e instanceof ApiError ? e.message : 'Could not undo the import');
-    }
+    const r = await api.delete<{ removed: number; kept: number }>(`/api/banking/import?id=${imp.id}`);
+    toast.success(`Import deleted: ${r.removed} line(s) removed`, { description: r.kept ? `${r.kept} line(s) already categorised were kept.` : undefined });
+    history.refetch();
   };
 
   const downloadSample = () => {
@@ -405,11 +406,19 @@ export default function BankImportsPage() {
                     <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" asChild>
                       <Link href={`/banking/statement-lines?import=${b.id}`}>View lines</Link>
                     </Button>
-                    {canEdit && b.matched < b.lines && (
-                      <Button variant="ghost" size="sm" className="h-7 gap-1 px-2 text-xs" onClick={() => void undo(b)}>
-                        <Undo2 className="size-3" /> Undo import
-                      </Button>
-                    )}
+                    {/* Edit: its lines, to correct or categorise; Delete: the import undone. */}
+                    <RowActions
+                      label={`the import ${b.filename}`}
+                      canEdit={canEdit}
+                      canDelete={canDelete && b.matched < b.lines}
+                      editTitle="Open its lines to correct, categorise or delete them one by one"
+                      onEdit={() => router.push(`/banking/statement-lines?import=${b.id}`)}
+                      onDelete={() => undo(b)}
+                      deleteLabel="Delete (undo import)"
+                      deleteTitle={`Delete the import ${b.filename}?`}
+                      deleteDescription={`Its ${b.lines - b.matched} line(s) still uncategorised are removed. ${b.matched ? `The ${b.matched} already categorised or excluded stay: the books have moved on from them.` : ''}`}
+                      withReasonField={false}
+                    />
                   </div>
                 ))}
               </div>

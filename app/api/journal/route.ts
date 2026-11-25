@@ -8,6 +8,7 @@ import { reverseJournal } from '@/lib/server/services/journals';
 import { saveJournal } from '@/lib/server/services/held-journals';
 import { JournalInput, toJournalInput } from '@/lib/server/journal-input';
 import '@/lib/server/jobs/boot';
+import { entryLinks, missingSourceIds } from '@/lib/server/reports/entry-refs';
 
 const ListQuery = z.object({
   /** One entry, by id — what a document's "Journal" tab asks for. */
@@ -107,6 +108,13 @@ export const GET = route(
       : [];
     const reversedBy = new Map(reversals.map((r) => [Number(r.reversal_of_entry_id), r.entry_no]));
 
+    // For each row's View, Edit and Delete (reports' entry rows): what it reverses and what reversed it,
+    // with their numbers, and the document behind an older transfer or cash count.
+    const [links, sources] = await Promise.all([
+      entryLinks(db, orgId, ids),
+      missingSourceIds(db, orgId, entries.map((e) => ({ entryId: e.id, sourceType: e.source_type, sourceId: e.source_id }))),
+    ]);
+
     const linesByEntry = new Map<number, typeof lines>();
     for (const l of lines) {
       const list = linesByEntry.get(l.entry_id) ?? [];
@@ -121,11 +129,14 @@ export const GET = route(
         date: e.entry_date,
         memo: e.memo,
         sourceType: e.source_type,
-        sourceId: e.source_id ? asId(e.source_id) : null,
+        sourceId: e.source_id ? asId(e.source_id) : sources.get(e.id) ?? null,
         // A reversal is a correction posted alongside the original, never a
         // rewrite of it — showing the link is what makes that visible.
         reversalOf: e.reversal_of_entry_id ? asId(e.reversal_of_entry_id) : null,
         reversedBy: reversedBy.get(Number(e.id)) ?? null,
+        /** The same links with both entry id and number, as the ledger rows' actions read them. */
+        reversalOfRef: links.get(e.id)?.reversalOf ?? null,
+        reversedByRef: links.get(e.id)?.reversedBy ?? null,
         totalDebitPaise: toPaiseFromSql(e.total_debit),
         totalCreditPaise: toPaiseFromSql(e.total_credit),
         postedAt: e.posted_at,
