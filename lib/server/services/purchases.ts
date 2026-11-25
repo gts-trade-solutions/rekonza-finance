@@ -23,8 +23,9 @@ import 'server-only';
 //     and paid less; the difference is a liability, not a discount.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { sql } from 'kysely';
+import { sql, type Insertable } from 'kysely';
 import type { Trx } from '../db';
+import type { DB } from '../db-types';
 import type { Paise, SupplyType } from '../../types';
 import { computeLineTax, hsnRateOn, sumTax, totalTaxPaise } from '../../tax/gst';
 import { computeTds, parseSections } from '../../tax/tds';
@@ -108,6 +109,8 @@ export async function vendorFyTaxable(
   orgId: number,
   vendorId: number,
   onDate: string,
+  /** The bill being edited: its old figures are not part of "so far". */
+  excludeBillId?: number,
 ): Promise<Paise> {
   const fyStartYear = Number(onDate.slice(0, 4)) - (Number(onDate.slice(5, 7)) < 4 ? 1 : 0);
   const from = `${fyStartYear}-04-01`;
@@ -118,6 +121,7 @@ export async function vendorFyTaxable(
     FROM bills
     WHERE org_id = ${orgId} AND vendor_id = ${vendorId}
       AND status <> 'void' AND bill_date BETWEEN ${from} AND ${to}
+      AND id <> ${excludeBillId ?? 0}
   `.execute(trx);
 
   return toPaiseFromSql(rows[0]?.total ?? '0');
@@ -128,6 +132,12 @@ export async function createBill(
   orgId: number,
   userId: number | null,
   input: CreateBillInput,
+  /**
+   * Zoho's Edit (services/purchase-changes.ts): write the bill back over the
+   * same row, keeping its number and self-invoice number, instead of a new one.
+   * The caller has reversed its old entry and taken its old lines away.
+   */
+  opts: { replace?: { id: number; internalNo: string; selfInvoiceNo: string | null } } = {},
 ): Promise<{ id: number; internalNo: string; totalPaise: Paise; journalEntryId: number | null; heldForApproval: boolean; warnings: string[] }> {
   if (!input.lines.length) throw badRequest('A bill needs at least one line.');
   const fx = foreignOf(input);
@@ -152,7 +162,7 @@ export async function createBill(
   if (!vendor) throw notFound('That vendor does not exist.');
   // A supplier's bill number is entered once (bill-duplicates.ts): the second
   // time is refused by name, before anything is posted or paid.
-  const twin = (await findBillDuplicates(trx, orgId, { vendorId: input.vendorId, vendorInvoiceNo: input.vendorInvoiceNo })).exact;
+  const twin = (await findBillDuplicates(trx, orgId, { vendorId: input.vendorId, vendorInvoiceNo: input.vendorInvoiceNo, excludeId: opts.replace?.id ?? null })).exact;
   if (twin) {
     throw conflict(`Bill ${input.vendorInvoiceNo} from ${twin.vendorName} is already in your books as ${twin.internalNo}, dated ${twin.date}. A supplier's bill is entered once: open that one, or void it first if it was wrong.`);
   }
@@ -258,7 +268,7 @@ export async function createBill(
     // inoperative (not linked to Aadhaar) counts as no PAN.
     pan: vendor.pan_status === 'inoperative' ? null : vendor.pan,
     billTaxable: subtotal,
-    fyPaidSoFar: await vendorFyTaxable(trx, orgId, input.vendorId, input.date),
+    fyPaidSoFar: await vendorFyTaxable(trx, orgId, input.vendorId, input.date, opts.replace?.id),
     lowerRatePct: lower.ratePct,
   });
 
@@ -269,19 +279,17 @@ export async function createBill(
 
   // Our own reference for the vendor's bill, unique across the organisation
   // (uq_bill_internal). The vendor's own number is theirs and may repeat.
-  const held = (input.status ?? 'open') !== 'draft' && !!input.holdForApproval
+  const held = !opts.replace && (input.status ?? 'open') !== 'draft' && !!input.holdForApproval
     && !!(await ruleFor(trx, orgId, 'bill', totalPayable));
   const status = held ? 'draft' : (input.status ?? 'open');
-  const internalNo = await allocateOrgNumber(trx, orgId, 'BILL', fyLabelFor(input.date), 'BILL');
+  const internalNo = opts.replace?.internalNo ?? await allocateOrgNumber(trx, orgId, 'BILL', fyLabelFor(input.date), 'BILL');
   // Reverse charge on a supply from someone without a GSTIN (unregistered, or
   // abroad) needs the buyer's own invoice for it: s.31(3)(f), Rule 47A.
   const selfInvoiceNo = input.isRcm && !vendor.gstin
-    ? await allocateOrgNumber(trx, orgId, 'RCM', fyLabelFor(input.date), 'RCM')
+    ? opts.replace?.selfInvoiceNo ?? await allocateOrgNumber(trx, orgId, 'RCM', fyLabelFor(input.date), 'RCM')
     : null;
 
-  const inserted = await trx
-    .insertInto('bills')
-    .values({
+  const values = {
       org_id: orgId,
       branch_id: input.branchId,
       cost_centre_id: input.costCentreId ?? null,
@@ -314,9 +322,22 @@ export async function createBill(
       match_status: input.match?.status ?? 'not_required',
       match_note: input.match?.note ?? null,
       created_by_user_id: userId,
-    })
-    .executeTakeFirstOrThrow();
-  const billId = Number(inserted.insertId);
+    } satisfies Insertable<DB['bills']>;
+  let billId: number;
+  if (opts.replace) {
+    // In place: the money already paid on it, the order and receipt it came
+    // from, its three-way match and its approval all stay as they were.
+    const {
+      org_id: _o, internal_no: _n, created_by_user_id: _c, amount_paid: _p,
+      source_po_id: _po, source_grn_id: _grn, match_status: _ms, match_note: _mn, ...changed
+    } = values;
+    await trx.updateTable('bills')
+      .set({ ...changed, journal_entry_id: null, currency: 'INR', exchange_rate: '1', fc_subtotal: null, fc_total: null })
+      .where('id', '=', opts.replace.id).where('org_id', '=', orgId).execute();
+    billId = opts.replace.id;
+  } else {
+    billId = Number((await trx.insertInto('bills').values(values).executeTakeFirstOrThrow()).insertId);
+  }
   // A batch-tracked item names its batch on every purchase.
   const trackedBatches = new Set((await trx.selectFrom('items').select('id').where('org_id', '=', orgId)
     .where('track_batches', '=', 1).where('id', 'in', [0, ...input.lines.map((l) => l.itemId ?? 0)]).execute()).map((r) => r.id));

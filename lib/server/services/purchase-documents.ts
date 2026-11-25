@@ -219,6 +219,8 @@ export async function createVendorCredit(
   orgId: number,
   userId: number | null,
   input: CreateVendorCreditInput,
+  /** Zoho's Edit (services/purchase-changes.ts): the same row and number, written again. */
+  opts: { replace?: { id: number; number: string } } = {},
 ): Promise<CreatedPurchaseDoc> {
   if (!input.reason?.trim()) throw badRequest('A vendor credit needs a reason.');
   if (input.amountPaise <= 0) throw badRequest('A vendor credit needs an amount above zero.');
@@ -258,27 +260,37 @@ export async function createVendorCredit(
     }
   }
 
-  const number =
-    input.number?.trim() ||
-    (await allocateNumber(trx, orgId, input.branchId, 'VC', fyLabelFor(input.date), { prefix: 'VC' }));
+  const number = opts.replace?.number ??
+    (input.number?.trim() ||
+    (await allocateNumber(trx, orgId, input.branchId, 'VC', fyLabelFor(input.date), { prefix: 'VC' })));
 
-  const inserted = await trx
-    .insertInto('vendor_credits')
-    .values({
-      org_id: orgId,
-      branch_id: input.branchId,
-      number,
-      vendor_id: input.vendorId,
-      credit_date: input.date,
-      reason: input.reason.trim(),
-      against_bill_id: input.againstBillId ?? null,
-      status: 'open',
-      total: toSqlFromPaise(rounded),
-      applied_amount: toSqlFromPaise(0),
-      created_by_user_id: userId,
-    })
-    .executeTakeFirstOrThrow();
-  const id = Number(inserted.insertId);
+  let id: number;
+  if (opts.replace) {
+    await trx.updateTable('vendor_credits').set({
+      branch_id: input.branchId, vendor_id: input.vendorId, credit_date: input.date, reason: input.reason.trim(),
+      against_bill_id: input.againstBillId ?? null, status: 'open', total: toSqlFromPaise(rounded),
+      applied_amount: toSqlFromPaise(0), journal_entry_id: null,
+    }).where('id', '=', opts.replace.id).where('org_id', '=', orgId).execute();
+    id = opts.replace.id;
+  } else {
+    const inserted = await trx
+      .insertInto('vendor_credits')
+      .values({
+        org_id: orgId,
+        branch_id: input.branchId,
+        number,
+        vendor_id: input.vendorId,
+        credit_date: input.date,
+        reason: input.reason.trim(),
+        against_bill_id: input.againstBillId ?? null,
+        status: 'open',
+        total: toSqlFromPaise(rounded),
+        applied_amount: toSqlFromPaise(0),
+        created_by_user_id: userId,
+      })
+      .executeTakeFirstOrThrow();
+    id = Number(inserted.insertId);
+  }
 
   const acc = await accountIds(trx, orgId);
   const lines: DraftLine[] = [

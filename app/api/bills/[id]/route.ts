@@ -8,6 +8,8 @@ import { route, body, idParam, asId, notFound, forbidden } from '@/lib/server/ht
 import { toPaiseFromSql } from '@/lib/server/money-sql';
 import { voidBill, postBill } from '@/lib/server/services/purchases';
 import { logAudit, auditMeta } from '@/lib/server/audit';
+import { BillInput, toBillInput } from '@/lib/server/bill-input';
+import { deleteBill, updateBill } from '@/lib/server/services/purchase-changes';
 
 /** One bill with its lines, payments and the journal entry behind it. */
 export const GET = route(
@@ -25,6 +27,7 @@ export const GET = route(
         'bills.cess', 'bills.tds_amount', 'bills.tds_section', 'bills.round_off',
         'bills.total', 'bills.amount_paid', 'bills.notes', 'bills.journal_entry_id',
         'bills.vendor_id', 'bills.branch_id', 'bills.created_at',
+        'bills.cost_centre_id', 'bills.warehouse_id', 'bills.currency', 'bills.exchange_rate',
         'bills.match_status', 'bills.match_note', 'bills.match_accepted_at', 'bills.source_po_id', 'bills.source_grn_id',
         'bills.approval_status', 'bills.rejection_reason', 'bills.submitted_by_user_id',
         'bills.voided_at', 'bills.void_reason',
@@ -49,6 +52,7 @@ export const GET = route(
           'bill_lines.discount_pct', 'bill_lines.gst_rate_pct', 'bill_lines.taxable',
           'bill_lines.cgst', 'bill_lines.sgst', 'bill_lines.igst', 'bill_lines.line_total',
           'bill_lines.itc_eligibility', 'bill_lines.account_id', 'accounts.name as account_name',
+          'bill_lines.cess_rate_pct', 'bill_lines.source_line_type', 'bill_lines.source_line_id', 'bill_lines.batch_id',
         ])
         .where('bill_lines.bill_id', '=', id)
         .orderBy('bill_lines.line_no')
@@ -77,6 +81,19 @@ export const GET = route(
             .execute()
         : Promise.resolve([]),
     ]);
+
+    // For Edit: the batch and the pieces each line brought in, as entered.
+    const batchIds = lines.map((l) => l.batch_id).filter((x): x is number => !!x);
+    const [batches, serials] = await Promise.all([
+      batchIds.length
+        ? db.selectFrom('batches').select(['id', 'batch_no', 'mfg_date', 'expiry_date']).where('id', 'in', batchIds).execute()
+        : Promise.resolve([]),
+      db.selectFrom('serial_moves').innerJoin('item_serials', 'item_serials.id', 'serial_moves.serial_id')
+        .select(['serial_moves.line_id', 'item_serials.serial_no'])
+        .where('serial_moves.org_id', '=', orgId).where('serial_moves.doc_type', '=', 'bill').where('serial_moves.doc_id', '=', id)
+        .execute(),
+    ]);
+    const day = (d: unknown) => (d ? String(d instanceof Date ? d.toISOString() : d).slice(0, 10) : null);
 
     const p = toPaiseFromSql;
     const rule = await ruleFor(db, orgId, 'bill', toPaiseFromSql(bill.total));
@@ -144,7 +161,24 @@ export const GET = route(
         igstPaise: p(l.igst),
         totalPaise: p(l.line_total),
         itcEligibility: l.itc_eligibility,
+        // What Edit needs to write the line back as it was.
+        cessRatePct: Number(l.cess_rate_pct ?? 0),
+        sourceLineType: l.source_line_type,
+        sourceLineId: l.source_line_id ? asId(l.source_line_id) : null,
+        // A bill in another currency is edited in that currency.
+        ratePaiseFc: bill.currency !== 'INR' && Number(bill.exchange_rate) > 0 ? Math.round(p(l.rate) / Number(bill.exchange_rate)) : null,
+        batch: (() => {
+          const b = batches.find((x) => x.id === l.batch_id);
+          return b ? { batchNo: b.batch_no, mfgDate: day(b.mfg_date), expiryDate: day(b.expiry_date) } : null;
+        })(),
+        serials: serials.filter((s) => s.line_id === l.id).map((s) => s.serial_no),
       })),
+      edit: {
+        costCentreId: bill.cost_centre_id ? asId(bill.cost_centre_id) : null,
+        warehouseId: bill.warehouse_id ? asId(bill.warehouse_id) : null,
+        currency: bill.currency,
+        exchangeRate: Number(bill.exchange_rate),
+      },
       payments: payments.map((pay) => ({
         id: asId(pay.id),
         number: pay.number,
@@ -219,4 +253,52 @@ export const POST = route(
     return { id: asId(id), status: bill.status };
   },
   { permission: { module: 'purchases', action: 'edit' } },
+);
+
+/**
+ * Edit, as Zoho Books' Edit: the bill's entry is reversed on its own date and
+ * it is written again in place, the same number, its payments kept
+ * (services/purchase-changes.ts updateBill).
+ */
+export const PUT = route(
+  async ({ orgId, user, req, params }) => {
+    const id = idParam(params);
+    const input = await body(req, BillInput);
+    const done = await transaction(async (trx) => {
+      const made = await updateBill(trx, orgId, user.userId, id, toBillInput(input, { keepSources: true }));
+      await logAudit({
+        trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'update',
+        targetType: 'bill', targetId: id, targetLabel: made.internalNo,
+        detail: `Edited bill ${made.internalNo} (${input.vendorInvoiceNo})`, payload: { before: made.before }, ...auditMeta(req),
+      });
+      return made;
+    });
+    return {
+      id: asId(done.id), internalNo: done.internalNo, totalPaise: done.totalPaise,
+      journalEntryId: done.journalEntryId ? asId(done.journalEntryId) : null, warnings: done.warnings,
+    };
+  },
+  { permission: { module: 'purchases', action: 'edit' } },
+);
+
+/**
+ * Delete, as Zoho Books' Delete: while nothing is paid or applied against it.
+ * The entry is reversed and the record kept in deleted_documents (migration 118).
+ */
+export const DELETE = route(
+  async ({ orgId, user, req, params }) => {
+    const id = idParam(params);
+    const reason = new URL(req.url).searchParams.get('reason');
+    const done = await transaction(async (trx) => {
+      const gone = await deleteBill(trx, orgId, user.userId, id, reason);
+      await logAudit({
+        trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'delete',
+        targetType: 'bill', targetId: id, targetLabel: gone.number,
+        detail: `Deleted bill ${gone.number}${reason ? ` — ${reason}` : ''}`, ...auditMeta(req),
+      });
+      return gone;
+    });
+    return { deleted: true, number: done.number };
+  },
+  { permission: { module: 'purchases', action: 'void' } },
 );
