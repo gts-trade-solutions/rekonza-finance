@@ -14,7 +14,7 @@
 
 import { FoldNav } from '@/components/layout/nav-state';
 import { useState } from 'react';
-import { CalendarClock, Play, Plus, Repeat, Trash2 } from 'lucide-react';
+import { CalendarClock, Play, Plus, Repeat } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -22,7 +22,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import {
-  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger,
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
 import { Combobox } from '@/components/ui/combobox';
 import { PageHeader } from '@/components/shared/page-header';
@@ -30,8 +30,9 @@ import { Money } from '@/components/shared/money';
 import { EmptyState } from '@/components/shared/empty-state';
 import { AsyncPage } from '@/components/shared/async-state';
 import { Field, MoneyInput } from '@/components/shared/form-bits';
+import { RowActions, withReason } from '@/components/shared/row-actions';
 import {
-  accounts as accountsApi, recurringJournals,
+  accounts as accountsApi, api, recurringJournals,
   type AccountRow, type RecurringJournalRow,
 } from '@/lib/api/client';
 import { useApi, useApiAction } from '@/lib/api/use-api';
@@ -54,18 +55,29 @@ const BLANK = {
 
 export default function RecurringJournalsPage() {
   const canCreate = usePermission('accountant', 'create');
+  const canEdit = usePermission('accountant', 'edit');
+  const canDelete = usePermission('accountant', 'void');
   const state = useApi<{ profiles: RecurringJournalRow[] }>(() => recurringJournals.list(), []);
   const chart = useApi<{ accounts: AccountRow[] }>(() => accountsApi.list(), []);
 
   const [open, setOpen] = useState(false);
   const [f, setF] = useState(BLANK);
+  // The profile being edited; null while making a new one.
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const startEdit = (p: RecurringJournalRow) => {
+    setEditingId(p.id);
+    setF({ name: p.name, frequency: p.frequency, nextRun: p.nextRun, debitAccountId: p.debitAccountId, creditAccountId: p.creditAccountId, amount: p.amountPaise, memo: p.memo ?? '' });
+    setOpen(true);
+  };
+  const startNew = () => { setEditingId(null); setF(BLANK); setOpen(true); };
 
   const create = useApiAction(recurringJournals.create);
   const run = useApiAction(recurringJournals.run);
   const toggle = useApiAction(recurringJournals.toggle);
   const auto = useApiAction(recurringJournals.auto);
-  const remove = useApiAction(recurringJournals.remove);
-  const busy = run.busy || toggle.busy || auto.busy || remove.busy;
+
+  const busy = run.busy || toggle.busy || auto.busy;
 
   const accountChoices = (chart.data?.accounts ?? []).map((a) => ({
     value: a.id,
@@ -76,6 +88,23 @@ export default function RecurringJournalsPage() {
   const save = async () => {
     if (!f.name.trim() || !f.debitAccountId || !f.creditAccountId || f.amount <= 0) {
       toast.error('Fill in a name, both accounts and an amount.');
+      return;
+    }
+    if (editingId) {
+      setSaving(true);
+      try {
+        await api.put('/api/recurring-journals', {
+          id: editingId, name: f.name.trim(), frequency: f.frequency, nextRun: f.nextRun,
+          debitAccountId: f.debitAccountId, creditAccountId: f.creditAccountId, amountPaise: f.amount, memo: f.memo.trim() || f.name.trim(),
+        });
+        toast.success('Profile saved', { description: 'It posts this way from its next run; entries already posted stay as they are.' });
+        setOpen(false); setEditingId(null); setF(BLANK);
+        state.refetch();
+      } catch (e) {
+        toast.error('Not saved', { description: e instanceof Error ? e.message : String(e) });
+      } finally {
+        setSaving(false);
+      }
       return;
     }
     const result = await create.run({
@@ -130,30 +159,18 @@ export default function RecurringJournalsPage() {
     state.refetch();
   };
 
-  const drop = async (p: RecurringJournalRow) => {
-    const done = await remove.run(p.id);
-    if (!done) {
-      toast.error(remove.error ?? 'The profile was not deleted');
-      return;
-    }
-    toast.info(`${p.name} deleted`, { description: 'Entries it already posted are unaffected.' });
-    state.refetch();
-  };
-
   return (
     <>
       <PageHeader
         title="Recurring Journals"
         description="Entries that repeat unchanged — depreciation, amortisation, accruals. Set once, and post them on schedule with identical wording every period."
         actions={
-          canCreate && (
-            <Dialog open={open} onOpenChange={setOpen}>
-              <DialogTrigger asChild>
-                <Button size="sm" className="gap-1.5"><Plus className="size-4" /> New profile</Button>
-              </DialogTrigger>
-              <DialogContent>
+          (canCreate || canEdit) && (
+            <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) setEditingId(null); }}>
+              {canCreate && <Button size="sm" className="gap-1.5" onClick={startNew}><Plus className="size-4" /> New profile</Button>}
+              <DialogContent data-slot="recurring-journal-dialog">
                 <DialogHeader>
-                  <DialogTitle>New recurring journal</DialogTitle>
+                  <DialogTitle>{editingId ? `Edit ${f.name || 'recurring journal'}` : 'New recurring journal'}</DialogTitle>
                   <FoldNav />
                   <DialogDescription>
                     Two accounts and one amount. The same entry posts each period, worded identically.
@@ -176,7 +193,7 @@ export default function RecurringJournalsPage() {
                         showAvatar={false}
                       />
                     </Field>
-                    <Field label="First run" required>
+                    <Field label={editingId ? 'Next run' : 'First run'} required>
                       <Input
                         type="date"
                         value={f.nextRun}
@@ -217,9 +234,9 @@ export default function RecurringJournalsPage() {
                   {create.error && <p className="text-sm text-destructive">{create.error}</p>}
                 </div>
                 <DialogFooter>
-                  <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
-                  <Button onClick={save} disabled={create.busy}>
-                    {create.busy ? 'Saving…' : 'Create profile'}
+                  <Button variant="outline" onClick={() => { setOpen(false); setEditingId(null); }}>Cancel</Button>
+                  <Button onClick={save} disabled={create.busy || saving} data-slot="recurring-journal-save">
+                    {create.busy || saving ? 'Saving…' : editingId ? 'Save' : 'Create profile'}
                   </Button>
                 </DialogFooter>
               </DialogContent>
@@ -295,15 +312,16 @@ export default function RecurringJournalsPage() {
                       >
                         <Play className="size-3.5" /> Run now
                       </Button>
-                      <button
-                        type="button"
-                        aria-label={`Delete ${p.name}`}
-                        disabled={busy}
-                        onClick={() => void drop(p)}
-                        className="grid size-8 place-items-center rounded text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:opacity-40"
-                      >
-                        <Trash2 className="size-3.5" />
-                      </button>
+                      <RowActions
+                        label={p.name}
+                        canEdit={canEdit}
+                        canDelete={canDelete}
+                        onEdit={() => startEdit(p)}
+                        onDelete={async (reason) => { await api.delete(withReason(`/api/recurring-journals?id=${encodeURIComponent(p.id)}`, reason)); state.refetch(); }}
+                        done={`${p.name} deleted`}
+                        deleteTitle={`Delete the recurring journal ${p.name}?`}
+                        deleteDescription="The profile goes and nothing more is posted from it. Entries it already posted are real and stay in the ledger."
+                      />
                     </div>
                   )}
                 </Card>

@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import { db } from '@/lib/server/db';
+import { db, transaction } from '@/lib/server/db';
+import { deleteBusinessDocument } from '@/lib/server/services/accountant-changes';
 import { route, body, idParam, notFound } from '@/lib/server/http';
 import { logAudit, auditMeta } from '@/lib/server/audit';
 
@@ -38,3 +39,21 @@ export const PATCH = route(async ({ orgId, user, req, params }) => {
   });
   return { ok: true };
 }, { permission: { module: 'accountant', action: 'edit' } });
+
+/**
+ * Delete a business document (services/accountant-changes.ts). Its files are
+ * not lost: they go back to the Documents inbox, unattached. Archive is still
+ * there for one that is merely finished with.
+ */
+export const DELETE = route(async ({ orgId, user, req, params }) => {
+  const id = idParam(params);
+  const reason = new URL(req.url).searchParams.get('reason');
+  return transaction(async (trx) => {
+    const gone = await deleteBusinessDocument(trx, orgId, user.userId, id, reason);
+    await logAudit({
+      trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'delete', targetType: 'document', targetId: id, targetLabel: gone.title,
+      detail: `Deleted "${gone.title}"; ${gone.filesKept} file(s) back in the inbox${reason ? ` — ${reason}` : ''}`, ...auditMeta(req),
+    });
+    return { ok: true, filesKept: gone.filesKept };
+  });
+}, { permission: { module: 'accountant', action: 'void' } });

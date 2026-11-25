@@ -1,9 +1,10 @@
 import { z } from 'zod';
-import { db } from '@/lib/server/db';
+import { db, transaction } from '@/lib/server/db';
 import { route, body, query, badRequest } from '@/lib/server/http';
 import { toSqlFromPaise } from '@/lib/server/money-sql';
 import { budgetVsActual } from '@/lib/server/reports/budgets';
 import { logAudit, auditMeta } from '@/lib/server/audit';
+import { deleteBudgetLine, setBudgetLine } from '@/lib/server/services/accountant-changes';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Budget vs actual: the figures are worked out in lib/server/reports/budgets.ts,
@@ -99,4 +100,45 @@ export const PUT = route(
     return { fy: input.fy, updated: input.entries.length };
   },
   { permission: { module: 'accountant', action: 'edit' } },
+);
+
+const LineInput = z.object({
+  fy: z.string().regex(/^\d{4}-\d{2}$/),
+  accountId: z.union([z.string(), z.number()]).transform(Number),
+  amountPaise: z.number().int().positive('A budget is an amount above zero. To remove the line, delete it.'),
+  notes: z.string().trim().max(500).nullish(),
+});
+
+/** Edit one budget line: its annual figure and note (services/accountant-changes.ts). */
+export const PATCH = route(
+  async ({ orgId, user, req }) => {
+    const input = await body(req, LineInput);
+    return transaction(async (trx) => {
+      const a = await setBudgetLine(trx, orgId, user.userId, input);
+      await logAudit({
+        trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'update',
+        targetType: 'budget', targetId: input.fy, targetLabel: `FY ${input.fy} · ${a.code} ${a.name}`,
+        detail: `Budget for ${a.code} ${a.name} in FY ${input.fy} set to ₹${(input.amountPaise / 100).toLocaleString('en-IN')}`, ...auditMeta(req),
+      });
+      return { ok: true };
+    });
+  },
+  { permission: { module: 'accountant', action: 'edit' } },
+);
+
+/** Delete one budget line: the plan only, the ledger does not move. */
+export const DELETE = route(
+  async ({ orgId, user, req }) => {
+    const q = query(req, z.object({ fy: z.string().regex(/^\d{4}-\d{2}$/), accountId: z.coerce.number().int().positive(), reason: z.string().max(300).optional() }));
+    return transaction(async (trx) => {
+      const gone = await deleteBudgetLine(trx, orgId, { fy: q.fy, accountId: q.accountId });
+      await logAudit({
+        trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'delete',
+        targetType: 'budget', targetId: q.fy, targetLabel: `FY ${q.fy} · ${gone.code} ${gone.name}`,
+        detail: `Deleted the FY ${q.fy} budget of ₹${(gone.amountPaise / 100).toLocaleString('en-IN')} on ${gone.code} ${gone.name}${q.reason ? ` — ${q.reason}` : ''}`, ...auditMeta(req),
+      });
+      return { ok: true };
+    });
+  },
+  { permission: { module: 'accountant', action: 'void' } },
 );

@@ -27,6 +27,7 @@ import { AsyncPage, LoadingRows } from '@/components/shared/async-state';
 import { Field, MoneyInput } from '@/components/shared/form-bits';
 import { downloadCsv, ReportTable } from '@/components/shared/report-shell';
 import { api } from '@/lib/api/client';
+import { RowActions, withReason } from '@/components/shared/row-actions';
 import { AddAssetDialog, AssetDialog, ClassDialog } from '@/components/assets/asset-dialogs';
 import {
   fixedAssets, type AssetClassRow, type AssetRegisterRow, type DepreciationRunRow, type ItBlockRow,
@@ -47,8 +48,11 @@ const STATUS: Record<AssetRegisterRow['status'], { label: string; tone: string }
 export default function FixedAssetsPage() {
   const state = useApi(() => fixedAssets.register(), []);
   const canEdit = usePermission('accountant', 'edit');
+  const canDelete = usePermission('accountant', 'void');
   const [adding, setAdding] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
+  const [openTab, setOpenTab] = useState<'history' | 'details'>('history');
+  const open = (id: string, t: 'history' | 'details' = 'history') => { setOpenTab(t); setOpenId(id); };
   const [tab, setTab] = useState('register');
 
   return (
@@ -71,19 +75,19 @@ export default function FixedAssetsPage() {
               <TabsTrigger value="classes">Classes</TabsTrigger>
             </TabsList>
             <TabsContent value="register" className="mt-4 space-y-4">
-              <Register assets={d.assets} onOpen={setOpenId} />
+              <Register assets={d.assets} onOpen={open} canEdit={canEdit} canDelete={canDelete} onChanged={() => void state.refetch()} />
             </TabsContent>
             <TabsContent value="depreciation" className="mt-4">
               <Depreciation canEdit={canEdit} onChanged={() => void state.refetch()} />
             </TabsContent>
             <TabsContent value="disposals" className="mt-4">
-              <Disposals onOpen={setOpenId} />
+              <Disposals onOpen={(id) => open(id)} />
             </TabsContent>
             <TabsContent value="it" className="mt-4">
               <ItBook canEdit={canEdit} classes={d.classes} />
             </TabsContent>
             <TabsContent value="classes" className="mt-4">
-              <Classes classes={d.classes} canEdit={canEdit} onChanged={() => void state.refetch()} />
+              <Classes classes={d.classes} canEdit={canEdit} canDelete={canDelete} onChanged={() => void state.refetch()} />
             </TabsContent>
           </Tabs>
         )}
@@ -93,14 +97,16 @@ export default function FixedAssetsPage() {
         open={adding}
         classes={state.data?.classes ?? []}
         onClose={() => setAdding(false)}
-        onDone={(id) => { setAdding(false); void state.refetch(); setOpenId(id); }}
+        onDone={(id) => { setAdding(false); void state.refetch(); open(id); }}
       />
-      <AssetDialog id={openId} canEdit={canEdit} onClose={() => setOpenId(null)} onChanged={() => void state.refetch()} />
+      <AssetDialog id={openId} startTab={openTab} canEdit={canEdit} onClose={() => setOpenId(null)} onChanged={() => void state.refetch()} />
     </>
   );
 }
 
-function Register({ assets, onOpen }: { assets: AssetRegisterRow[]; onOpen: (id: string) => void }) {
+function Register({ assets, onOpen, canEdit, canDelete, onChanged }: {
+  assets: AssetRegisterRow[]; onOpen: (id: string, tab?: 'history' | 'details') => void; canEdit: boolean; canDelete: boolean; onChanged: () => void;
+}) {
   const [show, setShow] = useState<'live' | 'all'>('live');
   const rows = show === 'live' ? assets.filter((a) => a.status !== 'disposed') : assets;
   const live = assets.filter((a) => a.status !== 'disposed');
@@ -128,6 +134,21 @@ function Register({ assets, onOpen }: { assets: AssetRegisterRow[]; onOpen: (id:
     { key: 'cost', header: 'Cost', align: 'right', sortValue: (r) => r.costPaise, cell: (r) => <Money value={r.costPaise} /> },
     { key: 'acc', header: 'Depreciation', align: 'right', sortValue: (r) => r.accumulatedPaise, cell: (r) => <Money value={r.accumulatedPaise} showZero={false} className="text-muted-foreground" /> },
     { key: 'net', header: 'Net block', align: 'right', sortValue: (r) => r.netPaise, cell: (r) => <Money value={r.netPaise} className="font-medium" /> },
+    {
+      key: 'actions', header: 'Actions', align: 'right', sortValue: () => 0,
+      cell: (r) => r.status === 'disposed' ? <span className="text-[11px] text-muted-foreground">Disposed</span> : (
+        <RowActions
+          label={`${r.tagNo} ${r.name}`}
+          canEdit={canEdit}
+          canDelete={canDelete}
+          onEdit={() => onOpen(r.id, 'details')}
+          onDelete={async (reason) => { await api.delete(withReason(`/api/fixed-assets?id=${r.id}`, reason)); onChanged(); }}
+          done={`${r.name} deleted`}
+          deleteTitle={`Delete ${r.name} (${r.tagNo})?`}
+          deleteDescription="What adding it posted is reversed on its own date and it leaves the register. Refused once depreciation is posted on it: undo those runs first."
+        />
+      ),
+    },
   ];
 
   return (
@@ -391,7 +412,7 @@ function ItBook({ canEdit, classes }: { canEdit: boolean; classes: AssetClassRow
   );
 }
 
-function Classes({ classes, canEdit, onChanged }: { classes: AssetClassRow[]; canEdit: boolean; onChanged: () => void }) {
+function Classes({ classes, canEdit, canDelete, onChanged }: { classes: AssetClassRow[]; canEdit: boolean; canDelete: boolean; onChanged: () => void }) {
   const [editing, setEditing] = useState<AssetClassRow | 'new' | null>(null);
   return (
     <div className="space-y-3">
@@ -409,7 +430,7 @@ function Classes({ classes, canEdit, onChanged }: { classes: AssetClassRow[]; ca
             <th className={`${th} text-left`}>Ledger</th>
             <th className={`${th} text-left`}>Companies Act</th>
             <th className={`${th} text-left`}>Income-tax block</th>
-            <th className="w-16" />
+            <th className={`${th} w-[150px] text-right`}>Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -419,7 +440,18 @@ function Classes({ classes, canEdit, onChanged }: { classes: AssetClassRow[]; ca
               <td className="px-3 py-2 text-xs">{c.accountName}</td>
               <td className="px-3 py-2 text-xs">{c.method.toUpperCase()} · {c.usefulLifeYears} years · residual {c.residualPct}%</td>
               <td className="px-3 py-2 text-xs">{c.itBlock} · {c.itRatePct}%</td>
-              <td className="px-2 py-2 text-right">{canEdit && <Button size="xs" variant="ghost" onClick={() => setEditing(c)}>Edit</Button>}</td>
+              <td className="whitespace-nowrap px-2 py-2 text-right">
+                <RowActions
+                  label={`class ${c.name}`}
+                  canEdit={canEdit}
+                  canDelete={canDelete}
+                  onEdit={() => setEditing(c)}
+                  onDelete={async () => { await api.delete(`/api/fixed-assets?classId=${c.id}`); onChanged(); }}
+                  done={`Class ${c.name} deleted`}
+                  withReasonField={false}
+                  deleteDescription="Only a class no asset is in can be deleted; one that holds assets (disposed ones too) is kept for the register."
+                />
+              </td>
             </tr>
           ))}
         </tbody>

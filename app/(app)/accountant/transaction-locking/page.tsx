@@ -25,6 +25,7 @@ import {
 import { PageHeader } from '@/components/shared/page-header';
 import { AsyncPage } from '@/components/shared/async-state';
 import { Field } from '@/components/shared/form-bits';
+import { ConfirmDelete, EditButton } from '@/components/shared/row-actions';
 import { transactionLocks, type TransactionLockRow } from '@/lib/api/client';
 import { useApi, useApiAction } from '@/lib/api/use-api';
 import { usePermission } from '@/lib/store/hooks';
@@ -54,6 +55,8 @@ export default function TransactionLockingPage() {
   const [editing, setEditing] = useState<TransactionLockRow | null>(null);
   const [lockDate, setLockDate] = useState(today());
   const [reason, setReason] = useState('');
+  // Unlocking (deleting the lock) is asked first: it reopens every entry it protects.
+  const [unlocking, setUnlocking] = useState<TransactionLockRow | null>(null);
 
   const setLock = useApiAction(transactionLocks.set);
 
@@ -64,7 +67,7 @@ export default function TransactionLockingPage() {
       toast.error(setLock.error ?? 'The lock was not applied');
       return;
     }
-    toast.success(`${MODULE_INFO[editing.module].label} locked`, {
+    toast.success(`${MODULE_INFO[editing.module].label} ${editing.lockedUpto ? 'lock changed' : 'locked'}`, {
       description: `Nothing can be posted on or before ${new Date(lockDate).toLocaleDateString('en-IN')}.`,
     });
     setEditing(null);
@@ -74,10 +77,7 @@ export default function TransactionLockingPage() {
 
   const unlock = async (l: TransactionLockRow) => {
     const done = await setLock.run(l.module, null);
-    if (!done) {
-      toast.error(setLock.error ?? 'The lock was not removed');
-      return;
-    }
+    if (!done) throw new Error(setLock.error ?? 'The lock was not removed');
     toast.info(`${MODULE_INFO[l.module].label} unlocked`, {
       description: 'This action is recorded in the audit trail.',
     });
@@ -154,15 +154,15 @@ export default function TransactionLockingPage() {
                         </div>
                         {canLock &&
                           (l.lockedUpto ? (
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="gap-1.5"
-                              disabled={setLock.busy}
-                              onClick={() => void unlock(l)}
-                            >
-                              <Unlock className="size-3.5" /> Unlock
-                            </Button>
+                            <div className="flex shrink-0 items-center gap-1" data-slot="lock-actions">
+                              {/* Edit: move the date or change the reason; Unlock deletes the lock. */}
+                              <EditButton label="Edit" title={`Change the ${info.label} lock`}
+                                onClick={() => { setEditing(l); setLockDate(l.lockedUpto!); setReason(l.reason ?? ''); }} />
+                              <button type="button" disabled={setLock.busy} onClick={() => setUnlocking(l)} data-slot="lock-unlock"
+                                className="inline-flex h-7 items-center gap-1 rounded-md border bg-background px-2 text-xs font-medium text-destructive hover:bg-accent disabled:opacity-50">
+                                <Unlock className="size-3.5" /> Unlock (delete lock)
+                              </button>
+                            </div>
                           ) : (
                             <Button
                               size="sm"
@@ -189,7 +189,7 @@ export default function TransactionLockingPage() {
       <Dialog open={!!editing} onOpenChange={(v) => !v && setEditing(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Lock {editing ? MODULE_INFO[editing.module].label : ''}</DialogTitle>
+            <DialogTitle>{editing?.lockedUpto ? 'Edit the lock on' : 'Lock'} {editing ? MODULE_INFO[editing.module].label : ''}</DialogTitle>
             <DialogDescription>
               Nothing dated on or before the lock date can be created, edited or voided in this module.
             </DialogDescription>
@@ -210,11 +210,21 @@ export default function TransactionLockingPage() {
           <DialogFooter>
             <Button variant="outline" onClick={() => setEditing(null)}>Cancel</Button>
             <Button onClick={applyLock} disabled={setLock.busy}>
-              {setLock.busy ? 'Locking…' : 'Lock module'}
+              {setLock.busy ? 'Locking…' : editing?.lockedUpto ? 'Save lock' : 'Lock module'}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <ConfirmDelete
+        open={!!unlocking}
+        onClose={() => setUnlocking(null)}
+        title={`Unlock ${unlocking ? MODULE_INFO[unlocking.module].label : ''}?`}
+        description={`The lock up to ${unlocking?.lockedUpto ?? ''} is removed: the ${unlocking?.protectedEntries ?? 0} entries it protects can be edited or deleted again. Who unlocked it, and when, goes into the audit trail.`}
+        withReasonField={false}
+        confirmLabel="Unlock"
+        onConfirm={() => unlock(unlocking!)}
+      />
     </>
   );
 }

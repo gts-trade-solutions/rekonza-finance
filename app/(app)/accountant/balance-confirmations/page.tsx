@@ -19,6 +19,7 @@ import { StatTile } from '@/components/shared/stat-tile';
 import { AsyncPage } from '@/components/shared/async-state';
 import { EmptyState } from '@/components/shared/empty-state';
 import { Field, MoneyInput } from '@/components/shared/form-bits';
+import { RowActions, withReason } from '@/components/shared/row-actions';
 import { api } from '@/lib/api/client';
 import { useApi, useApiAction } from '@/lib/api/use-api';
 import { usePermission } from '@/lib/store/hooks';
@@ -32,12 +33,13 @@ interface Row {
 
 export default function BalanceConfirmationsPage() {
   const canEdit = usePermission('accountant', 'edit');
+  const canDelete = usePermission('accountant', 'void');
   const state = useApi(() => api.get<{ confirmations: Row[] }>('/api/balance-confirmations'), []);
   const mail = useApi(() => api.get<{ configured: boolean }>('/api/email'), []);
   const [asking, setAsking] = useState(false);
   const [ask, setAsk] = useState({ side: 'vendor' as 'customer' | 'vendor', contactId: '', asOf: today(), email: true });
   const [reply, setReply] = useState<Row | null>(null);
-  const [answer, setAnswer] = useState({ paise: 0, notes: '' });
+  const [answer, setAnswer] = useState({ paise: 0, notes: '', clear: false });
   const post = useApiAction((input: unknown) => api.post<{ id?: string; ourBalancePaise?: number; agreed?: boolean; differencePaise?: number }>('/api/balance-confirmations', input));
 
   const request = async () => {
@@ -57,8 +59,17 @@ export default function BalanceConfirmationsPage() {
   };
   const saveReply = async () => {
     if (!reply) return;
-    const done = await post.run({ action: 'reply', id: reply.id, theirBalancePaise: answer.paise, notes: answer.notes || null });
-    if (!done) { toast.error(post.error ?? 'Not saved'); return; }
+    // A first reply is recorded; a reply already there is edited (and can be cleared back to awaited).
+    let done: { agreed?: boolean } | null;
+    if (reply.status === 'requested') {
+      done = await post.run({ action: 'reply', id: reply.id, theirBalancePaise: answer.paise, notes: answer.notes || null });
+      if (!done) { toast.error(post.error ?? 'Not saved'); return; }
+    } else {
+      try {
+        done = await api.patch<{ agreed: boolean }>('/api/balance-confirmations', { id: reply.id, theirBalancePaise: answer.clear ? null : answer.paise, notes: answer.notes || null });
+      } catch (e) { toast.error('Not saved', { description: e instanceof Error ? e.message : String(e) }); return; }
+      if (answer.clear) { toast.success('Reply cleared: awaited again'); setReply(null); state.refetch(); return; }
+    }
     toast.success(done.agreed ? 'Agreed: their balance matches the books' : 'Recorded as disputed', { description: done.agreed ? undefined : 'The difference is shown against the confirmation.' });
     setReply(null);
     state.refetch();
@@ -74,7 +85,22 @@ export default function BalanceConfirmationsPage() {
       key: 'status', header: 'Status', sortValue: (r) => r.status,
       cell: (r) => <Badge variant={r.status === 'agreed' ? 'secondary' : 'outline'} className={`text-[10px] capitalize ${r.status === 'disputed' ? 'border-destructive/50 text-destructive' : ''}`}>{r.status}</Badge>,
     },
-    { key: 'x', header: '', sortValue: () => 0, cell: (r) => (canEdit ? <Button size="sm" variant="outline" onClick={() => { setReply(r); setAnswer({ paise: r.theirBalancePaise ?? r.ourBalancePaise, notes: r.notes ?? '' }); }}>{r.status === 'requested' ? 'Record reply' : 'Change'}</Button> : null) },
+    {
+      key: 'x', header: 'Actions', sortValue: () => 0,
+      cell: (r) => (
+        <RowActions
+          label={`the confirmation of ${r.party} on ${r.asOf}`}
+          canEdit={canEdit}
+          canDelete={canDelete}
+          editLabel={r.status === 'requested' ? 'Record reply' : 'Edit'}
+          onEdit={() => { setReply(r); setAnswer({ paise: r.theirBalancePaise ?? r.ourBalancePaise, notes: r.notes ?? '', clear: false }); }}
+          onDelete={async (reason) => { await api.delete(withReason(`/api/balance-confirmations?id=${r.id}`, reason)); state.refetch(); }}
+          done={`Confirmation of ${r.party} deleted`}
+          deleteTitle={`Delete the balance confirmation of ${r.party}?`}
+          deleteDescription="The request and any reply recorded against it go. Nothing was posted by it, so the books do not change."
+        />
+      ),
+    },
   ];
 
   return (
@@ -120,6 +146,9 @@ export default function BalanceConfirmationsPage() {
           <div className="grid gap-4">
             <Field label="Balance as per their books"><MoneyInput valuePaise={answer.paise} onChangePaise={(p) => setAnswer({ ...answer, paise: p })} /></Field>
             <Field label="Notes" hint="What makes up any difference"><Input value={answer.notes} onChange={(e) => setAnswer({ ...answer, notes: e.target.value })} /></Field>
+            {reply && reply.status !== 'requested' && (
+              <label className="flex items-center gap-2 text-sm" data-slot="reply-clear"><input type="checkbox" checked={answer.clear} onChange={(e) => setAnswer({ ...answer, clear: e.target.checked })} /> Clear their reply: still awaited</label>
+            )}
           </div>
           {post.error && <p className="text-sm text-destructive">{post.error}</p>}
           <DialogFooter><Button variant="outline" onClick={() => setReply(null)}>Cancel</Button><Button onClick={saveReply} disabled={post.busy}>Save reply</Button></DialogFooter>

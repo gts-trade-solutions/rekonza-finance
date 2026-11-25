@@ -6,6 +6,9 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { ExternalLink, Globe, Plus, Trash2 } from 'lucide-react';
+import { RowActions } from '@/components/shared/row-actions';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Field } from '@/components/shared/form-bits';
 import { toast } from 'sonner';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -25,6 +28,25 @@ export default function WebTabsPage() {
   const tabs = useMemo(() => state.data?.tabs ?? [], [state.data]);
   useEffect(() => { if (!active && tabs.length) setActive(tabs[0].id); }, [tabs, active]);
   const current = tabs.find((t) => t.id === active) ?? null;
+  // One tab opened to edit (Edit beside it), saved with the rest of the list.
+  const [one, setOne] = useState<Tab | null>(null);
+  const putAll = async (list: Tab[]) => {
+    await api.put('/api/web-tabs', { tabs: list });
+    await state.refetch();
+  };
+  const saveOne = async () => {
+    if (!one) return;
+    setBusy(true);
+    try {
+      await putAll(tabs.map((t) => (t.id === one.id ? one : t)));
+      toast.success(`${one.name} saved`);
+      setOne(null);
+    } catch (e) {
+      toast.error('Not saved', { description: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const save = async () => {
     if (!editing) return;
@@ -55,7 +77,7 @@ export default function WebTabsPage() {
               <div key={i} className="flex flex-wrap gap-2">
                 <Input aria-label={`Tab ${i + 1} name`} value={t.name} onChange={(e) => setEditing(editing.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))} placeholder="Name, e.g. GST portal" maxLength={40} className="w-48" />
                 <Input aria-label={`Tab ${i + 1} address`} value={t.url} onChange={(e) => setEditing(editing.map((x, j) => (j === i ? { ...x, url: e.target.value } : x)))} placeholder="https://" maxLength={500} className="min-w-64 flex-1" />
-                <Button size="icon-sm" variant="ghost" aria-label={`Remove tab ${i + 1}`} onClick={() => setEditing(editing.filter((_, j) => j !== i))}><Trash2 className="size-3.5" /></Button>
+                <Button size="sm" variant="ghost" className="gap-1 text-destructive hover:text-destructive" aria-label={`Delete tab ${i + 1}`} onClick={() => setEditing(editing.filter((_, j) => j !== i))}><Trash2 className="size-3.5" /> Delete</Button>
               </div>
             ))}
             <div className="flex gap-2">
@@ -86,7 +108,19 @@ export default function WebTabsPage() {
               <>
                 <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
                   <span className="truncate">{current.url}</span>
-                  <a href={current.url} target="_blank" rel="noreferrer noopener" className="inline-flex shrink-0 items-center gap-1 text-primary hover:underline"><ExternalLink className="size-3.5" /> Open in a new tab</a>
+                  <span className="flex shrink-0 items-center gap-2">
+                    <a href={current.url} target="_blank" rel="noreferrer noopener" className="inline-flex shrink-0 items-center gap-1 text-primary hover:underline"><ExternalLink className="size-3.5" /> Open in a new tab</a>
+                    {state.data?.canEdit && (
+                      <RowActions
+                        label={`the ${current.name} tab`}
+                        onEdit={() => setOne(current)}
+                        onDelete={async () => { await putAll(tabs.filter((t) => t.id !== current.id)); setActive(null); }}
+                        done={`${current.name} deleted`}
+                        withReasonField={false}
+                        deleteDescription="The tab leaves everyone's Web tabs. The website itself is not touched."
+                      />
+                    )}
+                  </span>
                 </div>
                 <iframe key={current.id} src={current.url} title={current.name} className="h-[70vh] w-full rounded-md border bg-white"
                   sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-downloads" referrerPolicy="no-referrer" />
@@ -96,6 +130,24 @@ export default function WebTabsPage() {
           </div>
         )}
       </AsyncPage>
+      <Dialog open={!!one} onOpenChange={(v) => { if (!v) setOne(null); }}>
+        <DialogContent className="sm:max-w-md" data-slot="web-tab-edit">
+          <DialogHeader>
+            <DialogTitle>Edit web tab</DialogTitle>
+            <DialogDescription>Its name, and the https:// address it opens.</DialogDescription>
+          </DialogHeader>
+          {one && (
+            <div className="space-y-3">
+              <Field label="Name"><Input value={one.name} maxLength={40} onChange={(e) => setOne({ ...one, name: e.target.value })} /></Field>
+              <Field label="Address"><Input value={one.url} maxLength={500} onChange={(e) => setOne({ ...one, url: e.target.value })} placeholder="https://" /></Field>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setOne(null)}>Cancel</Button>
+            <Button onClick={() => void saveOne()} disabled={busy || !one?.name.trim() || !one?.url.trim()} data-slot="web-tab-save">{busy ? 'Saving…' : 'Save'}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

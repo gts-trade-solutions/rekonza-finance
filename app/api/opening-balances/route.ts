@@ -4,7 +4,7 @@ import { route, body, query, asId, forbidden } from '@/lib/server/http';
 import { hasPermission } from '@/lib/rbac';
 import { logAudit, auditMeta } from '@/lib/server/audit';
 import {
-  addOpeningDocument, listOpeningDocuments, openingSummary, setAccountOpenings, setBooksStartDate,
+  addOpeningDocument, editOpeningDocument, listOpeningDocuments, openingSummary, setAccountOpenings, setBooksStartDate,
   voidOpeningDocument,
 } from '@/lib/server/services/opening-balances';
 
@@ -56,6 +56,17 @@ const Input = z.discriminatedUnion('action', [
     notes: z.string().trim().max(500).nullish(),
   }),
   z.object({ action: z.literal('void-document'), id: z.string(), reason: z.string().trim().max(200).nullish() }),
+  z.object({
+    action: z.literal('edit-document'),
+    id: z.string(),
+    contactId: z.string(),
+    kind: z.enum(['receivable', 'payable']),
+    refNo: z.string().trim().min(1, 'Give the bill number.').max(50),
+    docDate: DATE,
+    dueDate: DATE,
+    amountPaise: z.number().int().positive('Enter an amount above zero.'),
+    notes: z.string().trim().max(500).nullish(),
+  }),
 ]);
 
 export const POST = route(
@@ -96,6 +107,21 @@ export const POST = route(
           return res;
         });
         return { id: asId(r.id) };
+      }
+
+      case 'edit-document': {
+        const r = await transaction(async (trx) => {
+          const res = await editOpeningDocument(trx, orgId, user.userId, Number(input.id), {
+            contactId: Number(input.contactId), kind: input.kind, refNo: input.refNo, docDate: input.docDate,
+            dueDate: input.dueDate, amountPaise: input.amountPaise, notes: input.notes,
+          });
+          await logAudit({ trx, ...audit(
+            `Edited opening bill ${res.before.refNo}${res.reposted ? `: now ${res.refNo} for ${(input.amountPaise / 100).toFixed(2)} (the old entry reversed)` : ': dates or note'}`,
+            { before: res.before },
+          ) });
+          return res;
+        });
+        return { ok: true, reposted: r.reposted };
       }
 
       case 'void-document':

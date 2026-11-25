@@ -17,15 +17,21 @@ import { Money } from '@/components/shared/money';
 import { AsyncPage, LoadingRows } from '@/components/shared/async-state';
 import { Field } from '@/components/shared/form-bits';
 import { ReportTable } from '@/components/shared/report-shell';
+import { RowActions, withReason } from '@/components/shared/row-actions';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { api } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
 import { usePermission } from '@/lib/store/hooks';
 import { today } from '@/lib/selectors';
 import { dayLabel } from '@/lib/date-range';
 
+interface Rate { id: string; currency: string; date: string; rate: number; source: string | null }
+
 interface Data {
   asOf: string;
-  rates: { id: string; currency: string; date: string; rate: number; source: string | null }[];
+  rates: Rate[];
+  /** Zoho's Currency Adjustments: each restatement still standing. */
+  restatements: { entryId: string; entryNo: number; date: string; amountPaise: number; memo: string | null; reversedOn: string | null }[];
   feed: { enabled: boolean; lastRunOn: string | null; lastDate: string | null; lastError: string | null; lastSaved: number; currencies: string[] };
   exposure: {
     kind: 'invoice' | 'bill'; id: string; number: string; party: string; currency: string; foreignOpenPaise: number;
@@ -38,7 +44,25 @@ const fx = (minor: number, c: string) => new Intl.NumberFormat('en-IN', { style:
 
 export default function ForeignCurrencyPage() {
   const canEdit = usePermission('accountant', 'edit');
+  const canDelete = usePermission('accountant', 'void');
   const [asOf, setAsOf] = useState(today());
+  // A rate opened to edit: its date and figure.
+  const [editing, setEditing] = useState<Rate | null>(null);
+  const [edit, setEdit] = useState({ date: '', rate: '' });
+  const saveRate = async () => {
+    if (!editing) return;
+    setBusy('edit');
+    try {
+      await api.patch('/api/fx', { id: editing.id, date: edit.date, rate: Number(edit.rate) });
+      toast.success(`${editing.currency} rate saved`);
+      setEditing(null);
+      await state.refetch();
+    } catch (e) {
+      toast.error('Not saved', { description: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setBusy(null);
+    }
+  };
   const state = useApi<Data>(() => api.get('/api/fx', { asOf }), [asOf]);
   const [rate, setRate] = useState({ currency: 'USD', date: today(), rate: '' });
   const [busy, setBusy] = useState<string | null>(null);
@@ -100,15 +124,54 @@ export default function ForeignCurrencyPage() {
                   </div>
                 )}
                 {d.rates.length === 0 ? <p className="text-sm text-muted-foreground">No rates yet. Add the closing rate for each currency you deal in.</p> : (
-                  <ul className="divide-y rounded-md border text-sm">
-                    {d.rates.slice(0, 12).map((r) => (
-                      <li key={r.id} className="flex gap-4 px-3 py-1.5">
-                        <span className="w-12 font-mono">{r.currency}</span><span className="w-28 text-muted-foreground">{dayLabel(r.date)}</span><span className="tabular-nums">₹{r.rate.toFixed(4)}</span>{r.source && <span className="ml-auto text-xs text-muted-foreground">{r.source.replace(/^Feed: /, '')}</span>}
+                  <ul className="divide-y rounded-md border text-sm" data-slot="fx-rates">
+                    {d.rates.slice(0, 30).map((r) => (
+                      <li key={r.id} className="flex flex-wrap items-center gap-4 px-3 py-1.5">
+                        <span className="w-12 font-mono">{r.currency}</span><span className="w-28 text-muted-foreground">{dayLabel(r.date)}</span><span className="tabular-nums">₹{r.rate.toFixed(4)}</span>
+                        {r.source && <span className="text-xs text-muted-foreground">{r.source.replace(/^Feed: /, '')}</span>}
+                        <RowActions
+                          className="ml-auto"
+                          label={`the ${r.currency} rate of ${dayLabel(r.date)}`}
+                          canEdit={canEdit}
+                          canDelete={canDelete}
+                          onEdit={() => { setEditing(r); setEdit({ date: r.date, rate: String(r.rate) }); }}
+                          onDelete={async (reason) => { await api.delete(withReason(`/api/fx?rate=${r.id}`, reason)); await state.refetch(); }}
+                          done={`${r.currency} rate of ${dayLabel(r.date)} deleted`}
+                          deleteDescription="Documents keep the rate they were booked at, so nothing posted moves. The next restatement, and the next document in this currency, use the rate before it."
+                        />
                       </li>
                     ))}
                   </ul>
                 )}
               </Card>
+
+              {d.restatements.length > 0 && (
+                <Card className="gap-0 overflow-hidden p-0" data-slot="fx-restatements">
+                  <div className="border-b px-4 py-3">
+                    <h3 className="text-sm font-semibold">Currency adjustments</h3>
+                    <p className="text-xs text-muted-foreground">Each restatement posted, with the day it reversed itself. Delete one made at the wrong date or rate: both halves are undone on their own dates.</p>
+                  </div>
+                  <ul className="divide-y text-sm">
+                    {d.restatements.map((r) => (
+                      <li key={r.entryId} className="flex flex-wrap items-center gap-4 px-4 py-2">
+                        <span className="w-28">{dayLabel(r.date)}</span>
+                        <span className="text-xs text-muted-foreground">Entry #{r.entryNo}{r.reversedOn ? ` · reversed ${dayLabel(r.reversedOn)}` : ''}</span>
+                        <Money value={r.amountPaise} className="tabular-nums" />
+                        <RowActions
+                          className="ml-auto"
+                          label={`the restatement of ${dayLabel(r.date)}`}
+                          canEdit={false}
+                          canDelete={canDelete}
+                          onDelete={async (reason) => { await api.delete(withReason(`/api/fx?restatement=${r.entryId}`, reason)); await state.refetch(); }}
+                          done={`Restatement of ${dayLabel(r.date)} deleted`}
+                          deleteDescription="An entry the other way is posted on its date, and its next-day reversal is reversed, so every day nets to what it was before. The ledger keeps all of them; the date can be restated again."
+                          extra={canEdit ? <span className="text-[11px] text-muted-foreground">To change it, delete it and restate again</span> : undefined}
+                        />
+                      </li>
+                    ))}
+                  </ul>
+                </Card>
+              )}
 
               <Card className="gap-0 overflow-hidden p-0">
                 <div className="flex flex-wrap items-center gap-3 border-b px-4 py-3">
@@ -155,6 +218,22 @@ export default function ForeignCurrencyPage() {
           );
         }}
       </AsyncPage>
+      <Dialog open={!!editing} onOpenChange={(v) => { if (!v) setEditing(null); }}>
+        <DialogContent className="sm:max-w-sm" data-slot="fx-rate-edit">
+          <DialogHeader>
+            <DialogTitle>Edit {editing?.currency} rate</DialogTitle>
+            <DialogDescription>Rupees for one {editing?.currency}. Documents already booked keep their own rate.</DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label="Date"><Input type="date" value={edit.date} onChange={(e) => setEdit({ ...edit, date: e.target.value })} /></Field>
+            <Field label={`₹ for 1 ${editing?.currency ?? ''}`}><Input type="number" step="0.0001" min={0} value={edit.rate} onChange={(e) => setEdit({ ...edit, rate: e.target.value })} /></Field>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditing(null)}>Cancel</Button>
+            <Button onClick={() => void saveRate()} disabled={!!busy || !(Number(edit.rate) > 0) || !edit.date} data-slot="fx-rate-save">{busy === 'edit' ? 'Saving…' : 'Save'}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

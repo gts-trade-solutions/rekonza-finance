@@ -14,7 +14,7 @@ import { useRouter } from 'next/navigation';
 
 import { useMemo, useState, type ReactNode } from 'react';
 import Link from 'next/link';
-import { CheckCircle2, FileCheck2, Loader2, Plus, Save, Scale, Trash2 } from 'lucide-react';
+import { CheckCircle2, FileCheck2, Loader2, Plus, Save, Scale } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -30,6 +30,9 @@ import { AsyncPage, LoadingRows } from '@/components/shared/async-state';
 import { Field, MoneyInput } from '@/components/shared/form-bits';
 import { ReportTable } from '@/components/shared/report-shell';
 import { ContactPicker } from '@/components/forms/quick-create';
+import { ConfirmDelete, DeleteButton, RowActions } from '@/components/shared/row-actions';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { api, type OpeningDocumentRow } from '@/lib/api/client';
 import { journal, openingBalances, type JournalResponse, type OpeningSummaryResponse } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
 import { usePermission } from '@/lib/store/hooks';
@@ -174,6 +177,8 @@ function LedgerOpenings({ s, onChanged }: { s: OpeningSummaryResponse; onChanged
   const [draft, setDraft] = useState<Record<string, number>>({});
   const [saving, setSaving] = useState(false);
   const [showAll, setShowAll] = useState(false);
+  // An account's opening figure cleared to nothing (Delete on its row): posts the difference, as any change does.
+  const [clearing, setClearing] = useState<{ accountId: string; code: string; name: string } | null>(null);
 
   const groups = useMemo(() => {
     const rows = s.accounts.filter((a) => showAll || a.netPaise !== 0 || draft[a.accountId] != null || a.lockedReason === null);
@@ -213,6 +218,7 @@ function LedgerOpenings({ s, onChanged }: { s: OpeningSummaryResponse; onChanged
             <th className={`${th} text-left`}>Account</th>
             <th className={`${th} w-40 text-right`}>Debit</th>
             <th className={`${th} w-40 text-right`}>Credit</th>
+            {canEdit && <th className={`${th} w-24 text-right`}>Actions</th>}
           </tr>
         </thead>
         <tbody>
@@ -237,6 +243,13 @@ function LedgerOpenings({ s, onChanged }: { s: OpeningSummaryResponse; onChanged
                         ? <MoneyInput valuePaise={v < 0 ? -v : 0} onChangePaise={(p) => setDraft((x) => ({ ...x, [a.accountId]: -p }))} className="h-8" />
                         : <span className="block text-right"><Money value={v < 0 ? -v : 0} showZero={false} /></span>}
                     </td>
+                    {canEdit && (
+                      <td className="px-2 py-1.5 text-right">
+                        {editable && a.netPaise !== 0 && (
+                          <DeleteButton title={`Clear the opening balance of ${a.code} ${a.name}`} onClick={() => setClearing({ accountId: a.accountId, code: a.code, name: a.name })} />
+                        )}
+                      </td>
+                    )}
                   </tr>
                 );
               })}
@@ -244,6 +257,20 @@ function LedgerOpenings({ s, onChanged }: { s: OpeningSummaryResponse; onChanged
           ))}
         </tbody>
       </ReportTable>
+      <ConfirmDelete
+        open={!!clearing}
+        onClose={() => setClearing(null)}
+        title={`Delete the opening balance of ${clearing?.code ?? ''} ${clearing?.name ?? ''}?`}
+        description="Its opening figure becomes nothing. The change is posted against Opening Balance Equity on the start date, so the trail keeps what was there before."
+        withReasonField={false}
+        onConfirm={async () => {
+          const r = await openingBalances.setAccounts([{ accountId: clearing!.accountId, netPaise: 0 }]);
+          setDraft((x) => { const n = { ...x }; delete n[clearing!.accountId]; return n; });
+          onChanged();
+          return r;
+        }}
+        done="Opening balance deleted"
+      />
       {canEdit && (
         <div className="flex justify-end">
           <Button onClick={() => void save()} disabled={saving || changed.length === 0} className="gap-1.5">
@@ -293,17 +320,8 @@ function PartyOpenings({ s, onChanged }: { s: OpeningSummaryResponse; onChanged:
     }
   };
 
-  const withdraw = async (id: string, ref: string) => {
-    const reason = window.prompt(`Withdraw opening bill ${ref}? Give a reason.`);
-    if (reason === null) return;
-    try {
-      await openingBalances.voidDocument(id, reason || undefined);
-      toast.success(`${ref} withdrawn`);
-      onChanged();
-    } catch (e) {
-      toast.error('Could not withdraw it', { description: e instanceof Error ? e.message : String(e) });
-    }
-  };
+  const canDelete = usePermission('accountant', 'void');
+  const [editing, setEditing] = useState<OpeningDocumentRow | null>(null);
 
   const docs = s.documents;
   return (
@@ -353,7 +371,7 @@ function PartyOpenings({ s, onChanged }: { s: OpeningSummaryResponse; onChanged:
               <th className={`${th} text-left`}>Due</th>
               <th className={`${th} text-right`}>Opening</th>
               <th className={`${th} text-right`}>Still owed</th>
-              <th className="w-10" />
+              <th className={`${th} w-[150px] text-right`}>Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -372,11 +390,19 @@ function PartyOpenings({ s, onChanged }: { s: OpeningSummaryResponse; onChanged:
                 <td className="px-3 py-2 text-right font-medium">
                   {x.status === 'void' ? <span className="text-xs text-muted-foreground">Withdrawn</span> : <Money value={x.balancePaise} />}
                 </td>
-                <td className="px-2 py-2">
-                  {canEdit && x.status !== 'void' && x.amountPaidPaise === 0 && (
-                    <Button size="icon" variant="ghost" className="size-7" aria-label={`Withdraw ${x.refNo}`} onClick={() => void withdraw(x.id, x.refNo)}>
-                      <Trash2 className="size-3.5" />
-                    </Button>
+                <td className="whitespace-nowrap px-2 py-2">
+                  {x.status !== 'void' && (
+                    <RowActions
+                      label={`opening bill ${x.refNo}`}
+                      canEdit={canEdit}
+                      // Paid against: what was paid rests on it; undo those payments first.
+                      canDelete={canDelete && x.amountPaidPaise === 0}
+                      onEdit={() => setEditing(x)}
+                      onDelete={async (reason) => { await openingBalances.voidDocument(x.id, reason || undefined); onChanged(); }}
+                      done={`${x.refNo} deleted (withdrawn)`}
+                      deleteTitle={`Delete opening bill ${x.refNo}?`}
+                      deleteDescription="Its entry is reversed on the start date, so the party's balance and Opening Balance Equity go back; the bill stays listed as withdrawn, for the audit trail."
+                    />
                   )}
                 </td>
               </tr>
@@ -384,6 +410,67 @@ function PartyOpenings({ s, onChanged }: { s: OpeningSummaryResponse; onChanged:
           </tbody>
         </ReportTable>
       )}
+      {editing && <EditOpeningBill doc={editing} startDate={s.startDate} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); onChanged(); }} />}
     </>
+  );
+}
+
+/** Edit an opening bill: party, number, dates, amount still unpaid. A posted change reverses and reposts its entry. */
+function EditOpeningBill({ doc, startDate, onClose, onSaved }: { doc: OpeningDocumentRow; startDate: string; onClose: () => void; onSaved: () => void }) {
+  const [f, setF] = useState({ kind: doc.kind, contactId: doc.contactId, refNo: doc.refNo, docDate: doc.docDate, dueDate: doc.dueDate, amount: doc.amountPaise });
+  const [busy, setBusy] = useState(false);
+  const paid = doc.amountPaidPaise > 0;
+  const save = async () => {
+    setBusy(true);
+    try {
+      await api.post('/api/opening-balances', { action: 'edit-document', id: doc.id, contactId: f.contactId, kind: f.kind, refNo: f.refNo, docDate: f.docDate, dueDate: f.dueDate, amountPaise: f.amount });
+      toast.success(`Opening bill ${f.refNo} saved`);
+      onSaved();
+    } catch (e) {
+      toast.error('Not saved', { description: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Dialog open onOpenChange={(v) => { if (!v) onClose(); }}>
+      <DialogContent className="sm:max-w-xl" data-slot="opening-bill-edit">
+        <DialogHeader>
+          <DialogTitle>Edit opening bill {doc.refNo}</DialogTitle>
+          <DialogDescription>
+            {paid
+              ? 'Something has been paid against it, so only its dates can change here; undo those payments to change the party or the amount.'
+              : 'A change to the party, number or amount reverses its entry on the start date and posts the corrected one.'}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field label="Kind" className="sm:col-span-2">
+            <div className="flex w-fit rounded-md border p-0.5 text-xs">
+              {(['receivable', 'payable'] as const).map((k) => (
+                <button key={k} type="button" disabled={paid} onClick={() => setF({ ...f, kind: k, contactId: '' })}
+                  className={`rounded px-2.5 py-1 ${f.kind === k ? 'bg-primary text-primary-foreground' : 'text-muted-foreground'}`}>
+                  {k === 'receivable' ? 'Customer owes us' : 'We owe a vendor'}
+                </button>
+              ))}
+            </div>
+          </Field>
+          <Field label={f.kind === 'receivable' ? 'Customer' : 'Vendor'} required className="sm:col-span-2">
+            {paid
+              ? <p className="text-sm">{doc.contactName}</p>
+              : <ContactPicker kind={f.kind === 'receivable' ? 'customer' : 'vendor'} value={f.contactId} onChange={(v) => setF({ ...f, contactId: v })} />}
+          </Field>
+          <Field label="Bill number" required><Input value={f.refNo} disabled={paid} onChange={(e) => setF({ ...f, refNo: e.target.value })} /></Field>
+          <Field label="Still unpaid" required>
+            {paid ? <Money value={f.amount} className="block pt-2 text-sm" /> : <MoneyInput valuePaise={f.amount} onChangePaise={(p) => setF({ ...f, amount: p })} />}
+          </Field>
+          <Field label="Bill date" required><Input type="date" value={f.docDate} max={startDate} onChange={(e) => setF({ ...f, docDate: e.target.value })} /></Field>
+          <Field label="Due date" required><Input type="date" value={f.dueDate} onChange={(e) => setF({ ...f, dueDate: e.target.value })} /></Field>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button onClick={() => void save()} disabled={busy || !f.contactId || !f.refNo || f.amount <= 0} data-slot="opening-bill-save">{busy ? 'Saving…' : 'Save'}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

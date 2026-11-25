@@ -5,6 +5,7 @@ import { route, body, query, asId, badRequest, conflict } from '@/lib/server/htt
 import { toPaiseFromSql } from '@/lib/server/money-sql';
 import { assertFresh } from '@/lib/server/concurrency';
 import { logAudit, auditMeta, snapshot, changesBetween, describeChanges } from '@/lib/server/audit';
+import { deleteAccount } from '@/lib/server/services/accountant-changes';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // The chart of accounts.
@@ -184,6 +185,30 @@ export const PATCH = route(
     if (input.code && input.code !== existing.code && existing.is_system) {
       throw conflict(`${existing.code} is a system account and is found by its code. The code cannot change.`);
     }
+    if (input.code && input.code !== existing.code) {
+      const dup = await db.selectFrom('accounts').select('id')
+        .where('org_id', '=', orgId).where('code', '=', input.code).where('id', '!=', id).executeTakeFirst();
+      if (dup) throw conflict(`Account code ${input.code} is already in use.`);
+    }
+
+    // Moved under another group: of the same type (or the totals would not add
+    // up), and never under itself or one of its own sub-accounts (a loop).
+    if (input.parentId) {
+      const parentId = Number(input.parentId);
+      if (parentId === id) throw badRequest('An account cannot be grouped under itself.');
+      const parent = await db.selectFrom('accounts').select(['id', 'type'])
+        .where('id', '=', parentId).where('org_id', '=', orgId).executeTakeFirst();
+      if (!parent) throw badRequest('That parent account does not exist.');
+      if (parent.type !== (input.type ?? existing.type)) {
+        throw badRequest(`A ${input.type ?? existing.type} account cannot sit under a ${parent.type} one — the totals would not add up.`);
+      }
+      let up: number | null = parentId;
+      for (let i = 0; up && i < 12; i++) {
+        if (up === id) throw badRequest('That group sits under this account already; moving it there would make a loop.');
+        const row: { parent_id: number | null } | undefined = await db.selectFrom('accounts').select('parent_id').where('id', '=', up).where('org_id', '=', orgId).executeTakeFirst();
+        up = row?.parent_id ?? null;
+      }
+    }
 
     if (input.isActive === false && hasPostings) {
       // Deactivating is fine — it only hides the account from pickers — but a
@@ -224,49 +249,26 @@ export const PATCH = route(
 /**
  * Delete an account.
  *
- * Only ever possible for one nobody has posted to. An account with history is
- * part of the audit trail, and removing it would leave entries pointing at
- * nothing — switch it off instead, which hides it from pickers and leaves every
- * report exactly as it was.
+ * Only ever possible for one nobody has used (services/accountant-changes.ts).
+ * An account with history is part of the audit trail, and removing it would
+ * leave entries pointing at nothing — the refusal (code 'in_use') offers Mark
+ * as inactive instead, which hides it from pickers and leaves every report
+ * exactly as it was.
  */
 export const DELETE = route(
   async ({ orgId, user, req }) => {
-    const { id } = query(req, z.object({ id: z.string() }));
+    const { id, reason } = query(req, z.object({ id: z.string(), reason: z.string().max(300).optional() }));
     const numeric = Number(id);
-
-    const existing = await db
-      .selectFrom('accounts').select(['id', 'code', 'name', 'is_system'])
-      .where('id', '=', numeric).where('org_id', '=', orgId).executeTakeFirst();
-    if (!existing) throw badRequest('That account does not exist.');
-    if (existing.is_system) throw conflict(`${existing.code} is a system account and cannot be deleted.`);
-
-    const [lines, children] = await Promise.all([
-      db.selectFrom('journal_lines').select(sql<string>`COUNT(*)`.as('n'))
-        .where('org_id', '=', orgId).where('account_id', '=', numeric).executeTakeFirst(),
-      db.selectFrom('accounts').select(sql<string>`COUNT(*)`.as('n'))
-        .where('org_id', '=', orgId).where('parent_id', '=', numeric).executeTakeFirst(),
-    ]);
-
-    if (Number(lines?.n ?? 0) > 0) {
-      throw conflict(
-        `${existing.code} has ${lines?.n} posting(s) against it. Switch it off instead — deleting it would ` +
-          'leave those entries pointing at nothing.',
-      );
-    }
-    if (Number(children?.n ?? 0) > 0) {
-      throw conflict(`${existing.code} has sub-accounts under it. Move or remove those first.`);
-    }
-
-    await transaction(async (trx) => {
-      await trx.deleteFrom('accounts').where('id', '=', numeric).where('org_id', '=', orgId).execute();
+    const gone = await transaction(async (trx) => {
+      const a = await deleteAccount(trx, orgId, numeric);
       await logAudit({
-        orgId, actorUserId: user.userId, actorName: user.name, action: 'void',
-        targetType: 'account', targetId: numeric, targetLabel: `${existing.code} ${existing.name}`,
-        detail: `Deleted unused account ${existing.code}`, trx, ...auditMeta(req),
+        orgId, actorUserId: user.userId, actorName: user.name, action: 'delete',
+        targetType: 'account', targetId: numeric, targetLabel: `${a.code} ${a.name}`,
+        detail: `Deleted unused account ${a.code} ${a.name}${reason ? ` — ${reason}` : ''}`, trx, ...auditMeta(req),
       });
+      return a;
     });
-
-    return { id: asId(numeric) };
+    return { id: asId(numeric), code: gone.code };
   },
-  { permission: { module: 'accountant', action: 'edit' } },
+  { permission: { module: 'accountant', action: 'void' } },
 );

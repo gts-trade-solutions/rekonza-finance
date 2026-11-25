@@ -21,9 +21,11 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Money } from '@/components/shared/money';
 import { Field, MoneyInput } from '@/components/shared/form-bits';
 import { ContactPicker } from '@/components/forms/quick-create';
-import { accounts as accountApi, bills as billApi, fixedAssets, type AssetClassRow, type AssetDetail } from '@/lib/api/client';
+import { ConfirmDelete, DeleteButton, EditButton, withReason } from '@/components/shared/row-actions';
+import { accounts as accountApi, api, bills as billApi, fixedAssets, type AssetClassRow, type AssetDetail } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
 import { useAppStore } from '@/lib/store';
+import { usePermission } from '@/lib/store/hooks';
 
 const today = () => new Date().toISOString().slice(0, 10);
 const fmt = (iso: string | null) => (iso ? new Date(`${iso}T00:00:00`).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—');
@@ -156,18 +158,22 @@ export function AddAssetDialog({ open, classes, onClose, onDone }: {
 
 // ── An asset ─────────────────────────────────────────────────────────────────
 
-export function AssetDialog({ id, canEdit, onClose, onChanged }: { id: string | null; canEdit: boolean; onClose: () => void; onChanged: () => void }) {
+export function AssetDialog({ id, canEdit, onClose, onChanged, startTab }: { id: string | null; canEdit: boolean; onClose: () => void; onChanged: () => void; startTab?: 'history' | 'details' }) {
   return (
     <Dialog open={!!id} onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="sm:max-w-3xl">
-        {id && <AssetBody id={id} canEdit={canEdit} onChanged={onChanged} onClose={onClose} />}
+        {id && <AssetBody key={`${id}-${startTab ?? 'history'}`} id={id} canEdit={canEdit} onChanged={onChanged} onClose={onClose} startTab={startTab} />}
       </DialogContent>
     </Dialog>
   );
 }
 
-function AssetBody({ id, canEdit, onChanged, onClose }: { id: string; canEdit: boolean; onChanged: () => void; onClose: () => void }) {
+function AssetBody({ id, canEdit, onChanged, onClose, startTab }: { id: string; canEdit: boolean; onChanged: () => void; onClose: () => void; startTab?: 'history' | 'details' }) {
   const state = useApi<AssetDetail>(() => fixedAssets.get(id), [id]);
+  const canDelete = usePermission('accountant', 'void');
+  // Edit opens the Details tab, where everything about it but its cost can change.
+  const [tab, setTab] = useState<string>(startTab ?? 'history');
+  const [deleting, setDeleting] = useState(false);
   const refresh = () => { void state.refetch(); onChanged(); };
   const d = state.data;
   if (!d) return <p className="py-6 text-sm text-muted-foreground">{state.error ?? 'Loading…'}</p>;
@@ -182,6 +188,12 @@ function AssetBody({ id, canEdit, onChanged, onClose }: { id: string; canEdit: b
           <span className="font-mono text-sm text-muted-foreground">{a.tagNo}</span> {a.name}
           <Badge variant="outline" className="text-[10px]">{a.status === 'cwip' ? 'CWIP' : a.status === 'in_use' ? 'In use' : `${a.disposalKind === 'sold' ? 'Sold' : 'Scrapped'} ${fmt(a.disposedOn)}`}</Badge>
         </DialogTitle>
+        {a.status !== 'disposed' && (canEdit || canDelete) && (
+          <div className="flex items-center gap-1 pt-1" data-slot="asset-actions">
+            {canEdit && <EditButton onClick={() => setTab('details')} title="Edit its name, place, custodian, insurance and AMC" />}
+            {canDelete && <DeleteButton onClick={() => setDeleting(true)} title="Delete the asset; what adding it posted is reversed" />}
+          </div>
+        )}
         <DialogDescription>
           {a.className} · {a.method.toUpperCase()} over {a.usefulLifeYears} years · acquired {fmt(a.acquiredOn)}
           {a.putToUseOn ? `, in use from ${fmt(a.putToUseOn)}` : ', not yet in use'}
@@ -193,7 +205,7 @@ function AssetBody({ id, canEdit, onChanged, onClose }: { id: string; canEdit: b
         <div className="rounded-md border p-3"><p className="text-xs text-muted-foreground">Depreciation</p><Money value={charged} className="font-semibold" /></div>
         <div className="rounded-md border p-3"><p className="text-xs text-muted-foreground">Net</p><Money value={a.status === 'disposed' ? 0 : cost - charged} className="font-semibold" /></div>
       </div>
-      <Tabs defaultValue="history">
+      <Tabs value={tab} onValueChange={(v) => setTab(String(v))}>
         <TabsList>
           <TabsTrigger value="history">History</TabsTrigger>
           <TabsTrigger value="details">Details</TabsTrigger>
@@ -230,6 +242,16 @@ function AssetBody({ id, canEdit, onChanged, onClose }: { id: string; canEdit: b
           </TabsContent>
         )}
       </Tabs>
+      <ConfirmDelete
+        open={deleting}
+        onClose={() => setDeleting(false)}
+        title={`Delete ${a.name} (${a.tagNo})?`}
+        description={d.depreciation.length
+          ? 'Depreciation has been posted on it, so it cannot be deleted until those runs are undone (Depreciation tab). A sold or scrapped asset stays as history.'
+          : 'What adding it posted (its cost, its capitalisation) is reversed on its own date, and it leaves the register; a bill it came from stays as it was. The deleted asset is kept on record for the auditor.'}
+        onConfirm={async (reason) => { await api.delete(withReason(`/api/fixed-assets?id=${a.id}`, reason)); onChanged(); onClose(); }}
+        done={`${a.name} deleted`}
+      />
     </>
   );
 }
@@ -237,6 +259,7 @@ function AssetBody({ id, canEdit, onChanged, onClose }: { id: string; canEdit: b
 function Details({ d, canEdit, onSaved }: { d: AssetDetail; canEdit: boolean; onSaved: () => void }) {
   const a = d.asset;
   const [f, setF] = useState({
+    name: a.name, description: a.description ?? '', hsnSac: a.hsnSac ?? '',
     location: a.location ?? '', custodian: a.custodian ?? '', serialNo: a.serialNo ?? '',
     insurancePolicyNo: a.insurancePolicyNo ?? '', insuranceExpiry: a.insuranceExpiry ?? '',
     amcVendor: a.amcVendor ?? '', amcExpiry: a.amcExpiry ?? '', notes: a.notes ?? '',
@@ -245,7 +268,7 @@ function Details({ d, canEdit, onSaved }: { d: AssetDetail; canEdit: boolean; on
     try {
       const n = (s: string) => s.trim() || null;
       await fixedAssets.act({
-        action: 'details', id: a.id, location: n(f.location), custodian: n(f.custodian), serialNo: n(f.serialNo),
+        action: 'details', id: a.id, name: f.name.trim() || a.name, description: n(f.description), hsnSac: n(f.hsnSac), location: n(f.location), custodian: n(f.custodian), serialNo: n(f.serialNo),
         insurancePolicyNo: n(f.insurancePolicyNo), insuranceExpiry: f.insuranceExpiry || null,
         amcVendor: n(f.amcVendor), amcExpiry: f.amcExpiry || null, notes: n(f.notes),
       });
@@ -261,6 +284,9 @@ function Details({ d, canEdit, onSaved }: { d: AssetDetail; canEdit: boolean; on
   return (
     <div className="space-y-3">
       <div className="grid gap-3 sm:grid-cols-2">
+        <Field label="Name">{input('name')}</Field>
+        <Field label="HSN / SAC">{input('hsnSac')}</Field>
+        <Field label="Description" className="sm:col-span-2">{input('description')}</Field>
         <Field label="Location">{input('location')}</Field>
         <Field label="Custodian">{input('custodian')}</Field>
         <Field label="Serial number">{input('serialNo')}</Field>
@@ -270,7 +296,12 @@ function Details({ d, canEdit, onSaved }: { d: AssetDetail; canEdit: boolean; on
         <Field label="AMC expires">{input('amcExpiry', 'date')}</Field>
         <Field label="Notes">{input('notes')}</Field>
       </div>
-      {canEdit && <div className="flex justify-end"><Button size="sm" onClick={() => void save()}>Save details</Button></div>}
+      {canEdit && (
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="text-xs text-muted-foreground">Its cost and dates come from what was posted: to change them, delete the asset and add it again (until depreciation is run on it).</p>
+          <Button size="sm" onClick={() => void save()} data-slot="asset-details-save">Save details</Button>
+        </div>
+      )}
     </div>
   );
 }

@@ -233,6 +233,18 @@ export async function addOpeningDocument(trx: Trx, orgId: number, userId: number
     amount: toSqlFromPaise(input.amountPaise), notes: input.notes ?? null, created_by_user_id: userId,
   }).executeTakeFirstOrThrow()).insertId);
 
+  const entryId = await postOpeningDocument(trx, orgId, userId, id, input, contact.display_name, start.date);
+  await trx.updateTable('opening_documents').set({ journal_entry_id: entryId }).where('id', '=', id).execute();
+  if (!start.isSet) {
+    await trx.updateTable('organizations').set({ books_start_date: start.date }).where('id', '=', orgId).execute();
+  }
+  return { id, journalEntryId: entryId };
+}
+
+/** An opening bill's entry: the party's control account against Opening Balance Equity, on the start date. */
+async function postOpeningDocument(
+  trx: Trx, orgId: number, userId: number | null, id: number, input: OpeningDocumentInput, party: string, startDate: string,
+): Promise<number> {
   const acc = await accountIds(trx, orgId);
   const equity = requireAccount(acc, CODE.OPENING_BALANCE_EQUITY);
   const description = `${input.refNo} of ${input.docDate}`;
@@ -248,15 +260,50 @@ export async function addOpeningDocument(trx: Trx, orgId: number, userId: number
   // Dated the day the books start, whatever the bill's own date: the books
   // hold nothing earlier. The bill's date and due date drive its ageing.
   const entry = await postEntry(trx, {
-    orgId, branchId: input.branchId, date: start.date,
-    memo: `Opening ${input.kind === 'receivable' ? 'receivable' : 'payable'}: ${contact.display_name}, ${input.refNo}`,
+    orgId, branchId: input.branchId, date: startDate,
+    memo: `Opening ${input.kind === 'receivable' ? 'receivable' : 'payable'}: ${party}, ${input.refNo}`,
     sourceType: 'opening_document', sourceId: id, userId, lines,
   });
-  await trx.updateTable('opening_documents').set({ journal_entry_id: entry.id }).where('id', '=', id).execute();
-  if (!start.isSet) {
-    await trx.updateTable('organizations').set({ books_start_date: start.date }).where('id', '=', orgId).execute();
+  return entry.id;
+}
+
+/**
+ * Edit an opening bill, as Zoho edits a document: what it posted is reversed
+ * on the start date and the corrected one posted, on the same row under the
+ * same id, so receipts and payments set against it later still find it. Its
+ * dates and note alone change in place (they post nothing). Refused once
+ * anything has been paid against it: undo those first, as for a bill.
+ */
+export async function editOpeningDocument(
+  trx: Trx, orgId: number, userId: number | null, id: number,
+  input: { contactId: number; kind: 'receivable' | 'payable'; refNo: string; docDate: string; dueDate: string; amountPaise: Paise; notes?: string | null },
+) {
+  const d = await trx.selectFrom('opening_documents').selectAll().where('id', '=', id).where('org_id', '=', orgId).forUpdate().executeTakeFirst();
+  if (!d) throw notFound('That opening bill was not found.');
+  if (d.status === 'void') throw conflict(`${d.ref_no} has been withdrawn. Add it again instead.`);
+  if (!(input.amountPaise > 0)) throw badRequest('An opening bill needs an amount above zero.');
+  if (!input.refNo.trim()) throw badRequest('Give the bill number.');
+  const start = await booksStartDate(trx, orgId);
+  if (input.docDate >= start.date) throw badRequest(`An opening bill is one raised before the books start on ${start.date}.`);
+  if (input.dueDate < input.docDate) throw badRequest('The due date cannot be before the bill date.');
+  const posted = input.contactId !== d.contact_id || input.kind !== d.kind || input.amountPaise !== toPaiseFromSql(d.amount) || input.refNo.trim() !== d.ref_no;
+  if (posted && toPaiseFromSql(d.amount_paid) > 0) {
+    throw conflict(`${d.ref_no} has been paid against. Undo those payments first; its dates and note can still be changed.`);
   }
-  return { id, journalEntryId: entry.id };
+  let entryId = d.journal_entry_id;
+  if (posted) {
+    const contact = await trx.selectFrom('contacts').select(['id', 'display_name']).where('id', '=', input.contactId).where('org_id', '=', orgId).executeTakeFirst();
+    if (!contact) throw notFound('That contact does not exist.');
+    if (d.journal_entry_id) {
+      await reverseEntry(trx, orgId, d.journal_entry_id, { memo: `Opening bill ${d.ref_no} edited: the entry as it was, reversed`, userId });
+    }
+    entryId = await postOpeningDocument(trx, orgId, userId, id, { ...input, refNo: input.refNo.trim(), branchId: d.branch_id }, contact.display_name, start.date);
+  }
+  await trx.updateTable('opening_documents').set({
+    contact_id: input.contactId, kind: input.kind, ref_no: input.refNo.trim(), doc_date: input.docDate, due_date: input.dueDate,
+    amount: toSqlFromPaise(input.amountPaise), notes: input.notes?.trim() || null, journal_entry_id: entryId,
+  }).where('id', '=', id).execute();
+  return { refNo: input.refNo.trim(), reposted: posted, before: { refNo: d.ref_no, amountPaise: toPaiseFromSql(d.amount) } };
 }
 
 /** Withdraw an opening bill entered by mistake. Only while nothing has been paid against it. */

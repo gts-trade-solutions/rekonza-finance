@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { db, transaction } from '@/lib/server/db';
-import { route, body, query, asId, notFound } from '@/lib/server/http';
+import { route, body, query, asId, notFound, badRequest } from '@/lib/server/http';
+import { deleteAsset, deleteAssetClass } from '@/lib/server/services/accountant-changes';
 import { logAudit, auditMeta, snapshot, changesBetween, describeChanges } from '@/lib/server/audit';
 import { toPaiseFromSql } from '@/lib/server/money-sql';
 import {
@@ -155,7 +156,8 @@ const Input = z.discriminatedUnion('action', [
   }),
   z.object({
     action: z.literal('details'), id: Id,
-    name: z.string().trim().min(1).max(200).optional(), location: z.string().trim().max(150).nullish(),
+    name: z.string().trim().min(1).max(200).optional(), description: z.string().trim().max(500).nullish(), hsnSac: z.string().trim().max(10).nullish(),
+    location: z.string().trim().max(150).nullish(),
     custodian: z.string().trim().max(150).nullish(), serialNo: z.string().trim().max(80).nullish(),
     insurancePolicyNo: z.string().trim().max(60).nullish(), insuranceExpiry: DATE.nullish(),
     amcVendor: z.string().trim().max(150).nullish(), amcExpiry: DATE.nullish(), notes: z.string().trim().max(500).nullish(),
@@ -237,7 +239,8 @@ export const POST = route(
           const id = Number(input.id);
           const patch: Record<string, unknown> = {};
           const set = (col: string, v: unknown) => { if (v !== undefined) patch[col] = v; };
-          set('name', input.name); set('location', input.location); set('custodian', input.custodian);
+          set('name', input.name); set('description', input.description); set('hsn_sac', input.hsnSac);
+          set('location', input.location); set('custodian', input.custodian);
           set('serial_no', input.serialNo); set('insurance_policy_no', input.insurancePolicyNo);
           set('insurance_expiry', input.insuranceExpiry); set('amc_vendor', input.amcVendor);
           set('amc_expiry', input.amcExpiry); set('notes', input.notes);
@@ -270,4 +273,35 @@ export const POST = route(
     });
   },
   { permission: { module: 'accountant', action: 'edit' } },
+);
+
+/**
+ * Delete an asset entered by mistake (?id=), or a class no asset is in
+ * (?classId=). An asset goes only while no depreciation is posted on it and it
+ * is not disposed of; what adding it posted is reversed on its own date
+ * (services/accountant-changes.ts).
+ */
+export const DELETE = route(
+  async ({ orgId, user, req }) => {
+    const q = query(req, z.object({
+      id: z.coerce.number().int().positive().optional(),
+      classId: z.coerce.number().int().positive().optional(),
+      reason: z.string().max(300).optional(),
+    }));
+    return transaction(async (trx) => {
+      if (q.classId) {
+        const c = await deleteAssetClass(trx, orgId, q.classId);
+        await logAudit({ trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'delete', targetType: 'asset_class', targetId: q.classId, targetLabel: c.name, detail: `Deleted the asset class ${c.name}`, ...auditMeta(req) });
+        return { ok: true };
+      }
+      if (!q.id) throw badRequest('Say which asset to delete.');
+      const a = await deleteAsset(trx, orgId, user.userId, q.id, q.reason);
+      await logAudit({
+        trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'delete', targetType: 'fixed_asset', targetId: q.id, targetLabel: a.tagNo,
+        detail: `Deleted ${a.name} (${a.tagNo}); ${a.reversed} entr${a.reversed === 1 ? 'y' : 'ies'} reversed${q.reason ? ` — ${q.reason}` : ''}`, ...auditMeta(req),
+      });
+      return { ok: true };
+    });
+  },
+  { permission: { module: 'accountant', action: 'void' } },
 );

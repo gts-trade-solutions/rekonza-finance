@@ -17,6 +17,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { AsyncPage } from '@/components/shared/async-state';
 import { DataTable, type Column } from '@/components/shared/data-table';
 import { Attachments } from '@/components/shared/attachments';
+import { ConfirmDelete, DeleteButton, EditButton, RowActions, withReason } from '@/components/shared/row-actions';
 import { api, ApiError } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
 import { usePermission } from '@/lib/store/hooks';
@@ -40,9 +41,41 @@ export function BusinessLibrary() {
   const [form, setForm] = useState(EMPTY);
   const [openDoc, setOpenDoc] = useState<Doc | null>(null);
   const canEdit = usePermission('accountant', 'create');
+  const canDelete = usePermission('accountant', 'void');
+  // The document being edited (the same form as adding), and the one asked about deleting.
+  const [editing, setEditing] = useState<Doc | null>(null);
+  const [deleting, setDeleting] = useState<Doc | null>(null);
   const state = useApi<{ documents: Doc[] }>(() => api.get('/api/documents'), []);
 
+  const startEdit = (d: Doc) => {
+    setEditing(d);
+    setForm({ title: d.title, category: d.category, reference: d.reference ?? '', issuedOn: d.issuedOn ?? '', expiresOn: d.expiresOn ?? '', notes: d.notes ?? '' });
+    setOpenDoc(null);
+    setCreating(true);
+  };
+  const saveEdit = async () => {
+    if (!editing) return;
+    try {
+      await api.patch(`/api/documents/${editing.id}`, {
+        title: form.title.trim(), category: form.category, reference: form.reference.trim() || null,
+        issuedOn: form.issuedOn || null, expiresOn: form.expiresOn || null, notes: form.notes.trim() || null,
+      });
+      toast.success('Saved');
+      setCreating(false); setEditing(null); setForm(EMPTY);
+      await state.refetch();
+    } catch (e) {
+      toast.error('Not saved', { description: e instanceof ApiError ? e.message : String(e) });
+    }
+  };
+  const remove = async (d: Doc, reason: string) => {
+    const r = await api.delete<{ filesKept: number }>(withReason(`/api/documents/${d.id}`, reason));
+    if (r.filesKept) toast.info(`${r.filesKept} file${r.filesKept === 1 ? '' : 's'} back in the inbox`);
+    setOpenDoc(null);
+    await state.refetch();
+  };
+
   const create = async () => {
+    if (editing) return saveEdit();
     try {
       const r = await api.post<{ id: string }>('/api/documents', { ...form });
       toast.success('Added to the library', { description: 'Attach the file to it now.' });
@@ -89,6 +122,18 @@ export function BusinessLibrary() {
       } },
     { key: 'files', header: 'Files', align: 'right', sortValue: (r) => r.files,
       cell: (r) => <span className={cn('text-sm', !r.files && 'text-amber-700')}>{r.files || 'None yet'}</span> },
+    { key: 'actions', header: 'Actions', align: 'right', sortValue: () => 0,
+      cell: (r) => (
+        <RowActions
+          label={r.title}
+          canEdit={canEdit}
+          canDelete={canDelete}
+          onEdit={() => startEdit(r)}
+          onDelete={(reason) => remove(r, reason)}
+          done={`${r.title} deleted`}
+          deleteDescription="The record leaves the library. Its files are not lost: they go back to the Documents inbox, unattached. Archive instead if it is only finished with."
+        />
+      ) },
   ];
 
   return (
@@ -120,11 +165,11 @@ export function BusinessLibrary() {
         }}
       </AsyncPage>
 
-      <Dialog open={creating} onOpenChange={setCreating}>
+      <Dialog open={creating} onOpenChange={(v) => { setCreating(v); if (!v) { setEditing(null); setForm(EMPTY); } }}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
-            <DialogTitle>Add a document</DialogTitle>
-            <DialogDescription>The details first; attach the file once it is added.</DialogDescription>
+            <DialogTitle>{editing ? `Edit ${editing.title}` : 'Add a document'}</DialogTitle>
+            <DialogDescription>{editing ? 'Its details. Its files are on its record.' : 'The details first; attach the file once it is added.'}</DialogDescription>
           </DialogHeader>
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="space-y-1.5 sm:col-span-2"><Label htmlFor="doc-title">Title</Label>
@@ -144,8 +189,8 @@ export function BusinessLibrary() {
               <Textarea id="doc-notes" rows={2} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} /></div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setCreating(false)}>Cancel</Button>
-            <Button onClick={create} disabled={form.title.trim().length < 2}>Add</Button>
+            <Button variant="outline" onClick={() => { setCreating(false); setEditing(null); setForm(EMPTY); }}>Cancel</Button>
+            <Button onClick={create} disabled={form.title.trim().length < 2} data-slot="library-save">{editing ? 'Save' : 'Add'}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -156,6 +201,12 @@ export function BusinessLibrary() {
             <>
               <DialogHeader>
                 <DialogTitle className="flex items-center gap-2"><FolderOpen className="size-5 text-muted-foreground" /> {openDoc.title}</DialogTitle>
+                {(canEdit || canDelete) && (
+                  <div className="flex items-center gap-1 pt-1" data-slot="library-record-actions">
+                    {canEdit && <EditButton onClick={() => startEdit(openDoc)} />}
+                    {canDelete && <DeleteButton onClick={() => setDeleting(openDoc)} />}
+                  </div>
+                )}
                 <DialogDescription className="capitalize">
                   {openDoc.category}{openDoc.reference ? ` · ${openDoc.reference}` : ''} · issued {day(openDoc.issuedOn)} · expires {day(openDoc.expiresOn)}
                 </DialogDescription>
@@ -171,6 +222,14 @@ export function BusinessLibrary() {
           )}
         </DialogContent>
       </Dialog>
+      <ConfirmDelete
+        open={!!deleting}
+        onClose={() => setDeleting(null)}
+        title={`Delete ${deleting?.title ?? ''}?`}
+        description="The record leaves the library. Its files are not lost: they go back to the Documents inbox, unattached."
+        onConfirm={(reason) => remove(deleting!, reason)}
+        done="Deleted"
+      />
     </>
   );
 }

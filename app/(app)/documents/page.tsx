@@ -26,6 +26,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import { PageHeader } from '@/components/shared/page-header';
 import { AsyncPage } from '@/components/shared/async-state';
 import { BusinessLibrary } from '@/components/documents/business-library';
+import { ConfirmDelete, RowActions } from '@/components/shared/row-actions';
 import { AttachDialog } from '@/components/documents/attach-dialog';
 import { api, ApiError, files as fileApi } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
@@ -61,6 +62,8 @@ export default function DocumentsPage() {
   const [attachFor, setAttachFor] = useState<string[] | null>(null);
   const [folderFor, setFolderFor] = useState<string[] | null>(null);
   const [renaming, setRenaming] = useState<LibraryFile | null>(null);
+  // Files asked about deleting (one row's, or the ticked ones).
+  const [deleting, setDeleting] = useState<string[] | null>(null);
   const input = useRef<HTMLInputElement>(null);
 
   // A link like /documents?tab=library opens that section.
@@ -116,15 +119,13 @@ export default function DocumentsPage() {
     }
   };
 
+  // Deletes after the dialog has asked; a refusal is shown there and as a toast.
   const remove = async (ids: string[]) => {
-    if (!window.confirm(`Delete ${ids.length} file${ids.length === 1 ? '' : 's'}? Each is kept in the audit trail.`)) return;
     try {
       for (const id of ids) await fileApi.remove(id);
-      toast.success(`${ids.length} file${ids.length === 1 ? '' : 's'} deleted`);
       setSelected(new Set());
+    } finally {
       refresh();
-    } catch (e) {
-      toast.error(e instanceof ApiError ? e.message : 'Could not delete');
     }
   };
 
@@ -208,7 +209,7 @@ export default function DocumentsPage() {
                   <div className="ml-auto flex flex-wrap gap-2">
                     <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setAttachFor([...selected])}><Link2 className="size-3.5" /> Attach to transaction</Button>
                     <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setFolderFor([...selected])}><FolderInput className="size-3.5" /> Move to folder</Button>
-                    <Button size="sm" variant="ghost" className="gap-1.5 text-destructive hover:text-destructive" onClick={() => void remove([...selected])}><Trash2 className="size-3.5" /> Delete</Button>
+                    <Button size="sm" variant="ghost" className="gap-1.5 text-destructive hover:text-destructive" onClick={() => setDeleting([...selected])}><Trash2 className="size-3.5" /> Delete</Button>
                   </div>
                 </Card>
               )}
@@ -228,7 +229,7 @@ export default function DocumentsPage() {
                             <th className="px-3 py-2 text-left font-semibold">Attached to</th>
                             <th className="px-3 py-2 text-left font-semibold">Uploaded</th>
                             <th className="px-3 py-2 text-right font-semibold">Size</th>
-                            <th className="w-10 px-3 py-2" />
+                            <th className="w-[200px] px-3 py-2 text-right font-semibold">Actions</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -267,7 +268,19 @@ export default function DocumentsPage() {
                               </td>
                               <td className="px-3 py-2 text-xs text-muted-foreground">{when(f.uploadedAt)}{f.uploadedBy ? ` · ${f.uploadedBy}` : ''}</td>
                               <td className="px-3 py-2 text-right text-xs text-muted-foreground">{size(f.sizeBytes)}</td>
-                              <td className="px-3 py-2">
+                              <td className="whitespace-nowrap px-3 py-2">
+                                <div className="flex items-center justify-end gap-1">
+                                <RowActions
+                                  label={f.filename}
+                                  canEdit={canUpload}
+                                  canDelete={canUpload}
+                                  editTitle={`Rename ${f.filename}`}
+                                  onEdit={() => setRenaming(f)}
+                                  onDelete={() => remove([f.id])}
+                                  done={`${f.filename} deleted`}
+                                  withReasonField={false}
+                                  deleteDescription={f.attachedTo ? `It is attached to ${f.attachedTo.kind} ${f.attachedTo.label}, and leaves that too. The audit trail keeps a record of it.` : 'The file is removed. The audit trail keeps a record of it.'}
+                                />
                                 <DropdownMenu>
                                   <DropdownMenuTrigger asChild>
                                     <Button variant="ghost" size="icon" className="size-7" aria-label={`Actions for ${f.filename}`}><MoreHorizontal className="size-4" /></Button>
@@ -286,9 +299,10 @@ export default function DocumentsPage() {
                                     )}
                                     <DropdownMenuItem onClick={() => setRenaming(f)}><Pencil className="mr-2 size-3.5" /> Rename</DropdownMenuItem>
                                     <DropdownMenuSeparator />
-                                    <DropdownMenuItem className="text-destructive" onClick={() => void remove([f.id])}><Trash2 className="mr-2 size-3.5" /> Delete</DropdownMenuItem>
+                                    <DropdownMenuItem className="text-destructive" onClick={() => setDeleting([f.id])}><Trash2 className="mr-2 size-3.5" /> Delete</DropdownMenuItem>
                                   </DropdownMenuContent>
                                 </DropdownMenu>
+                                </div>
                               </td>
                             </tr>
                           ))}
@@ -311,6 +325,15 @@ export default function DocumentsPage() {
         <FolderDialog folders={folders.map((f) => f.name)} count={folderFor.length} onClose={() => setFolderFor(null)}
           onPick={(name) => { const ids = folderFor; setFolderFor(null); void patch({ action: 'folder', fileIds: ids, folder: name }, name ? `Moved to ${name}` : 'Taken out of its folder'); }} />
       )}
+      <ConfirmDelete
+        open={!!deleting}
+        onClose={() => setDeleting(null)}
+        title={`Delete ${deleting?.length ?? 0} file${deleting?.length === 1 ? '' : 's'}?`}
+        description="Each is removed from Documents, and from whatever it was attached to. The audit trail keeps a record of each."
+        withReasonField={false}
+        onConfirm={() => remove(deleting!)}
+        done={`${deleting?.length ?? 0} file${deleting?.length === 1 ? '' : 's'} deleted`}
+      />
       {renaming && (
         <RenameDialog file={renaming} onClose={() => setRenaming(null)}
           onSave={(name) => { const f = renaming; setRenaming(null); void patch({ action: 'rename', fileId: f.id, filename: name }, 'Renamed'); }} />

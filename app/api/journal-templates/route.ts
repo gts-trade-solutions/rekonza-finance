@@ -28,7 +28,7 @@ export const POST = route(async ({ orgId, user, role, req }) => {
   if (input.action === 'delete') {
     return transaction(async (trx) => {
       const name = await deleteJournalTemplate(trx, orgId, input.id);
-      await logAudit({ trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'update', targetType: 'journal_template', targetId: input.id, targetLabel: name, detail: `Deleted journal template ${name}`, ...auditMeta(req) });
+      await logAudit({ trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'delete', targetType: 'journal_template', targetId: input.id, targetLabel: name, detail: `Deleted journal template ${name}`, ...auditMeta(req) });
       return { ok: true };
     });
   }

@@ -28,11 +28,12 @@ import { Money } from '@/components/shared/money';
 import { EmptyState } from '@/components/shared/empty-state';
 import { AsyncPage } from '@/components/shared/async-state';
 import { Field, MoneyInput } from '@/components/shared/form-bits';
+import { RowActions, withReason } from '@/components/shared/row-actions';
 import { Input } from '@/components/ui/input';
 import { BranchSelect, downloadCsv, useBranchName } from '@/components/shared/report-shell';
 import {
   accounts as accountsApi, api, budgets as budgetsApi,
-  type AccountRow, type BudgetResponse,
+  type AccountRow, type BudgetResponse, type BudgetRow,
 } from '@/lib/api/client';
 import { useApi, useApiAction } from '@/lib/api/use-api';
 import { usePermission } from '@/lib/store/hooks';
@@ -56,6 +57,7 @@ function yearChoices(today: string): string[] {
 
 export default function BudgetsPage() {
   const canEdit = usePermission('accountant', 'edit');
+  const canDelete = usePermission('accountant', 'void');
   const todayIso = new Date().toISOString().slice(0, 10);
   const [fy, setFy] = useState(fyLabelFor(todayIso));
   const [asOf, setAsOf] = useState('');
@@ -78,6 +80,26 @@ export default function BudgetsPage() {
   const [adding, setAdding] = useState(false);
   const [newAccount, setNewAccount] = useState('');
   const [newAmount, setNewAmount] = useState(0);
+  // One line opened to edit: its figure and note.
+  const [editing, setEditing] = useState<BudgetRow | null>(null);
+  const [editAmount, setEditAmount] = useState(0);
+  const [editNotes, setEditNotes] = useState('');
+  const [editBusy, setEditBusy] = useState(false);
+  const saveLine = async () => {
+    if (!editing) return;
+    if (editAmount <= 0) { toast.error('Enter an amount above zero, or delete the line.'); return; }
+    setEditBusy(true);
+    try {
+      await api.patch('/api/budgets', { fy, accountId: editing.accountId, amountPaise: editAmount, notes: editNotes.trim() || null });
+      toast.success(`Budget for ${editing.code} ${editing.name} saved`);
+      setEditing(null);
+      state.refetch();
+    } catch (e) {
+      toast.error('Not saved', { description: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setEditBusy(false);
+    }
+  };
 
   const save = useApiAction(budgetsApi.set);
 
@@ -304,6 +326,7 @@ export default function BudgetsPage() {
                           <th className="px-4 py-2.5 text-right font-semibold">Variance</th>
                           <th className="px-4 py-2.5 text-right font-semibold">Variance %</th>
                           <th className="w-40 px-4 py-2.5 text-left font-semibold">Used of annual</th>
+                          {(canEdit || canDelete) && <th className="w-[150px] px-2 py-2.5 text-right font-semibold">Actions</th>}
                         </tr>
                       </thead>
                       <tbody>
@@ -334,6 +357,20 @@ export default function BudgetsPage() {
                               <Progress value={Math.min(100, r.pct)} className={r.pct > 100 && r.type !== 'income' ? '[&>div]:bg-red-500' : '[&>div]:bg-emerald-500'} />
                               <p className="mt-1 text-[10px] text-muted-foreground">{r.pct.toFixed(0)}% of the year&apos;s figure</p>
                             </td>
+                            {(canEdit || canDelete) && (
+                              <td className="whitespace-nowrap px-2 py-2">
+                                <RowActions
+                                  label={`the budget on ${r.code} ${r.name}`}
+                                  canEdit={canEdit}
+                                  canDelete={canDelete}
+                                  onEdit={() => { setEditing(r); setEditAmount(r.budgetPaise); setEditNotes(r.notes ?? ''); }}
+                                  onDelete={async (reason) => { await api.delete(withReason(`/api/budgets?fy=${encodeURIComponent(fy)}&accountId=${r.accountId}`, reason)); state.refetch(); }}
+                                  done={`Budget line ${r.code} ${r.name} deleted`}
+                                  deleteTitle={`Delete the FY ${fy} budget on ${r.code} ${r.name}?`}
+                                  deleteDescription="Only the plan goes: the actuals stay in the ledger, and the account can be budgeted again."
+                                />
+                              </td>
+                            )}
                           </tr>
                         ))}
                         <tr className="border-t-2 bg-muted/40 font-semibold">
@@ -344,6 +381,7 @@ export default function BudgetsPage() {
                           <td className="px-4 py-2.5 text-right"><Money value={totalVariance} colored /></td>
                           <td className="px-4 py-2.5 text-right">{totalToDate > 0 ? `${((totalVariance / totalToDate) * 100).toFixed(1)}%` : ''}</td>
                           <td className="px-4 py-2.5" />
+                          {(canEdit || canDelete) && <td />}
                         </tr>
                       </tbody>
                     </table>
@@ -390,6 +428,23 @@ export default function BudgetsPage() {
           )
         }
       </AsyncPage>
+
+      <Dialog open={!!editing} onOpenChange={(v) => { if (!v) setEditing(null); }}>
+        <DialogContent data-slot="budget-edit">
+          <DialogHeader>
+            <DialogTitle>Edit budget: {editing?.code} {editing?.name}</DialogTitle>
+            <DialogDescription>The figure for FY {fy}. Actuals are read from the ledger and do not change.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <Field label="Annual budget" required><MoneyInput valuePaise={editAmount} onChangePaise={setEditAmount} /></Field>
+            <Field label="Note"><Input value={editNotes} onChange={(e) => setEditNotes(e.target.value)} placeholder="How the figure was arrived at" maxLength={500} /></Field>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditing(null)}>Cancel</Button>
+            <Button onClick={() => void saveLine()} disabled={editBusy} data-slot="budget-edit-save">{editBusy ? 'Saving…' : 'Save'}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Card className="flex items-start gap-3 p-4">
         <BarChart3 className="mt-0.5 size-4 shrink-0 text-muted-foreground" />

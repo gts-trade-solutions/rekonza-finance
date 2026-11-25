@@ -15,6 +15,8 @@ import { Switch } from '@/components/ui/switch';
 import { PageHeader } from '@/components/shared/page-header';
 import { AsyncPage, LoadingRows } from '@/components/shared/async-state';
 import { Field } from '@/components/shared/form-bits';
+import { RowActions, withReason } from '@/components/shared/row-actions';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Money } from '@/components/shared/money';
 import { DateRangePicker } from '@/components/shared/date-range-picker';
 import { downloadCsv, useReportRange } from '@/components/shared/report-shell';
@@ -32,6 +34,9 @@ interface Column {
 
 export default function CostCentresPage() {
   const canEdit = usePermission('accountant', 'edit');
+  const canDelete = usePermission('accountant', 'void');
+  const [editing, setEditing] = useState<Centre | null>(null);
+  const [ef, setEf] = useState({ code: '', name: '', category: '' });
   const canSeeReport = usePermission('reports.financial', 'view');
   const [range, setRange] = useReportRange();
   const state = useApi(
@@ -74,11 +79,29 @@ export default function CostCentresPage() {
                       <span className="font-mono text-xs">{c.code}</span>
                       <span className="font-medium">{c.name}</span>
                       {c.category && <Badge variant="outline" className="text-[10px]">{c.category}</Badge>}
-                      {canEdit && (
-                        <label className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
-                          In use <Switch checked={c.isActive} onCheckedChange={(v) => void save({ ...c, isActive: v }, v ? `${c.name} back in use` : `${c.name} retired`)} />
-                        </label>
-                      )}
+                      {!c.isActive && <Badge variant="outline" className="text-[10px]">Retired</Badge>}
+                      <span className="ml-auto flex items-center gap-3">
+                        {canEdit && (
+                          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                            In use <Switch checked={c.isActive} onCheckedChange={(v) => void save({ ...c, isActive: v }, v ? `${c.name} back in use` : `${c.name} retired`)} />
+                          </label>
+                        )}
+                        <RowActions
+                          label={`cost centre ${c.code} ${c.name}`}
+                          canEdit={canEdit}
+                          canDelete={canDelete}
+                          onEdit={() => { setEditing(c); setEf({ code: c.code, name: c.name, category: c.category ?? '' }); }}
+                          onDelete={async (reason) => { await api.delete(withReason(`/api/cost-centres?id=${c.id}`, reason)); await state.refetch(); }}
+                          done={`${c.code} ${c.name} deleted`}
+                          deleteDescription="Only a centre named on nothing can be deleted. One already on an invoice, bill, expense or journal line is kept for the profit and loss by centre; retire it instead."
+                          alternative={c.isActive ? {
+                            label: 'Retire it instead',
+                            note: 'Retired: the forms stop offering it; what was counted against it stays.',
+                            run: () => api.post('/api/cost-centres', { ...c, isActive: false }).then(() => state.refetch()),
+                            done: `${c.name} retired`,
+                          } : undefined}
+                        />
+                      </span>
                     </li>
                   ))}
                 </ul>
@@ -95,6 +118,27 @@ export default function CostCentresPage() {
                 </div>
               )}
             </Card>
+
+            <Dialog open={!!editing} onOpenChange={(v) => { if (!v) setEditing(null); }}>
+              <DialogContent data-slot="cost-centre-edit">
+                <DialogHeader>
+                  <DialogTitle>Edit cost centre</DialogTitle>
+                  <DialogDescription>The code, name and category. What was counted against it stays with it.</DialogDescription>
+                </DialogHeader>
+                <div className="grid gap-3 sm:grid-cols-[120px_1fr]">
+                  <Field label="Code"><Input value={ef.code} onChange={(e) => setEf({ ...ef, code: e.target.value.toUpperCase() })} className="font-mono" /></Field>
+                  <Field label="Name"><Input value={ef.name} onChange={(e) => setEf({ ...ef, name: e.target.value })} /></Field>
+                  <Field label="Category" className="sm:col-span-2"><Input value={ef.category} onChange={(e) => setEf({ ...ef, category: e.target.value })} placeholder="Department, Project…" /></Field>
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setEditing(null)}>Cancel</Button>
+                  <Button disabled={busy || !ef.code || !ef.name} data-slot="cost-centre-save"
+                    onClick={() => void save({ id: editing!.id, code: ef.code, name: ef.name, category: ef.category || null, isActive: editing!.isActive }, `${ef.name} saved`).then((ok) => ok && setEditing(null))}>
+                    {busy ? 'Saving…' : 'Save'}
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
 
             {d.columns && (
               <Card className="space-y-3 p-5">

@@ -4,6 +4,7 @@ import { route, body, query, asId, forbidden } from '@/lib/server/http';
 import { hasPermission } from '@/lib/rbac';
 import { logAudit, auditMeta } from '@/lib/server/audit';
 import { costCentrePnl, listCostCentres, saveCostCentre } from '@/lib/server/services/cost-centres';
+import { deleteCostCentre } from '@/lib/server/services/accountant-changes';
 
 // Cost centres: the list (for the pickers on documents, so open to anyone
 // signed in), and the profit and loss by centre (a financial report).
@@ -36,4 +37,24 @@ export const POST = route(
     });
   },
   { permission: { module: 'accountant', action: 'edit' } },
+);
+
+/**
+ * Delete a cost centre named on nothing (services/accountant-changes.ts). One
+ * in use is refused with code 'in_use': the screen offers Retire instead.
+ */
+export const DELETE = route(
+  async ({ orgId, user, req }) => {
+    const q = query(req, z.object({ id: z.coerce.number().int().positive(), reason: z.string().max(300).optional() }));
+    return transaction(async (trx) => {
+      const gone = await deleteCostCentre(trx, orgId, q.id);
+      await logAudit({
+        trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'delete',
+        targetType: 'cost_centre', targetId: q.id, targetLabel: gone.name,
+        detail: `Deleted unused cost centre ${gone.code} ${gone.name}${q.reason ? ` — ${q.reason}` : ''}`, ...auditMeta(req),
+      });
+      return { ok: true };
+    });
+  },
+  { permission: { module: 'accountant', action: 'void' } },
 );

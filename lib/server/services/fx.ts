@@ -85,8 +85,13 @@ export async function exposure(ex: Executor, orgId: number, date: string): Promi
 
 /** Restate open balances at the date's closing rates, and reverse it the next day. */
 export async function revalue(trx: Trx, orgId: number, userId: number | null, date: string) {
+  // A restatement standing on the date: not its undoing (a reversal), and not one deleted
+  // (accountant-changes.ts deleteRestatement), which leaves the date free to restate again.
   const done = await trx.selectFrom('journal_entries').select('id').where('org_id', '=', orgId)
-    .where('source_type', '=', 'fx_revaluation').where('entry_date', '=', date).executeTakeFirst();
+    .where('source_type', '=', 'fx_revaluation').where('entry_date', '=', date).where('reversal_of_entry_id', 'is', null)
+    .where(({ not, exists, selectFrom }) => not(exists(selectFrom('deleted_documents as d').select('d.id')
+      .where('d.org_id', '=', orgId).where('d.doc_type', '=', 'fx_restatement').whereRef('d.doc_id', '=', 'journal_entries.id'))))
+    .executeTakeFirst();
   if (done) throw conflict(`Foreign balances are already restated at ${date}.`);
   const rows = await exposure(trx, orgId, date);
   const missing = [...new Set(rows.filter((r) => r.closingRate === null).map((r) => r.currency))];

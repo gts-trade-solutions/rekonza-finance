@@ -5,6 +5,7 @@ import { toPaiseFromSql, toSqlFromPaise } from '@/lib/server/money-sql';
 import { runRecurringJournal } from '@/lib/server/services/recurring';
 import '@/lib/server/jobs/boot';
 import { logAudit, auditMeta } from '@/lib/server/audit';
+import { deleteRecurringJournal, updateRecurringJournal } from '@/lib/server/services/accountant-changes';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Recurring journals: entries that repeat unchanged month after month —
@@ -144,6 +145,29 @@ const ActionInput = z.discriminatedUnion('action', [
 ]);
 
 /**
+ * Edit a profile: what it posts from its next run. Entries it already posted
+ * stay as they are (services/accountant-changes.ts).
+ */
+export const PUT = route(
+  async ({ orgId, user, req }) => {
+    const input = await body(req, ProfileInput.extend({ id: z.union([z.string(), z.number()]).transform(Number) }));
+    await transaction(async (trx) => {
+      await updateRecurringJournal(trx, orgId, input.id, {
+        ...input, debitAccountId: Number(input.debitAccountId), creditAccountId: Number(input.creditAccountId),
+      });
+      await logAudit({
+        trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'update',
+        targetType: 'recurring_journal', targetId: input.id, targetLabel: input.name,
+        detail: `Edited: ${input.frequency}, ${(input.amountPaise / 100).toFixed(2)}, next ${input.nextRun}${input.endDate ? `, ends ${input.endDate}` : ''}`,
+        ...auditMeta(req),
+      });
+    });
+    return { id: asId(input.id) };
+  },
+  { permission: { module: 'accountant', action: 'edit' } },
+);
+
+/**
  * Run a profile, pause it, or let the scheduler post it.
  *
  * Running posts one entry and rolls the schedule forward. It does not catch up
@@ -196,22 +220,17 @@ export const PATCH = route(
 /** Delete a profile. The entries it already posted stay — they are real. */
 export const DELETE = route(
   async ({ orgId, user, req }) => {
-    const { id } = query(req, z.object({ id: z.string() }));
+    const { id, reason } = query(req, z.object({ id: z.string(), reason: z.string().max(300).optional() }));
     const numeric = Number(id);
-
-    const profile = await db
-      .selectFrom('recurring_journals').select(['id', 'name'])
-      .where('id', '=', numeric).where('org_id', '=', orgId).executeTakeFirst();
-    if (!profile) throw badRequest('That profile does not exist.');
-
-    await db.deleteFrom('recurring_journals').where('id', '=', numeric).where('org_id', '=', orgId).execute();
-    await logAudit({
-      orgId, actorUserId: user.userId, actorName: user.name, action: 'void',
-      targetType: 'recurring_journal', targetId: numeric, targetLabel: profile.name,
-      detail: 'Profile deleted. Entries it already posted are unaffected.', ...auditMeta(req),
+    await transaction(async (trx) => {
+      const gone = await deleteRecurringJournal(trx, orgId, numeric);
+      await logAudit({
+        trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'delete',
+        targetType: 'recurring_journal', targetId: numeric, targetLabel: gone.name,
+        detail: `Profile deleted. Entries it already posted are unaffected.${reason ? ` — ${reason}` : ''}`, ...auditMeta(req),
+      });
     });
-
     return { id: asId(numeric) };
   },
-  { permission: { module: 'accountant', action: 'edit' } },
+  { permission: { module: 'accountant', action: 'void' } },
 );
