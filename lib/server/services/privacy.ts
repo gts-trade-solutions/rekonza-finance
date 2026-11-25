@@ -262,3 +262,55 @@ export async function listBreaches(ex: Executor, orgId: number) {
     reportDueBy: new Date(new Date(b.discovered_at).getTime() + 72 * 3600_000).toISOString(),
   }));
 }
+
+// ── Edit and Delete (2026-11-25) ─────────────────────────────────────────────
+// A request or breach logged by hand can be put right, and one logged in
+// error taken off — but only while nothing has followed from it. A closed
+// request is the record of the answer the person was owed, and a breach the
+// Board has been told of is the record the Board holds: those stay.
+
+export async function updateRequest(trx: Trx, orgId: number, id: number, input: { subjectName: string; kind: RequestKind; details?: string | null; receivedOn: string }) {
+  const r = await trx.selectFrom('privacy_requests').select(['status', 'subject_type']).where('id', '=', id).where('org_id', '=', orgId).executeTakeFirst();
+  if (!r) throw notFound('That request was not found.');
+  if (r.status !== 'open') throw conflict('It has been closed: the answer given stays on record as it was.');
+  const settings = await getPrivacySettings(trx, orgId);
+  const due = new Date(`${input.receivedOn}T00:00:00Z`);
+  due.setUTCDate(due.getUTCDate() + settings.responseDays);
+  await trx.updateTable('privacy_requests').set({
+    kind: input.kind, details: input.details?.trim() || null, received_on: input.receivedOn, due_on: ymd(due),
+    // A party's name comes from the party; anyone else's is as typed.
+    ...(r.subject_type === 'contact' ? {} : { subject_name: input.subjectName.trim() }),
+  }).where('id', '=', id).execute();
+}
+
+export async function deleteRequest(trx: Trx, orgId: number, id: number) {
+  const r = await trx.selectFrom('privacy_requests').select(['status', 'subject_name']).where('id', '=', id).where('org_id', '=', orgId).executeTakeFirst();
+  if (!r) throw notFound('That request was not found.');
+  if (r.status !== 'open') throw conflict('It has been closed: the record of what was done, or why it was refused, stays.');
+  await trx.deleteFrom('privacy_requests').where('id', '=', id).execute();
+  return { subjectName: r.subject_name };
+}
+
+export async function updateBreach(trx: Trx, orgId: number, id: number, input: { discoveredAt: string; description: string; dataAffected?: string | null; peopleAffected?: number | null; measures?: string | null }) {
+  const b = await trx.selectFrom('privacy_breaches').select(['board_informed_at', 'discovered_at']).where('id', '=', id).where('org_id', '=', orgId).executeTakeFirst();
+  if (!b) throw notFound('That breach was not found.');
+  if (!input.description.trim()) throw badRequest('Say what happened.');
+  // The 72 hours run from when it became known: once the Board has been told, that time stays as told.
+  const moved = new Date(input.discoveredAt).getTime() !== new Date(b.discovered_at).getTime();
+  if (moved && b.board_informed_at) throw conflict('The Board has been told of it, so when it was found stays as reported.');
+  await trx.updateTable('privacy_breaches').set({
+    discovered_at: new Date(input.discoveredAt), description: input.description.trim(), data_affected: input.dataAffected?.trim() || null,
+    people_affected: input.peopleAffected ?? null, measures: input.measures?.trim() || null,
+  }).where('id', '=', id).execute();
+}
+
+export async function deleteBreach(trx: Trx, orgId: number, id: number) {
+  const b = await trx.selectFrom('privacy_breaches').select(['board_informed_at', 'board_report_at', 'people_informed_at', 'description'])
+    .where('id', '=', id).where('org_id', '=', orgId).executeTakeFirst();
+  if (!b) throw notFound('That breach was not found.');
+  if (b.board_informed_at || b.board_report_at || b.people_informed_at) {
+    throw conflict('The Board or the people affected have been told of it, so the record stays. Correct it with Edit instead.');
+  }
+  await trx.deleteFrom('privacy_breaches').where('id', '=', id).execute();
+  return { description: b.description };
+}

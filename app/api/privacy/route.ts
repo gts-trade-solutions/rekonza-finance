@@ -5,7 +5,7 @@ import { logAudit, auditMeta } from '@/lib/server/audit';
 import { encryptionConfigured } from '@/lib/server/crypto/fields';
 import {
   closeRequest, contactData, eraseContact, getPrivacySettings, listBreaches, listRequests, logBreach, logRequest,
-  markBreach, retainedUntil, setPrivacySettings,
+  markBreach, retainedUntil, setPrivacySettings, deleteBreach, deleteRequest, updateBreach, updateRequest,
 } from '@/lib/server/services/privacy';
 
 // Personal data under the DPDP Act: settings, requests, breaches, and acting on
@@ -39,6 +39,18 @@ const Input = z.discriminatedUnion('action', [
     dataAffected: z.string().max(500).nullish(), peopleAffected: z.number().int().nonnegative().nullish(), measures: z.string().max(2000).nullish(),
   }),
   z.object({ action: z.literal('mark-breach'), id: Id, step: z.enum(['board_informed', 'board_report', 'people_informed']) }),
+  // Edit and Delete for what was logged by hand, while nothing has followed from it (services/privacy.ts).
+  z.object({
+    action: z.literal('update-request'), id: Id, subjectName: z.string().trim().min(1).max(200),
+    kind: z.enum(['access', 'correction', 'erasure', 'grievance', 'consent_withdrawal']), details: z.string().max(1000).nullish(),
+    receivedOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  }),
+  z.object({ action: z.literal('delete-request'), id: Id }),
+  z.object({
+    action: z.literal('update-breach'), id: Id, discoveredAt: z.string().min(10), description: z.string().max(2000),
+    dataAffected: z.string().max(500).nullish(), peopleAffected: z.number().int().nonnegative().nullish(), measures: z.string().max(2000).nullish(),
+  }),
+  z.object({ action: z.literal('delete-breach'), id: Id }),
 ]);
 
 export const POST = route(
@@ -87,6 +99,24 @@ export const POST = route(
           await markBreach(trx, orgId, input.id, input.step);
           await audit('privacy_breach', input.id, `Breach: ${input.step.replace('_', ' ')}`);
           return { id: asId(input.id) };
+        case 'update-request':
+          await updateRequest(trx, orgId, input.id, input);
+          await audit('privacy_request', input.id, `Request changed: ${input.kind.replace('_', ' ')} from ${input.subjectName}, received ${input.receivedOn}`);
+          return { id: asId(input.id) };
+        case 'delete-request': {
+          const r = await deleteRequest(trx, orgId, input.id);
+          await logAudit({ trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'void', targetType: 'privacy_request', targetId: input.id, detail: `Request from ${r.subjectName} deleted, logged in error`, ...meta });
+          return { id: asId(input.id), deleted: true };
+        }
+        case 'update-breach':
+          await updateBreach(trx, orgId, input.id, input);
+          await audit('privacy_breach', input.id, `Breach record changed: ${input.description.slice(0, 200)}`);
+          return { id: asId(input.id) };
+        case 'delete-breach': {
+          const r = await deleteBreach(trx, orgId, input.id);
+          await logAudit({ trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'void', targetType: 'privacy_breach', targetId: input.id, detail: `Breach record deleted, logged in error: ${r.description.slice(0, 200)}`, ...meta });
+          return { id: asId(input.id), deleted: true };
+        }
       }
     });
   },

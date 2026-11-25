@@ -16,8 +16,9 @@ import { Combobox } from '@/components/ui/combobox';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Field } from '@/components/shared/form-bits';
 import { AsyncPage } from '@/components/shared/async-state';
-import { customFields, type CustomFieldDefinition, type CustomFieldEntity } from '@/lib/api/client';
+import { api, customFields, type CustomFieldDefinition, type CustomFieldEntity } from '@/lib/api/client';
 import { useApi, useApiAction } from '@/lib/api/use-api';
+import { RowActions, reasonQuery, useConfirmDelete } from '@/components/shared/row-actions';
 
 const ENTITIES: { value: CustomFieldEntity; label: string }[] = [
   { value: 'contact', label: 'Customers & vendors' }, { value: 'item', label: 'Items' }, { value: 'invoice', label: 'Invoices' },
@@ -34,6 +35,18 @@ export function CustomFieldsSettings({ canEdit }: { canEdit: boolean }) {
   const state = useApi(() => customFields.list(), []);
   const save = useApiAction(customFields.save);
   const [f, setF] = useState<typeof BLANK | null>(null);
+  const del = useConfirmDelete();
+  const open = (x: CustomFieldDefinition) => setF({ id: x.id, entity: x.entity, label: x.label, type: x.type, options: x.options.join(', '), required: x.required, showOnPdf: x.showOnPdf, isActive: x.isActive });
+  const remove = (x: CustomFieldDefinition) => del.ask({
+    title: `Delete the field ${x.label}?`,
+    description: 'Only a field no record holds a value in can be deleted. One that has values is marked as inactive instead: it leaves the forms, and what was recorded stays readable.',
+    run: (reason) => api.delete(`/api/custom-fields?id=${x.id}${reasonQuery(reason, false)}`),
+    done: `${x.label} deleted`, onDone: () => state.refetch(),
+    instead: x.isActive ? {
+      label: 'Mark as inactive instead',
+      run: () => customFields.save({ id: x.id, entity: x.entity, label: x.label, type: x.type, required: x.required, showOnPdf: x.showOnPdf, isActive: false, options: x.type === 'select' ? x.options : undefined }),
+    } : undefined,
+  });
 
   const submit = async () => {
     if (!f) return;
@@ -63,16 +76,15 @@ export function CustomFieldsSettings({ canEdit }: { canEdit: boolean }) {
                 <Card key={e.value} className="p-4">
                   <p className="mb-2 text-sm font-semibold">{e.label}</p>
                   {list.map((x) => (
-                    <button key={x.id} type="button" disabled={!canEdit}
-                      onClick={() => setF({ id: x.id, entity: x.entity, label: x.label, type: x.type, options: x.options.join(', '), required: x.required, showOnPdf: x.showOnPdf, isActive: x.isActive })}
-                      className="flex w-full items-center justify-between border-t py-2 text-left text-sm hover:bg-muted/40">
+                    <div key={x.id} className="flex w-full flex-wrap items-center justify-between gap-2 border-t py-2 text-left text-sm" data-slot="custom-field">
                       <span className={x.isActive ? '' : 'text-muted-foreground line-through'}>{x.label}</span>
-                      <span className="flex gap-1">
+                      <span className="flex flex-wrap items-center gap-1">
                         <Badge variant="outline" className="text-[10px]">{TYPES.find((t) => t.value === x.type)?.label}</Badge>
                         {x.required && <Badge variant="secondary" className="text-[10px]">Required</Badge>}
                         {x.showOnPdf && <Badge variant="secondary" className="text-[10px]">On PDF</Badge>}
+                        {canEdit && <RowActions onEdit={() => open(x)} onDelete={() => remove(x)} />}
                       </span>
-                    </button>
+                    </div>
                   ))}
                 </Card>
               );
@@ -82,6 +94,7 @@ export function CustomFieldsSettings({ canEdit }: { canEdit: boolean }) {
         )}
       </AsyncPage>
 
+      {del.dialog}
       <Dialog open={!!f} onOpenChange={(o) => !o && setF(null)}>
         <DialogContent className="max-w-md">
           <DialogHeader>

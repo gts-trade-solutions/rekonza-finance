@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { db, transaction } from '@/lib/server/db';
-import { route, body, asId } from '@/lib/server/http';
+import { route, body, query, asId } from '@/lib/server/http';
+import { deleteUser } from '@/lib/server/services/settings-changes';
 import { logAudit, auditMeta } from '@/lib/server/audit';
 import {
   addUser, deleteCustomRole, listCustomRoles, listUsers, resetPassword, resetUserMfa, saveCustomRole, updateUser,
@@ -76,6 +77,22 @@ export const POST = route(
           await audit('custom_role', input.id, 'Deleted a custom role');
           return { id: asId(input.id) };
       }
+    });
+  },
+  { permission: { module: 'settings', action: 'edit' } },
+);
+
+/** Delete a user nobody has used; one in use is refused with the way out (services/settings-changes.ts). */
+export const DELETE = route(
+  async ({ orgId, user, req }) => {
+    const { id } = query(req, z.object({ id: z.coerce.number().int().positive() }));
+    return transaction(async (trx) => {
+      const r = await deleteUser(trx, orgId, user.userId, id);
+      await logAudit({
+        trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'void', targetType: 'user', targetId: id,
+        targetLabel: r.name, detail: `Deleted ${r.name}`, ...auditMeta(req),
+      });
+      return { id: String(id), deleted: true };
     });
   },
   { permission: { module: 'settings', action: 'edit' } },

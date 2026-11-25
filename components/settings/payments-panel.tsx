@@ -16,6 +16,7 @@ import { Combobox } from '@/components/ui/combobox';
 import { Field } from '@/components/shared/form-bits';
 import { api } from '@/lib/api/client';
 import { useApi, useApiAction } from '@/lib/api/use-api';
+import { RowActions, useConfirmDelete } from '@/components/shared/row-actions';
 
 interface Status { connected: boolean; keyId: string | null; depositTo: string | null; test: boolean; canStore: boolean; webhookUrl: string }
 
@@ -27,6 +28,14 @@ export function PaymentsPanel({ canEdit }: { canEdit: boolean }) {
   const [editing, setEditing] = useState(false);
   const connect = useApiAction((input: typeof f) => api.post<Status>('/api/payment-links', { action: 'connect', ...input }));
   const s = state.data;
+  const del = useConfirmDelete();
+  const disconnect = () => del.ask({
+    title: 'Disconnect Razorpay?',
+    description: 'The stored keys are deleted. Links already sent can still be paid at Razorpay, but those receipts no longer record themselves: record them by hand. Connect again at any time.',
+    reason: false, confirmLabel: 'Disconnect',
+    run: () => api.post('/api/payment-links', { action: 'disconnect' }),
+    done: 'Razorpay disconnected', onDone: () => void state.refetch(),
+  });
 
   const save = async () => {
     if (!(await connect.run(f))) { toast.error(connect.error ?? 'Not connected'); return; }
@@ -59,7 +68,12 @@ export function PaymentsPanel({ canEdit }: { canEdit: boolean }) {
       {s && !s.canStore && (
         <p className="text-xs text-destructive">INTEGRATION_KEY is not set on this server, so the Razorpay secret cannot be stored. Set it, then connect.</p>
       )}
-      {canEdit && !editing && <Button size="sm" variant="outline" onClick={() => setEditing(true)} disabled={!s?.canStore}>{s?.connected ? 'Change keys' : 'Connect Razorpay'}</Button>}
+      {canEdit && !editing && (
+        s?.connected
+          ? <RowActions className="justify-start" onEdit={() => setEditing(true)} editLabel="Edit (change keys)" onDelete={disconnect} deleteLabel="Delete (disconnect)" />
+          : <Button size="sm" variant="outline" onClick={() => setEditing(true)} disabled={!s?.canStore}>Connect Razorpay</Button>
+      )}
+      {del.dialog}
       {editing && (
         <div className="grid gap-3 sm:grid-cols-2">
           <Field label="Key id"><Input value={f.keyId} onChange={(e) => setF({ ...f, keyId: e.target.value })} placeholder="rzp_live_…" /></Field>

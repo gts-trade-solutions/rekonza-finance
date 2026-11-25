@@ -4,7 +4,7 @@
 // reset a forgotten password or a lost phone, and build roles of the book's own.
 
 import { useState } from 'react';
-import { Copy, KeyRound, Loader2, Pencil, Plus, ShieldCheck, ShieldOff, Trash2, UserPlus } from 'lucide-react';
+import { Copy, KeyRound, Loader2, Plus, ShieldCheck, ShieldOff, UserPlus } from 'lucide-react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -18,6 +18,7 @@ import { Field } from '@/components/shared/form-bits';
 import { api } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
 import { matrixOf, PERMISSION_MODULES, voucherModule, type Action, type CustomPermissions } from '@/lib/rbac';
+import { RowActions, reasonQuery, useConfirmDelete } from '@/components/shared/row-actions';
 
 type Role = 'admin' | 'accountant' | 'sales' | 'staff' | 'viewer';
 type BaseRole = Exclude<Role, 'admin'>;
@@ -183,6 +184,54 @@ function RoleEditor({ role, onClose, onSaved }: { role: CustomRole | 'new'; onCl
   );
 }
 
+/** A user's name, role and home branch. Their email is how they sign in, so it stays. */
+function UserEditor({ user, roles, branches, onClose, onSaved }: {
+  user: User; roles: CustomRole[]; branches: { id: string; name: string }[]; onClose: () => void; onSaved: () => void;
+}) {
+  const [name, setName] = useState(user.name);
+  const [role, setRole] = useState(roleValue(user));
+  const [home, setHome] = useState(user.homeBranchId ?? '');
+  const [busy, setBusy] = useState(false);
+  const save = async () => {
+    setBusy(true);
+    try {
+      await api.post('/api/settings/users', { action: 'update', id: user.id, name, ...fromRoleValue(role, roles), homeBranchId: home || null });
+      toast.success(`${name} saved`);
+      onSaved();
+    } catch (e) {
+      toast.error('Not saved', { description: errorText(e) });
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Dialog open onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="max-w-md" data-slot="user-edit">
+        <DialogHeader>
+          <DialogTitle>Edit {user.name}</DialogTitle>
+          <DialogDescription>{user.email} signs in with this account; the email stays as it is.</DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-3">
+          <Field label="Name" required><Input value={name} onChange={(e) => setName(e.target.value)} /></Field>
+          <Field label="Role"><div><RoleSelect value={role} onChange={setRole} roles={roles} /></div></Field>
+          <Field label="Home branch">
+            <div>
+              <select value={home} onChange={(e) => setHome(e.target.value)} className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm">
+                <option value="">Primary</option>
+                {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+              </select>
+            </div>
+          </Field>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button onClick={() => void save()} disabled={busy || !name.trim()}>{busy && <Loader2 className="size-3.5 animate-spin" />} Save</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export function UsersPanel({ canEdit, currentUserId, branches }: {
   canEdit: boolean; currentUserId: string | undefined; branches: { id: string; name: string }[];
 }) {
@@ -191,7 +240,25 @@ export function UsersPanel({ canEdit, currentUserId, branches }: {
   const [draft, setDraft] = useState({ name: '', email: '', phone: '', roleValue: 'role:staff', homeBranchId: '' });
   const [shown, setShown] = useState<{ who: string; password: string } | null>(null);
   const [editingRole, setEditingRole] = useState<CustomRole | 'new' | null>(null);
+  const [editingUser, setEditingUser] = useState<User | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const del = useConfirmDelete();
+  // Zoho's Delete for someone added by mistake. Anyone who has done anything in
+  // the book stays, switched off: the audit trail and their entries name them.
+  const removeUser = (u: User) => del.ask({
+    title: `Delete ${u.name}?`,
+    description: 'Only someone who has not made any entry can be deleted, and never the last admin. Anyone else is switched off instead: signed out everywhere, unable to sign in, and still named on what they did.',
+    run: (reason) => api.delete(`/api/settings/users?id=${u.id}${reasonQuery(reason, false)}`),
+    done: `${u.name} deleted`, onDone: () => void state.refetch(),
+    instead: u.isActive ? { label: 'Switch them off instead', run: () => api.post('/api/settings/users', { action: 'update', id: u.id, isActive: false }) } : undefined,
+  });
+  const removeRole = (r: CustomRole) => del.ask({
+    title: `Delete the role ${r.name}?`,
+    description: r.userCount ? `${r.userCount} user(s) have it: move them to another role first.` : 'Nobody has it; it goes.',
+    reason: false,
+    run: () => api.post('/api/settings/users', { action: 'delete-role', id: r.id }),
+    done: `${r.name} deleted`, onDone: () => void state.refetch(),
+  });
 
   const post = async <T,>(key: string, payload: Record<string, unknown>, done?: string): Promise<T | null> => {
     setBusy(key);
@@ -295,6 +362,7 @@ export function UsersPanel({ canEdit, currentUserId, branches }: {
                       )}
                       <Switch checked={u.isActive} disabled={busy === u.id || u.id === currentUserId} aria-label={u.isActive ? `Switch ${u.name} off` : `Switch ${u.name} on`}
                         onCheckedChange={(v) => void post(u.id, { action: 'update', id: u.id, isActive: v }, v ? `${u.name} switched on` : `${u.name} switched off and signed out`)} />
+                      <RowActions className="ml-1" onEdit={() => setEditingUser(u)} onDelete={u.id !== currentUserId && (() => removeUser(u))} />
                     </div>
                   )}
                 </div>
@@ -321,13 +389,7 @@ export function UsersPanel({ canEdit, currentUserId, branches }: {
                     <span className="font-medium">{r.name}</span>
                     <Badge variant="outline" className="text-[10px] capitalize">on {r.baseRole}</Badge>
                     <span className="text-xs text-muted-foreground">{r.userCount} user{r.userCount === 1 ? '' : 's'}{r.description ? ` · ${r.description}` : ''}</span>
-                    {canEdit && (
-                      <span className="ml-auto flex gap-1">
-                        <Button size="icon-sm" variant="ghost" aria-label={`Edit ${r.name}`} onClick={() => setEditingRole(r)}><Pencil className="size-3.5" /></Button>
-                        <Button size="icon-sm" variant="ghost" aria-label={`Delete ${r.name}`} disabled={busy === `role-${r.id}`}
-                          onClick={() => void post(`role-${r.id}`, { action: 'delete-role', id: r.id }, `${r.name} deleted`)}><Trash2 className="size-3.5" /></Button>
-                      </span>
-                    )}
+                    {canEdit && <RowActions className="ml-auto" onEdit={() => setEditingRole(r)} onDelete={() => removeRole(r)} />}
                     {/* What it may do, part by part. */}
                     <span className="basis-full text-[11px] text-muted-foreground" data-slot="role-rights">
                       {PERMISSION_MODULES.filter((m) => (r.permissions[m.key] ?? []).length > 0)
@@ -342,6 +404,11 @@ export function UsersPanel({ canEdit, currentUserId, branches }: {
 
           {shown && <PasswordShown who={shown.who} password={shown.password} onClose={() => setShown(null)} />}
           {editingRole && <RoleEditor role={editingRole} onClose={() => setEditingRole(null)} onSaved={() => { setEditingRole(null); void state.refetch(); }} />}
+          {editingUser && (
+            <UserEditor user={editingUser} roles={d.roles} branches={branches} onClose={() => setEditingUser(null)}
+              onSaved={() => { setEditingUser(null); void state.refetch(); }} />
+          )}
+          {del.dialog}
         </>
       )}
     </AsyncPage>

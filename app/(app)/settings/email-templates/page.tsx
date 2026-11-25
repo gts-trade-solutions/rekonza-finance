@@ -6,7 +6,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, Mail, RotateCcw } from 'lucide-react';
+import { ArrowLeft, Mail } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -19,6 +19,7 @@ import { AsyncPage } from '@/components/shared/async-state';
 import { api } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
 import { usePermission } from '@/lib/store/hooks';
+import { DeleteButton, useConfirmDelete } from '@/components/shared/row-actions';
 
 interface Template {
   kind: string; label: string; when: string; subject: string; body: string; custom: boolean; updatedAt: string | null;
@@ -73,9 +74,11 @@ function Editor({ t, canEdit, onSaved }: { t: Template; canEdit: boolean; onSave
     }
   };
   const insert = (key: string) => setBody((b) => `${b}{${key}}`);
+  const del = useConfirmDelete();
 
   return (
     <Card className="space-y-4 p-5" data-slot={`email-template-${t.kind}`}>
+      {del.dialog}
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
           <h3 className="flex items-center gap-2 font-semibold"><Mail className="size-4 text-muted-foreground" /> {t.label}</h3>
@@ -106,7 +109,17 @@ function Editor({ t, canEdit, onSaved }: { t: Template; canEdit: boolean; onSave
             <div className="flex flex-wrap gap-2">
               <Button size="sm" disabled={busy || !dirty} onClick={() => post({ action: 'save', kind: t.kind, subject, body }, `${t.label} email saved`)}>{busy ? 'Saving…' : 'Save'}</Button>
               {dirty && <Button size="sm" variant="ghost" onClick={() => { setSubject(t.subject); setBody(t.body); }}>Undo changes</Button>}
-              {t.custom && <Button size="sm" variant="ghost" className="gap-1" disabled={busy} onClick={() => post({ action: 'reset', kind: t.kind }, `${t.label} email back to the built-in wording`)}><RotateCcw className="size-3.5" /> Built-in wording</Button>}
+              {/* The emails themselves are fixed, one for each kind; what is yours is the wording, and that can be deleted. */}
+              {t.custom && (
+                <DeleteButton className="h-[30px]" label="Delete my wording" title="Go back to the built-in wording" disabled={busy}
+                  onClick={() => del.ask({
+                    title: `Delete your wording of the ${t.label} email?`,
+                    description: 'It goes back to the built-in wording, with the same placeholders. Emails already sent are not touched.',
+                    reason: false, confirmLabel: 'Delete my wording',
+                    run: () => post({ action: 'reset', kind: t.kind }, `${t.label} email back to the built-in wording`),
+                    done: 'Built-in wording restored',
+                  })} />
+              )}
             </div>
           )}
         </div>

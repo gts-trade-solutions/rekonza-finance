@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { db, transaction } from '@/lib/server/db';
-import { route, body } from '@/lib/server/http';
+import { route, body, query } from '@/lib/server/http';
+import { deleteVoucherType } from '@/lib/server/services/settings-changes';
 import { logAudit, auditMeta } from '@/lib/server/audit';
 import { listVoucherTypes, saveVoucherType } from '@/lib/server/services/voucher-types';
 
@@ -25,6 +26,22 @@ export const POST = route(
         detail: `Voucher type ${input.name} (${input.prefix.toUpperCase()} series)`, ...auditMeta(req),
       });
       return { id: String(id) };
+    });
+  },
+  { permission: { module: 'settings', action: 'edit' } },
+);
+
+/** Delete a voucher type nobody has used; one in use is refused with the way out (services/settings-changes.ts). */
+export const DELETE = route(
+  async ({ orgId, user, req }) => {
+    const { id } = query(req, z.object({ id: z.coerce.number().int().positive() }));
+    return transaction(async (trx) => {
+      const r = await deleteVoucherType(trx, orgId, id);
+      await logAudit({
+        trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'void', targetType: 'voucher_type', targetId: id,
+        targetLabel: r.name, detail: `Deleted ${r.name}`, ...auditMeta(req),
+      });
+      return { id: String(id), deleted: true };
     });
   },
   { permission: { module: 'settings', action: 'edit' } },

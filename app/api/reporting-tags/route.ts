@@ -4,6 +4,7 @@ import { route, body, query, asId, forbidden } from '@/lib/server/http';
 import { hasPermission } from '@/lib/rbac';
 import { logAudit, auditMeta } from '@/lib/server/audit';
 import { listTags, profitByTag, saveTag, setTags, tagsFor, TAGGABLE, type Taggable } from '@/lib/server/services/reporting-tags';
+import { deleteReportingTag } from '@/lib/server/services/settings-changes';
 
 // Reporting tags (services/reporting-tags.ts): the tags, a document's tags,
 // and the profit and loss cut by a tag.
@@ -51,3 +52,19 @@ export const POST = route(async ({ orgId, user, role, req }) => {
   });
   return { ok: true };
 });
+
+/** Delete a tag no document carries; one in use is switched off instead (services/settings-changes.ts). */
+export const DELETE = route(
+  async ({ orgId, user, req }) => {
+    const { id } = query(req, z.object({ id: z.coerce.number().int().positive() }));
+    return transaction(async (trx) => {
+      const r = await deleteReportingTag(trx, orgId, id);
+      await logAudit({
+        trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'void', targetType: 'reporting_tag', targetId: id,
+        targetLabel: r.name, detail: `Deleted the reporting tag ${r.name}`, ...auditMeta(req),
+      });
+      return { id: asId(id), deleted: true };
+    });
+  },
+  { permission: { module: 'settings', action: 'edit' } },
+);

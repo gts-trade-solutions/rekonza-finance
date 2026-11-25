@@ -5,7 +5,7 @@
 // inside another app; for those the tab opens them in a new browser tab.
 
 import { useEffect, useMemo, useState } from 'react';
-import { ExternalLink, Globe, Plus, Trash2 } from 'lucide-react';
+import { ExternalLink, Globe, Plus } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -14,6 +14,7 @@ import { PageHeader } from '@/components/shared/page-header';
 import { AsyncPage } from '@/components/shared/async-state';
 import { api } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
+import { DeleteButton, RowActions, useConfirmDelete } from '@/components/shared/row-actions';
 
 interface Tab { id: string; name: string; url: string }
 
@@ -25,6 +26,14 @@ export default function WebTabsPage() {
   const tabs = useMemo(() => state.data?.tabs ?? [], [state.data]);
   useEffect(() => { if (!active && tabs.length) setActive(tabs[0].id); }, [tabs, active]);
   const current = tabs.find((t) => t.id === active) ?? null;
+  const del = useConfirmDelete();
+  const remove = (t: Tab) => del.ask({
+    title: `Delete the tab ${t.name}?`,
+    description: 'It comes off the list for everyone in the book. The website itself is not touched.',
+    reason: false,
+    run: () => api.put('/api/web-tabs', { tabs: tabs.filter((x) => x.id !== t.id) }),
+    done: `${t.name} deleted`, onDone: () => { setActive(null); state.refetch(); },
+  });
 
   const save = async () => {
     if (!editing) return;
@@ -55,7 +64,7 @@ export default function WebTabsPage() {
               <div key={i} className="flex flex-wrap gap-2">
                 <Input aria-label={`Tab ${i + 1} name`} value={t.name} onChange={(e) => setEditing(editing.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))} placeholder="Name, e.g. GST portal" maxLength={40} className="w-48" />
                 <Input aria-label={`Tab ${i + 1} address`} value={t.url} onChange={(e) => setEditing(editing.map((x, j) => (j === i ? { ...x, url: e.target.value } : x)))} placeholder="https://" maxLength={500} className="min-w-64 flex-1" />
-                <Button size="icon-sm" variant="ghost" aria-label={`Remove tab ${i + 1}`} onClick={() => setEditing(editing.filter((_, j) => j !== i))}><Trash2 className="size-3.5" /></Button>
+                <DeleteButton title={`Take tab ${i + 1} off the list (saved with Save)`} onClick={() => setEditing(editing.filter((_, j) => j !== i))} />
               </div>
             ))}
             <div className="flex gap-2">
@@ -86,7 +95,10 @@ export default function WebTabsPage() {
               <>
                 <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
                   <span className="truncate">{current.url}</span>
-                  <a href={current.url} target="_blank" rel="noreferrer noopener" className="inline-flex shrink-0 items-center gap-1 text-primary hover:underline"><ExternalLink className="size-3.5" /> Open in a new tab</a>
+                  <span className="flex shrink-0 items-center gap-2">
+                    <a href={current.url} target="_blank" rel="noreferrer noopener" className="inline-flex items-center gap-1 text-primary hover:underline"><ExternalLink className="size-3.5" /> Open in a new tab</a>
+                    {state.data?.canEdit && <RowActions onEdit={() => setEditing(tabs)} editTitle="Change the tabs" onDelete={() => remove(current)} />}
+                  </span>
                 </div>
                 <iframe key={current.id} src={current.url} title={current.name} className="h-[70vh] w-full rounded-md border bg-white"
                   sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-downloads" referrerPolicy="no-referrer" />
@@ -96,6 +108,7 @@ export default function WebTabsPage() {
           </div>
         )}
       </AsyncPage>
+      {del.dialog}
     </>
   );
 }
