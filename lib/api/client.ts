@@ -2728,6 +2728,8 @@ export interface ScheduleIIIBalanceSheetReport {
   previousAsOf: string;
   equityAndLiabilities: ScheduleIIILine[];
   assets: ScheduleIIILine[];
+  /** Missing from replies recorded before 2026-11-25. */
+  fyStart?: string;
   totals: { equityAndLiabilities: [number, number]; assets: [number, number] };
   msmePayablesPaise: number;
   receivablesAgeing: ScheduleIIIAgeing;

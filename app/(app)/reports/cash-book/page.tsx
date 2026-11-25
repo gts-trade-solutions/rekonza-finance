@@ -107,8 +107,8 @@ export default function CashBookPage() {
                   </tr></thead>
                   {d.days.map((day) => (
                     <tbody key={day.date} className="divide-y border-b">
-                      <tr className="bg-muted/40">
-                        <td className="px-3 py-1.5 text-xs font-semibold" colSpan={4}>{fmt(day.date)}</td>
+                      <tr className="rpt-head" data-slot="rpt-heading">
+                        <td className="px-3 py-1.5 text-xs" colSpan={4}>{fmt(day.date)}</td>
                         <td className="px-3 py-1.5 text-right text-xs text-muted-foreground"><Money value={day.openingPaise} /></td>
                       </tr>
                       {day.lines.map((l, i) => (
@@ -120,7 +120,7 @@ export default function CashBookPage() {
                           <td className="px-3 py-1.5 text-right tabular-nums"><Money value={running(day, i)} className={running(day, i) < 0 ? 'text-red-600' : ''} /></td>
                         </tr>
                       ))}
-                      <tr className="text-xs font-medium">
+                      <tr className="rpt-total text-xs" data-slot="rpt-total">
                         <td className="px-3 py-1.5" colSpan={2}>Closing</td>
                         <td className="px-3 py-1.5 text-right"><Money value={day.receiptsPaise} /></td>
                         <td className="px-3 py-1.5 text-right"><Money value={day.paymentsPaise} /></td>

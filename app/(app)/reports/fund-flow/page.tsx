@@ -50,7 +50,7 @@ export default function FundFlowPage() {
                       <tr key={l.label} className="border-t"><td className="px-3 py-2">{l.label}</td><td className="px-3 py-2 text-right"><Money value={l.amountPaise} /></td></tr>
                     ))}
                     {!lines.length && <tr className="border-t"><td className="px-3 py-2 text-muted-foreground" colSpan={2}>None in the period.</td></tr>}
-                    <tr className="border-t bg-muted/30 font-semibold"><td className="px-3 py-2">Total</td><td className="px-3 py-2 text-right"><Money value={total} /></td></tr>
+                    <tr className="rpt-total border-t font-semibold" data-slot="rpt-total"><td className="px-3 py-2">Total</td><td className="px-3 py-2 text-right"><Money value={total} /></td></tr>
                   </tbody>
                 </ReportTable>
               ))}
@@ -83,7 +83,7 @@ export default function FundFlowPage() {
                     <td className="px-3 py-2 text-right"><Money value={l.decreasePaise} showZero={false} /></td>
                   </tr>
                 ))}
-                <tr className="border-t bg-muted/30 font-semibold">
+                <tr className="rpt-result border-t" data-slot="rpt-result">
                   <td className="px-3 py-2">Working capital</td>
                   <td className="px-3 py-2 text-right"><Money value={d.workingCapital.openingPaise} /></td>
                   <td className="px-3 py-2 text-right"><Money value={d.workingCapital.closingPaise} /></td>

@@ -87,7 +87,7 @@ export default function StockLedgerPage() {
                   </tr>
                 );
               })}
-              <tr className="border-t bg-muted/30 font-semibold">
+              <tr className="rpt-total border-t font-semibold" data-slot="rpt-total">
                 <td className="px-3 py-2">{dayLabel(range.to)}</td><td className="px-3 py-2" colSpan={2}>Closing · value <Money value={d.closingValuePaise} /></td>
                 <td className="px-3 py-2 text-right tabular-nums">{qty(d.inQty)}</td><td className="px-3 py-2 text-right tabular-nums">{qty(d.outQty)}</td>
                 <td className="px-3 py-2 text-right tabular-nums">{qty(d.closingQty) || '0'}</td>

@@ -65,7 +65,7 @@ export default function ConsolidatedPage() {
             </tr>
           );
           const line = (label: string, s: Sum, strong = false, key?: string) => (
-            <tr key={key ?? label} className={cn('border-b', strong && 'bg-muted/40 font-semibold')}>
+            <tr key={key ?? label} className={cn('border-b', strong ? 'rpt-total font-semibold' : 'rpt-line')} data-slot={strong ? 'rpt-total' : 'rpt-account'}>
               <td className="px-3 py-1.5">{label}</td>
               {ids.map((id) => <td key={id} className="px-3 py-1.5 text-right"><Money value={s.by[id] ?? 0} /></td>)}
               {hasElim && <td className="px-3 py-1.5 text-right text-muted-foreground">{s.elimination ? <Money value={s.elimination} /> : ''}</td>}
@@ -74,7 +74,7 @@ export default function ConsolidatedPage() {
           );
           const section = (title: string, list: Row[], total: Sum) => (
             <Fragment key={title}>
-              <tr className="border-b"><td colSpan={cols} className="px-3 pb-1 pt-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">{title}</td></tr>
+              <tr className="rpt-head border-b" data-slot="rpt-heading"><td colSpan={cols} className="px-3 py-2 text-xs uppercase tracking-wide">{title}</td></tr>
               {list.map((r) => line(`${r.code ? `${r.code} ` : ''}${r.name}`, r, false, `${title}-${r.code || r.name}`))}
               {line(`Total ${title.toLowerCase()}`, total, true)}
             </Fragment>
@@ -128,7 +128,7 @@ export default function ConsolidatedPage() {
                       {section('Income', d.income, d.totalIncome)}
                       {section('Expenses', d.expenses, d.totalExpense)}
                       {line('Net profit', d.netProfit, true)}
-                      <tr className="border-b"><td colSpan={cols} className="px-3 pb-1 pt-5 text-sm font-semibold">Balance sheet on {dayLabel(d.to)}</td></tr>
+                      <tr className="rpt-sub border-b" data-slot="rpt-heading"><td colSpan={cols} className="px-3 py-2 text-sm font-semibold">Balance sheet on {dayLabel(d.to)}</td></tr>
                       {section('Assets', d.assets, d.totalAssets)}
                       {section('Liabilities', d.liabilities, d.totalLiabilities)}
                       {section("Owners' equity", d.equity, d.totalEquity)}

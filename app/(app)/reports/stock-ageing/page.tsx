@@ -60,7 +60,7 @@ export default function StockAgeingPage() {
                 </tr>
               ))}
               {!d.rows.length && <tr className="border-t"><td className="px-3 py-2 text-muted-foreground" colSpan={8}>Nothing in stock on this date.</td></tr>}
-              <tr className="border-t bg-muted/30 font-semibold">
+              <tr className="rpt-total border-t font-semibold" data-slot="rpt-total">
                 <td className="px-3 py-2" colSpan={2}>Total</td>
                 <td className="px-3 py-2 text-right"><Money value={d.rows.reduce((t, r) => t + r.valuePaise, 0)} /></td>
                 {d.totalsPaise.map((v, i) => <td key={i} className="px-3 py-2 text-right"><Money value={v} /></td>)}

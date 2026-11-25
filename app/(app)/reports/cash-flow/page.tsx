@@ -78,7 +78,7 @@ export default function CashFlowPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  <tr className="border-b bg-muted/20 font-medium">
+                  <tr className="rpt-total border-b" data-slot="rpt-total">
                     <td className="px-4 py-2.5">Cash at start of period</td>
                     <td className="px-4 py-2.5 text-right"><Money value={d.openingPaise} /></td>
                   </tr>
@@ -87,25 +87,25 @@ export default function CashFlowPage() {
                     const rows = d.rows.filter((r) => r.group === g);
                     if (!rows.length) return [];
                     return [
-                      <tr key={`${g}-head`} className="border-b bg-muted/30">
-                        <td className="px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground" colSpan={2}>
+                      <tr key={`${g}-head`} className="rpt-head border-b" data-slot="rpt-heading">
+                        <td className="px-4 py-2 text-[11px] uppercase tracking-[0.08em]" colSpan={2}>
                           {g} activities
                         </td>
                       </tr>,
                       ...rows.map((r) => (
-                        <tr key={`${g}-${r.label}`} className="border-b hover:bg-accent/40">
+                        <tr key={`${g}-${r.label}`} className="rpt-line border-b hover:bg-accent/40" data-slot="rpt-account">
                           <td className="px-4 py-2 pl-8">{r.label}</td>
                           <td className="px-4 py-2 text-right"><Money value={r.amountPaise} colored /></td>
                         </tr>
                       )),
-                      <tr key={`${g}-total`} className="border-b bg-muted/20 font-medium">
+                      <tr key={`${g}-total`} className="rpt-total border-b" data-slot="rpt-total">
                         <td className="px-4 py-2">Net cash from {g.toLowerCase()} activities</td>
                         <td className="px-4 py-2 text-right"><Money value={GROUP_TOTAL[g](d)} colored /></td>
                       </tr>,
                     ];
                   })}
 
-                  <tr className="border-t-2 bg-muted/40 font-semibold">
+                  <tr className="rpt-result-strong border-t-2" data-slot="rpt-result">
                     <td className="px-4 py-3">Cash at end of period</td>
                     <td className="px-4 py-3 text-right"><Money value={d.closingPaise} /></td>
                   </tr>

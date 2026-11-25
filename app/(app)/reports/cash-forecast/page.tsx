@@ -139,8 +139,8 @@ export default function CashForecastPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  <tr className="border-b bg-muted/20">
-                    <td className="px-4 py-2 text-sm text-muted-foreground" colSpan={4}>Today, {short(f.today)}</td>
+                  <tr className="rpt-sub border-b" data-slot="rpt-heading">
+                    <td className="px-4 py-2 text-sm" colSpan={4}>Today, {short(f.today)}</td>
                     <td className="px-4 py-2 text-right font-medium"><Money value={f.openingPaise} /></td>
                   </tr>
                   {f.weeks.map((w) => {

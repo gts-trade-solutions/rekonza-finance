@@ -56,7 +56,7 @@ export default function ProfitByTagPage() {
                   <td className="px-3 py-2 text-right"><Money value={r.profitPaise} className={r.profitPaise < 0 ? 'text-destructive' : undefined} /></td>
                 </tr>
               ))}
-              <tr className="border-t bg-muted/30 font-semibold">
+              <tr className="rpt-total border-t font-semibold" data-slot="rpt-total">
                 <td className="px-3 py-2">Total</td>
                 <td className="px-3 py-2 text-right"><Money value={d.rows.reduce((t, r) => t + r.incomePaise, 0)} /></td>
                 <td className="px-3 py-2 text-right"><Money value={d.rows.reduce((t, r) => t + r.expensePaise, 0)} /></td>

@@ -98,11 +98,11 @@ function GroupRows({ g, prev, depth, ledger, cols }: {
   const empty = lines.length === 0 && !(g.groups ?? []).some((c) => c.totalPaise !== 0 || c.lines.length);
   return (
     <>
-      <tr className={depth === 0 ? 'bg-muted/40' : ''}>
-        <td colSpan={cols} className={cn('py-2 pr-4 text-sm', depth === 0 ? 'font-semibold' : 'font-medium')} style={pad(depth)}>{g.label}</td>
+      <tr className={depth === 0 ? 'rpt-head' : 'rpt-sub'} data-slot="rpt-heading">
+        <td colSpan={cols} className="py-2 pr-4 text-sm" style={pad(depth)}>{g.label}</td>
       </tr>
       {lines.map((l) => (
-        <tr key={l.accountId} className="border-b border-dashed last:border-0 hover:bg-accent/40">
+        <tr key={l.accountId} className="rpt-line border-b border-dashed last:border-0 hover:bg-accent/40" data-slot="rpt-account">
           <td className="py-1.5 pr-4" style={pad(depth + 1)}><AccountName l={l} ledger={ledger} /></td>
           <td className="px-4 py-1.5 text-right"><Money value={l.amountPaise} /></td>
           {prev !== undefined && cols > 2 && <td className="px-4 py-1.5 text-right text-muted-foreground"><Money value={before.get(l.accountId) ?? 0} /></td>}
@@ -114,7 +114,7 @@ function GroupRows({ g, prev, depth, ledger, cols }: {
       {empty && (
         <tr><td colSpan={cols} className="py-1.5 pr-4 text-xs text-muted-foreground" style={pad(depth + 1)}>No accounts</td></tr>
       )}
-      <tr className="border-b font-medium">
+      <tr className="rpt-total border-b" data-slot="rpt-total">
         <td className="py-2 pr-4" style={pad(depth)}>Total for {g.label}</td>
         <td className="px-4 py-2 text-right"><Money value={g.totalPaise} /></td>
         {cols > 2 && <td className="px-4 py-2 text-right text-muted-foreground"><Money value={prev?.totalPaise ?? 0} /></td>}
@@ -125,7 +125,7 @@ function GroupRows({ g, prev, depth, ledger, cols }: {
 
 function ResultRow({ label, value, before, cols, strong }: { label: string; value: number; before?: number; cols: number; strong?: boolean }) {
   return (
-    <tr className={cn('border-y-2', strong ? 'bg-muted/50 text-base font-semibold' : 'bg-muted/20 font-semibold')}>
+    <tr className={cn('border-y-2', strong ? 'rpt-result-strong text-base' : 'rpt-result')} data-slot="rpt-result">
       <td className="px-4 py-2.5">{label}</td>
       <td className={cn('px-4 py-2.5 text-right', value < 0 ? 'text-destructive' : strong && 'text-emerald-600 dark:text-emerald-400')}><Money value={value} /></td>
       {cols > 2 && <td className="px-4 py-2.5 text-right text-muted-foreground"><Money value={before ?? 0} /></td>}
@@ -177,7 +177,7 @@ export function GeneralBalanceSheet({ bs, prev, prevLabel }: { bs: GroupedBalanc
   return (
     <StatementTable prevLabel={prev ? prevLabel : undefined}>
       <GroupRows g={bs.assets} prev={p?.assets} depth={0} ledger={ledger} cols={cols} />
-      <tr className="bg-muted/40"><td colSpan={cols} className="px-4 py-2 text-sm font-semibold">Liabilities &amp; Equities</td></tr>
+      <tr className="rpt-head" data-slot="rpt-heading"><td colSpan={cols} className="px-4 py-2 text-sm">Liabilities &amp; Equities</td></tr>
       <GroupRows g={bs.liabilities} prev={p?.liabilities} depth={1} ledger={ledger} cols={cols} />
       <GroupRows g={bs.equities} prev={p?.equities} depth={1} ledger={ledger} cols={cols} />
       <ResultRow label="Total for Liabilities & Equities" value={bs.totalLiabilitiesAndEquitiesPaise} before={p?.totalLiabilitiesAndEquitiesPaise} cols={cols} />
@@ -203,15 +203,19 @@ function Side({ title, rows, total }: { title: string; rows: TRow[]; total: numb
       </div>
       <div className="flex-1">
         {rows.map((r, i) => (
-          <div key={`${r.label}-${i}`} className={cn('border-b border-dashed px-4 py-2 last:border-0', r.strong && 'bg-muted/25 font-semibold')}>
-            <div className="flex items-baseline gap-3">
+          <div
+            key={`${r.label}-${i}`}
+            className={cn('border-b border-dashed last:border-0', r.strong && (r.label === 'Total' ? 'rpt-total font-semibold' : 'rpt-result'))}
+            data-slot={r.strong ? (r.label === 'Total' ? 'rpt-total' : 'rpt-result') : r.sub ? 'rpt-heading' : undefined}
+          >
+            <div className={cn('flex items-baseline gap-3 px-4 py-2', !r.strong && r.sub && 'rpt-sub')}>
               <span className={cn('min-w-0 flex-1 text-sm', r.muted && 'italic text-muted-foreground', r.loss && 'text-destructive')}>{r.label}</span>
               {r.amountPaise !== undefined && <Money value={r.amountPaise} className={cn('text-sm', r.loss && 'text-destructive')} />}
             </div>
             {r.sub && r.sub.length > 0 && (
-              <div className="mt-1 space-y-0.5 pl-4">
+              <div className="space-y-0.5 px-4 pb-2 pl-8 pt-1">
                 {r.sub.map((s, j) => (
-                  <div key={`${s.name}-${j}`} className="flex items-baseline gap-3 text-xs text-muted-foreground">
+                  <div key={`${s.name}-${j}`} className="rpt-line flex items-baseline gap-3 text-xs" data-slot="rpt-account">
                     <span className="min-w-0 flex-1 truncate">
                       {s.href ? <Link href={s.href} className="hover:text-foreground hover:underline">{s.name}</Link> : s.name}
                     </span>
@@ -223,7 +227,7 @@ function Side({ title, rows, total }: { title: string; rows: TRow[]; total: numb
           </div>
         ))}
       </div>
-      <div className="flex border-t-2 bg-muted/50 px-4 py-2.5 text-sm font-semibold">
+      <div className="rpt-total flex border-t-2 px-4 py-2.5 text-sm font-semibold" data-slot="rpt-total">
         <span className="flex-1">Total</span>
         <Money value={total} />
       </div>

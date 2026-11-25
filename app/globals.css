@@ -136,6 +136,16 @@
   /* Register headings: 11px uppercase grey on Zoho's #f9f9fb band. */
   --table-head: #f9f9fb;
   --table-head-foreground: #6c718a;
+  /* Report rows, each kind in its own light colour (the client, 2026-11-25):
+     a section heading, a heading inside it, a total, and a profit line. */
+  --rpt-head: #e6f0fe;
+  --rpt-head-foreground: #1e4a8a;
+  --rpt-sub: #f3f7fe;
+  --rpt-sub-foreground: #2d4f7c;
+  --rpt-total: #f4f5f8;
+  --rpt-result: #e9f7ef;
+  --rpt-result-strong: #dbf2e5;
+  --rpt-line-foreground: #3b4157;
   --row-hover: #f1f1fa;
 
   /* Zoho's dashboard colours: the receivables bar and the cash-flow line. */
@@ -231,6 +241,14 @@
 
   --table-head: #232632;
   --table-head-foreground: #9a9fb5;
+  --rpt-head: rgba(64, 141, 251, 0.18);
+  --rpt-head-foreground: #a9cbff;
+  --rpt-sub: rgba(64, 141, 251, 0.08);
+  --rpt-sub-foreground: #c3d8f7;
+  --rpt-total: rgba(255, 255, 255, 0.04);
+  --rpt-result: rgba(16, 185, 129, 0.12);
+  --rpt-result-strong: rgba(16, 185, 129, 0.2);
+  --rpt-line-foreground: #d4d6e0;
   --row-hover: #2a2d3a;
 
   --chart-1: #5ea0ff;
@@ -309,6 +327,21 @@
 }
 
 @layer utilities {
+  /* Report rows (P&L, balance sheet, Schedule III, cash flow and the rest):
+     a section heading in a light blue band, a heading inside it in a paler
+     one, account lines plain, totals light grey and profit lines light green.
+     Printed with their colours, as the screen shows them. */
+  .rpt-head, .rpt-sub, .rpt-total, .rpt-result, .rpt-result-strong {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .rpt-head { background: var(--rpt-head); color: var(--rpt-head-foreground); font-weight: 600; }
+  .rpt-sub { background: var(--rpt-sub); color: var(--rpt-sub-foreground); font-weight: 500; }
+  .rpt-total { background: var(--rpt-total); font-weight: 500; }
+  .rpt-result { background: var(--rpt-result); font-weight: 600; }
+  .rpt-result-strong { background: var(--rpt-result-strong); font-weight: 600; }
+  .rpt-line { color: var(--rpt-line-foreground); }
+
   .num {
     font-family: var(--font-sans);
     font-variant-numeric: tabular-nums;

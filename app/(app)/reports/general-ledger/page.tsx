@@ -132,8 +132,8 @@ function GeneralLedger() {
                   </tr>
                 </thead>
                 <tbody>
-                  <tr className="border-b bg-muted/20">
-                    <td className="px-4 py-2 text-sm text-muted-foreground" colSpan={6}>
+                  <tr className="rpt-sub border-b" data-slot="rpt-heading">
+                    <td className="px-4 py-2 text-sm" colSpan={6}>
                       Opening balance at {new Date(gl.from).toLocaleDateString('en-IN')}
                     </td>
                     <td className="px-4 py-2 text-right font-medium"><Money value={gl.openingPaise} /></td>
@@ -179,7 +179,7 @@ function GeneralLedger() {
                     })
                   )}
 
-                  <tr className="border-t-2 bg-muted/40 font-semibold">
+                  <tr className="rpt-total border-t-2 font-semibold" data-slot="rpt-total">
                     <td className="px-4 py-3" colSpan={6}>
                       Closing balance at {new Date(gl.to).toLocaleDateString('en-IN')}
                     </td>

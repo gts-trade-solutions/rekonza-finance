@@ -8,6 +8,7 @@
 // the 2021 amendment added. Notes to the accounts are the signatory's part.
 
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { Scale } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -21,12 +22,49 @@ import {
 import { useApi } from '@/lib/api/use-api';
 import { toRupees } from '@/lib/money';
 import { FormatSwitch } from '@/components/reports/statement-formats';
+import { ledgerHref } from '@/lib/source-links';
 
 const fmt = (iso: string) =>
   new Date(`${iso}T00:00:00`).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+/** The financial year's first day when the reply does not say (April, India's default). */
+const aprilStart = (iso: string) => {
+  const [y, m] = iso.split('-').map(Number);
+  return `${m >= 4 ? y : y - 1}-04-01`;
+};
 const th = 'px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground';
 
-function Lines({ lines, grouped }: { lines: ScheduleIIILine[]; grouped?: boolean }) {
+/** Where an account's figure on a line comes from: its ledger for the period. */
+interface LedgerRange { from: string; to: string }
+
+/** What the part of a line that no account holds is. */
+const REST_LABEL: Record<string, string> = {
+  reserves_surplus: 'Surplus in the statement of profit and loss',
+  changes_in_inventories: 'Opening stock less closing stock',
+};
+
+/**
+ * The accounts that make up a line, under it, as the horizontal T-form lists
+ * them. What no account carries (profit not yet closed to reserves) is shown
+ * as its own line so the accounts add up to the line.
+ */
+function accountRows(line: ScheduleIIILine): { key: string; accountId?: string; label: string; current: number; previous: number }[] {
+  const rows: { key: string; accountId?: string; label: string; current: number; previous: number }[] = line.accounts
+    .filter((a) => a.currentPaise !== 0 || a.previousPaise !== 0)
+    .map((a) => ({ key: a.accountId, accountId: a.code ? a.accountId : undefined, label: a.name, current: a.currentPaise, previous: a.previousPaise }));
+  const restNow = line.currentPaise - line.accounts.reduce((t, a) => t + a.currentPaise, 0);
+  const restBefore = line.previousPaise - line.accounts.reduce((t, a) => t + a.previousPaise, 0);
+  if (restNow !== 0 || restBefore !== 0) {
+    rows.push({
+      key: `${line.key}-rest`,
+      label: REST_LABEL[line.key] ?? 'Other balances',
+      current: restNow,
+      previous: restBefore,
+    });
+  }
+  return rows;
+}
+
+function Lines({ lines, grouped, ledger }: { lines: ScheduleIIILine[]; grouped?: boolean; ledger: LedgerRange }) {
   let lastGroup = '';
   return (
     <>
@@ -37,35 +75,52 @@ function Lines({ lines, grouped }: { lines: ScheduleIIILine[]; grouped?: boolean
         // statements would; the heading above it stays.
         const empty = l.currentPaise === 0 && l.previousPaise === 0;
         return (
-          <FragmentRow key={l.key} header={header ? l.group : undefined} line={empty ? null : l} />
+          <FragmentRow key={l.key} header={header ? l.group : undefined} line={empty ? null : l} ledger={ledger} />
         );
       })}
     </>
   );
 }
 
-function FragmentRow({ header, line }: { header?: string; line: ScheduleIIILine | null }) {
+function FragmentRow({ header, line, ledger }: { header?: string; line: ScheduleIIILine | null; ledger: LedgerRange }) {
   return (
     <>
       {header && (
-        <tr className="bg-muted/30">
-          <td colSpan={3} className="px-3 py-1.5 text-xs font-semibold text-muted-foreground">{header}</td>
+        <tr className="rpt-sub" data-slot="rpt-heading">
+          <td colSpan={3} className="px-3 py-1.5 pl-5 text-[13px]">{header}</td>
         </tr>
       )}
       {line && (
-        <tr className="border-b last:border-0" title={line.accounts.map((a) => `${a.code} ${a.name}`).join(', ')}>
-          <td className="px-3 py-2 pl-6 text-sm">{line.label}</td>
-          <td className="px-3 py-2 text-right"><Money value={line.currentPaise} /></td>
+        <tr className="border-b border-dashed" data-slot="sch3-line">
+          <td className="px-3 py-2 pl-7 text-sm font-medium">{line.label}</td>
+          <td className="px-3 py-2 text-right font-medium"><Money value={line.currentPaise} /></td>
           <td className="px-3 py-2 text-right text-muted-foreground"><Money value={line.previousPaise} /></td>
         </tr>
       )}
+      {line && accountRows(line).map((a) => (
+        <tr key={a.key} className="rpt-line border-b border-dashed text-xs hover:bg-accent/40" data-slot="rpt-account">
+          <td className="px-3 py-1.5 pl-12">
+            {a.accountId ? <Link href={ledgerHref(a.accountId, ledger.from, ledger.to)} className="hover:underline">{a.label}</Link> : a.label}
+          </td>
+          <td className="px-3 py-1.5 text-right"><Money value={a.current} /></td>
+          <td className="px-3 py-1.5 text-right text-muted-foreground"><Money value={a.previous} /></td>
+        </tr>
+      ))}
     </>
+  );
+}
+
+function Heading({ children }: { children: React.ReactNode }) {
+  return (
+    <tr className="rpt-head" data-slot="rpt-heading">
+      <td colSpan={3} className="px-3 py-2 text-xs font-bold uppercase tracking-wide">{children}</td>
+    </tr>
   );
 }
 
 function Total({ label, values, strong }: { label: string; values: [number, number]; strong?: boolean }) {
   return (
-    <tr className={strong ? 'border-t-2 bg-muted/40 font-semibold' : 'border-t font-medium'}>
+    <tr className={strong ? 'rpt-result border-t-2' : 'rpt-total border-t'} data-slot={strong ? 'rpt-result' : 'rpt-total'}>
       <td className="px-3 py-2.5">{label}</td>
       <td className="px-3 py-2.5 text-right"><Money value={values[0]} /></td>
       <td className="px-3 py-2.5 text-right"><Money value={values[1]} /></td>
@@ -111,25 +166,31 @@ export default function ScheduleIIIPage() {
   );
 
   const exportCsv = () => {
-    const row = (l: ScheduleIIILine) => [l.group ?? '', l.label, toRupees(l.currentPaise), toRupees(l.previousPaise)];
+    const lineRow = (l: ScheduleIIILine) => [l.group ?? '', l.label, toRupees(l.currentPaise), toRupees(l.previousPaise)];
+    // Each line with its accounts under it, as the screen shows them.
+    const rows = (ls: ScheduleIIILine[]) => ls
+      .filter((l) => l.currentPaise !== 0 || l.previousPaise !== 0)
+      .flatMap((l) => [lineRow(l), ...accountRows(l).map((a) => ['', `    ${a.label}`, toRupees(a.current), toRupees(a.previous)])]);
     if (tab === 'bs' && bs.data) {
       const d = bs.data;
       downloadCsv(`schedule-iii-balance-sheet-${d.asOf}.csv`, [
         ['Group', 'Particulars', fmt(d.asOf), fmt(d.previousAsOf)],
         ['I', 'EQUITY AND LIABILITIES', '', ''],
-        ...d.equityAndLiabilities.map(row),
+        ...rows(d.equityAndLiabilities),
         ['', 'Total', toRupees(d.totals.equityAndLiabilities[0]), toRupees(d.totals.equityAndLiabilities[1])],
         ['II', 'ASSETS', '', ''],
-        ...d.assets.map(row),
+        ...rows(d.assets),
         ['', 'Total', toRupees(d.totals.assets[0]), toRupees(d.totals.assets[1])],
       ]);
     } else if (pl.data) {
       const d = pl.data;
       downloadCsv(`schedule-iii-profit-and-loss-${d.from}-${d.to}.csv`, [
         ['', 'Particulars', `${d.from} to ${d.to}`, `${d.previous.from} to ${d.previous.to}`],
-        ...d.income.map(row),
+        ['', 'INCOME', '', ''],
+        ...rows(d.income),
         ['', 'Total income', toRupees(d.totalIncome[0]), toRupees(d.totalIncome[1])],
-        ...d.expenses.map(row),
+        ['', 'EXPENSES', '', ''],
+        ...rows(d.expenses),
         ['', 'Total expenses', toRupees(d.totalExpenses[0]), toRupees(d.totalExpenses[1])],
         ['', 'Profit before tax', toRupees(d.profitBeforeTax[0]), toRupees(d.profitBeforeTax[1])],
       ]);
@@ -171,11 +232,11 @@ export default function ScheduleIIIPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    <tr><td colSpan={3} className="px-3 py-2 text-xs font-bold uppercase tracking-wide">I. Equity and liabilities</td></tr>
-                    <Lines lines={d.equityAndLiabilities} grouped />
+                    <Heading>I. Equity and liabilities</Heading>
+                    <Lines lines={d.equityAndLiabilities} grouped ledger={{ from: d.fyStart ?? aprilStart(d.asOf), to: d.asOf }} />
                     <Total label="Total" values={d.totals.equityAndLiabilities} strong />
-                    <tr><td colSpan={3} className="px-3 py-2 text-xs font-bold uppercase tracking-wide">II. Assets</td></tr>
-                    <Lines lines={d.assets} grouped />
+                    <Heading>II. Assets</Heading>
+                    <Lines lines={d.assets} grouped ledger={{ from: d.fyStart ?? aprilStart(d.asOf), to: d.asOf }} />
                     <Total label="Total" values={d.totals.assets} strong />
                   </tbody>
                 </ReportTable>
@@ -203,10 +264,11 @@ export default function ScheduleIIIPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  <Lines lines={d.income} />
+                  <Heading>Income</Heading>
+                  <Lines lines={d.income} ledger={d} />
                   <Total label="Total income" values={d.totalIncome} />
-                  <tr><td colSpan={3} className="px-3 py-2 text-xs font-bold uppercase tracking-wide">Expenses</td></tr>
-                  <Lines lines={d.expenses} />
+                  <Heading>Expenses</Heading>
+                  <Lines lines={d.expenses} ledger={d} />
                   <Total label="Total expenses" values={d.totalExpenses} />
                   <Total label="Profit before tax" values={d.profitBeforeTax} strong />
                   <tr>

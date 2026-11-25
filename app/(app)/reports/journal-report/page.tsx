@@ -88,7 +88,7 @@ export default function JournalReportPage() {
                   const balanced = e.totalDebitPaise === e.totalCreditPaise;
                   return (
                     <Card key={e.id} className="overflow-hidden p-0">
-                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b bg-muted/40 px-4 py-2.5">
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rpt-head border-b px-4 py-2.5" data-slot="rpt-heading">
                         <span className="font-medium">Entry #{e.entryNo}</span>
                         <span className="text-sm text-muted-foreground">
                           {new Date(e.date).toLocaleDateString('en-IN', {
@@ -133,7 +133,7 @@ export default function JournalReportPage() {
                               </td>
                             </tr>
                           ))}
-                          <tr className="bg-muted/30 font-medium">
+                          <tr className="rpt-total" data-slot="rpt-total">
                             <td className="px-4 py-2" colSpan={2}>
                               {balanced ? 'Balanced' : 'OUT OF BALANCE'}
                             </td>

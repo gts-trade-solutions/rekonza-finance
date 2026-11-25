@@ -64,6 +64,8 @@ test('Schedule III balances, and agrees with the ordinary statements', async () 
     const bs = await balanceSheet(f.trx, f.orgId, asOf);
     assert.ok(s3.balanced, 'both years balance');
     assert.equal(s3.totals.assets[0], bs.totalAssets);
+    // The page links each account under a line to its ledger from here.
+    assert.equal(s3.fyStart, bs.fyStart);
 
     const line = (k: string) => [...s3.assets, ...s3.equityAndLiabilities].find((l) => l.key === k)!;
     assert.equal(line('inventories').currentPaise, bs.closingStockPaise, 'closing stock is the inventory line');
@@ -81,6 +83,15 @@ test('Schedule III balances, and agrees with the ordinary statements', async () 
     const pl = await profitAndLoss(f.trx, f.orgId, '2026-04-01', '2027-03-31');
     assert.equal(p3.profitForThePeriod[0], pl.netProfit, 'the same profit, laid out differently');
     assert.equal(p3.previous.from, '2025-04-01');
+    // The page lists each line's accounts under it: they add up to the line,
+    // the change in stock as opening stock less closing stock.
+    for (const l of [...p3.income, ...p3.expenses]) {
+      for (const k of ['currentPaise', 'previousPaise'] as const) {
+        assert.equal(l.accounts.reduce((t, a) => t + a[k], 0), l[k], `${l.label}: its accounts add up (${k})`);
+      }
+    }
+    const stock = p3.expenses.find((l) => l.key === 'changes_in_inventories')!;
+    assert.deepEqual(stock.accounts.map((a) => a.name), ['Opening stock', 'Less: closing stock']);
   });
 });
 

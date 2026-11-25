@@ -223,6 +223,8 @@ export interface ScheduleIIIBalanceSheet {
   previousAsOf: string;
   equityAndLiabilities: StatementLine[];
   assets: StatementLine[];
+  /** The first day of the financial year asOf falls in (for the ledger links). */
+  fyStart: string;
   totals: { equityAndLiabilities: [Paise, Paise]; assets: [Paise, Paise] };
   /** Trade payables owed to micro and small enterprises, shown apart. */
   msmePayablesPaise: Paise;
@@ -279,6 +281,7 @@ export async function scheduleIIIBalanceSheet(
   return {
     asOf,
     previousAsOf,
+    fyStart: now.fyStart,
     equityAndLiabilities: el,
     assets,
     totals,
@@ -331,7 +334,21 @@ export async function scheduleIIIProfitAndLoss(
       acc[which] += r.balancePaise;
     }
     // Opening stock less closing stock: positive when stock was run down.
-    lines.get('changes_in_inventories')![which] += pl.openingStockPaise - pl.closingStockPaise;
+    // Both are listed under the line, as the T-form shows them; neither is
+    // an account with a ledger (no code).
+    const change = lines.get('changes_in_inventories')!;
+    change[which] += pl.openingStockPaise - pl.closingStockPaise;
+    for (const [accountId, name, amount] of [
+      ['opening-stock', 'Opening stock', pl.openingStockPaise],
+      ['closing-stock', 'Less: closing stock', -pl.closingStockPaise],
+    ] as const) {
+      let acc = change.accounts.find((a) => a.accountId === accountId);
+      if (!acc) {
+        acc = { accountId, code: '', name, currentPaise: 0, previousPaise: 0 };
+        change.accounts.push(acc);
+      }
+      acc[which] += amount;
+    }
   }
 
   const income = [...lines.values()].filter((l) => PL_LINES[l.key as PlLine].income);

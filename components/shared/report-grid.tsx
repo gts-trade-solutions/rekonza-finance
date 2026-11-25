@@ -81,7 +81,7 @@ export function ReportGrid<T>({
           ))
         )}
         {hasTotals && rows.length > 0 && (
-          <tr className="border-t-2 bg-muted/40 font-semibold">
+          <tr className="rpt-total border-t-2 font-semibold" data-slot="rpt-total">
             {columns.map((c, idx) => (
               <td
                 key={c.key}

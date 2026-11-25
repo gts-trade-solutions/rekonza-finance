@@ -105,7 +105,7 @@ export default function TrialBalancePage() {
                     </td>
                   </tr>
                 ))}
-                <tr className="border-t-2 bg-muted/40 font-semibold">
+                <tr className="rpt-total border-t-2 font-semibold" data-slot="rpt-total">
                   <td className="px-4 py-3" colSpan={3}>Total</td>
                   <td className="px-4 py-3 text-right"><Money value={tb.totalDebit} /></td>
                   <td className="px-4 py-3 text-right"><Money value={tb.totalCredit} /></td>
