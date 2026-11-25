@@ -61,6 +61,11 @@ export const LEDGER_KINDS: Record<string, Kind> = {
   credit_note: { noun: 'credit note', module: 'sales', edit: (id) => `/sales/credit-notes/${id}/edit`, del: (id) => `/api/sales-documents/credit-note/${id}` },
   retainer: { noun: 'service invoice', module: 'sales', edit: (id) => `/sales/retainers/${id}/edit`, del: (id) => `/api/retainers/${id}` },
   manual: { noun: 'journal', module: 'accountant', byEntry: true, edit: (id) => `/accountant/journals?edit=${id}`, del: (id) => `/api/journal/${id}` },
+  bill: { noun: 'bill', module: 'purchases', edit: (id) => `/purchases/bills/${id}/edit`, del: (id) => `/api/bills/${id}` },
+  vendor_credit: { noun: 'vendor credit', module: 'purchases', edit: (id) => `/purchases/vendor-credits?edit=${id}`, del: (id) => `/api/vendor-credits/${id}` },
+  // A receipt note's own entry; the "accrual taken back" entry a bill posts under the same kind is
+  // refused by the server ("Delete the bill first"), with its reason shown.
+  goods_receipt: { noun: 'goods receipt', module: 'purchases', edit: (id) => `/purchases/goods-receipts?edit=${id}`, del: (id) => `/api/goods-receipts/${id}` },
   bank_txn: { noun: 'bank line categorisation', module: 'banking' },
 };
 
