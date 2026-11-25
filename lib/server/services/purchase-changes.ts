@@ -277,6 +277,9 @@ export async function deleteBill(trx: Trx, orgId: number, userId: number | null,
     .where((eb) => eb.or([eb('goods_bill_id', '=', billId), eb('charge_bill_id', '=', billId)])).execute();
   for (const l of landed) await removeLandedCost(trx, orgId, userId, l.id);
   await releaseBillQuantities(trx, orgId, userId, bill);
+  // A void vendor credit raised against it stays void; its link goes with the bill (its entry's memo still names it).
+  await trx.updateTable('vendor_credits').set({ against_bill_id: null })
+    .where('org_id', '=', orgId).where('against_bill_id', '=', billId).where('status', '=', 'void').execute();
   // A GSTR-2B line matched to it is waiting for a bill again.
   await trx.updateTable('gstr2b_entries').set({ matched_bill_id: null, match_status: 'unmatched' }).where('org_id', '=', orgId).where('matched_bill_id', '=', billId).execute();
   await trx.deleteFrom('serial_moves').where('org_id', '=', orgId).where('doc_type', '=', 'bill').where('doc_id', '=', billId).execute();

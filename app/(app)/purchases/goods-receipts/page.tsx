@@ -8,7 +8,7 @@
 // and a price above the order's holds it from payment until it is accepted.
 
 import { FoldNav } from '@/components/layout/nav-state';
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { ArrowRight, Ban, MoreHorizontal, PackageCheck, Pencil, Plus, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -51,6 +51,11 @@ export default function GoodsReceiptsPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<GoodsReceiptRow | null>(null);
   const closeEdit = useCallback(() => setEditingId(null), []);
+  // ?edit=<id> (the General Ledger's ⋯, say): open that note's Edit window.
+  useEffect(() => {
+    const id = new URLSearchParams(window.location.search).get('edit');
+    if (id && canEdit) setEditingId(id);
+  }, [canEdit]);
   const items = useAppStore((s) => s.items);
   const state = useApi(() => orderFlow.receipts(), []);
 

@@ -10,7 +10,7 @@
 // department asks about, with interest.
 
 import { FoldNav } from '@/components/layout/nav-state';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { FileMinus, Plus, Undo2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -52,6 +52,7 @@ const short = (d: string) => new Date(d).toLocaleDateString('en-IN');
 
 export default function VendorCreditsPage() {
   const canCreate = usePermission('purchases', 'create');
+  const canEdit = usePermission('purchases', 'edit');
   const branchId = useAppStore((s) => s.activeBranchId);
   const bankAccounts = useAppStore((s) => s.bankAccounts);
 
@@ -72,10 +73,10 @@ export default function VendorCreditsPage() {
   const startNew = () => {
     setEditing(null); setVendorId(''); setBillId(''); setReason(REASONS[0]); setAmount(0); setGstRate(18); setItcClaimed(true); setDate(today());
   };
-  const startEdit = async (r: PurchaseDocRow) => {
+  const startEdit = async (id: string) => {
     setLoadingEdit(true);
     try {
-      const vc = await vendorCredits.get(r.id);
+      const vc = await vendorCredits.get(id);
       setEditing(vc);
       setVendorId(vc.vendorId); setBillId(vc.againstBillId ?? ''); setReason(vc.reason); setAmount(vc.amountPaise);
       setGstRate(vc.gstRatePct); setItcClaimed(vc.itcClaimed); setDate(vc.date);
@@ -90,6 +91,13 @@ export default function VendorCreditsPage() {
     async () => (vendorId ? billsApi.list({ vendorId, open: true, limit: 100 }) : { bills: [] as never[] }),
     [vendorId],
   );
+
+  // ?edit=<id> (the General Ledger's ⋯, say): open that credit's Edit window.
+  useEffect(() => {
+    const id = new URLSearchParams(window.location.search).get('edit');
+    if (id && canEdit) void startEdit(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const create = useApiAction(purchaseDocuments.create);
   const update = useApiAction(vendorCredits.update);
@@ -185,11 +193,13 @@ export default function VendorCreditsPage() {
         title="Vendor Credits"
         description="Money a supplier owes you back — returns, shortfalls, or over-billing."
         actions={
-          canCreate && (
+          (canCreate || canEdit) && (
             <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) startNew(); }}>
-              <DialogTrigger asChild>
-                <Button size="sm" className="gap-1.5" onClick={startNew}><Plus className="size-4" /> New vendor credit</Button>
-              </DialogTrigger>
+              {canCreate && (
+                <DialogTrigger asChild>
+                  <Button size="sm" className="gap-1.5" onClick={startNew}><Plus className="size-4" /> New vendor credit</Button>
+                </DialogTrigger>
+              )}
               <DialogContent data-slot="vendor-credit-dialog">
                 <DialogHeader>
                   <DialogTitle>{editing ? `Edit vendor credit ${editing.number}` : 'New vendor credit'}</DialogTitle>
@@ -300,7 +310,7 @@ export default function VendorCreditsPage() {
             <DataTable
               rows={d.documents}
               columns={[...columns, documentMenuColumn<PurchaseDocRow>('vendor-credit', state.refetch,
-                (r) => { if (!loadingEdit) void startEdit(r); }, (r) => r.status !== 'refunded')]}
+                (r) => { if (!loadingEdit) void startEdit(r.id); }, (r) => r.status !== 'refunded')]}
               getRowId={(r) => r.id}
               selectable
               bulkActions={(selected) => <BulkPrintButton kind="vendor-credit" ids={selected.map((r) => r.id)} />}

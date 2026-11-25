@@ -229,6 +229,20 @@ test('a vendor credit against a bill refuses its change until the credit goes', 
     await deleteVendorCredit(f.trx, f.orgId, null, vc.id);
     await deleteBill(f.trx, f.orgId, null, b.id);
     assert.equal(await balance(f, CODE.AP), 0);
+
+    // A void credit does not hold its bill.
+    const { voidVendorCredit } = await import('../../lib/server/services/purchase-documents');
+    const b2 = await createBill(f.trx, f.orgId, null, bill(f, 2, { vendorInvoiceNo: 'M-301' }));
+    const vc2 = await createVendorCredit(f.trx, f.orgId, null, {
+      branchId: f.branchId, vendorId: f.vendorId, date: '2026-10-08', reason: 'Damaged', againstBillId: b2.id, amountPaise: 50_00, gstRatePct: 18,
+    });
+    await voidVendorCredit(f.trx, f.orgId, null, vc2.id, 'Raised in error');
+    await deleteBill(f.trx, f.orgId, null, b2.id);
+    const left = await f.trx.selectFrom('vendor_credits').select(['status', 'against_bill_id']).where('id', '=', vc2.id).executeTakeFirstOrThrow();
+    assert.equal(left.status, 'void');
+    assert.equal(left.against_bill_id, null);
+    assert.equal(await balance(f, CODE.AP), 0);
+    assert.ok((await verifyLedgerBalances(f.trx, f.orgId)).balanced);
   });
 });
 
