@@ -48,6 +48,8 @@ try {
     await api('POST', '/api/contacts', { kind: 'customer', displayName: buyer, gstTreatment: 'registered', stateCode: '33', gstin: gstinFor('33', randomPan('F')) });
   } else {
     branch = /Bengaluru/;
+    // The demo book asks for approval of disposals of ₹5 lakh and above; this run tests that last, so it starts with none.
+    await api('POST', '/api/fixed-assets', { action: 'disposal-approval', isActive: false, thresholdPaise: 0, approverRole: 'admin' });
   }
 
   // What the report held before this run (the demo book has disposals of its own).
@@ -284,7 +286,10 @@ try {
   await page.getByRole('tab', { name: 'Income-tax book' }).click();
   await page.getByText('Motor cars').first().waitFor();
   const it = await page.getByRole('row').filter({ hasText: 'Motor cars' }).first().innerText();
-  check('Income-tax book: the van\'s ₹6,50,000 comes out of the Motor cars block', it.includes('6,50,000.00'), it.replace(/\s+/g, ' '));
+  const itData = await api('GET', '/api/fixed-assets?view=it&fy=2026');
+  const motor = itData.blocks.find((b) => /Motor cars/.test(b.block));
+  check('Income-tax book: the van\'s ₹6,50,000 comes out of the Motor cars block (section 43(6))',
+    FRESH ? it.includes('6,50,000.00') && motor?.salesPaise === 6_50_000_00 : (motor?.salesPaise ?? 0) >= 6_50_000_00, `${it.replace(/\s+/g, ' ')} | sold ${inr(motor?.salesPaise ?? 0)}`);
   await shot('it-block');
 
   // ── 5. Disposal approval: a second person approves ────────────────────────
