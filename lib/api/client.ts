@@ -3326,3 +3326,79 @@ export const assetDisposals = {
     api.get<DisposalPreview>('/api/fixed-assets', { view: 'disposal-preview', id, ...p }),
   approval: () => api.get<{ isActive: boolean; thresholdPaise: number; approverRole: string }>('/api/fixed-assets', { view: 'approval' }),
 };
+
+// ── Status review 7, item 10: payroll statutory reports ─────────────────────
+// (app/api/payroll/statutory?view=…, app/api/payroll/salary-tds, app/api/payroll/runs/[id]/payments)
+
+export interface StatTie { registerPaise: number; ledgerPostedPaise: number; paidPaise: number; ledgerPaidPaise: number; ok: boolean }
+export interface PfReportData {
+  rows: { month: string; employeeId: string; code: string; name: string; uan: string | null; grossPaise: number; epfWagesPaise: number; epsWagesPaise: number;
+    edliWagesPaise: number; eePaise: number; epsPaise: number; erDiffPaise: number; adminPaise: number; edliPaise: number; ncpDays: number; totalPaise: number }[];
+  ecr: { month: string; text: string; members: number; missing: string[]; challan: { ac1Paise: number; ac2Paise: number; ac10Paise: number; ac21Paise: number } }[];
+  totalPaise: number; tie: StatTie;
+}
+export interface EsiReportData {
+  rows: { month: string; employeeId: string; code: string; name: string; ipNumber: string | null; paidDays: number; wagesPaise: number; eePaise: number; erPaise: number; reasonCode: number; lastWorkingDay: string }[];
+  uploads: { month: string; rows: (string | number)[][]; missing: string[] }[];
+  totalPaise: number; tie: StatTie;
+}
+export interface PtReportData {
+  byState: { stateCode: string; state: string; basis: string | null; hasRule: boolean; ptPaise: number;
+    months: { month: string; employees: number; grossPaise: number; ptPaise: number; slabs: { ratePaise: number; count: number; grossPaise: number }[] }[];
+    employees: { employeeId: string; code: string; name: string; months: number; grossPaise: number; ptPaise: number }[] }[];
+  rows: { month: string; employeeId: string; code: string; name: string; state: string; grossPaise: number; ptPaise: number }[];
+  totalPaise: number; tie: StatTie;
+}
+export interface LwfReportData {
+  periods: { stateCode: string; state: string; month: string; period: string; employees: number; eePaise: number; erPaise: number }[];
+  rows: { month: string; employeeId: string; code: string; name: string; state: string; eePaise: number; erPaise: number }[];
+  totalPaise: number; tie: StatTie;
+}
+export interface SalaryChallanRow {
+  id: string; forMonth: string; date: string; bsrCode: string; serial: string; taxPaise: number; surchargePaise: number; cessPaise: number;
+  interestPaise: number; feePaise: number; totalPaise: number; bankAccountId: string; bank: string | null; entryId: string | null; notes: string | null; linkedPaise: number;
+}
+export interface TdsReportData {
+  rows: { month: string; employeeId: string; code: string; name: string; grossPaise: number; tdsPaise: number; depositedPaise: number; challans: string[] }[];
+  totalPaise: number; tie: StatTie;
+  months: { month: string; deductedPaise: number; depositedPaise: number; linkedPaise: number; balancePaise: number; dueDate: string; late: boolean; status: string; challans: SalaryChallanRow[] }[];
+}
+export interface Form16Year {
+  form: string; fyStart: number; assessmentYear: string;
+  employee: { id: string; code: string; name: string; pan: string | null; designation: string | null; regime: 'new' | 'old'; from: string; to: string };
+  grossPaise: number; hraExemptPaise: number; standardDeductionPaise: number; professionalTaxPaise: number; incomeFromSalaryPaise: number;
+  chapterVIA: { section: string; amountPaise: number }[]; chapterVIAPaise: number; taxablePaise: number; slabTaxPaise: number; rebatePaise: number;
+  surchargePaise: number; cessPaise: number; taxPaise: number; deductedPaise: number; balancePaise: number;
+}
+export interface Form24QData {
+  fy: number; quarter: number; months: string[]; form: string; returnDueDate: string; receipt: { receiptNo: string; filedOn: string | null } | null;
+  deductor: { name: string; tan: string | null; pan: string | null; address: string | null; type: string | null;
+    responsible: { name: string | null; designation: string | null; pan: string | null; mobile: string | null; email: string | null } };
+  challans: (SalaryChallanRow & { deductees: { employeeId: string; code: string; name: string; pan: string | null; month: string; paymentDate: string; amountPaidPaise: number; tdsPaise: number; depositedPaise: number; deductedOn: string }[] })[];
+  unlinked: { employeeId: string; code: string; name: string; pan: string | null; month: string; tdsPaise: number; linkedPaise: number }[];
+  totals: { paidPaise: number; deductedPaise: number; depositedPaise: number; linkedPaise: number };
+  annexureII: Form16Year[] | null;
+  issues: { level: 'error' | 'warning'; message: string }[];
+}
+export interface SalaryPaymentsData {
+  month: string; status: string; netPaise: number; paidPaise: number;
+  rows: { employeeId: string; code: string; name: string; netPaise: number; paidPaise: number; unpaidPaise: number;
+    bankAccountName: string | null; bankAccountNo: string | null; bankIfsc: string | null;
+    payments: { id: string; paidOn: string; amountPaise: number; bank: string; reference: string | null; entryId: string; reversed: boolean; reverseReason: string | null }[] }[];
+}
+
+export const payrollStatutory = {
+  pf: (from: string, to: string) => api.get<PfReportData>('/api/payroll/statutory', { view: 'pf', from, to }),
+  esi: (from: string, to: string) => api.get<EsiReportData>('/api/payroll/statutory', { view: 'esi', from, to }),
+  pt: (from: string, to: string) => api.get<PtReportData>('/api/payroll/statutory', { view: 'pt', from, to }),
+  lwf: (from: string, to: string) => api.get<LwfReportData>('/api/payroll/statutory', { view: 'lwf', from, to }),
+  tds: (from: string, to: string) => api.get<TdsReportData>('/api/payroll/statutory', { view: 'tds', from, to }),
+  form24q: (fy: number, quarter: number) => api.get<Form24QData>('/api/payroll/salary-tds', { view: '24q', fy, quarter }),
+  payments: (runId: string) => api.get<SalaryPaymentsData>(`/api/payroll/runs/${runId}/payments`),
+  bankFile: (runId: string, bankAccountId: string, date: string) => api.get<{ columns: string[]; rows: string[][]; totalPaise: number; missing: string[] }>(
+    `/api/payroll/runs/${runId}/payments`, { view: 'bank-file', bankAccountId, date }),
+  pay: (runId: string, input: { bankAccountId: string; date: string; employeeIds: string[] | null; reference?: string | null }) =>
+    api.post<{ paidPaise: number; employees: number; fullyPaid: boolean }>(`/api/payroll/runs/${runId}/payments`, { action: 'pay', ...input }),
+  reversePayment: (runId: string, paymentId: string, reason: string | null) =>
+    api.post(`/api/payroll/runs/${runId}/payments`, { action: 'reverse', paymentId, reason }),
+};

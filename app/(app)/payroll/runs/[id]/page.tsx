@@ -36,6 +36,7 @@ import { Attachments } from '@/components/shared/attachments';
 import { bankTransfers, ecr, esiContributions } from '@/lib/payroll/files';
 import { DeleteButton, EditButton, useConfirmDelete } from '@/components/shared/row-actions';
 import { RUN_DELETE } from '@/components/payroll/run-delete-text';
+import { SalaryPaymentsCard } from '@/components/payroll/salary-payments';
 
 export interface RunLine {
   employeeId: string; code: string; name: string; designation: string | null; pan: string | null; uan: string | null;
@@ -220,7 +221,7 @@ export default function PayrollRunPage({ params }: { params: Promise<{ id: strin
                     </Button>
                   )}
                   {run.status === 'posted' && canApprove && (
-                    <Button size="sm" className="gap-1.5" onClick={() => setPaying(true)}><Banknote className="size-3.5" /> Pay salaries</Button>
+                    <Button size="sm" className="gap-1.5" onClick={() => setPaying(true)} data-slot="run-pay"><Banknote className="size-3.5" /> Pay salaries</Button>
                   )}
                   {run.status === 'paid' && canApprove && (
                     <Button size="sm" variant="outline" className="gap-1.5" disabled={!!busy} onClick={() => undoPayment(run)} data-slot="run-unpay">
@@ -324,6 +325,7 @@ export default function PayrollRunPage({ params }: { params: Promise<{ id: strin
                 </tbody>
               </ReportTable>
             </Card>
+            {!draft && <SalaryPaymentsCard key={`${run.status}-${run.paidOn}`} runId={run.id} onChanged={() => void state.refetch()} />}
             {draft && canEdit && L.length > 0 && <p className="text-xs text-muted-foreground">Edit an employee to change their unpaid days, bonus, or other reimbursement and recovery. Arrears, approved claims and advance instalments are worked out by themselves.</p>}
             <Attachments targetType="payroll_run" targetId={run.id} canEdit={canEdit} title="Attendance sheets, bank confirmation and other papers" />
 

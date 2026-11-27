@@ -188,7 +188,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { label: 'Advances & Loans', href: '/payroll/advances', icon: Banknote, module: 'payroll' },
       { label: 'Expense Claims', href: '/payroll/claims', icon: Receipt, module: 'payroll' },
       { label: 'Declarations', href: '/payroll/declarations', icon: FileCheck2, module: 'payroll' },
-      { label: 'Statutory Registers', href: '/payroll/statutory', icon: FileSpreadsheet, module: 'payroll' },
+      { label: 'Statutory Reports', href: '/payroll/statutory', icon: FileSpreadsheet, module: 'payroll' },
       { label: 'Form 16 / 130', href: '/payroll/form-16', icon: FileText, module: 'payroll' },
       { label: 'Full & Final', href: '/payroll/full-and-final', icon: HandCoins, module: 'payroll' },
     ],
