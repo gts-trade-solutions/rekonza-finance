@@ -1,5 +1,6 @@
 import { checkHsnCode } from '@/lib/tax/hsn';
-import { unitProblem } from '@/lib/validation/masters';
+import { itemProblems, unitProblem } from '@/lib/validation/masters';
+import { GST_RATES } from '@/lib/tax/gst';
 import { getPolicies } from '@/lib/server/services/org-settings';
 import { z } from 'zod';
 import { sql } from 'kysely';
@@ -114,11 +115,18 @@ async function checkUnit(orgId: number, uqc: string | null | undefined): Promise
   return u.unit ?? uqc;
 }
 
+/** A GST rate the law has, as the bulk import checks it too (lib/validation/masters.ts). */
+function checkRate(rate: number) {
+  const p = itemProblems({ kind: 'goods', gstRatePct: rate }, { hsnDigits: 4, gstRates: GST_RATES })[0];
+  if (p) throw badRequest(p.message);
+}
+
 export const POST = route(
   async ({ orgId, user, req }) => {
     const input = await body(req, ItemInput);
     await checkHsn(orgId, input.hsnSac, input.kind);
     input.uqc = (await checkUnit(orgId, input.uqc)) ?? input.uqc;
+    checkRate(input.gstRatePct);
     checkMaster(input);
     await checkGroup(orgId, input.stockGroupId);
     await checkLinks(orgId, input);
@@ -192,6 +200,7 @@ export const PATCH = route(
     const input = await body(req, UpdateInput);
     const id = Number(input.id);
     if (input.uqc) input.uqc = (await checkUnit(orgId, input.uqc)) ?? input.uqc;
+    if (input.gstRatePct !== undefined) checkRate(input.gstRatePct);
 
     const existing = await db
       .selectFrom('items')

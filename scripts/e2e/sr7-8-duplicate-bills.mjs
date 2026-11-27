@@ -48,7 +48,7 @@ if (FRESH) {
   for (const v of ['INV-001', 'INV001', 'inv-001', ' INV/001 ']) {
     await billForm('Vendor X Auto Parts', v, d, 500);
     const red = page.locator('[data-slot="bill-duplicate"]');
-    const shown = await red.isVisible().catch(() => false);
+    const shown = await red.waitFor({ timeout: 30_000 }).then(() => true, () => false);
     const link = shown ? await red.locator('a').first().getAttribute('href') : null;
     check(t, `"${v}" for Vendor X: shown on the form as already in the books, linked to the first bill`, shown && !!link && firstUrl.endsWith(link), link ?? '');
     if (v === 'INV001') await shot(t, 'same-number-refused');
@@ -59,6 +59,7 @@ if (FRESH) {
 
   // 4. Same vendor, same amount, two days later, another number: a likely duplicate needing a reason.
   await billForm('Vendor X Auto Parts', 'INV-002', addDays(d, 2), 1000);
+  await page.locator('[data-slot="bill-likely-duplicate"]').waitFor({ timeout: 30_000 }).catch(() => {});
   const amber = await page.locator('[data-slot="bill-likely-duplicate"]').innerText().catch(() => '');
   check(t, 'same vendor and amount two days apart: warned as a possible duplicate on the form', /Possible duplicate/.test(amber) && /same amount 2 day/.test(amber), amber.slice(0, 160));
   await save();
@@ -79,8 +80,7 @@ if (FRESH) {
   // 7. Edit: changing the number to one that exists is refused.
   await goto(t, `/purchases/bills/${secondId}/edit`);
   await page.locator('[data-slot="bill-vendor-invoice-no"]').fill('inv/001');
-  await page.waitForTimeout(900);
-  check(t, 'editing INV-002 to "inv/001" shows it as already in the books', await page.locator('[data-slot="bill-duplicate"]').isVisible().catch(() => false));
+  check(t, 'editing INV-002 to "inv/001" shows it as already in the books', await page.locator('[data-slot="bill-duplicate"]').waitFor({ timeout: 30_000 }).then(() => true, () => false));
   await page.getByRole('button', { name: /^Save$/ }).click();
   await page.locator('[data-slot="bill-duplicate-refusal"]').waitFor({ timeout: 60_000 }).catch(() => {});
   const editRefused = await page.locator('[data-slot="bill-duplicate-refusal"]').innerText().catch(() => '');
@@ -134,7 +134,7 @@ if (FRESH) {
   await goto(t, '/sales/invoices/new');
   await pick(t, page, 'Select or add a customer', 'PO Customer', /PO Customer/, 'Search customers by name or GSTIN');
   await page.locator('[data-slot="invoice-order-number"]').fill('po 4471');
-  await page.waitForTimeout(1200);
+  await page.locator('[data-slot="invoice-po-twin"]').waitFor({ timeout: 30_000 }).catch(() => {});
   const poWarn = await page.locator('[data-slot="invoice-po-twin"]').innerText().catch(() => '');
   check(t, 'the same customer PO on a new invoice is warned on the form', /already on/.test(poWarn), poWarn.slice(0, 120));
   await shot(t, 'customer-po-warned');
@@ -145,7 +145,7 @@ if (FRESH) {
   check(t, 'the demo register shows a near miss with its reason', /Second delivery of the monthly consumables/.test(rowText), rowText.replace(/\s+/g, ' ').slice(0, 160));
   await shot(t, 'register');
   await billForm('Bosch Automotive Distributors', 'bos/26-27/0771', today(), 100);
-  check(t, 'Bosch\'s BOS/26-27/0771 written another way is shown as already in the books', await page.locator('[data-slot="bill-duplicate"]').isVisible().catch(() => false));
+  check(t, 'Bosch\'s BOS/26-27/0771 written another way is shown as already in the books', await page.locator('[data-slot="bill-duplicate"]').waitFor({ timeout: 30_000 }).then(() => true, () => false));
   await shot(t, 'bill-form-duplicate');
   await goto(t, '/purchases/bills');
   check(t, 'the Bills list has a Possible duplicates button', await page.locator('[data-slot="bills-possible-duplicates"]').isVisible());

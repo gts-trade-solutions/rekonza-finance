@@ -56,7 +56,7 @@ if (process.env.FRESH === '1') {
 
   // 2. From the invoice: Create Credit Note, 3 of the 10 returned, and a price cut on the 7 kept.
   await goto(t, `/sales/invoices/${inv.json.id}`);
-  await page.locator('[data-slot="doc-more"], [aria-label="More actions"]').first().click();
+  await page.locator('[data-slot="invoice-more"]').click();
   await page.locator('[data-slot="create-credit-note"]').click();
   await page.waitForURL(/credit-notes\/new\?invoice=/, { timeout: 120_000 });
   await page.locator('textarea[placeholder="Add a description"]').first().waitFor();
