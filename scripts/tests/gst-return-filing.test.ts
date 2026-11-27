@@ -45,6 +45,8 @@ interface Fixture {
   acc: Record<string, number>;
 }
 
+test.after(() => db.destroy());
+
 async function withFixture(fn: (f: Fixture) => Promise<void>) {
   const rollback = Symbol('rollback');
   try {
@@ -238,6 +240,8 @@ test('table 6.1 posted as set-off and cash clears the GST ledgers; Delete revers
   await withFixture(async (f) => {
     await sell(f, f.buyer, '2026-08-10', [line(20_000)]);
     await buy(f, f.vendor, 'S/9', '2026-08-12', 5_000);
+    // Filed on time, so 6.1 carries no interest or late fee.
+    await markFiled(f.trx, f.orgId, null, { returnType: 'gstr3b', period: '2026-08', filedOn: '2026-09-18', arn: 'AB330826000009Z' }, TODAY);
     const pay = await recordGstr3bPayment(f.trx, f.orgId, null, { period: '2026-08', paidOn: '2026-09-18', cpin: '33082600011111', bankAccountId: f.bankId }, TODAY);
     assert.equal(pay.creditUsedPaise, 900_00, 'CGST and SGST credit set off');
     assert.equal(pay.cashPaise, 2_700_00, 'the rest in cash');

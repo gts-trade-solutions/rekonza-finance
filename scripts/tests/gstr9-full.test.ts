@@ -25,6 +25,8 @@ const gstin = (first14: string) => first14 + gstinCheckChar(first14);
 
 interface Fixture { trx: Trx; orgId: number; branchId: number; buyer: number; consumer: number; vendor: number; compo: number }
 
+test.after(() => db.destroy());
+
 async function withFixture(fn: (f: Fixture) => Promise<void>) {
   const rollback = Symbol('rollback');
   try {
@@ -77,7 +79,8 @@ test('tables 4, 5, 6, 16 and 17 from the year\'s documents, and the tie-out with
     assert.equal(g.table6.itc3b.cgstPaise, 540_00, '6A, as GSTR-3B claimed it');
     assert.equal(g.table6.difference.cgstPaise, 0, '6J nil');
     assert.equal(g.table16.composition, 2_000_00, '16A: supplies from a composition dealer');
-    assert.ok(g.table17.some((h) => h.code === '870830'), '17: the HSN of what was sold');
+    // At least four digits up to ₹5 crore of turnover (Notification 78/2020-CT): 8708 or 870830.
+    assert.ok(g.table17.some((h) => h.code.startsWith('8708') && h.taxablePaise === 13_000_00), '17: the HSN of what was sold, net of the note');
     assert.ok(g.tieOut.every((l) => l.unexplainedPaise === 0), 'the GL tie-out has nothing unexplained');
     assert.equal(g.table19.dueDate, '2027-12-31');
 
