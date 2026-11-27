@@ -19,6 +19,7 @@ import { PageHeader } from '@/components/shared/page-header';
 import { DataTable, type Column } from '@/components/shared/data-table';
 import { AsyncPage, LoadingRows } from '@/components/shared/async-state';
 import { Field, MoneyInput } from '@/components/shared/form-bits';
+import { DeleteConfirmDialog, RowActions, withReasonQuery } from '@/components/shared/row-actions';
 import { Money } from '@/components/shared/money';
 import { api } from '@/lib/api/client';
 import { toastWarnings } from '@/lib/api/warnings';
@@ -32,6 +33,7 @@ interface Bom { id: string; itemId: string; itemName: string; name: string; outp
 interface Production {
   id: string; number: string; date: string; itemName: string; uqc: string; qty: number; componentsCostPaise: number; overheadPaise: number;
   costPaise: number; unitCostPaise: number; status: 'done' | 'void'; branch: string; notes: string | null;
+  bomId: string | null; branchId: string; warehouseId: string | null;
 }
 interface Data { boms: Bom[]; productions: Production[] }
 
@@ -42,6 +44,32 @@ export default function ProductionPage() {
   const canEdit = usePermission('inventory', 'edit');
   const [bomOpen, setBomOpen] = useState<Bom | 'new' | null>(null);
   const [producing, setProducing] = useState(false);
+  // Zoho's Edit and Delete on a run and on a bill of materials (services/stock-changes.ts).
+  const [editingRun, setEditingRun] = useState<Production | null>(null);
+  const [deletingRun, setDeletingRun] = useState<Production | null>(null);
+  const [deletingBom, setDeletingBom] = useState<Bom | null>(null);
+  const setBomInUse = async (b: Bom, isActive: boolean) => {
+    try {
+      await api.patch(`/api/manufacturing/boms/${b.id}`, { isActive });
+      toast.success(isActive ? `${b.itemName}: ${b.name} is in use again` : `${b.itemName}: ${b.name} marked not in use`);
+      await state.refetch();
+    } catch (e) {
+      toast.error('Not changed', { description: e instanceof Error ? e.message : String(e) });
+    }
+  };
+  const saveRunEdit = async (run: Production, payload: Record<string, unknown>) => {
+    try {
+      const { action: _action, ...body } = payload;
+      void _action;
+      const r = await api.put(`/api/manufacturing/${run.id}`, body);
+      toastWarnings(r);
+      toast.success(`${run.number} changed`, { description: 'Costed again at its components’ cost on its date.' });
+      setEditingRun(null);
+      await state.refetch();
+    } catch (e) {
+      toast.error('Not saved', { description: e instanceof Error ? e.message : String(e) });
+    }
+  };
 
   const post = async (payload: Record<string, unknown>, done: string) => {
     try {
@@ -62,9 +90,19 @@ export default function ProductionPage() {
     { key: 'item', header: 'Made', sortValue: (r) => r.itemName, cell: (r) => <span>{r.qty} {r.uqc} {r.itemName}</span> },
     { key: 'cost', header: 'Cost', align: 'right', sortValue: (r) => r.costPaise, cell: (r) => <div><Money value={r.costPaise} /><p className="text-[11px] text-muted-foreground"><Money value={r.unitCostPaise} /> each</p></div> },
     {
-      key: 'status', header: '', align: 'right', cell: (r) => (r.status === 'void'
-        ? <Badge variant="outline" className="text-[10px] text-muted-foreground">Void</Badge>
-        : canEdit ? <Button size="sm" variant="ghost" onClick={() => { if (window.confirm(`Void ${r.number}? Its components go back into stock.`)) void post({ action: 'void', id: r.id }, `${r.number} voided`); }}>Void</Button> : null),
+      key: 'status', header: '', align: 'right', cell: (r) => (
+        <div className="flex items-center justify-end gap-1">
+          {r.status === 'void' && <Badge variant="outline" className="text-[10px] text-muted-foreground">Void</Badge>}
+          {canEdit && (
+            <RowActions onEdit={r.status === 'void' ? null : () => setEditingRun(r)} onDelete={() => setDeletingRun(r)}
+              editTitle={`Edit ${r.number}`} deleteTitle={`Delete ${r.number}`}>
+              {r.status !== 'void' && (
+                <Button size="sm" variant="ghost" onClick={() => { if (window.confirm(`Void ${r.number}? Its components go back into stock.`)) void post({ action: 'void', id: r.id }, `${r.number} voided`); }}>Void</Button>
+              )}
+            </RowActions>
+          )}
+        </div>
+      ),
     },
   ];
 
@@ -95,6 +133,14 @@ export default function ProductionPage() {
                     <p className="font-medium">{b.itemName}</p>
                     <Badge variant="outline" className="text-[10px]">{b.name}</Badge>
                     {!b.isActive && <span className="text-xs text-muted-foreground">not in use</span>}
+                    {canEdit && (
+                      <RowActions className="ml-auto" onEdit={() => setBomOpen(b)} onDelete={() => setDeletingBom(b)}
+                        editTitle="Edit this bill of materials" deleteTitle="Delete this bill of materials">
+                        {!b.isActive && (
+                          <Button size="sm" variant="ghost" onClick={(e) => { e.stopPropagation(); void setBomInUse(b, true); }} data-slot="bom-reuse">Put back in use</Button>
+                        )}
+                      </RowActions>
+                    )}
                   </div>
                   <p className="text-xs text-muted-foreground">For {b.outputQty}:</p>
                   <ul className="text-sm">{b.lines.map((l) => <li key={l.itemId}>{l.qty} {l.uqc} {l.name}</li>)}</ul>
@@ -104,6 +150,38 @@ export default function ProductionPage() {
             <BomDialog bom={bomOpen} onClose={() => setBomOpen(null)} onSave={async (payload) => { if (await post(payload, 'Bill of materials saved')) setBomOpen(null); }} />
             <ProduceDialog open={producing} boms={d.boms.filter((b) => b.isActive)} onClose={() => setProducing(false)}
               onSave={async (payload) => { if (await post(payload, 'Production recorded')) setProducing(false); }} />
+            <ProduceDialog open={!!editingRun} existing={editingRun}
+              boms={d.boms.filter((b) => b.isActive || b.id === editingRun?.bomId)} onClose={() => setEditingRun(null)}
+              onSave={async (payload) => { if (editingRun) await saveRunEdit(editingRun, payload); }} />
+            <DeleteConfirmDialog
+              open={!!deletingRun}
+              onOpenChange={(o) => { if (!o) setDeletingRun(null); }}
+              title={`Delete production run ${deletingRun?.number ?? ''}?`}
+              description={deletingRun?.status === 'void'
+                ? 'It is void, so it moves no stock; it is removed. The audit trail keeps a copy of it.'
+                : 'Its components count back in stock and the goods it made no longer do. Refused if those goods have been sold or used since. The audit trail keeps a copy of it.'}
+              onConfirm={async (reason) => {
+                const r = await api.delete<{ warnings?: string[] }>(withReasonQuery(`/api/manufacturing/${deletingRun!.id}`, reason));
+                toastWarnings(r);
+              }}
+              doneMessage={`${deletingRun?.number ?? 'Run'} deleted`}
+              onDone={() => void state.refetch()}
+            />
+            <DeleteConfirmDialog
+              open={!!deletingBom}
+              onOpenChange={(o) => { if (!o) setDeletingBom(null); }}
+              title={`Delete the bill of materials ${deletingBom ? `${deletingBom.itemName}: ${deletingBom.name}` : ''}?`}
+              description="It is removed. A bill of materials something was made from stays on those runs: it can be marked not in use instead, so it is not picked for new ones."
+              withReason={false}
+              onConfirm={() => api.delete(`/api/manufacturing/boms/${deletingBom!.id}`)}
+              doneMessage="Bill of materials deleted"
+              onDone={() => void state.refetch()}
+              inUse={deletingBom ? {
+                label: 'Mark as not in use',
+                run: () => api.patch(`/api/manufacturing/boms/${deletingBom.id}`, { isActive: false }),
+                doneMessage: `${deletingBom.itemName}: ${deletingBom.name} marked not in use`,
+              } : undefined}
+            />
           </Tabs>
         )}
       </AsyncPage>
@@ -132,7 +210,7 @@ function BomDialog({ bom, onClose, onSave }: { bom: Bom | 'new' | null; onClose:
   );
   return (
     <Dialog open={!!bom} onOpenChange={(o) => { if (!o) onClose(); }}>
-      <DialogContent className="sm:max-w-2xl">
+      <DialogContent className="sm:max-w-2xl" data-slot="bom-dialog">
         <DialogHeader><DialogTitle>{existing ? `${existing.itemName}: ${existing.name}` : 'New bill of materials'}</DialogTitle></DialogHeader>
         <div className="grid gap-3 sm:grid-cols-3">
           <Field label="Makes" className="sm:col-span-2"><div>{pickItem(f.itemId, (v) => setF({ ...f, itemId: v }))}</div></Field>
@@ -164,19 +242,36 @@ function BomDialog({ bom, onClose, onSave }: { bom: Bom | 'new' | null; onClose:
   );
 }
 
-function ProduceDialog({ open, boms, onClose, onSave }: { open: boolean; boms: Bom[]; onClose: () => void; onSave: (p: Record<string, unknown>) => Promise<void> }) {
-  const branchId = useAppStore((s) => s.activeBranchId || s.branches[0]?.id || '');
-  const [f, setF] = useState({ bomId: '', qty: '', date: today(), overhead: 0, warehouseId: '' });
+/** Record a run, or Edit one (`existing`): the same window, filled with it as entered. */
+function ProduceDialog({ open, existing, boms, onClose, onSave }: {
+  open: boolean; existing?: Production | null; boms: Bom[]; onClose: () => void; onSave: (p: Record<string, unknown>) => Promise<void>;
+}) {
+  const activeBranch = useAppStore((s) => s.activeBranchId || s.branches[0]?.id || '');
+  const branchId = existing?.branchId ?? activeBranch;
+  const [f, setF] = useState({ bomId: '', qty: '', date: today(), overhead: 0, warehouseId: '', notes: '' });
   const [busy, setBusy] = useState(false);
+  const [shown, setShown] = useState<string | null>(null);
+  if (existing && existing.id !== shown) {
+    setShown(existing.id);
+    setF({
+      bomId: existing.bomId ?? '', qty: String(existing.qty), date: existing.date, overhead: existing.overheadPaise,
+      warehouseId: existing.warehouseId ?? '', notes: existing.notes ?? '',
+    });
+  }
+  if (!existing && shown) setShown(null);
   const bom = boms.find((b) => b.id === f.bomId);
   const factor = bom && Number(f.qty) > 0 ? Number(f.qty) / bom.outputQty : 0;
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
-      <DialogContent>
+      <DialogContent data-slot={existing ? 'production-edit' : 'production-new'}>
         <DialogHeader>
-          <DialogTitle>Record production</DialogTitle>
+          <DialogTitle>{existing ? `Edit ${existing.number}` : 'Record production'}</DialogTitle>
           <FoldNav />
-          <DialogDescription>The components are taken out of stock and the finished item added, at their cost today plus the overhead.</DialogDescription>
+          <DialogDescription>
+            {existing
+              ? 'Saved over the run as it was, under the same number, and costed again at the components’ cost on its date. Refused if goods it made have been used since.'
+              : 'The components are taken out of stock and the finished item added, at their cost today plus the overhead.'}
+          </DialogDescription>
         </DialogHeader>
         <div className="grid gap-3 sm:grid-cols-2">
           <Field label="Bill of materials" className="sm:col-span-2">
@@ -189,6 +284,7 @@ function ProduceDialog({ open, boms, onClose, onSave }: { open: boolean; boms: B
           <Field label="Date"><Input type="date" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} /></Field>
           <GodownPicker branchId={branchId} value={f.warehouseId} onChange={(v) => setF({ ...f, warehouseId: v })} />
           <Field label="Overhead absorbed" hint="Labour and factory cost, if valued into the goods" className="sm:col-span-2"><MoneyInput valuePaise={f.overhead} onChangePaise={(v) => setF({ ...f, overhead: v })} /></Field>
+          <Field label="Note" className="sm:col-span-2"><Input value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} maxLength={300} placeholder="Optional" /></Field>
         </div>
         {bom && factor > 0 && (
           <ul className="rounded-md border p-3 text-sm">
@@ -200,9 +296,9 @@ function ProduceDialog({ open, boms, onClose, onSave }: { open: boolean; boms: B
           <Button variant="outline" onClick={onClose}>Cancel</Button>
           <Button disabled={busy || !f.bomId || !(Number(f.qty) > 0)} className="gap-1.5" onClick={async () => {
             setBusy(true);
-            await onSave({ action: 'produce', bomId: f.bomId, qty: Number(f.qty), date: f.date, branchId, overheadPaise: f.overhead, warehouseId: f.warehouseId || null });
+            await onSave({ action: 'produce', bomId: f.bomId, qty: Number(f.qty), date: f.date, branchId, overheadPaise: f.overhead, warehouseId: f.warehouseId || null, notes: f.notes || null });
             setBusy(false);
-          }}>{busy && <Loader2 className="size-3.5 animate-spin" />} Record</Button>
+          }} data-slot="production-save">{busy && <Loader2 className="size-3.5 animate-spin" />} {existing ? 'Save changes' : 'Record'}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

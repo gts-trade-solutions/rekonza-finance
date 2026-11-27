@@ -1,10 +1,10 @@
 import { z } from 'zod';
 import { db, transaction } from '@/lib/server/db';
-import { route, body, forbidden } from '@/lib/server/http';
+import { route, body, forbidden, badRequest } from '@/lib/server/http';
 import { hasPermission } from '@/lib/rbac';
 import { logAudit, auditMeta } from '@/lib/server/audit';
 import { siteUrl } from '@/lib/server/mail/mailer';
-import { createPaymentLink, gatewayStatus, onlinePayments, saveGateway } from '@/lib/server/services/payment-links';
+import { createPaymentLink, deletePaymentLink, gatewayStatus, onlinePayments, saveGateway } from '@/lib/server/services/payment-links';
 
 // Online payments: whether this company's Razorpay is connected, connecting
 // it, and a payment link for an invoice (services/payment-links.ts).
@@ -39,3 +39,25 @@ export const POST = route(async ({ orgId, user, role, req }) => {
   if (!r.reused) await logAudit({ orgId, actorUserId: user.userId, actorName: user.name, action: 'send', targetType: 'invoice', targetId: Number(input.invoiceId), detail: `Payment link for ₹${(r.amountPaise / 100).toFixed(2)}`, ...auditMeta(req) });
   return r;
 });
+
+/**
+ * Delete a payment link (?id=): one waiting to be paid is cancelled at
+ * Razorpay and kept as cancelled; a cancelled or expired one is removed; a
+ * paid one is refused — its payment is changed in Payments received.
+ */
+export const DELETE = route(
+  async ({ orgId, user, req }) => {
+    const raw = new URL(req.url).searchParams.get('id');
+    const id = Number(raw);
+    if (!raw || !Number.isInteger(id) || id <= 0) throw badRequest('Say which payment link.');
+    return transaction(async (trx) => {
+      const r = await deletePaymentLink(trx, orgId, id);
+      await logAudit({
+        trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'delete', targetType: 'payment_link', targetId: id,
+        detail: r.outcome === 'cancelled' ? `Payment link for ${r.invoiceNumber} cancelled at Razorpay` : `Payment link for ${r.invoiceNumber} removed`, ...auditMeta(req),
+      });
+      return { deleted: true, outcome: r.outcome };
+    });
+  },
+  { permission: { module: 'sales', action: 'edit' } },
+);

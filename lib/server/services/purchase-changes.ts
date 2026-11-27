@@ -21,11 +21,12 @@ import { ApiError, badRequest, notFound } from '../http';
 import { toPaiseFromSql, toSqlFromPaise } from '../money-sql';
 import { reverseEntry } from '../ledger/posting';
 import { createBill, type CreateBillInput } from './purchases';
-import { createVendorCredit, type CreateVendorCreditInput } from './purchase-documents';
+import { createPurchaseOrder, createVendorCredit, type CreatePurchaseOrderInput, type CreateVendorCreditInput } from './purchase-documents';
 import { receiveGoods, type ReceiptLineInput } from './order-flow';
 import { statusFor } from './order-release';
 import { removeLandedCost } from './landed-cost';
-import { plain, recordDeletion, reverseForChange, unlinkDocument } from './doc-delete';
+import { bankLineMatched, plain, recordDeletion, reverseForChange, unlinkDocument } from './doc-delete';
+import { recordBillOfEntry, type BillOfEntryInput } from './bill-of-entry';
 
 const locked = (message: string) => new ApiError(409, message, 'locked_document');
 const ymd = (d: unknown) => String(d instanceof Date ? d.toISOString() : d).slice(0, 10);
@@ -499,4 +500,145 @@ export async function deleteGoodsReceipt(trx: Trx, orgId: number, userId: number
   await trx.deleteFrom('goods_receipt_lines').where('receipt_id', '=', receiptId).execute();
   await trx.deleteFrom('goods_receipts').where('id', '=', receiptId).where('org_id', '=', orgId).execute();
   return { number: g.number };
+}
+
+// ── Purchase orders ─────────────────────────────────────────────────────────
+//
+// A purchase order posts nothing (purchase-documents.ts), so changing it moves
+// no entry: an edit rewrites it in place under the same number, a delete
+// removes it and keeps the record in deleted_documents. Both wait until
+// nothing has been received or billed on it — a receipt note or a bill made
+// from it holds its line ids and quantities, and taking the order away from
+// under them would leave them pointing at nothing. Delete those first, as
+// Zoho Books asks.
+
+async function purchaseOrderBlocker(trx: Trx, orgId: number, po: { id: number; number: string; status: string }, what: 'edit' | 'delete') {
+  if (what === 'edit' && po.status === 'cancelled') return `${po.number} is cancelled. Reopen it, or raise a new order.`;
+  const refuse = (why: string) => `${po.number} cannot be ${what === 'edit' ? 'edited' : 'deleted'}: ${why}`;
+  const grn = await trx.selectFrom('goods_receipts').select(['number', 'status']).where('org_id', '=', orgId)
+    .where('source_po_id', '=', po.id).executeTakeFirst();
+  if (grn) return refuse(`goods were received on it (${grn.number}${grn.status === 'cancelled' ? ', cancelled' : ''}). Delete that receipt note first.`);
+  const bill = await trx.selectFrom('bills').select('internal_no').where('org_id', '=', orgId).where('source_po_id', '=', po.id).executeTakeFirst()
+    ?? await trx.selectFrom('bill_lines as bl').innerJoin('purchase_order_lines as pol', 'pol.id', 'bl.source_line_id')
+      .innerJoin('bills as b', 'b.id', 'bl.bill_id').select('b.internal_no')
+      .where('bl.source_line_type', '=', 'purchase_order').where('pol.purchase_order_id', '=', po.id).executeTakeFirst();
+  if (bill) return refuse(`bill ${bill.internal_no} was raised from it. Delete that bill first.`);
+  const moved = await trx.selectFrom('purchase_order_lines').select('id').where('purchase_order_id', '=', po.id)
+    .where((eb) => eb.or([eb('qty_received', '>', '0'), eb('qty_billed', '>', '0')])).executeTakeFirst();
+  if (moved) return refuse('part of it has been received or billed. Delete those receipt notes and bills first.');
+  return null;
+}
+
+/** The order as saved, for its Edit window. */
+export async function purchaseOrderForEdit(trx: Executor, orgId: number, poId: number) {
+  const po = await trx.selectFrom('purchase_orders').selectAll().where('id', '=', poId).where('org_id', '=', orgId).executeTakeFirst();
+  if (!po) throw notFound('That purchase order does not exist.');
+  const lines = await trx.selectFrom('purchase_order_lines')
+    .select(['item_id', 'description', 'hsn_sac', 'qty', 'uqc', 'rate', 'discount_pct', 'gst_rate_pct', 'cess'])
+    .where('purchase_order_id', '=', poId).orderBy('line_no').execute();
+  return {
+    id: String(po.id), number: po.number, status: po.status, branchId: String(po.branch_id), vendorId: String(po.vendor_id),
+    date: ymd(po.order_date), expectedDate: po.expected_date ? ymd(po.expected_date) : null, notes: po.notes,
+    totalPaise: toPaiseFromSql(po.total), vendorResponse: po.vendor_response,
+    lines: lines.map((l) => ({
+      itemId: l.item_id ? String(l.item_id) : null, description: l.description, hsnSac: l.hsn_sac, qty: Number(l.qty), uqc: l.uqc,
+      ratePaise: toPaiseFromSql(l.rate), discountPct: Number(l.discount_pct), gstRatePct: Number(l.gst_rate_pct),
+    })),
+  };
+}
+
+async function purchaseOrderSnapshot(trx: Trx, orgId: number, poId: number) {
+  const head = await trx.selectFrom('purchase_orders').selectAll().where('id', '=', poId).where('org_id', '=', orgId).executeTakeFirst();
+  const lines = await trx.selectFrom('purchase_order_lines').selectAll().where('purchase_order_id', '=', poId).orderBy('line_no').execute();
+  return head ? { purchaseOrder: plain(head), lines: lines.map(plain) } : null;
+}
+
+/**
+ * Edit a purchase order, as Zoho Books' Edit: while nothing on it is received
+ * or billed. Rewritten in place, the same number; a draft stays a draft, an
+ * open or closed order keeps its state.
+ */
+export async function updatePurchaseOrder(trx: Trx, orgId: number, userId: number | null, poId: number, input: CreatePurchaseOrderInput) {
+  const po = await trx.selectFrom('purchase_orders').select(['id', 'number', 'status'])
+    .where('id', '=', poId).where('org_id', '=', orgId).forUpdate().executeTakeFirst();
+  if (!po) throw notFound('That purchase order does not exist.');
+  const blocked = await purchaseOrderBlocker(trx, orgId, po, 'edit');
+  if (blocked) throw locked(blocked);
+  if (!input.lines.length) throw badRequest('An order needs at least one line.');
+  const before = await purchaseOrderSnapshot(trx, orgId, poId);
+  await trx.deleteFrom('purchase_order_lines').where('purchase_order_id', '=', poId).execute();
+  const status = po.status === 'draft' ? (input.status ?? 'draft') : po.status === 'closed' ? 'closed' : 'open';
+  const made = await createPurchaseOrder(trx, orgId, userId, input, { replace: { id: poId, number: po.number, status } });
+  return { ...made, before };
+}
+
+/** Delete a purchase order: while nothing on it is received or billed. Nothing was posted, so nothing is reversed; the record is kept. */
+export async function deletePurchaseOrder(trx: Trx, orgId: number, userId: number | null, poId: number, reason?: string | null) {
+  const po = await trx.selectFrom('purchase_orders').selectAll().where('id', '=', poId).where('org_id', '=', orgId).forUpdate().executeTakeFirst();
+  if (!po) throw notFound('That purchase order does not exist.');
+  const blocked = await purchaseOrderBlocker(trx, orgId, po, 'delete');
+  if (blocked) throw locked(blocked);
+  const snapshot = await purchaseOrderSnapshot(trx, orgId, poId);
+  await unlinkDocument(trx, orgId, 'purchase_order', poId);
+  await unlinkDocument(trx, orgId, 'purchase-order', poId);
+  await recordDeletion(trx, {
+    orgId, userId, docType: 'purchase_order', docId: poId, number: po.number, date: ymd(po.order_date),
+    totalPaise: toPaiseFromSql(po.total), contactId: po.vendor_id, branchId: po.branch_id, reason, snapshot,
+  });
+  await trx.deleteFrom('purchase_order_lines').where('purchase_order_id', '=', poId).execute();
+  await trx.deleteFrom('purchase_orders').where('id', '=', poId).where('org_id', '=', orgId).execute();
+  return { number: po.number };
+}
+
+// ── Bills of entry ──────────────────────────────────────────────────────────
+//
+// A bill of entry posts the duty and the import IGST paid at customs
+// (bill-of-entry.ts). An edit reverses that entry on its own date and posts it
+// again from the corrected figures, on the same row; a delete reverses it and
+// keeps the record. Both are refused once the IGST is in a filed GSTR-3B
+// (correct it in the next return instead), or while the payment is matched to
+// a bank statement line (unmatch it in Banking first).
+
+async function billOfEntryBlocker(trx: Trx, orgId: number, e: { boe_no: string; status: string; branch_id: number; boe_date: unknown; itc_eligibility: string; journal_entry_id: number | null }, what: 'edit' | 'delete') {
+  if (what === 'edit' && e.status === 'void') return `Bill of entry ${e.boe_no} is void. Record it again instead.`;
+  if (e.status === 'void') return null;
+  const refuse = (why: string) => `Bill of entry ${e.boe_no} cannot be ${what === 'edit' ? 'edited' : 'deleted'}: ${why}`;
+  if (e.journal_entry_id && await bankLineMatched(trx, orgId, 'journal_entry', e.journal_entry_id)) {
+    return refuse('the payment at customs is matched to a bank statement line. Unmatch it in Banking first.');
+  }
+  if (e.itc_eligibility !== 'ineligible' && await filedGstr3b(trx, orgId, e.branch_id, ymd(e.boe_date))) {
+    return refuse(`GSTR-3B for ${ymd(e.boe_date).slice(0, 7)} is filed with its IGST in table 4(A)(1). Correct it in a later return.`);
+  }
+  return null;
+}
+
+/** Edit a bill of entry: its entry reversed on its own date and posted again from the figures as corrected. */
+export async function updateBillOfEntry(trx: Trx, orgId: number, userId: number | null, id: number, input: BillOfEntryInput) {
+  const e = await trx.selectFrom('bills_of_entry').selectAll().where('id', '=', id).where('org_id', '=', orgId).forUpdate().executeTakeFirst();
+  if (!e) throw notFound('That bill of entry does not exist.');
+  const blocked = await billOfEntryBlocker(trx, orgId, e, 'edit');
+  if (blocked) throw locked(blocked);
+  const before = plain(e);
+  await reverseForChange(trx, orgId, e.journal_entry_id, { memo: `Bill of entry ${e.boe_no} edited: the entry as it was, reversed`, userId, module: 'purchases' });
+  const made = await recordBillOfEntry(trx, orgId, userId, input, { replace: { id } });
+  return { ...made, before };
+}
+
+/** Delete a bill of entry: its entry reversed (a void one's already was), the record kept. */
+export async function deleteBillOfEntry(trx: Trx, orgId: number, userId: number | null, id: number, reason?: string | null) {
+  const e = await trx.selectFrom('bills_of_entry').selectAll().where('id', '=', id).where('org_id', '=', orgId).forUpdate().executeTakeFirst();
+  if (!e) throw notFound('That bill of entry does not exist.');
+  const blocked = await billOfEntryBlocker(trx, orgId, e, 'delete');
+  if (blocked) throw locked(blocked);
+  const reversal = e.status === 'void' ? null
+    : await reverseForChange(trx, orgId, e.journal_entry_id, { memo: `Bill of entry ${e.boe_no} deleted`, userId, module: 'purchases' });
+  await unlinkDocument(trx, orgId, 'bill_of_entry', id);
+  const p = toPaiseFromSql;
+  await recordDeletion(trx, {
+    orgId, userId, docType: 'bill_of_entry', docId: id, number: e.boe_no, date: ymd(e.boe_date),
+    totalPaise: p(e.customs_duty) + p(e.igst) + p(e.cess), contactId: e.vendor_id, branchId: e.branch_id,
+    journalEntryId: e.journal_entry_id, reversalEntryId: reversal, reason, snapshot: { billOfEntry: plain(e) },
+  });
+  await trx.deleteFrom('bills_of_entry').where('id', '=', id).where('org_id', '=', orgId).execute();
+  return { number: e.boe_no };
 }

@@ -26,6 +26,7 @@ import { useApi } from '@/lib/api/use-api';
 import { usePermission } from '@/lib/store/hooks';
 import { downloadWorkbook } from '@/lib/xlsx';
 import { cn } from '@/lib/utils';
+import { DeleteConfirmDialog, RowActions, withReasonQuery } from '@/components/shared/row-actions';
 
 type Status = 'draft' | 'pending' | 'approved' | 'paid' | 'rejected' | 'cancelled';
 interface Transfer {
@@ -33,7 +34,7 @@ interface Transfer {
   paymentNumber: string | null; bills: { billId: string; number: string; vendorInvoiceNo: string; amountPaise: number }[];
 }
 interface Batch {
-  id: string; number: string; status: Status; payDate: string; bankName: string; totalPaise: number; notes: string | null;
+  id: string; number: string; status: Status; payDate: string; bankAccountId: string; bankName: string; totalPaise: number; notes: string | null;
   createdBy: string | null; approvedBy: string | null; rejectionReason: string | null; fileDownloadedAt: string | null; transfers: Transfer[];
 }
 interface PayableBill {
@@ -55,8 +56,13 @@ const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 export default function PaymentBatchesPage() {
   const canCreate = usePermission('purchases', 'create');
+  const canEdit = usePermission('purchases', 'edit');
+  const canDelete = usePermission('purchases', 'void');
   const state = useApi(() => api.get<{ batches: Batch[]; bankAccounts: { id: string; name: string; hasAccountNo: boolean }[] }>('/api/payment-batches'), []);
   const [building, setBuilding] = useState(false);
+  // Edit (a draft or one sent back) opens the builder filled with the batch; Delete is asked once.
+  const [editing, setEditing] = useState<Batch | null>(null);
+  const [deleting, setDeleting] = useState<Batch | null>(null);
   const [paying, setPaying] = useState<Batch | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
 
@@ -103,9 +109,9 @@ export default function PaymentBatchesPage() {
       <AsyncPage state={state} loading={<LoadingRows rows={4} />}>
         {(d) => (
           <div className="space-y-4">
-            {building && (
-              <Builder banks={d.bankAccounts} onClose={() => setBuilding(false)}
-                onCreated={() => { setBuilding(false); void state.refetch(); }} />
+            {(building || editing) && (
+              <Builder key={editing?.id ?? 'new'} banks={d.bankAccounts} editing={editing} onClose={() => { setBuilding(false); setEditing(null); }}
+                onCreated={() => { setBuilding(false); setEditing(null); void state.refetch(); }} />
             )}
             {d.batches.length === 0 && !building && (
               <EmptyState icon={Landmark} title="No payment batches yet"
@@ -121,6 +127,10 @@ export default function PaymentBatchesPage() {
                     {b.approvedBy && b.status !== 'draft' ? ` · released by ${b.approvedBy}` : ''}
                   </span>
                   <Money value={b.totalPaise} className="ml-auto text-base font-semibold" />
+                  <RowActions
+                    onEdit={canEdit && (b.status === 'draft' || b.status === 'rejected') ? () => { setBuilding(false); setEditing(b); } : null}
+                    onDelete={canDelete && b.status !== 'paid' && b.status !== 'approved' ? () => setDeleting(b) : null}
+                    editTitle={`Edit ${b.number}`} deleteTitle={`Delete ${b.number}`} />
                 </div>
                 {b.status === 'rejected' && b.rejectionReason && <p className="text-xs text-destructive">Sent back: {b.rejectionReason}</p>}
                 {b.notes && <p className="text-xs text-muted-foreground">{b.notes}</p>}
@@ -205,19 +215,29 @@ export default function PaymentBatchesPage() {
       </AsyncPage>
 
       {paying && <MarkPaid batch={paying} onClose={() => setPaying(null)} onDone={() => { setPaying(null); void state.refetch(); }} />}
+      <DeleteConfirmDialog
+        open={!!deleting} onOpenChange={(v) => { if (!v) setDeleting(null); }}
+        title={`Delete batch ${deleting?.number ?? ''}?`}
+        description="It is removed and its bills are free for another batch. Nothing was paid or posted from it, so the ledger does not change; the audit trail keeps a copy of it. A released batch is cancelled first; a paid one stays."
+        doneMessage={`Batch ${deleting?.number ?? ''} deleted`}
+        onConfirm={(reason) => api.delete(withReasonQuery(`/api/payment-batches?id=${deleting!.id}`, reason))}
+        onDone={() => void state.refetch()}
+      />
     </>
   );
 }
 
 /** Choose bills: due by a date, with what is left on each, and the amount to pay. */
-function Builder({ banks, onClose, onCreated }: {
-  banks: { id: string; name: string; hasAccountNo: boolean }[]; onClose: () => void; onCreated: () => void;
+function Builder({ banks, editing, onClose, onCreated }: {
+  banks: { id: string; name: string; hasAccountNo: boolean }[]; editing?: Batch | null; onClose: () => void; onCreated: () => void;
 }) {
-  const [payDate, setPayDate] = useState(iso(new Date()));
-  const [dueBy, setDueBy] = useState(iso(new Date(Date.now() + 7 * 864e5)));
-  const [bankId, setBankId] = useState(banks[0]?.id ?? '');
-  const [notes, setNotes] = useState('');
-  const [chosen, setChosen] = useState<Record<string, number>>({});
+  const [payDate, setPayDate] = useState(editing?.payDate ?? iso(new Date()));
+  // Editing: every open bill is listed, so those already in the batch are there whatever their due date.
+  const [dueBy, setDueBy] = useState(editing ? '' : iso(new Date(Date.now() + 7 * 864e5)));
+  const [bankId, setBankId] = useState(editing?.bankAccountId ?? banks[0]?.id ?? '');
+  const [notes, setNotes] = useState(editing?.notes ?? '');
+  const [chosen, setChosen] = useState<Record<string, number>>(() =>
+    Object.fromEntries((editing?.transfers ?? []).flatMap((t) => t.bills.map((x) => [x.billId, x.amountPaise]))));
   const [saving, setSaving] = useState(false);
   const bills = useApi(() => api.get<{ bills: PayableBill[] }>('/api/payment-batches', { view: 'bills', dueBy }), [dueBy]);
 
@@ -228,13 +248,13 @@ function Builder({ banks, onClose, onCreated }: {
     setSaving(true);
     try {
       const r = await api.post<{ number: string }>('/api/payment-batches', {
-        action: 'create', bankAccountId: bankId, payDate, notes: notes || null,
+        action: editing ? 'update' : 'create', ...(editing ? { id: editing.id } : {}), bankAccountId: bankId, payDate, notes: notes || null,
         lines: Object.entries(chosen).map(([billId, amountPaise]) => ({ billId, amountPaise })),
       });
-      toast.success(`${r.number} created`, { description: 'Release it to make the bank file.' });
+      toast.success(`${r.number} ${editing ? 'saved' : 'created'}`, { description: editing ? 'It is a draft again: release it to make the bank file.' : 'Release it to make the bank file.' });
       onCreated();
     } catch (e) {
-      toast.error('Not created', { description: errorText(e) });
+      toast.error(editing ? 'Not saved' : 'Not created', { description: errorText(e) });
     } finally {
       setSaving(false);
     }
@@ -243,7 +263,7 @@ function Builder({ banks, onClose, onCreated }: {
   return (
     <Card className="space-y-4 p-4">
       <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold">New batch</h3>
+        <h3 className="text-sm font-semibold" data-slot="batch-builder-title">{editing ? `Edit ${editing.number}` : 'New batch'}</h3>
         <Button size="icon-sm" variant="ghost" onClick={onClose} aria-label="Close"><X className="size-4" /></Button>
       </div>
       <div className="grid gap-3 sm:grid-cols-4">
@@ -262,7 +282,7 @@ function Builder({ banks, onClose, onCreated }: {
 
       <AsyncPage state={bills} loading={<LoadingRows rows={3} />}>
         {(d) => d.bills.length === 0 ? (
-          <p className="rounded-md border px-3 py-6 text-center text-sm text-muted-foreground">No open bills due by {dmy(dueBy)}.</p>
+          <p className="rounded-md border px-3 py-6 text-center text-sm text-muted-foreground">{dueBy ? `No open bills due by ${dmy(dueBy)}.` : 'No open bills.'}</p>
         ) : (
           <div className="overflow-x-auto rounded-md border">
             <table className="w-full text-sm">
@@ -279,7 +299,7 @@ function Builder({ banks, onClose, onCreated }: {
               <tbody>
                 {d.bills.map((b) => {
                   const on = b.id in chosen;
-                  const blocked = !!b.inBatch;
+                  const blocked = !!b.inBatch && b.inBatch !== editing?.number;
                   return (
                     <tr key={b.id} className={cn('border-b last:border-0', blocked && 'opacity-50')}>
                       <td className="px-3 py-1.5">
@@ -294,7 +314,7 @@ function Builder({ banks, onClose, onCreated }: {
                         <span className="font-medium">{b.vendorName}</span>
                         {b.isMsme && <Badge variant="outline" className="ml-2 text-[9px]">MSME</Badge>}
                         {!b.hasBankDetails && <Badge variant="outline" className="ml-2 border-destructive/40 text-[9px] text-destructive">No bank details</Badge>}
-                        {blocked && <span className="ml-2 text-xs text-muted-foreground">in {b.inBatch}</span>}
+                        {b.inBatch && <span className="ml-2 text-xs text-muted-foreground">in {b.inBatch}</span>}
                       </td>
                       <td className="px-3 py-1.5 text-xs">{b.number} · {b.vendorInvoiceNo}</td>
                       <td className={cn('px-3 py-1.5 text-xs tabular-nums', b.dueDate < iso(new Date()) && 'text-destructive')}>{dmy(b.dueDate)}</td>
@@ -317,7 +337,7 @@ function Builder({ banks, onClose, onCreated }: {
           {Object.keys(chosen).length} bill(s), {suppliers} supplier(s) · <Money value={total} className="font-semibold text-foreground" />
         </span>
         <Button className="ml-auto gap-1.5" disabled={saving || !bankId || total <= 0} onClick={() => void create()}>
-          {saving && <Loader2 className="size-3.5 animate-spin" />} Create batch
+          {saving && <Loader2 className="size-3.5 animate-spin" />} {editing ? 'Save batch' : 'Create batch'}
         </Button>
       </div>
     </Card>

@@ -23,7 +23,8 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { downloadCsv } from '@/components/shared/report-shell';
 import { toRupees } from '@/lib/money';
-import { BulkPrintButton, documentMenuColumn } from '@/components/shared/document-menu';
+import { BulkPrintButton, DeleteDocumentDialog, documentMenuColumn } from '@/components/shared/document-menu';
+import { RowActions } from '@/components/shared/row-actions';
 import { Money } from '@/components/shared/money';
 import { EmptyState } from '@/components/shared/empty-state';
 import { AsyncPage, LoadingRows, Refreshing } from '@/components/shared/async-state';
@@ -39,6 +40,10 @@ export function PaymentsList({ kind }: { kind: 'received' | 'made' }) {
   const isReceipt = kind === 'received';
   const canCreate = usePermission(isReceipt ? 'sales' : 'purchases', 'create');
   const canEdit = usePermission(isReceipt ? 'sales' : 'purchases', 'edit');
+  const canDelete = usePermission(isReceipt ? 'sales' : 'purchases', 'void');
+  // Edit and Delete as worded buttons on each row, beside the ⋯ (the client looks for the words).
+  const [deleting, setDeleting] = useState<{ id: string; number: string } | null>(null);
+  const editHref = (id: string) => `${isReceipt ? '/sales/payments/new' : '/purchases/payments/new'}?edit=${id}`;
   const [openId, setOpenId] = useState<string | null>(null);
   const [range, setRange] = useState<RangeValue>(() => ({ ...ALL_TIME, mode: 'all' }));
   // Zoho's ⋯ → Sort by on Payments Received.
@@ -153,6 +158,8 @@ export function PaymentsList({ kind }: { kind: 'received' | 'made' }) {
 
   return (
     <>
+      <DeleteDocumentDialog kind={isReceipt ? 'payment-received' : 'payment-made'} id={deleting?.id ?? ''} number={deleting?.number ?? ''}
+        open={!!deleting} onOpenChange={(v) => { if (!v) setDeleting(null); }} onDeleted={() => void state.refetch()} />
       <PageHeader
         title={isReceipt ? 'Payments Received' : 'Payments Made'}
         description={
@@ -226,7 +233,12 @@ export function PaymentsList({ kind }: { kind: 'received' | 'made' }) {
 
               <DataTable
                 rows={data.payments}
-                columns={[...(isReceipt ? receivedColumns : columns), documentMenuColumn(isReceipt ? 'payment-received' : 'payment-made', () => void state.refetch(), (r) => router.push(`${isReceipt ? '/sales/payments/new' : '/purchases/payments/new'}?edit=${r.id}`))]}
+                columns={[...(isReceipt ? receivedColumns : columns), {
+                  key: 'change', header: '', align: 'right',
+                  cell: (r) => <RowActions onEdit={canEdit && r.status !== 'void' ? () => router.push(editHref(r.id)) : null}
+                    onDelete={canDelete ? () => setDeleting({ id: r.id, number: r.number }) : null}
+                    editTitle={`Edit ${r.number}`} deleteTitle={`Delete ${r.number}`} />,
+                }, documentMenuColumn(isReceipt ? 'payment-received' : 'payment-made', () => void state.refetch(), (r) => router.push(editHref(r.id)))]}
                 getRowId={(r) => r.id}
                 selectable
                 bulkActions={(selected) => <BulkPrintButton kind={isReceipt ? 'payment-received' : 'payment-made'} ids={selected.map((r) => r.id)} />}

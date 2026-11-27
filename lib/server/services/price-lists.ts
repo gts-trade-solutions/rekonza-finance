@@ -9,7 +9,7 @@ import 'server-only';
 import type { Executor, Trx } from '../db';
 import type { Paise } from '../../types';
 import { toPaiseFromSql, toSqlFromPaise } from '../money-sql';
-import { badRequest, conflict, notFound } from '../http';
+import { ApiError, badRequest, conflict, notFound } from '../http';
 
 export interface PriceListInput {
   name: string;
@@ -122,4 +122,36 @@ export async function pricesFor(ex: Executor, orgId: number, contactId: number):
     for (const n of named) out.set(n.item_id, toPaiseFromSql(n.rate));
   }
   return out;
+}
+
+/**
+ * Delete a price list, as Zoho Books does: only while nobody is on it. A list a
+ * customer or a recurring invoice still names is refused (`in_use`), and the
+ * screen offers to mark it inactive instead, which keeps what it priced and
+ * stops it being picked again. Invoices already raised keep their prices: a
+ * price is copied onto the invoice line, not read from the list later.
+ */
+export async function deletePriceList(trx: Trx, orgId: number, id: number): Promise<{ name: string }> {
+  const list = await trx.selectFrom('price_lists').select(['id', 'name']).where('id', '=', id).where('org_id', '=', orgId).forUpdate().executeTakeFirst();
+  if (!list) throw notFound('That price list does not exist.');
+  const { n: customers } = await trx.selectFrom('contacts').select((eb) => eb.fn.countAll<number>().as('n'))
+    .where('org_id', '=', orgId).where('price_list_id', '=', id).executeTakeFirstOrThrow();
+  const { n: profiles } = await trx.selectFrom('recurring_invoices').select((eb) => eb.fn.countAll<number>().as('n'))
+    .where('org_id', '=', orgId).where('price_list_id', '=', id).executeTakeFirstOrThrow();
+  const on = [Number(customers) && `${customers} customer${Number(customers) === 1 ? '' : 's'}`, Number(profiles) && `${profiles} recurring invoice${Number(profiles) === 1 ? '' : 's'}`].filter(Boolean);
+  if (on.length) {
+    throw new ApiError(409, `${list.name} is in use by ${on.join(' and ')}. Take them off it first, or mark it inactive so it is not picked again.`, 'in_use');
+  }
+  await trx.deleteFrom('price_list_items').where('price_list_id', '=', id).execute();
+  await trx.deleteFrom('price_list_discounts').where('price_list_id', '=', id).execute();
+  await trx.deleteFrom('price_lists').where('id', '=', id).where('org_id', '=', orgId).execute();
+  return { name: list.name };
+}
+
+/** Zoho's "Mark as inactive": kept, not offered for new customers. */
+export async function setPriceListActive(trx: Trx, orgId: number, id: number, active: boolean): Promise<{ name: string }> {
+  const list = await trx.selectFrom('price_lists').select(['id', 'name']).where('id', '=', id).where('org_id', '=', orgId).executeTakeFirst();
+  if (!list) throw notFound('That price list does not exist.');
+  await trx.updateTable('price_lists').set({ is_active: active ? 1 : 0 }).where('id', '=', id).execute();
+  return { name: list.name };
 }

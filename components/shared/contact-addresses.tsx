@@ -5,7 +5,7 @@
 // The invoice form offers them as the ship-to (services/contact-addresses.ts).
 
 import { useState } from 'react';
-import { MapPin, Pencil, Plus, Star, Trash2 } from 'lucide-react';
+import { MapPin, Plus, Star } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { Card } from '@/components/ui/card';
@@ -17,6 +17,7 @@ import { Combobox } from '@/components/ui/combobox';
 import { api } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
 import { GST_STATES } from '@/lib/tax/gst';
+import { DeleteConfirmDialog, RowActions } from '@/components/shared/row-actions';
 
 export interface ContactAddress {
   id: string; label: string; name: string | null; address: string; city: string | null; pincode: string | null;
@@ -31,6 +32,7 @@ export function ContactAddresses({ contactId, canEdit, compact = false }: { cont
   const state = useApi(() => api.get<{ addresses: ContactAddress[] }>(`/api/contacts/${contactId}/addresses`), [contactId]);
   const [form, setForm] = useState<typeof blank | null>(null);
   const [busy, setBusy] = useState(false);
+  const [deleting, setDeleting] = useState<ContactAddress | null>(null);
   const list = state.data?.addresses ?? [];
 
   const post = async (payload: Record<string, unknown>, done: string) => {
@@ -77,16 +79,23 @@ export function ContactAddresses({ contactId, canEdit, compact = false }: { cont
             {(a.gstin || a.phone) && <p className="text-xs text-muted-foreground">{[a.gstin && `GSTIN ${a.gstin}`, a.phone].filter(Boolean).join(' · ')}</p>}
           </div>
           {canEdit && (
-            <span className="flex shrink-0 gap-1">
-              <Button size="icon-sm" variant="ghost" aria-label={`Change ${a.label}`} onClick={() => setForm({ ...blank, ...a, name: a.name ?? '', city: a.city ?? '', pincode: a.pincode ?? '', gstin: a.gstin ?? '', phone: a.phone ?? '' })}><Pencil className="size-3.5" /></Button>
-              <Button size="icon-sm" variant="ghost" aria-label={`Remove ${a.label}`} disabled={busy}
-                onClick={() => { if (window.confirm(`Remove the address ${a.label}? Invoices already raised keep theirs.`)) void post({ action: 'delete', id: a.id }, 'Address removed'); }}><Trash2 className="size-3.5" /></Button>
-            </span>
+            // Edit and Delete with their words (2026-11-25), not a bare pencil and bin.
+            <RowActions className={compact ? 'shrink-0 flex-col items-end' : 'shrink-0'}
+              onEdit={() => setForm({ ...blank, ...a, name: a.name ?? '', city: a.city ?? '', pincode: a.pincode ?? '', gstin: a.gstin ?? '', phone: a.phone ?? '' })}
+              onDelete={busy ? null : () => setDeleting(a)} editTitle={`Edit ${a.label}`} deleteTitle={`Delete ${a.label}`} />
           )}
         </div>
       ))}
       {!list.length && !form && !compact && <p className="text-xs text-muted-foreground">None yet: invoices go to the contact&apos;s own address unless another is typed in.</p>}
       {!list.length && !form && compact && <p className="text-[13px] text-muted-foreground">No other addresses.</p>}
+
+      <DeleteConfirmDialog
+        open={!!deleting} onOpenChange={(o) => { if (!o) setDeleting(null); }} withReason={false}
+        title={`Delete the address ${deleting?.label ?? ''}?`}
+        description="It is no longer offered as a ship-to. Invoices and challans already raised keep the address printed on them."
+        onConfirm={() => api.post(`/api/contacts/${contactId}/addresses`, { action: 'delete', id: deleting!.id })}
+        doneMessage="Address deleted" onDone={() => { setDeleting(null); void state.refetch(); }}
+      />
 
       {form && (
         <div className={cn('grid gap-2 rounded-md border p-3', !compact && 'sm:grid-cols-2')} data-slot="address-form">

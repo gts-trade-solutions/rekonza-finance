@@ -30,6 +30,7 @@ import { Field, MoneyInput } from '@/components/shared/form-bits';
 import { api, recurringPurchases, type RecurringPurchaseRow } from '@/lib/api/client';
 import { useApi, useApiAction } from '@/lib/api/use-api';
 import { usePermission } from '@/lib/store/hooks';
+import { DeleteConfirmDialog, RowActions } from '@/components/shared/row-actions';
 
 const FREQUENCY = [
   { value: 'weekly', label: 'Weekly' },
@@ -51,20 +52,44 @@ const BLANK = {
   accountId: '', description: '', amount: 0, gst: 18, paidThroughId: '',
 };
 
+/** A recurring bill's line: what it is booked to, its words, and the amount before GST. */
+interface BillLine { key: string; itemId: string | null; accountId: string; description: string; qty: number; ratePaise: number; gstRatePct: number; hsnSac: string | null }
+const newLine = (): BillLine => ({ key: `n${Math.random().toString(36).slice(2)}`, itemId: null, accountId: '', description: '', qty: 1, ratePaise: 0, gstRatePct: 18, hsnSac: null });
+
 export default function RecurringPurchasesPage() {
   const router = useRouter();
   const canCreate = usePermission('purchases', 'create');
+  const canEdit = usePermission('purchases', 'edit');
+  const canDelete = usePermission('purchases', 'void');
   const state = useApi(() => recurringPurchases.list(), []);
   const masters = useApi<Masters>(() => api.get('/api/masters'), []);
   const [kind, setKind] = useState<'bill' | 'expense' | null>(null);
   const [f, setF] = useState(BLANK);
+  const [lines, setLines] = useState<BillLine[]>([newLine()]);
+  // Zoho's Edit (the same window, filled with the profile) and Delete (asked once).
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<RecurringPurchaseRow | null>(null);
+  const setLine = (key: string, patch: Partial<BillLine>) => setLines((ls) => ls.map((l) => (l.key === key ? { ...l, ...patch } : l)));
+  const openNew = (k: 'bill' | 'expense') => { setEditingId(null); setF(BLANK); setLines([newLine()]); setKind(k); };
+  const startEdit = (p: RecurringPurchaseRow) => {
+    setEditingId(p.id);
+    setF({
+      name: p.name, vendorId: p.vendorId ?? '', frequency: p.frequency, startDate: p.startDate, endDate: p.endDate ?? '', dueDays: p.dueDays,
+      autoRun: p.autoRun, accountId: p.expense?.accountId ?? '', description: p.expense?.notes ?? '', amount: p.expense?.amountPaise ?? 0,
+      gst: p.expense?.gstRatePct ?? 18, paidThroughId: p.expense?.paidThroughBankAccountId ?? '',
+    });
+    setLines((p.lines ?? []).map((l, i) => ({
+      key: `l${i}`, itemId: l.itemId, accountId: l.accountId ?? '', description: l.description ?? '', qty: l.qty, ratePaise: l.ratePaise, gstRatePct: l.gstRatePct, hsnSac: l.hsnSac,
+    })));
+    setKind(p.kind);
+  };
+  const close = () => { setKind(null); setEditingId(null); };
 
-  const create = useApiAction(recurringPurchases.create);
+  const create = useApiAction((input: unknown) => (editingId ? recurringPurchases.update(editingId, input) : recurringPurchases.create(input)));
   const run = useApiAction(recurringPurchases.run);
   const toggle = useApiAction(recurringPurchases.toggle);
   const auto = useApiAction(recurringPurchases.auto);
-  const remove = useApiAction(recurringPurchases.remove);
-  const busy = run.busy || toggle.busy || auto.busy || remove.busy;
+  const busy = run.busy || toggle.busy || auto.busy;
 
   const accounts = useMemo(() => (masters.data?.accounts ?? []).filter((a) => a.type === 'expense')
     .map((a) => ({ value: a.id, label: a.name, sublabel: a.code })), [masters.data]);
@@ -72,8 +97,13 @@ export default function RecurringPurchasesPage() {
 
   const save = async () => {
     if (!kind) return;
-    if (!f.name.trim() || !f.accountId || f.amount <= 0) {
-      toast.error('Name the profile, pick what it is booked to, and set an amount.');
+    if (!f.name.trim()) { toast.error('Name the profile.'); return; }
+    if (kind === 'bill' && (!lines.length || lines.some((l) => (!l.accountId && !l.itemId) || l.ratePaise <= 0))) {
+      toast.error('Each line needs what it is booked to and an amount.');
+      return;
+    }
+    if (kind === 'expense' && (!f.accountId || f.amount <= 0)) {
+      toast.error('Pick what it is booked to, and set an amount.');
       return;
     }
     if (kind === 'bill' && !f.vendorId) { toast.error('A recurring bill needs the vendor it comes from.'); return; }
@@ -88,13 +118,17 @@ export default function RecurringPurchasesPage() {
       dueDays: f.dueDays,
       autoRun: f.autoRun,
       ...(kind === 'bill'
-        ? { lines: [{ accountId: f.accountId, description: f.description || f.name.trim(), qty: 1, ratePaise: f.amount, gstRatePct: f.gst }] }
+        ? { lines: lines.map((l) => ({ itemId: l.itemId, accountId: l.accountId || null, description: l.description || f.name.trim(), qty: l.qty, ratePaise: l.ratePaise, gstRatePct: l.gstRatePct, hsnSac: l.hsnSac })) }
         : { expense: { accountId: f.accountId, paidThroughBankAccountId: f.paidThroughId, amountPaise: f.amount, gstRatePct: f.gst, notes: f.description || null } }),
     });
-    if (!done) { toast.error(create.error ?? 'The profile was not created'); return; }
-    toast.success('Recurring profile created', { description: f.autoRun ? 'It runs on its dates by itself.' : 'Nothing is raised until you run it.' });
-    setKind(null);
+    if (!done) { toast.error(editingId ? 'Not saved' : 'The profile was not created', { description: create.error ?? undefined }); return; }
+    toast.success(editingId ? `${f.name.trim()} saved` : 'Recurring profile created', {
+      description: editingId ? 'Its next runs raise it as it is now; what it raised already stays as it was.'
+        : f.autoRun ? 'It runs on its dates by itself.' : 'Nothing is raised until you run it.',
+    });
+    close();
     setF(BLANK);
+    setLines([newLine()]);
     state.refetch();
   };
 
@@ -144,12 +178,10 @@ export default function RecurringPurchasesPage() {
                     onClick={() => act(() => toggle.run(p.id, !p.isActive), p.isActive ? 'Paused' : 'Resumed', () => toggle.error)}>
                     {p.isActive ? 'Pause' : 'Resume'}
                   </Button>
-                  <Button size="icon-sm" variant="ghost" aria-label={`Delete ${p.name}`} disabled={busy}
-                    onClick={() => act(() => remove.run(p.id), `${p.name} deleted; what it raised stays`, () => remove.error)}>
-                    <Trash2 className="size-4" />
-                  </Button>
                 </>
               )}
+              <RowActions onEdit={canEdit ? () => startEdit(p) : null} onDelete={canDelete ? () => setDeleting(p) : null}
+                editTitle={`Edit ${p.name}`} deleteTitle={`Delete ${p.name}`} />
             </div>
           </div>
         </Card>
@@ -158,7 +190,7 @@ export default function RecurringPurchasesPage() {
   ) : (
     <EmptyState icon={Repeat} title={k === 'bill' ? 'No recurring bills' : 'No recurring expenses'}
       description={k === 'bill' ? 'Rent, maintenance, an annual contract: a bill that comes on a schedule.' : 'A subscription or a standing charge paid on a schedule.'}
-      action={canCreate ? <Button size="sm" onClick={() => setKind(k)}><Plus className="size-4" /> New recurring {k}</Button> : undefined} />
+      action={canCreate ? <Button size="sm" onClick={() => openNew(k)}><Plus className="size-4" /> New recurring {k}</Button> : undefined} />
   );
 
   return (
@@ -168,8 +200,8 @@ export default function RecurringPurchasesPage() {
         description="Bills and expenses that come on a schedule, raised the same way you would raise them by hand."
         actions={canCreate ? (
           <div className="flex gap-2">
-            <Button size="sm" variant="outline" onClick={() => setKind('expense')} className="gap-1.5"><Plus className="size-4" /> Recurring expense</Button>
-            <Button size="sm" onClick={() => setKind('bill')} className="gap-1.5"><Plus className="size-4" /> Recurring bill</Button>
+            <Button size="sm" variant="outline" onClick={() => openNew('expense')} className="gap-1.5"><Plus className="size-4" /> Recurring expense</Button>
+            <Button size="sm" onClick={() => openNew('bill')} className="gap-1.5"><Plus className="size-4" /> Recurring bill</Button>
           </div>
         ) : undefined}
       />
@@ -186,10 +218,19 @@ export default function RecurringPurchasesPage() {
         )}
       </AsyncPage>
 
-      <Dialog open={!!kind} onOpenChange={(o) => !o && setKind(null)}>
-        <DialogContent className="max-w-lg">
+      <DeleteConfirmDialog
+        open={!!deleting} onOpenChange={(v) => { if (!v) setDeleting(null); }}
+        title={`Delete ${deleting?.name ?? 'this profile'}?`}
+        description={`The profile stops and is removed. The ${deleting?.kind === 'bill' ? 'bills' : 'expenses'} it already raised stay as they are, each with its own Edit and Delete.`}
+        doneMessage={`${deleting?.name ?? 'Profile'} deleted; what it raised stays`}
+        onConfirm={(reason) => recurringPurchases.remove(deleting!.id, reason)}
+        onDone={() => void state.refetch()}
+      />
+
+      <Dialog open={!!kind} onOpenChange={(o) => !o && close()}>
+        <DialogContent className={kind === 'bill' ? 'max-w-2xl' : 'max-w-lg'} data-slot="recurring-dialog">
           <DialogHeader>
-            <DialogTitle>{kind === 'bill' ? 'New recurring bill' : 'New recurring expense'}</DialogTitle>
+            <DialogTitle>{editingId ? `Edit ${f.name || 'profile'}` : kind === 'bill' ? 'New recurring bill' : 'New recurring expense'}</DialogTitle>
             <FoldNav />
             <DialogDescription>
               {kind === 'bill'
@@ -204,15 +245,33 @@ export default function RecurringPurchasesPage() {
             <Field label="Vendor" required={kind === 'bill'} className="sm:col-span-2">
               <ContactPicker kind="vendor" value={f.vendorId} onChange={(v) => setF({ ...f, vendorId: v })} placeholder={kind === 'bill' ? 'Who bills it' : 'Optional'} canCreate={canCreate} />
             </Field>
-            <Field label="Booked to" required className="sm:col-span-2">
-              <Combobox options={accounts} value={f.accountId} onChange={(v) => setF({ ...f, accountId: v })} placeholder="Expense account" showAvatar={false} />
-            </Field>
-            <Field label={kind === 'bill' ? 'Amount before GST' : 'Amount paid'} required hint={kind === 'bill' ? 'GST is added on top' : 'Including GST; the tax is taken out of it'}>
-              <MoneyInput valuePaise={f.amount} onChangePaise={(p) => setF({ ...f, amount: p })} />
-            </Field>
-            <Field label="GST rate">
-              <Combobox options={GST} value={String(f.gst)} onChange={(v) => setF({ ...f, gst: Number(v) })} showAvatar={false} />
-            </Field>
+            {kind === 'bill' ? (
+              <div className="space-y-2 sm:col-span-2" data-slot="recurring-lines">
+                <p className="text-sm font-medium">Lines <span className="text-xs font-normal text-muted-foreground">· amounts before GST; GST is added on top</span></p>
+                {lines.map((l) => (
+                  <div key={l.key} className="grid gap-2 rounded-md border p-2 sm:grid-cols-[1.4fr_1.4fr_1fr_90px_auto]" data-slot="recurring-line">
+                    <Combobox options={accounts} value={l.accountId} onChange={(v) => setLine(l.key, { accountId: v })} placeholder={l.itemId ? 'From the item' : 'Expense account'} showAvatar={false} />
+                    <Input value={l.description} onChange={(e) => setLine(l.key, { description: e.target.value })} placeholder="What it is for" />
+                    <MoneyInput valuePaise={l.ratePaise} onChangePaise={(v) => setLine(l.key, { ratePaise: v })} />
+                    <Combobox options={GST} value={String(l.gstRatePct)} onChange={(v) => setLine(l.key, { gstRatePct: Number(v) })} showAvatar={false} />
+                    <Button size="icon-sm" variant="ghost" aria-label="Remove line" disabled={lines.length < 2} onClick={() => setLines((ls) => ls.filter((x) => x.key !== l.key))}><Trash2 className="size-4" /></Button>
+                  </div>
+                ))}
+                <Button size="sm" variant="ghost" className="gap-1.5" onClick={() => setLines((ls) => [...ls, newLine()])}><Plus className="size-3.5" /> Add line</Button>
+              </div>
+            ) : (
+              <>
+                <Field label="Booked to" required className="sm:col-span-2">
+                  <Combobox options={accounts} value={f.accountId} onChange={(v) => setF({ ...f, accountId: v })} placeholder="Expense account" showAvatar={false} />
+                </Field>
+                <Field label="Amount paid" required hint="Including GST; the tax is taken out of it">
+                  <MoneyInput valuePaise={f.amount} onChangePaise={(p) => setF({ ...f, amount: p })} />
+                </Field>
+                <Field label="GST rate">
+                  <Combobox options={GST} value={String(f.gst)} onChange={(v) => setF({ ...f, gst: Number(v) })} showAvatar={false} />
+                </Field>
+              </>
+            )}
             {kind === 'expense' && (
               <Field label="Paid from" required className="sm:col-span-2">
                 <Combobox options={banks} value={f.paidThroughId} onChange={(v) => setF({ ...f, paidThroughId: v })} placeholder="Bank, cash or card" showAvatar={false} />
@@ -232,9 +291,11 @@ export default function RecurringPurchasesPage() {
             <Field label="Ends" hint="Optional">
               <Input type="date" value={f.endDate} onChange={(e) => setF({ ...f, endDate: e.target.value })} />
             </Field>
-            <Field label="Description" className="sm:col-span-2">
-              <Input value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} placeholder="What it is for" />
-            </Field>
+            {kind === 'expense' && (
+              <Field label="Description" className="sm:col-span-2">
+                <Input value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} placeholder="What it is for" />
+              </Field>
+            )}
             <label className="flex items-center justify-between gap-3 rounded-md border p-3 text-sm sm:col-span-2">
               <span>Run on its dates by itself<span className="block text-xs text-muted-foreground">Off: it waits for you to press Run now.</span></span>
               <Switch checked={f.autoRun} onCheckedChange={(v) => setF({ ...f, autoRun: v })} />
@@ -242,8 +303,8 @@ export default function RecurringPurchasesPage() {
           </div>
           {create.error && <p className="text-sm text-destructive">{create.error}</p>}
           <DialogFooter>
-            <Button variant="outline" onClick={() => setKind(null)}>Cancel</Button>
-            <Button onClick={save} disabled={create.busy}>{create.busy ? 'Saving…' : 'Create profile'}</Button>
+            <Button variant="outline" onClick={close}>Cancel</Button>
+            <Button onClick={save} disabled={create.busy} data-slot="recurring-save">{create.busy ? 'Saving…' : editingId ? 'Save' : 'Create profile'}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

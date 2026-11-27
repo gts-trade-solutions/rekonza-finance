@@ -19,7 +19,8 @@ export default function EditInvoicePage() {
         <p className="p-6 text-sm text-muted-foreground" data-slot="edit-void">{inv.number} is void, so it cannot be edited. Clone it to raise it again.</p>
       ) : (
         <Suspense>
-          <InvoiceForm editing={inv} variant={inv.docKind === 'debit_note' ? 'debit_note' : 'invoice'} />
+          {/* A sales receipt opens as one: its counter payment is edited with it. */}
+          <InvoiceForm editing={inv} variant={inv.docKind === 'debit_note' ? 'debit_note' : inv.paidAtSale ? 'receipt' : 'invoice'} />
         </Suspense>
       )}
     </AsyncPage>

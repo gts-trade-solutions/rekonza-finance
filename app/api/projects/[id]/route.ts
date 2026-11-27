@@ -5,7 +5,7 @@ import { hasPermission } from '@/lib/rbac';
 import { toPaiseFromSql } from '@/lib/server/money-sql';
 import { logAudit, auditMeta } from '@/lib/server/audit';
 import { queueIrns } from '@/lib/server/gst/auto-irn';
-import { billProject, projectFigures, unbilled } from '@/lib/server/services/projects';
+import { billProject, deleteProject, projectFigures, unbilled } from '@/lib/server/services/projects';
 
 /** One project: its set-up, time, expenses, invoices, figures and what is unbilled. */
 export const GET = route(
@@ -109,4 +109,27 @@ export const POST = route(
     return { invoiceId: asId(r.invoice.id), number: r.invoice.number, totalPaise: r.invoice.totalPaise, hoursBilled: r.hoursBilled, warnings: r.invoice.warnings ?? [] };
   },
   { permission: { module: 'projects', action: 'view' } },
+);
+
+/**
+ * Delete a project, as Zoho Books' Delete: only while nothing is logged,
+ * booked or billed to it. Otherwise refused with `in_use`, and the screen
+ * offers archiving it instead (services/projects.ts deleteProject).
+ */
+export const DELETE = route(
+  async ({ orgId, user, params, req }) => {
+    const pid = idParam(params);
+    const reason = new URL(req.url).searchParams.get('reason')?.trim().slice(0, 300) || null;
+    const gone = await transaction(async (trx) => {
+      const r = await deleteProject(trx, orgId, pid);
+      await logAudit({
+        trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'delete', targetType: 'project', targetId: pid,
+        targetLabel: r.name, detail: `Deleted project ${r.name}${reason ? ` — ${reason}` : ''}`, payload: { before: r.snapshot },
+        ...(reason ? { reason } : {}), ...auditMeta(req),
+      });
+      return r;
+    });
+    return { deleted: true, name: gone.name };
+  },
+  { permission: { module: 'projects', action: 'void' } },
 );

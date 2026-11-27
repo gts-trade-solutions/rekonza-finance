@@ -28,11 +28,13 @@ import { usePermission } from '@/lib/store/hooks';
 import { useSession } from '@/components/layout/session-provider';
 import { formatINRCompact } from '@/lib/money';
 import { today } from '@/lib/selectors';
+import { DeleteConfirmDialog, RowActions, withReasonQuery } from '@/components/shared/row-actions';
 
 interface Entry {
   id: string; boeNo: string; boeDate: string; portCode: string; assessablePaise: number; customsDutyPaise: number;
   igstPaise: number; cessPaise: number; itcEligibility: string; status: string; voidReason: string | null;
   billId: string | null; billNo: string | null; vendorName: string | null; paidThrough: string;
+  vendorId: string | null; branchId: string; dutyAccountId: string; paidThroughBankAccountId: string; notes: string | null;
 }
 interface Masters { accounts: { id: string; code: string; name: string; type: string }[]; bankAccounts: { id: string; name: string; kind: string }[] }
 
@@ -40,13 +42,27 @@ const BLANK = { vendorId: '', boeNo: '', boeDate: today(), portCode: '', assessa
 
 export default function BillsOfEntryPage() {
   const canCreate = usePermission('purchases', 'create');
+  const canEdit = usePermission('purchases', 'edit');
   const canVoid = usePermission('purchases', 'void');
+  // Zoho's Edit (the same window, filled in) and Delete; both reverse the entry for the duty and IGST.
+  const [editing, setEditing] = useState<Entry | null>(null);
+  const [deleting, setDeleting] = useState<Entry | null>(null);
   const session = useSession();
   const state = useApi(() => api.get<{ entries: Entry[] }>('/api/bills-of-entry'), []);
   const masters = useApi<Masters>(() => api.get('/api/masters'), []);
   const [open, setOpen] = useState(false);
   const [f, setF] = useState(BLANK);
-  const create = useApiAction((input: unknown) => api.post<{ id: string; totalPaise: number }>('/api/bills-of-entry', input));
+  const create = useApiAction((input: unknown) => (editing
+    ? api.put<{ id: string; totalPaise: number }>(`/api/bills-of-entry/${editing.id}`, input)
+    : api.post<{ id: string; totalPaise: number }>('/api/bills-of-entry', input)));
+  const startEdit = (e: Entry) => {
+    setEditing(e);
+    setF({
+      vendorId: e.vendorId ?? '', boeNo: e.boeNo, boeDate: e.boeDate, portCode: e.portCode, assessable: e.assessablePaise, duty: e.customsDutyPaise,
+      igst: e.igstPaise, cess: e.cessPaise, itc: e.itcEligibility, dutyAccountId: e.dutyAccountId, bankId: e.paidThroughBankAccountId, notes: e.notes ?? '',
+    });
+    setOpen(true);
+  };
   const voidIt = useApiAction((id: string, reason: string) => api.patch('/api/bills-of-entry', { action: 'void', id, reason }));
 
   const dutyAccounts = useMemo(() => (masters.data?.accounts ?? []).filter((a) => a.type === 'expense' || a.code === '1500' || a.type === 'asset')
@@ -56,13 +72,17 @@ export default function BillsOfEntryPage() {
   const save = async () => {
     if (!f.boeNo || !f.portCode || !f.dutyAccountId || !f.bankId) { toast.error('Give the bill of entry number, the port, where the duty goes and what it was paid from.'); return; }
     const done = await create.run({
-      branchId: session.user.branchId ?? session.branches[0]?.id, vendorId: f.vendorId || null, boeNo: f.boeNo, boeDate: f.boeDate,
+      branchId: editing?.branchId ?? session.user.branchId ?? session.branches[0]?.id, vendorId: f.vendorId || null, boeNo: f.boeNo, boeDate: f.boeDate,
       portCode: f.portCode, assessablePaise: f.assessable, customsDutyPaise: f.duty, igstPaise: f.igst, cessPaise: f.cess,
       itcEligibility: f.itc, dutyAccountId: f.dutyAccountId, paidThroughBankAccountId: f.bankId, notes: f.notes || null,
     });
-    if (!done) { toast.error(create.error ?? 'Not recorded'); return; }
-    toast.success(`Bill of entry ${f.boeNo} recorded`, { description: f.itc === 'ineligible' ? 'The IGST is part of the cost.' : 'The IGST is input credit in this month’s GSTR-3B, table 4(A)(1).' });
+    if (!done) { toast.error(editing ? 'Not saved' : 'Not recorded', { description: create.error ?? undefined }); return; }
+    toast.success(`Bill of entry ${f.boeNo} ${editing ? 'saved' : 'recorded'}`, {
+      description: editing ? 'Its entry as it was is reversed and posted again.'
+        : f.itc === 'ineligible' ? 'The IGST is part of the cost.' : 'The IGST is input credit in this month’s GSTR-3B, table 4(A)(1).',
+    });
     setOpen(false);
+    setEditing(null);
     setF({ ...BLANK, bankId: f.bankId, dutyAccountId: f.dutyAccountId });
     state.refetch();
   };
@@ -81,13 +101,18 @@ export default function BillsOfEntryPage() {
     },
     {
       key: 'x', header: '', sortValue: () => 0,
-      cell: (r) => (r.status !== 'void' && canVoid ? (
-        <Button size="sm" variant="ghost" onClick={async () => {
-          const reason = window.prompt(`Why is bill of entry ${r.boeNo} being cancelled?`);
-          if (!reason) return;
-          if (await voidIt.run(r.id, reason)) { toast.info('Voided; its entry is reversed.'); state.refetch(); } else toast.error(voidIt.error ?? 'Not voided');
-        }}>Void</Button>
-      ) : null),
+      cell: (r) => (
+        <RowActions onEdit={canEdit && r.status !== 'void' ? () => startEdit(r) : null} onDelete={canVoid ? () => setDeleting(r) : null}
+          editTitle={`Edit bill of entry ${r.boeNo}`} deleteTitle={`Delete bill of entry ${r.boeNo}`}>
+          {r.status !== 'void' && canVoid && (
+            <Button size="xs" variant="ghost" onClick={async () => {
+              const reason = window.prompt(`Why is bill of entry ${r.boeNo} being cancelled?`);
+              if (!reason) return;
+              if (await voidIt.run(r.id, reason)) { toast.info('Voided; its entry is reversed.'); state.refetch(); } else toast.error(voidIt.error ?? 'Not voided');
+            }}>Void</Button>
+          )}
+        </RowActions>
+      ),
     },
   ];
 
@@ -96,7 +121,7 @@ export default function BillsOfEntryPage() {
       <PageHeader
         title="Bills of Entry"
         description="Goods imported: the customs duty is a cost of the goods, the IGST and cess paid at customs are input credit (GSTR-3B 4(A)(1)). The supplier's own invoice is an ordinary bill, with no GST."
-        actions={canCreate ? <Button size="sm" onClick={() => setOpen(true)} className="gap-1.5"><Plus className="size-4" /> Record bill of entry</Button> : undefined}
+        actions={canCreate ? <Button size="sm" onClick={() => { setEditing(null); setF({ ...BLANK, bankId: f.bankId, dutyAccountId: f.dutyAccountId }); setOpen(true); }} className="gap-1.5"><Plus className="size-4" /> Record bill of entry</Button> : undefined}
       />
       <AsyncPage state={state}>
         {(d) => {
@@ -114,10 +139,20 @@ export default function BillsOfEntryPage() {
           );
         }}
       </AsyncPage>
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-w-lg">
+      <DeleteConfirmDialog
+        open={!!deleting} onOpenChange={(v) => { if (!v) setDeleting(null); }}
+        title={`Delete bill of entry ${deleting?.boeNo ?? ''}?`}
+        description={deleting?.status === 'void'
+          ? 'It was voided, so its entry is already reversed. It is removed; the audit trail keeps a copy of it as it was.'
+          : 'It is removed and its entry for the duty and the IGST is reversed in the ledger, so the credit leaves this month’s GSTR-3B. Refused once that GSTR-3B is filed, or while the payment is matched in Banking.'}
+        doneMessage={`Bill of entry ${deleting?.boeNo ?? ''} deleted`}
+        onConfirm={(reason) => api.delete(withReasonQuery(`/api/bills-of-entry/${deleting!.id}`, reason))}
+        onDone={() => void state.refetch()}
+      />
+      <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) setEditing(null); }}>
+        <DialogContent className="max-w-lg" data-slot="boe-dialog">
           <DialogHeader>
-            <DialogTitle>Record a bill of entry</DialogTitle>
+            <DialogTitle>{editing ? `Edit bill of entry ${editing.boeNo}` : 'Record a bill of entry'}</DialogTitle>
             <FoldNav />
             <DialogDescription>From the bill of entry and the duty paid on ICEGATE. The supplier&rsquo;s invoice goes in as a bill.</DialogDescription>
           </DialogHeader>
@@ -139,8 +174,8 @@ export default function BillsOfEntryPage() {
           </div>
           {create.error && <p className="text-sm text-destructive">{create.error}</p>}
           <DialogFooter>
-            <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
-            <Button onClick={save} disabled={create.busy}>{create.busy ? 'Recording…' : 'Record'}</Button>
+            <Button variant="outline" onClick={() => { setOpen(false); setEditing(null); }}>Cancel</Button>
+            <Button onClick={save} disabled={create.busy} data-slot="boe-save">{create.busy ? 'Saving…' : editing ? 'Save' : 'Record'}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

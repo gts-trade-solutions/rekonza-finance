@@ -79,12 +79,22 @@ export interface ProductionInput {
   notes?: string | null;
 }
 
-/** Make `qty` of a BOM's item: components consumed in proportion, cost fixed now. */
-export async function recordProduction(trx: Trx, orgId: number, userId: number | null, input: ProductionInput) {
+/**
+ * Make `qty` of a BOM's item: components consumed in proportion, cost fixed now.
+ *
+ * `replace` is Edit (services/stock-changes.ts): the run is written again over
+ * its own row under its own number, costed afresh on its (new) date. The caller
+ * has already taken the old version out of stock. A run keeps the bill of
+ * materials it was made from even if that has since been marked not in use.
+ */
+export async function recordProduction(
+  trx: Trx, orgId: number, userId: number | null, input: ProductionInput,
+  opts: { replace?: { id: number; number: string; bomId: number | null } } = {},
+) {
   if (!(input.qty > 0)) throw badRequest('Make more than zero.');
   const bom = (await listBoms(trx, orgId)).find((b) => b.id === String(input.bomId));
   if (!bom) throw notFound('That bill of materials does not exist.');
-  if (!bom.isActive) throw conflict(`${bom.name} for ${bom.itemName} is no longer in use.`);
+  if (!bom.isActive && opts.replace?.bomId !== input.bomId) throw conflict(`${bom.name} for ${bom.itemName} is no longer in use.`);
   const factor = input.qty / bom.outputQty;
   const needs = bom.lines.map((l) => ({ itemId: Number(l.itemId), name: l.name, qty: Math.round(l.qty * factor * 10_000) / 10_000 }));
 
@@ -100,13 +110,21 @@ export async function recordProduction(trx: Trx, orgId: number, userId: number |
   const componentsCost = costed.reduce((t, c) => t + c.cost, 0);
   const overhead = input.overheadPaise ?? 0;
   if (overhead < 0) throw badRequest('Overhead cannot be negative.');
-  const number = await allocateOrgNumber(trx, orgId, 'MFG', fyLabelFor(input.date), 'MFG');
-  const id = Number((await trx.insertInto('productions').values({
-    org_id: orgId, number, bom_id: input.bomId, item_id: Number(bom.itemId), branch_id: input.branchId, qty: String(input.qty),
+  const values = {
+    bom_id: input.bomId, item_id: Number(bom.itemId), branch_id: input.branchId, qty: String(input.qty),
     produced_on: input.date, components_cost: toSqlFromPaise(componentsCost), overhead: toSqlFromPaise(overhead),
-    cost: toSqlFromPaise(componentsCost + overhead), notes: input.notes ?? null, created_by_user_id: userId,
+    cost: toSqlFromPaise(componentsCost + overhead), notes: input.notes ?? null,
     warehouse_id: await checkGodown(trx, orgId, input.branchId, input.warehouseId),
-  }).executeTakeFirstOrThrow()).insertId);
+  };
+  let id: number;
+  let number: string;
+  if (opts.replace) {
+    ({ id, number } = opts.replace);
+    await trx.updateTable('productions').set({ ...values, status: 'done' }).where('id', '=', id).where('org_id', '=', orgId).execute();
+  } else {
+    number = await allocateOrgNumber(trx, orgId, 'MFG', fyLabelFor(input.date), 'MFG');
+    id = Number((await trx.insertInto('productions').values({ org_id: orgId, number, created_by_user_id: userId, ...values }).executeTakeFirstOrThrow()).insertId);
+  }
   await trx.insertInto('production_lines').values(costed.map((c) => ({
     production_id: id, item_id: c.itemId, qty: String(c.qty), cost: toSqlFromPaise(c.cost),
   }))).execute();
@@ -122,11 +140,14 @@ export async function voidProduction(trx: Trx, orgId: number, id: number) {
 
 export async function listProductions(ex: Executor, orgId: number) {
   const rows = await ex.selectFrom('productions as p').innerJoin('items as i', 'i.id', 'p.item_id').innerJoin('branches as b', 'b.id', 'p.branch_id')
-    .select(['p.id', 'p.number', 'p.produced_on', 'i.name as item_name', 'i.uqc', 'p.qty', 'p.components_cost', 'p.overhead', 'p.cost', 'p.status', 'b.name as branch_name', 'p.notes'])
+    .select(['p.id', 'p.number', 'p.produced_on', 'i.name as item_name', 'i.uqc', 'p.qty', 'p.components_cost', 'p.overhead', 'p.cost', 'p.status', 'b.name as branch_name', 'p.notes',
+      'p.bom_id', 'p.branch_id', 'p.warehouse_id'])
     .where('p.org_id', '=', orgId).orderBy('p.produced_on', 'desc').orderBy('p.id', 'desc').limit(300).execute();
   return rows.map((r) => ({
     id: String(r.id), number: r.number, date: String(r.produced_on).slice(0, 10), itemName: r.item_name, uqc: r.uqc, qty: Number(r.qty),
     componentsCostPaise: toPaiseFromSql(r.components_cost), overheadPaise: toPaiseFromSql(r.overhead), costPaise: toPaiseFromSql(r.cost),
     unitCostPaise: Math.round(toPaiseFromSql(r.cost) / Number(r.qty)), status: r.status, branch: r.branch_name, notes: r.notes,
+    // For its Edit window.
+    bomId: r.bom_id ? String(r.bom_id) : null, branchId: String(r.branch_id), warehouseId: r.warehouse_id ? String(r.warehouse_id) : null,
   }));
 }

@@ -102,41 +102,56 @@ export async function createPurchaseOrder(
   orgId: number,
   userId: number | null,
   input: CreatePurchaseOrderInput,
+  /** Edit (purchase-changes.ts updatePurchaseOrder): write over this row, keeping its number. */
+  opts: { replace?: { id: number; number: string; status: 'draft' | 'open' | 'closed' } } = {},
 ): Promise<CreatedPurchaseDoc> {
   const ctx = await vendorContext(trx, orgId, input.branchId, input.vendorId);
   // Purchase prices, not sale prices — an unpriced line takes what we pay.
   const costed = await costLines(trx, orgId, ctx.supplyType, input.lines, 'purchase_price', input.date);
   const { rounded } = roundToRupee(costed.tax.taxablePaise + totalTaxPaise(costed.tax));
 
-  const series = await seriesFor(trx, orgId, 'PO', input.voucherTypeId);
-  const number =
-    input.number?.trim() ||
-    (await allocateNumber(trx, orgId, input.branchId, series.docType, fyLabelFor(input.date), { prefix: series.prefix }));
+  const replace = opts.replace;
+  const series = replace ? null : await seriesFor(trx, orgId, 'PO', input.voucherTypeId);
+  const number = replace?.number ??
+    (input.number?.trim() ||
+    (await allocateNumber(trx, orgId, input.branchId, series!.docType, fyLabelFor(input.date), { prefix: series!.prefix })));
 
-  const inserted = await trx
-    .insertInto('purchase_orders')
-    .values({
-      org_id: orgId,
-      branch_id: input.branchId,
-      number,
-      vendor_id: input.vendorId,
-      order_date: input.date,
-      expected_date: input.expectedDate ?? null,
-      place_of_supply: ctx.placeOfSupply,
-      supply_type: ctx.supplyType,
-      status: input.status ?? 'open',
-      subtotal: toSqlFromPaise(costed.tax.taxablePaise),
-      cgst: toSqlFromPaise(costed.tax.cgstPaise),
-      sgst: toSqlFromPaise(costed.tax.sgstPaise),
-      igst: toSqlFromPaise(costed.tax.igstPaise),
-      cess: toSqlFromPaise(costed.tax.cessPaise),
-      total: toSqlFromPaise(rounded),
-      billed_amount: toSqlFromPaise(0),
-      notes: input.notes ?? null,
-      created_by_user_id: userId,
-    })
-    .executeTakeFirstOrThrow();
-  const id = Number(inserted.insertId);
+  const head = {
+    branch_id: input.branchId,
+    vendor_id: input.vendorId,
+    order_date: input.date,
+    expected_date: input.expectedDate ?? null,
+    place_of_supply: ctx.placeOfSupply,
+    supply_type: ctx.supplyType,
+    subtotal: toSqlFromPaise(costed.tax.taxablePaise),
+    cgst: toSqlFromPaise(costed.tax.cgstPaise),
+    sgst: toSqlFromPaise(costed.tax.sgstPaise),
+    igst: toSqlFromPaise(costed.tax.igstPaise),
+    cess: toSqlFromPaise(costed.tax.cessPaise),
+    total: toSqlFromPaise(rounded),
+    notes: input.notes ?? null,
+  };
+  let id: number;
+  if (replace) {
+    // The vendor's answer on the portal was to the order as it stood; the changed one waits for a new one.
+    await trx.updateTable('purchase_orders')
+      .set({ ...head, status: replace.status, vendor_response: null, vendor_response_at: null, vendor_response_note: null })
+      .where('id', '=', replace.id).where('org_id', '=', orgId).execute();
+    id = replace.id;
+  } else {
+    const inserted = await trx
+      .insertInto('purchase_orders')
+      .values({
+        org_id: orgId,
+        number,
+        ...head,
+        status: input.status ?? 'open',
+        billed_amount: toSqlFromPaise(0),
+        created_by_user_id: userId,
+      })
+      .executeTakeFirstOrThrow();
+    id = Number(inserted.insertId);
+  }
 
   await trx
     .insertInto('purchase_order_lines')

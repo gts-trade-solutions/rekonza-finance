@@ -105,3 +105,29 @@ export async function followUpsFor(ex: Executor, orgId: number, contactId: numbe
     nextFollowup: f.next_followup ? String(f.next_followup).slice(0, 10) : null,
   }));
 }
+
+/**
+ * Edit a follow-up as logged: what was said, the promise, when to chase next.
+ * The customer and the invoice it was about stay; log a new one for another.
+ */
+export async function updateFollowUp(trx: Trx, orgId: number, id: number, input: Omit<FollowUpInput, 'contactId' | 'invoiceId'>) {
+  const f = await trx.selectFrom('collection_followups').selectAll().where('id', '=', id).where('org_id', '=', orgId).forUpdate().executeTakeFirst();
+  if (!f) throw notFound('That follow-up does not exist.');
+  if (!input.note.trim()) throw badRequest('Say what happened: who you spoke to and what they said.');
+  if (input.promisedPaise != null && input.promisedPaise <= 0) throw badRequest('A promise to pay is for an amount above zero.');
+  if (input.promisedPaise != null && !input.promisedDate) throw badRequest('Say when they promised to pay.');
+  await trx.updateTable('collection_followups').set({
+    kind: input.kind, note: input.note.trim().slice(0, 1000), promised_date: input.promisedDate ?? null,
+    promised_amount: input.promisedPaise != null ? toSqlFromPaise(input.promisedPaise) : null,
+    next_followup: input.nextFollowup ?? input.promisedDate ?? null,
+  }).where('id', '=', id).execute();
+  return { contactId: f.contact_id, before: { kind: f.kind, note: f.note, promisedDate: f.promised_date, promisedAmount: f.promised_amount, nextFollowup: f.next_followup } };
+}
+
+/** Delete a follow-up logged in error. The customer's chase goes back to the one before it. */
+export async function deleteFollowUp(trx: Trx, orgId: number, id: number) {
+  const f = await trx.selectFrom('collection_followups').selectAll().where('id', '=', id).where('org_id', '=', orgId).forUpdate().executeTakeFirst();
+  if (!f) throw notFound('That follow-up does not exist.');
+  await trx.deleteFrom('collection_followups').where('id', '=', id).execute();
+  return { contactId: f.contact_id, note: f.note };
+}

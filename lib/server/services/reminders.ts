@@ -118,3 +118,33 @@ export async function markReminder(trx: Trx, orgId: number, userId: number | nul
   if (r.status !== 'queued') throw badRequest(`It was already ${r.status}.`);
   await trx.updateTable('payment_reminders').set({ status, sent_at: new Date(), sent_by_user_id: userId }).where('id', '=', id).execute();
 }
+
+/**
+ * Edit a reminder waiting to go: who it goes to and what it says. The queue
+ * wrote it from the book's template; this is the person's last word before it
+ * is sent. {link} is where the invoice's link goes when it is sent.
+ */
+export async function updateReminder(trx: Trx, orgId: number, id: number, input: { to?: string | null; subject?: string | null; message: string }) {
+  const r = await trx.selectFrom('payment_reminders').select(['status', 'channel']).where('id', '=', id).where('org_id', '=', orgId).forUpdate().executeTakeFirst();
+  if (!r) throw notFound('That reminder was not found.');
+  if (r.status !== 'queued') throw badRequest(`It was already ${r.status}, so it can no longer be changed.`);
+  const message = input.message.trim();
+  if (!message) throw badRequest('Write what the reminder says.');
+  const to = input.to?.trim() || null;
+  if (to && r.channel === 'email' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) throw badRequest('That email address does not look right.');
+  if (to && r.channel !== 'email' && !/^\+?[\d\s-]{8,20}$/.test(to)) throw badRequest('Give the phone number in digits, with the country code if it is not Indian.');
+  await trx.updateTable('payment_reminders').set({ to_address: to, subject: input.subject?.trim() || null, message: message.slice(0, 2000) })
+    .where('id', '=', id).execute();
+}
+
+/**
+ * Delete a reminder waiting to go: it is taken off the queue and not sent. It
+ * is kept as skipped rather than erased, because the nightly sweep queues each
+ * stage once; were the row gone, the same reminder would be back tomorrow.
+ */
+export async function deleteReminder(trx: Trx, orgId: number, userId: number | null, id: number) {
+  const r = await trx.selectFrom('payment_reminders').select(['status']).where('id', '=', id).where('org_id', '=', orgId).forUpdate().executeTakeFirst();
+  if (!r) throw notFound('That reminder was not found.');
+  if (r.status !== 'queued') throw badRequest(`It was already ${r.status}: that is the record of what happened, and it stays.`);
+  await trx.updateTable('payment_reminders').set({ status: 'skipped', sent_at: new Date(), sent_by_user_id: userId }).where('id', '=', id).execute();
+}

@@ -4,6 +4,7 @@ import { route, body, asId } from '@/lib/server/http';
 import { toPaiseFromSql } from '@/lib/server/money-sql';
 import { logAudit, auditMeta } from '@/lib/server/audit';
 import { recordBillOfEntry, voidBillOfEntry } from '@/lib/server/services/bill-of-entry';
+import { BillOfEntryBody, toBillOfEntryInput } from '@/lib/server/bill-of-entry-input';
 
 // Bills of entry: what customs charged on goods imported (services/bill-of-entry.ts).
 
@@ -13,7 +14,8 @@ export const GET = route(
       .leftJoin('contacts as c', 'c.id', 'e.vendor_id').leftJoin('bills as b', 'b.id', 'e.bill_id')
       .innerJoin('bank_accounts as k', 'k.id', 'e.paid_through_bank_account_id')
       .select(['e.id', 'e.boe_no', 'e.boe_date', 'e.port_code', 'e.assessable_value', 'e.customs_duty', 'e.igst', 'e.cess', 'e.itc_eligibility',
-        'e.status', 'e.void_reason', 'e.bill_id', 'b.internal_no as bill_no', 'c.display_name as vendor_name', 'k.name as paid_through'])
+        'e.status', 'e.void_reason', 'e.bill_id', 'b.internal_no as bill_no', 'c.display_name as vendor_name', 'k.name as paid_through',
+        'e.vendor_id', 'e.branch_id', 'e.duty_account_id', 'e.paid_through_bank_account_id', 'e.notes'])
       .where('e.org_id', '=', orgId).orderBy('e.boe_date', 'desc').orderBy('e.id', 'desc').limit(500).execute();
     return {
       entries: rows.map((r) => ({
@@ -22,6 +24,9 @@ export const GET = route(
         igstPaise: toPaiseFromSql(r.igst), cessPaise: toPaiseFromSql(r.cess), itcEligibility: r.itc_eligibility,
         status: r.status, voidReason: r.void_reason, billId: r.bill_id ? asId(r.bill_id) : null, billNo: r.bill_no,
         vendorName: r.vendor_name, paidThrough: r.paid_through,
+        // For Edit: the form as it was filled in.
+        vendorId: r.vendor_id ? asId(r.vendor_id) : null, branchId: asId(r.branch_id), dutyAccountId: asId(r.duty_account_id),
+        paidThroughBankAccountId: asId(r.paid_through_bank_account_id), notes: r.notes,
       })),
     };
   },
@@ -29,25 +34,12 @@ export const GET = route(
 );
 
 const id = z.union([z.string(), z.number()]);
-const DATE = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use a yyyy-mm-dd date.');
-const CreateInput = z.object({
-  branchId: id, vendorId: id.nullish(), billId: id.nullish(),
-  boeNo: z.string().trim().min(1).max(20), boeDate: DATE, portCode: z.string().trim().min(1).max(6),
-  assessablePaise: z.number().int().nonnegative(), customsDutyPaise: z.number().int().nonnegative(),
-  igstPaise: z.number().int().nonnegative(), cessPaise: z.number().int().nonnegative().optional(),
-  itcEligibility: z.enum(['eligible', 'ineligible', 'capital_goods']).optional(),
-  dutyAccountId: id, paidThroughBankAccountId: id, notes: z.string().trim().max(500).nullish(),
-});
 
 export const POST = route(
   async ({ orgId, user, req }) => {
-    const input = await body(req, CreateInput);
+    const input = await body(req, BillOfEntryBody);
     const r = await transaction(async (trx) => {
-      const made = await recordBillOfEntry(trx, orgId, user.userId, {
-        ...input, branchId: Number(input.branchId), vendorId: input.vendorId ? Number(input.vendorId) : null,
-        billId: input.billId ? Number(input.billId) : null, dutyAccountId: Number(input.dutyAccountId),
-        paidThroughBankAccountId: Number(input.paidThroughBankAccountId),
-      });
+      const made = await recordBillOfEntry(trx, orgId, user.userId, toBillOfEntryInput(input));
       await logAudit({
         trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'create', targetType: 'bill_of_entry', targetId: made.id,
         targetLabel: input.boeNo, detail: `Bill of entry ${input.boeNo}, ${input.portCode}: ₹${(made.totalPaise / 100).toFixed(2)} paid at customs`, ...auditMeta(req),
