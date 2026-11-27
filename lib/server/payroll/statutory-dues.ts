@@ -103,10 +103,14 @@ export async function statutoryRegister(ex: Executor, orgId: number, from: strin
     .select(['statutory_payments.id', 'statutory_payments.component', 'statutory_payments.period', 'statutory_payments.amount', 'statutory_payments.paid_on', 'statutory_payments.reference', 'statutory_payments.bank_account_id', 'bank_accounts.name as bank'])
     .where('statutory_payments.org_id', '=', orgId).where('statutory_payments.period', '>=', from).where('statutory_payments.period', '<=', to)
     .orderBy('statutory_payments.paid_on').execute();
+  // A month's payroll run in another system and imported (payroll-import.ts) owes the same dues.
+  const imports = await ex.selectFrom('payroll_imports').select(['month', 'pf', 'esi', 'pt', 'lwf'])
+    .where('org_id', '=', orgId).where('status', '=', 'posted').where('month', '>=', from).where('month', '<=', to).execute();
+  const importedDue = (month: string, c: StatutoryComponent) => imports.filter((i) => i.month === month).reduce((t, i) => t + p(i[c]), 0);
   const dues: DueRow[] = [];
-  for (const month of [...new Set([...months, ...paid.map((x) => x.period)])].sort()) {
+  for (const month of [...new Set([...months, ...paid.map((x) => x.period), ...imports.map((i) => i.month)])].sort()) {
     for (const c of COMPONENTS) {
-      const due = lines.filter((l) => l.month === month).reduce((t, l) => t + dueOf(l, c), 0);
+      const due = lines.filter((l) => l.month === month).reduce((t, l) => t + dueOf(l, c), 0) + importedDue(month, c);
       const pays = paid.filter((x) => x.period === month && x.component === c);
       if (!due && !pays.length) continue;
       const paidPaise = pays.reduce((t, x) => t + p(x.amount), 0);
