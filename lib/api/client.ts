@@ -3328,3 +3328,47 @@ export const voucherReversals = {
   /** Post every post-dated entry and auto-reversal whose date has come. */
   postDue: () => api.post<{ posted: number; held: number; failed: number; errors: string[] }>('/api/held-journals', { action: 'post-due' }),
 };
+
+// ── Status review 7, builder A: budgets by period, Budget vs Actuals ────────
+
+export type BudgetPeriodKind = 'monthly' | 'quarterly' | 'half_yearly' | 'yearly';
+export type BudgetColumnMode = 'month' | 'quarter' | 'half' | 'year';
+
+export interface BudgetPlanSummary {
+  id: string; name: string; fyLabel: string; period: BudgetPeriodKind;
+  branchId: string | null; branchName: string | null; costCentreId: string | null; costCentreName: string | null; projectId: string | null; projectName: string | null;
+  includeBalanceSheet: boolean; isPrimary: boolean; notes: string | null; accounts: number; incomePaise: number; expensePaise: number; updatedAt: string;
+}
+export interface BudgetPlanDetail extends BudgetPlanSummary {
+  periods: { no: number; label: string; from: string; to: string }[];
+  lines: { accountId: string; code: string; name: string; type: AccountRow['type']; amountsPaise: number[] }[];
+}
+export interface BudgetVarianceCell { budgetPaise: number; actualPaise: number; variancePaise: number; variancePct: number | null; favourable: boolean | null; flagged: boolean }
+export interface BudgetVarianceRow { accountId: string; code: string; name: string; type: AccountRow['type']; budgeted: boolean; computed?: boolean; cells: BudgetVarianceCell[]; total: BudgetVarianceCell }
+export interface BudgetVarianceReport {
+  plan: BudgetPlanDetail;
+  columns: { key: string; label: string; from: string; to: string }[];
+  upto: string; thresholdPct: number;
+  sections: { key: string; label: string; rows: BudgetVarianceRow[]; total: { cells: BudgetVarianceCell[]; total: BudgetVarianceCell } }[];
+  summary: { key: string; label: string; cells: BudgetVarianceCell[]; total: BudgetVarianceCell }[];
+  notes: string[];
+}
+export interface CostCentreBudgetRow {
+  costCentreId: string; code: string; name: string; planId: string | null; planName: string | null;
+  income: BudgetVarianceCell; expense: BudgetVarianceCell; net: BudgetVarianceCell;
+}
+
+export const budgetPlans = {
+  list: (fy?: string) => api.get<{ plans: BudgetPlanSummary[]; years: string[] }>('/api/budget-plans', fy ? { fy } : undefined),
+  get: (id: string) => api.get<BudgetPlanDetail>(`/api/budget-plans/${id}`),
+  save: (input: {
+    id?: string | null; name: string; fyLabel: string; period: BudgetPeriodKind; branchId?: string | null; costCentreId?: string | null; projectId?: string | null;
+    includeBalanceSheet?: boolean; isPrimary?: boolean; notes?: string | null; lines: { accountId: string; amountsPaise: number[] }[];
+  }) => api.post<{ id: string }>('/api/budget-plans', { action: 'save', ...input }),
+  clone: (id: string, name: string, fyLabel?: string, adjustPct?: number) => api.post<{ id: string }>('/api/budget-plans', { action: 'clone', id, name, fyLabel, adjustPct }),
+  fill: (input: { fyLabel: string; period: BudgetPeriodKind; accountIds: string[]; adjustPct?: number; branchId?: string | null; costCentreId?: string | null; projectId?: string | null }) =>
+    api.post<{ sourceFy: string; lines: { accountId: string; amountsPaise: number[] }[] }>('/api/budget-plans', { action: 'fill', ...input }),
+  remove: (id: string, reason?: string | null) => api.delete<{ deleted: true }>(`/api/budget-plans/${id}${reason ? `?reason=${encodeURIComponent(reason)}` : ''}`),
+  variance: (id: string, params?: { columns?: BudgetColumnMode; upto?: string; threshold?: number }) => api.get<BudgetVarianceReport>(`/api/budget-plans/${id}/variance`, params),
+  costing: (fy: string, upto?: string) => api.get<{ fy: string; from: string; to: string; centres: CostCentreBudgetRow[] }>('/api/budget-plans/costing', { fy, ...(upto ? { upto } : {}) }),
+};

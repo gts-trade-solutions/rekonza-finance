@@ -63,6 +63,10 @@ const CATALOGUE: { group: string; blurb: string; reports: ReportDef[] }[] = [
       { title: 'Reconciliation Status', href: '/reports/reconciliation-status', description: 'Each bank account: statement lines matched and still to match, and the books against the statement.' },
       { title: 'Realised Exchange Gain or Loss', href: '/reports/realised-fx', description: 'The exchange difference on foreign-currency invoices and bills settled in the period.' },
       { title: 'Unrealised Exchange Gain or Loss', href: '/reports/unrealised-fx', description: 'What open foreign-currency documents would gain or lose at the closing rates.' },
+      // Status review 7 (builder A).
+      { title: 'Budget vs Actuals', href: '/reports/budget-vs-actuals', description: 'Each account against its budget by month, quarter or year: variance in rupees and per cent, favourable or not.' },
+      { title: 'Cost Centre Costing', href: '/accountant/budgets?tab=costing', description: 'Each cost centre’s budget against its own income and expense.' },
+      { title: 'Reversed Vouchers', href: '/accountant/reversed-vouchers', description: 'Every reversal pair with its reason and who did it.' },
     ],
   },
   {
