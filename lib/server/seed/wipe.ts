@@ -36,6 +36,8 @@ export const CHILD_TABLES: ReadonlyArray<readonly [string, string, string]> = [
   ['tally_stock_items', 'company_id', 'tally_companies'],
   ['tally_vouchers', 'company_id', 'tally_companies'],
   ['tally_voucher_entries', 'company_id', 'tally_companies'],
+  // Each Rule 37 reclaim's share per reversal (129_itc_reclaims); the reclaim carries org_id.
+  ['itc_reclaim_lines', 'reclaim_id', 'itc_reclaims'],
 ];
 
 /**
