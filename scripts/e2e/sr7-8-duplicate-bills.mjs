@@ -120,8 +120,8 @@ if (FRESH) {
   await row.locator('[data-slot="dup-clear"]').click();
   await page.waitForTimeout(1200);
   await page.locator('[data-slot="dup-filter-cleared"]').click();
-  await page.waitForTimeout(800);
-  const cleared = await page.locator('[data-slot="dup-row"]').first().innerText().catch(() => '');
+  await page.locator('[data-slot="dup-row"][data-status="cleared"]').first().waitFor({ timeout: 60_000 }).catch(() => {});
+  const cleared = await page.locator('[data-slot="dup-row"][data-status="cleared"]').first().innerText().catch(() => '');
   check(t, 'cleared, with who and the note', /Checked with Vendor X/.test(cleared), cleared.replace(/\s+/g, ' ').slice(0, 160));
   await shot(t, 'register-cleared');
 

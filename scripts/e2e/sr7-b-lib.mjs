@@ -57,6 +57,11 @@ export async function shot(t, what) {
 
 /** The app's own API as the signed-in person (cookies shared with the page). */
 export async function api(t, method, url, body) {
+  // The document forms send the branch they are raised in; so do these steps.
+  if (method === 'POST' && body && !body.branchId && /^\/api\/(invoices|bills|sales-documents|expenses)(\?|$)/.test(url)) {
+    if (!t.branchId) t.branchId = String(((await api(t, 'GET', '/api/settings')).json?.branches ?? [])[0]?.id ?? '');
+    body = { ...body, branchId: t.branchId };
+  }
   let r;
   for (let attempt = 0; ; attempt++) {
     try {
@@ -79,6 +84,7 @@ export const stamp = Date.now().toString(36).slice(-5);
 /** Sign up a brand-new company through the sign-up screen, or sign in to the demo book. */
 export async function enter(t) {
   const { page } = t;
+  t.branchId = null;
   if (FRESH) {
     await goto(t, '/register');
     await page.locator('#businessName').fill(`Auditor Test ${t.item} ${stamp}`);
