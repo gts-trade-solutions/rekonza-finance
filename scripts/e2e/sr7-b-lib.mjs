@@ -88,15 +88,27 @@ export async function enter(t) {
     await page.locator('#email').fill(`audit-${t.item}-${stamp}-${Math.floor(Math.random() * 1e6)}@example.test`);
     await page.locator('#password').fill('Audit@Test2026');
     await page.getByRole('button', { name: /Create my books/ }).click();
-    await page.waitForURL('**/dashboard', { timeout: 240_000 });
+    await landOnDashboard(t);
   } else {
     await goto(t, '/login');
     await page.locator('#email').fill('arun@raceautospares.in');
     await page.locator('#password').fill('Rekonza@2026');
     await page.getByRole('button', { name: /^Sign in$/ }).click();
-    await page.waitForURL('**/dashboard', { timeout: 240_000 });
+    await landOnDashboard(t);
   }
   check(t, FRESH ? 'a new company is signed up and opens its dashboard' : 'signed in to the demo book', page.url().includes('/dashboard'));
+}
+
+/** The dashboard after signing up or in; if the server restarted meanwhile, open it again (the session is kept). */
+async function landOnDashboard(t) {
+  try {
+    await t.page.waitForURL('**/dashboard', { timeout: 240_000 });
+  } catch (e) {
+    if (!/ERR_CONNECTION|Timeout/.test(String(e))) throw e;
+    console.log('(the server restarted while the dashboard opened; opening it again)');
+    await serverUp();
+    await goto(t, '/dashboard');
+  }
 }
 
 /** Open a combobox (by the text its trigger shows) inside `scope`, search, and pick the option. */
