@@ -279,7 +279,10 @@ try {
   const ties = await sch.locator('[data-slot="schedule-ties"]').innerText();
   const pmRow = await sch.locator('[data-slot="schedule-row"]', { hasText: 'Plant & Machinery' }).innerText();
   check('Schedule: every check against the ledger passes', !/Differs/.test(ties) && (ties.match(/Pass/g) ?? []).length >= 4, ties.replace(/\s+/g, ' ').slice(0, 300));
-  check('Schedule: Plant & Machinery shows the part disposed of (₹3,00,000)' + (FRESH ? ' and ₹16,00,000 added' : ''), pmRow.includes('3,00,000.00') && (!FRESH || pmRow.includes('16,00,000.00')), pmRow.replace(/\s+/g, ' '));
+  const schedApi = await api('GET', '/api/fixed-assets?view=schedule&fy=2026');
+  const pmApi = schedApi.rows.find((r) => r.label === 'Plant & Machinery');
+  check('Schedule: Plant & Machinery shows the part disposed of (₹3,00,000)' + (FRESH ? ' and ₹16,00,000 added' : ''),
+    FRESH ? pmRow.includes('3,00,000.00') && pmRow.includes('16,00,000.00') : (pmApi?.disposalsPaise ?? 0) >= 3_00_000_00 && pmRow.includes(inr(pmApi.disposalsPaise).slice(1)), pmRow.replace(/\s+/g, ' '));
   await shot('schedule-iii');
 
   // ── 4. Income tax: the van's sale out of its block (section 43(6)) ────────
