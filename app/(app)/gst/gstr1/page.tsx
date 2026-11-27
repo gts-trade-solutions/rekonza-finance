@@ -101,6 +101,9 @@ function DocTable({ slot, rows, totals, showGstin, typeLabel }: {
               <td className="px-3 py-2 font-medium">
                 <Link href={r.href} className="text-primary hover:underline">{r.number}</Link>
                 {r.noteType && <span className="ml-1 text-[10px] text-muted-foreground">{r.noteType === 'C' ? 'credit note' : 'debit note'}</span>}
+                {r.againstNumber && (
+                  <span className="ml-1 text-[10px] text-muted-foreground" data-slot="gstr1-against">vs {r.againstNumber}{r.againstDate ? ` of ${r.againstDate}` : ''}</span>
+                )}
                 {r.reverseCharge && <span className="ml-1.5 rounded border px-1 text-[10px] text-muted-foreground" data-slot="gstr1-rcm">Reverse charge</span>}
                 {r.eco && <span className="ml-1.5 rounded border px-1 text-[10px] text-muted-foreground" title={`Sold through ${r.eco.gstin}`}>E-commerce {r.eco.section === '9_5' ? '9(5)' : 'TCS'}</span>}
               </td>
@@ -177,8 +180,8 @@ function exportExcel(d: Gstr1ReportView) {
   const rs = (n: number) => toRupees(n);
   const heads = (h: Heads): Cell[] => [rs(h.taxablePaise), rs(h.igstPaise), rs(h.cgstPaise), rs(h.sgstPaise), rs(h.cessPaise)];
   const docSheet = (name: string, rows: Gstr1DocRowView[]): Sheet => ({
-    name, rows: [['Number', 'Date', 'Customer', 'GSTIN', 'Place of supply', 'Type', 'Reverse charge', 'E-commerce operator', 'Value', 'Taxable value', 'IGST', 'CGST', 'SGST', 'Cess'],
-      ...rows.map((r) => [r.number, r.date, r.party, r.gstin ?? '', stateLabel(r.pos), r.type ?? '', r.reverseCharge ? 'Y' : 'N', r.eco?.gstin ?? '', rs(r.valuePaise), ...heads(r)])],
+    name, rows: [['Number', 'Date', 'Customer', 'GSTIN', 'Place of supply', 'Type', 'Original invoice', 'Original invoice date', 'Reverse charge', 'E-commerce operator', 'Value', 'Taxable value', 'IGST', 'CGST', 'SGST', 'Cess'],
+      ...rows.map((r) => [r.number, r.date, r.party, r.gstin ?? '', stateLabel(r.pos), r.type ?? '', r.againstNumber ?? '', r.againstDate ?? '', r.reverseCharge ? 'Y' : 'N', r.eco?.gstin ?? '', rs(r.valuePaise), ...heads(r)])],
   });
   const t = d.tables;
   const sheets: Sheet[] = [

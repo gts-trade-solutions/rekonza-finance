@@ -58,6 +58,9 @@ export interface Gstr1DocRow extends Heads {
   /** Sold through an e-commerce operator: its GSTIN and the section. */
   eco: { gstin: string; section: '52' | '9_5' } | null;
   shippingBill: string | null;
+  /** A credit or debit note: the invoice it corrects, its number and date (YYYY-MM-DD), as rule 53(1A) asks. */
+  againstNumber: string | null;
+  againstDate: string | null;
   href: string;
 }
 
@@ -145,22 +148,28 @@ export async function gstr1Report(ex: Executor, orgId: number, month: string): P
   // Who each document was to, and the bits the file keeps only as codes.
   const invIds = docs.filter((d) => d.docType !== 'credit_note').map((d) => d.docId);
   const cnIds = docs.filter((d) => d.docType === 'credit_note').map((d) => d.docId);
-  const meta = new Map<string, { party: string; gstin: string | null; rc: boolean; sb: string | null }>();
+  const meta = new Map<string, { party: string; gstin: string | null; rc: boolean; sb: string | null; againstNumber: string | null; againstDate: string | null }>();
+  const ymd = (v: unknown) => (v ? String(v instanceof Date ? new Date(v.getTime() - v.getTimezoneOffset() * 60_000).toISOString() : v).slice(0, 10) : null);
   if (invIds.length) {
     const r = await ex.selectFrom('invoices as i').innerJoin('contacts as c', 'c.id', 'i.customer_id')
-      .select(['i.id', 'i.doc_kind', 'c.display_name', 'c.gstin', 'i.reverse_charge', 'i.export_shipping_bill_no', 'i.export_port_code'])
+      .leftJoin('invoices as o', 'o.id', 'i.against_invoice_id')
+      .select(['i.id', 'i.doc_kind', 'c.display_name', 'c.gstin', 'i.reverse_charge', 'i.export_shipping_bill_no', 'i.export_port_code',
+        'o.number as against_number', 'o.invoice_date as against_date'])
       .where('i.id', 'in', invIds).execute();
     for (const x of r) {
       meta.set(`${x.doc_kind === 'debit_note' ? 'debit_note' : 'invoice'}:${x.id}`, {
         party: x.display_name, gstin: x.gstin, rc: Number(x.reverse_charge) === 1,
         sb: x.export_shipping_bill_no ? `${x.export_port_code ?? ''} ${x.export_shipping_bill_no}`.trim() : null,
+        againstNumber: x.doc_kind === 'debit_note' ? x.against_number ?? null : null,
+        againstDate: x.doc_kind === 'debit_note' ? ymd(x.against_date) : null,
       });
     }
   }
   if (cnIds.length) {
     const r = await ex.selectFrom('credit_notes as n').innerJoin('contacts as c', 'c.id', 'n.customer_id')
-      .select(['n.id', 'c.display_name', 'c.gstin']).where('n.id', 'in', cnIds).execute();
-    for (const x of r) meta.set(`credit_note:${x.id}`, { party: x.display_name, gstin: x.gstin, rc: false, sb: null });
+      .leftJoin('invoices as o', 'o.id', 'n.against_invoice_id')
+      .select(['n.id', 'c.display_name', 'c.gstin', 'o.number as against_number', 'o.invoice_date as against_date']).where('n.id', 'in', cnIds).execute();
+    for (const x of r) meta.set(`credit_note:${x.id}`, { party: x.display_name, gstin: x.gstin, rc: false, sb: null, againstNumber: x.against_number ?? null, againstDate: ymd(x.against_date) });
   }
   const row = (d: Gstr1DocEntry): Gstr1DocRow => {
     const m = meta.get(`${d.docType}:${d.docId}`);
@@ -170,7 +179,8 @@ export async function gstr1Report(ex: Executor, orgId: number, month: string): P
       valuePaise: d.valuePaise, taxablePaise: d.taxablePaise, igstPaise: d.igstPaise, cgstPaise: d.cgstPaise, sgstPaise: d.sgstPaise, cessPaise: d.cessPaise,
       type: (e.inv_typ as string) ?? (d.group.exp_typ as string) ?? (e.typ as string) ?? null,
       noteType: d.docType === 'credit_note' ? 'C' : d.docType === 'debit_note' ? 'D' : null,
-      reverseCharge: e.rchrg === 'Y', eco: d.eco ?? null, shippingBill: m?.sb ?? null, href: hrefOf(d.docType, d.docId),
+      reverseCharge: e.rchrg === 'Y', eco: d.eco ?? null, shippingBill: m?.sb ?? null,
+      againstNumber: m?.againstNumber ?? null, againstDate: m?.againstDate ?? null, href: hrefOf(d.docType, d.docId),
     };
   };
   const of = (section: Gstr1DocEntry['section']) => docs.filter((d) => d.section === section).map(row);
