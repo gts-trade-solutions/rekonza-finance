@@ -250,7 +250,7 @@ export default function Gstr8Page() {
   );
 }
 
-interface Preview { supplierName: string; supplierGstin: string; inter: boolean; netPaise: number; igstPaise: number; cgstPaise: number; sgstPaise: number; ratePct: number; totalPaise: number }
+interface Preview { problem?: string | null; supplierName: string; supplierGstin: string; inter: boolean; netPaise: number; igstPaise: number; cgstPaise: number; sgstPaise: number; ratePct: number; totalPaise: number }
 
 function SupplyDialog({ month, edit, stateCode, onClose, onDone }: { month: string; edit?: EcoSupplyRow; stateCode: string; onClose: () => void; onDone: () => void }) {
   const sellers = useAppStore((s) => s.contacts).filter((c) => c.kind === 'vendor' || c.kind === 'both');
@@ -274,7 +274,9 @@ function SupplyDialog({ month, edit, stateCode, onClose, onDone }: { month: stri
         view: 'eco-preview', supplierId: f.supplierId, section: f.section, pos: f.placeOfSupply, date: f.entryDate,
         supR: f.grossRegisteredPaise, retsupR: f.returnsRegisteredPaise, supU: f.grossUnregisteredPaise, retsupU: f.returnsUnregisteredPaise,
         gstRatePct: f.section === '9_5' ? f.gstRatePct : undefined,
-      }).then((p) => { setPreview(p); setProblem(null); }).catch((e) => { setPreview(null); setProblem(err(e)); });
+      }).then((p) => {
+        if (p.problem) { setPreview(null); setProblem(p.problem); } else { setPreview(p); setProblem(null); }
+      }).catch((e) => { setPreview(null); setProblem(err(e)); });
     }, 250);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps

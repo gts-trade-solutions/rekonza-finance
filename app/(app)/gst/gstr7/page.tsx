@@ -313,7 +313,9 @@ function DeductDialog({ month, bill, edit, stateCode, onClose, onDone }: {
       withholding.tdsPreview({
         billId: f.billId ?? undefined, vendorId: f.billId ? undefined : f.vendorId || undefined, date: f.deductionDate,
         contractValuePaise: f.contractValuePaise || undefined, taxablePaise: f.taxablePaise || undefined, pos: f.placeOfSupply,
-      }).then((p) => { setPreview(p); setProblem(null); }).catch((e) => { setPreview(null); setProblem(err(e)); });
+      }).then((p) => {
+        if (p.problem) { setPreview(null); setProblem(p.problem); } else { setPreview(p); setProblem(null); }
+      }).catch((e) => { setPreview(null); setProblem(err(e)); });
     }, 250);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps

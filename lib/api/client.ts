@@ -3322,6 +3322,8 @@ export interface Gstr7aResponse {
   filed: WithholdingFiling | null;
 }
 export interface TdsPreview extends WithholdingHeadsRow {
+  /** Why it cannot be deducted as it stands; the figures are then left out. */
+  problem: string | null;
   vendorName: string; deducteeGstin: string; taxablePaise: number; contractValuePaise: number; placeOfSupply: string;
   applies: boolean; inter: boolean; reason: string; ratePct: number; totalPaise: number; billOutstandingPaise: number | null;
 }

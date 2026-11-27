@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { db, transaction } from '@/lib/server/db';
-import { route, body, query, badRequest, forbidden } from '@/lib/server/http';
+import { route, body, query, badRequest, forbidden, ApiError } from '@/lib/server/http';
 import { hasPermission } from '@/lib/rbac';
 import { logAudit, auditMeta } from '@/lib/server/audit';
 import { monthLabel } from '@/lib/date-range';
@@ -32,6 +32,15 @@ const localToday = () => {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 };
+
+async function asPreview<T extends object>(view: string, run: () => Promise<T>) {
+  try {
+    return { view, problem: null, ...(await run()) };
+  } catch (e) {
+    if (e instanceof ApiError && e.status < 500) return { view, problem: e.message };
+    throw e;
+  }
+}
 
 const Q = z.object({
   view: z.enum(['gstr7', 'gstr7-file', 'gstr7a', 'tds-preview', 'gstr8', 'gstr8-file', 'eco-preview', 'roles']),
@@ -72,29 +81,26 @@ export const GET = route(
         if (!q.gstin) throw badRequest('Whose certificate? Pass the deductee\'s GSTIN.');
         return { view: q.view, ...(await gstr7aCertificate(db, orgId, period, q.gstin)) };
       }
+      // A preview answers while the window is being filled in, so what is not
+      // allowed yet comes back as a problem to show, not as a refused request.
       case 'tds-preview':
-        return {
-          view: q.view,
-          ...(await previewGstTds(db, orgId, {
+        return asPreview(q.view, () => previewGstTds(db, orgId, {
             billId: q.billId ? Number(q.billId) : null, vendorId: q.vendorId ? Number(q.vendorId) : null,
             deductionDate: q.date ?? today, contractValuePaise: q.contractValuePaise ?? null, taxablePaise: q.taxablePaise ?? null,
             placeOfSupply: q.pos ?? null,
-          })),
-        };
+          }));
       case 'gstr8':
         return { view: q.view, ...(await gstr8(db, orgId, period, today)) };
       case 'gstr8-file':
         return gstr8PortalJson(await gstr8(db, orgId, period, today));
       case 'eco-preview': {
-        if (!q.supplierId || !q.section || !q.pos) throw badRequest('Pick the supplier, the section and the place of supply.');
-        return {
-          view: q.view,
-          ...(await previewEcoSupply(db, orgId, {
-            supplierId: Number(q.supplierId), entryDate: q.date ?? today, section: q.section, placeOfSupply: q.pos,
+        const { supplierId, section, pos } = q;
+        if (!supplierId || !section || !pos) throw badRequest('Pick the supplier, the section and the place of supply.');
+        return asPreview(q.view, () => previewEcoSupply(db, orgId, {
+            supplierId: Number(supplierId), entryDate: q.date ?? today, section, placeOfSupply: pos,
             grossRegisteredPaise: q.supR ?? 0, returnsRegisteredPaise: q.retsupR ?? 0, grossUnregisteredPaise: q.supU ?? 0, returnsUnregisteredPaise: q.retsupU ?? 0,
             gstRatePct: q.gstRatePct ?? null,
-          })),
-        };
+          }));
       }
     }
   },
