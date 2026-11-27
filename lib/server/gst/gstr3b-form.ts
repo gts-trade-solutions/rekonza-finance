@@ -22,6 +22,18 @@ import 'server-only';
 //
 // The net credit (4C) and the cash payable agree exactly with gstr3b() in
 // returns.ts, which the AI, GSTR-9 and the checks use; a test holds them to it.
+//
+// Two things from status review 7 (migration 133):
+//
+//   * 4(A)(5) follows the decisions made after matching bills with GSTR-2B
+//     (itc-claims.ts): a bill held back, or claimed in a later month, moves
+//     out of its own month and into that one, each move shown as a line of
+//     its own so the drill-down says why.
+//   * 3.1.1 is filled: (ii) from this book's sales through an e-commerce
+//     operator who pays the tax under s.9(5) (no tax on our invoice), and (i)
+//     from the s.9(5) supplies this book pays tax on as an operator. That tax
+//     is paid in cash, with reverse charge, in 6.1(B) — the operator may not
+//     use input credit against it.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { sql } from 'kysely';
@@ -31,6 +43,7 @@ import { advancesForMonth } from './advances';
 import { monthRange } from './returns';
 import { creditUsedFor, setOffCredit, TAX_HEADS, type TaxHead } from './set-off';
 import { calendarProfile, obligations } from '../tax/compliance-calendar';
+import { claimShifts } from './itc-claims';
 import { GSTR3B_ROWS, ZERO_HEADS, type Gstr3bHeads, type Gstr3bRowKey } from '../../gst/gstr3b-layout';
 
 // ── The period ───────────────────────────────────────────────────────────────
@@ -75,7 +88,7 @@ export function gstr3bPeriod(key: string): Gstr3bPeriod {
 
 export type Gstr3bDocType =
   | 'invoice' | 'debit_note' | 'credit_note' | 'advance' | 'bill' | 'expense' | 'bill_of_entry'
-  | 'vendor_credit' | 'itc_reversal';
+  | 'vendor_credit' | 'itc_reversal' | 'eco_supply';
 
 export interface Gstr3bDoc extends Gstr3bHeads {
   row: Gstr3bRowKey;
@@ -105,6 +118,7 @@ const HREF: Record<Gstr3bDocType, (id: string | null) => string | null> = {
   bill_of_entry: () => '/purchases/bills-of-entry',
   vendor_credit: () => '/purchases/vendor-credits',
   itc_reversal: () => '/gst/itc-reversals',
+  eco_supply: () => '/gst/gstr8',
 };
 
 type HeadsRow = { taxable: string; igst: string; cgst: string; sgst: string; cess: string };
@@ -154,7 +168,7 @@ export async function gstr3bDocuments(ex: Executor, orgId: number, period: Gstr3
   // ── Sales: invoices, debit notes and credit notes, line by line ────────────
   type SaleHead = {
     id: number; number: string; doc_date: string; doc_kind: string; supply_type: string; pos: string; branch_state: string;
-    party: string; gstin: string | null; treatment: string;
+    party: string; gstin: string | null; treatment: string; eco_section: string | null;
   } & HeadsRow;
   type SaleLine = { doc_id: number; rate: string; tax_pref: string } & HeadsRow;
 
@@ -162,6 +176,7 @@ export async function gstr3bDocuments(ex: Executor, orgId: number, period: Gstr3
     sql<SaleHead>`
       SELECT i.id, i.number, i.invoice_date AS doc_date, i.doc_kind, i.supply_type, i.place_of_supply AS pos,
              b.state_code AS branch_state, c.display_name AS party, NULLIF(c.gstin, '') AS gstin, c.gst_treatment AS treatment,
+             COALESCE(i.eco_section, (SELECT o.eco_section FROM invoices o WHERE o.id = i.against_invoice_id)) AS eco_section,
              i.subtotal AS taxable, i.igst, i.cgst, i.sgst, i.cess
         FROM invoices i JOIN contacts c ON c.id = i.customer_id JOIN branches b ON b.id = i.branch_id
        WHERE i.org_id = ${orgId} AND i.status NOT IN ('draft', 'void')
@@ -179,6 +194,7 @@ export async function gstr3bDocuments(ex: Executor, orgId: number, period: Gstr3
     sql<SaleHead>`
       SELECT n.id, n.number, n.note_date AS doc_date, 'credit_note' AS doc_kind, n.supply_type, n.place_of_supply AS pos,
              b.state_code AS branch_state, c.display_name AS party, NULLIF(c.gstin, '') AS gstin, c.gst_treatment AS treatment,
+             (SELECT o.eco_section FROM invoices o WHERE o.id = n.against_invoice_id) AS eco_section,
              n.subtotal AS taxable, n.igst, n.cgst, n.sgst, n.cess
         FROM credit_notes n JOIN contacts c ON c.id = n.customer_id JOIN branches b ON b.id = n.branch_id
        WHERE n.org_id = ${orgId} AND n.status NOT IN ('void', 'draft')
@@ -201,6 +217,18 @@ export async function gstr3bDocuments(ex: Executor, orgId: number, period: Gstr3
     for (const h of headRows) {
       const docType: Gstr3bDocType = h.doc_kind === 'credit_note' ? 'credit_note' : h.doc_kind === 'debit_note' ? 'debit_note' : 'invoice';
       const inter = h.pos !== h.branch_state || ['export_lut', 'export_with_tax', 'sez'].includes(h.supply_type);
+      // Sold through an operator who pays the tax under s.9(5): its value in 3.1.1(ii), nothing in 3.1.
+      if (h.eco_section === '9_5') {
+        const v = heads(h, sign);
+        if (v.taxablePaise) {
+          out.push({
+            row: '3.1.1ii', docType, docId: String(h.id), number: h.number, date: day(h.doc_date), party: h.party, gstin: h.gstin,
+            pos: h.pos, inter, href: HREF[docType](String(h.id)), note: 'The e-commerce operator pays the tax (section 9(5))',
+            ...ZERO_HEADS, taxablePaise: v.taxablePaise,
+          });
+        }
+        continue;
+      }
       const byRow = new Map<SalesBucket, Gstr3bHeads>();
       let lineSum = ZERO_HEADS;
       for (const l of linesOf.get(Number(h.id)) ?? []) {
@@ -319,6 +347,37 @@ export async function gstr3bDocuments(ex: Executor, orgId: number, period: Gstr3
     if (hasTax && l.eligibility === 'ineligible') put('4B1', l, tax);
   }
   out.push(...credit.values());
+
+  // Credit moved by the GSTR-2B claim decisions: held back from this period,
+  // or claimed in it from an earlier one (itc-claims.ts).
+  for (const s of await claimShifts(ex, orgId, period.months, branchId)) {
+    const sign = s.direction === 'in' ? 1 : -1;
+    out.push({
+      row: '4A5', docType: 'bill', docId: String(s.billId),
+      number: s.vendorInvoiceNo ? `${s.vendorInvoiceNo} (${s.number})` : s.number, date: s.billDate, party: s.party, gstin: s.gstin,
+      pos: null, inter: s.igstPaise !== 0, href: HREF.bill(String(s.billId)),
+      taxablePaise: 0, igstPaise: sign * s.igstPaise, cgstPaise: sign * s.cgstPaise, sgstPaise: sign * s.sgstPaise, cessPaise: sign * s.cessPaise,
+      note: s.direction === 'in'
+        ? `Claimed now: held back from ${s.billDate.slice(0, 7)} after matching with GSTR-2B`
+        : s.decision === 'defer' ? 'Held back: not claimed until the supplier files it (GSTR-2B)' : `Held back: to be claimed in ${s.claimPeriod}`,
+    });
+  }
+
+  // 3.1.1(i): as an e-commerce operator, the s.9(5) supplies of others it pays the tax on.
+  const op95 = await sql<{ id: number; supplier_gstin: string; party: string; period: string; entry_date: string; place_of_supply: string; inter: number; net_value: string; igst: string; cgst: string; sgst: string }>`
+    SELECT s.id, s.supplier_gstin, c.display_name AS party, s.period, s.entry_date, s.place_of_supply, s.inter, s.net_value, s.igst, s.cgst, s.sgst
+      FROM gst_eco_supplies s JOIN contacts c ON c.id = s.supplier_id
+     WHERE s.org_id = ${orgId} AND s.section = '9_5' AND s.period IN (${sql.join(period.months)}) ${br('s')}
+     ORDER BY s.entry_date, s.id
+  `.execute(ex);
+  for (const r of op95.rows) {
+    out.push({
+      row: '3.1.1i', docType: 'eco_supply', docId: String(r.id), number: `Supplies of ${r.supplier_gstin} in ${r.period}`, date: day(r.entry_date),
+      party: r.party, gstin: r.supplier_gstin, pos: r.place_of_supply, inter: Number(r.inter) === 1, href: HREF.eco_supply(null),
+      taxablePaise: p(r.net_value), igstPaise: p(r.igst), cgstPaise: p(r.cgst), sgstPaise: p(r.sgst), cessPaise: 0,
+      note: 'Paid by this book as the e-commerce operator (section 9(5)); in cash, with reverse charge',
+    });
+  }
 
   // ── Expenses keep only claimable tax in their GST columns ──────────────────
   const expenses = await sql<{ id: number; number: string; expense_date: string; party: string | null; gstin: string | null; taxable: string; igst: string; cgst: string; sgst: string }>`
@@ -554,7 +613,8 @@ export async function gstr3bForm(
   const fwd = add(rows['3.1a'], rows['3.1b']);
   const owed: Record<TaxHead, number> = { IGST: Math.max(0, fwd.igstPaise), CGST: Math.max(0, fwd.cgstPaise), SGST: Math.max(0, fwd.sgstPaise), CESS: Math.max(0, fwd.cessPaise) };
   const so = setOffCredit(owed, { IGST: itcNet.igstPaise, CGST: itcNet.cgstPaise, SGST: itcNet.sgstPaise, CESS: itcNet.cessPaise });
-  const rcm = rows['3.1d'];
+  // 6.1(B): reverse charge and the operator's s.9(5) supplies, both paid in cash only.
+  const rcm = add(rows['3.1d'], taxOnly(rows['3.1.1i']));
   const rcmByHead: Record<TaxHead, number> = { IGST: rcm.igstPaise, CGST: rcm.cgstPaise, SGST: rcm.sgstPaise, CESS: rcm.cessPaise };
   const cashByHead: Record<TaxHead, number> = { IGST: 0, CGST: 0, SGST: 0, CESS: 0 };
   for (const h of TAX_HEADS) cashByHead[h] = so.cash[h] + Math.max(0, rcmByHead[h]);
@@ -562,7 +622,7 @@ export async function gstr3bForm(
   const filedOn = filing ? day(filing.done_on) : null;
   const asOf = filedOn ?? opts.today;
   const daysLate = Math.max(0, daysBetween(dueDate, asOf));
-  const nilReturn = isZero(sumRows(['3.1a', '3.1b', '3.1c', '3.1d', '3.1e'])) && isZero(itcAvailable);
+  const nilReturn = isZero(sumRows(['3.1a', '3.1b', '3.1c', '3.1d', '3.1e', '3.1.1i', '3.1.1ii'])) && isZero(itcAvailable);
   let turnoverPaise = 0;
   if (daysLate > 0 && !org.aato_above_5cr) {
     // The previous financial year's turnover sets the late-fee cap.
@@ -596,6 +656,8 @@ export async function gstr3bForm(
   if (rows['4B1'].count) notes.push('Credit blocked under section 17(5) is shown in 4(A) and reversed in 4(B)(1), as Circular 170/02/2022-GST asks.');
   if (documents.some((d) => d.docType === 'advance')) notes.push('3.1(a) includes tax on advances received for services and takes off the tax on earlier advances invoiced this period.');
   if (!branch?.gstin) notes.push('The branch has no GSTIN yet. Add it in Settings before downloading the return file.');
+  if (documents.some((d) => d.row === '4A5' && d.note?.startsWith('Held back'))) notes.push('Some bills\' credit is held back after matching with GSTR-2B (ITC Reconciliation): it is claimed in the month chosen there, not in its own month.');
+  if (rows['3.1.1i'].count) notes.push('Tax on supplies under section 9(5) is paid in cash with reverse charge, in 6.1(B): the operator may not use input credit against it.');
   if (!filing && daysLate > 0) notes.push(`This return was due on ${dueDate}. Interest and late fee below are what they would be if it were filed today.`);
 
   return {
