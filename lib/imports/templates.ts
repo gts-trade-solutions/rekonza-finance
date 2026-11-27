@@ -153,6 +153,8 @@ export const TEMPLATES: Record<ImportKind, Template> = {
       { key: 'rate', label: 'Rate', required: true, example: '600' },
       { key: 'gst_rate', label: 'GST rate', example: '18' },
       { key: 'export_igst', label: 'Export IGST', example: '', hint: 'an export only: nil (under LUT) or paid; blank is nil, as most exports are' },
+      // A bill that looks like one already in the books (same vendor, same amount within a week) needs a reason (services/bill-duplicates.ts).
+      { key: 'duplicate_reason', label: 'Why not a duplicate', example: '', hint: 'only for a bill that looks like another: same vendor and amount within a week' },
     ],
   },
   estimates: {

@@ -75,9 +75,14 @@ export default function ImportPage() {
         title="Import"
         description="Bring masters, opening balances and vouchers in from Excel, CSV, text (tab, pipe or any separator) or JSON, invoices from PDF, or a whole company from Tally or QuickBooks."
         actions={
-          <Button variant="outline" size="sm" asChild>
-            <Link href="/settings"><ArrowLeft className="mr-1.5 size-3.5" /> Settings</Link>
-          </Button>
+          <>
+            <Button variant="outline" size="sm" asChild data-slot="settings-import-history">
+              <Link href="/import/history">Import History</Link>
+            </Button>
+            <Button variant="outline" size="sm" asChild>
+              <Link href="/settings"><ArrowLeft className="mr-1.5 size-3.5" /> Settings</Link>
+            </Button>
+          </>
         }
       />
       <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)}>

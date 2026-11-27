@@ -4,7 +4,8 @@ import { route, body, badRequest, forbidden } from '@/lib/server/http';
 import { hasPermission } from '@/lib/rbac';
 import { logAudit, auditMeta } from '@/lib/server/audit';
 import { IMPORT_KINDS, MAX_IMPORT_ROWS, TEMPLATES, type ImportKind } from '@/lib/imports/templates';
-import { clean, runImport, type ImportOutcome } from '@/lib/server/imports/run';
+import { clean, keptAny, runImport, type ImportOutcome } from '@/lib/server/imports/run';
+import { recordImportBatch } from '@/lib/server/services/import-history';
 import { connectedCompanyMasters, importTally, importTallyFileVouchers, importTallyVouchers, QUICKBOOKS_COMPANY_ID } from '@/lib/server/imports/tally';
 import { parseQuickBooks, toImportShapes } from '@/lib/quickbooks/parse';
 import { parseTallyFiles } from '@/lib/tally/xml';
@@ -49,6 +50,15 @@ const Input = z.discriminatedUnion('source', [
     rows: z.array(z.record(z.string(), z.unknown())).max(MAX_IMPORT_ROWS, `Up to ${MAX_IMPORT_ROWS} rows at a time.`),
     dryRun: z.boolean().default(true),
     onDuplicate: z.enum(['skip', 'error']).default('skip'),
+    /**
+     * all: keep everything or nothing (the default, as before). valid_only:
+     * keep the rows that passed and skip the rest, each failed row listed.
+     */
+    mode: z.enum(['all', 'valid_only']).default('all'),
+    /** For the import history: which list it was for, and the file. */
+    module: z.string().max(40).nullish(),
+    fileName: z.string().max(255).nullish(),
+    fileFormat: z.string().max(12).nullish(),
   }),
   // Files exported from Tally: masters, vouchers, or both, one file or several.
   z.object({
@@ -94,7 +104,7 @@ class Discard extends Error {
 
 export const POST = route(async ({ orgId, user, role, branchId, req }) => {
   const input = await body(req, Input);
-  const ctx = { orgId, userId: user.userId, branchId, onDuplicate: input.source === 'rows' ? input.onDuplicate : 'skip' as const };
+  const ctx = { orgId, userId: user.userId, branchId, onDuplicate: input.source === 'rows' ? input.onDuplicate : 'skip' as const, requireBalancedOpenings: input.source === 'rows' };
 
   if (input.source === 'rows') {
     if (!hasPermission(role, MODULE[input.kind], 'create')) throw forbidden(`Your role cannot import ${TEMPLATES[input.kind].title.toLowerCase()}.`);
@@ -109,6 +119,7 @@ export const POST = route(async ({ orgId, user, role, branchId, req }) => {
   }
 
   let outcomes: ImportOutcome[];
+  let batchId: number | null = null;
   try {
     outcomes = await db.transaction().execute(async (trx) => {
       let out: ImportOutcome[];
@@ -148,11 +159,21 @@ export const POST = route(async ({ orgId, user, role, branchId, req }) => {
         }
         out = await importTally(trx, ctx, masters);
       }
-      if (input.dryRun || !clean(out)) throw new Discard(out);
+      // A check is thrown away; so is a run with problems, unless it was asked
+      // to keep the rows that passed (each failed row's savepoint has already
+      // taken it back: lib/server/imports/run.ts).
+      const keep = !input.dryRun && (clean(out) || (input.source === 'rows' && input.mode === 'valid_only' && keptAny(out)));
+      if (!keep) throw new Discard(out);
+      if (input.source === 'rows') {
+        batchId = await recordImportBatch(trx, orgId, user.userId, {
+          module: input.module || input.kind, kind: input.kind, fileName: input.fileName, fileFormat: input.fileFormat, mode: input.mode, outcome: out[0],
+        });
+      }
       await logAudit({
         trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'import',
         targetType: input.source === 'rows' ? input.kind : input.source === 'quickbooks' ? 'quickbooks' : input.source === 'pdf-invoices' ? 'pdf_invoices' : 'tally',
-        detail: out.map((o) => `${o.kind}: ${o.created} created, ${o.skipped} skipped`).join('; '),
+        detail: out.map((o) => `${o.kind}: ${o.created} created, ${o.skipped} skipped${o.errors.length ? `, ${new Set(o.errors.map((e) => e.row)).size} rows failed and were left out` : ''}`).join('; ')
+          + (input.source === 'rows' && input.fileName ? ` (file ${input.fileName})` : ''),
         ...auditMeta(req),
       });
       return out;
@@ -161,5 +182,5 @@ export const POST = route(async ({ orgId, user, role, branchId, req }) => {
     if (!(err instanceof Discard)) throw err;
     outcomes = err.outcomes;
   }
-  return { committed: !input.dryRun && clean(outcomes), outcomes };
+  return { committed: batchId !== null || (!input.dryRun && clean(outcomes)), outcomes, batchId: batchId === null ? null : String(batchId) };
 });

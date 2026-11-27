@@ -3247,14 +3247,24 @@ export interface ImportOutcome {
   rows: number;
   created: number;
   skipped: number;
-  errors: { row: number; message: string }[];
+  errors: ImportRowError[];
   notes: string[];
+  valid?: number;
+  duplicates?: number;
+  skippedRows?: ImportRowError[];
 }
 
-export interface ImportResponse { committed: boolean; outcomes: ImportOutcome[] }
+/** One row's problem: its line in the file, the field and its value, and why (status review 7). */
+export interface ImportRowError { row: number; message: string; field?: string; value?: string; duplicate?: boolean }
+
+export interface ImportResponse { committed: boolean; outcomes: ImportOutcome[]; batchId?: string | null }
 
 export const imports = {
-  rows: (kind: string, rows: Record<string, unknown>[], opts: { dryRun: boolean; onDuplicate?: 'skip' | 'error' }) =>
+  rows: (kind: string, rows: Record<string, unknown>[], opts: {
+    dryRun: boolean; onDuplicate?: 'skip' | 'error';
+    /** Keep everything or nothing, or keep the rows that passed (status review 7). */
+    mode?: 'all' | 'valid_only'; module?: string; fileName?: string; fileFormat?: string;
+  }) =>
     api.post<ImportResponse>('/api/imports', { source: 'rows', kind, rows, ...opts }),
   tallyXml: (xml: string, dryRun: boolean) => api.post<ImportResponse>('/api/imports', { source: 'tally-xml', xml, dryRun }),
   /** QuickBooks' lists and transactions, each file read into rows by the browser. */
@@ -3315,4 +3325,18 @@ export const duplicateReviews = {
     api.get<{ counts: Record<'open' | 'cleared' | 'confirmed', number>; rows: DuplicateReviewRow[] }>('/api/duplicate-reviews', status ? { status } : undefined),
   review: (id: string, action: 'clear' | 'confirm' | 'reopen', note?: string) => api.post<{ id: number; status: string }>('/api/duplicate-reviews', { action, id, note }),
   scan: () => api.post<{ added: number }>('/api/duplicate-reviews', { action: 'scan' }),
+};
+
+// ── Status review 7, builder B: import history ──────────────────────────────
+
+export interface ImportBatchRow {
+  id: string; module: string; kind: string; fileName: string | null; fileFormat: string | null; mode: 'all' | 'valid_only';
+  rowsTotal: number; imported: number; skipped: number; failed: number; note: string | null; status: 'imported' | 'undone';
+  by: string | null; at: string; undoneBy: string | null; undoneAt: string | null; undoable: boolean;
+}
+export const importHistory = {
+  list: (module?: string) => api.get<{ batches: ImportBatchRow[] }>('/api/imports/history', module ? { module } : undefined),
+  get: (id: string) => api.get<ImportBatchRow & { errors: ImportRowError[]; createdCounts: Record<string, number> }>(`/api/imports/history/${id}`),
+  setNote: (id: string, note: string | null) => api.patch<{ id: string }>(`/api/imports/history/${id}`, { note }),
+  undo: (id: string) => api.delete<{ undone: true; deleted: Record<string, number> }>(`/api/imports/history/${id}`),
 };

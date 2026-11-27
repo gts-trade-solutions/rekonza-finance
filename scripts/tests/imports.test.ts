@@ -38,7 +38,7 @@ test('contacts: good rows go in, a bad one is reported by its row number', async
     ]);
     assert.equal(out.errors.length, 1);
     assert.equal(out.errors[0].row, 3, 'the second data row, under the heading');
-    assert.match(out.errors[0].message, /checksum/);
+    assert.match(out.errors[0].message, /check digit/);
     assert.equal(out.created, 2);
 
     const again = await runImport(f.trx, ctx(f), 'contacts', [{ type: 'customer', name: 'sri murugan  motors', state: '33' }]);

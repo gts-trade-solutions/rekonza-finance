@@ -101,7 +101,7 @@ test('expenses and payments: posted, settling the named invoice or bill; bad row
       { date: '2026-09-15', customer: 'Sri Murugan Motors', amount: '5', account: 'HDFC Current', mode: 'barter' },
     ]);
     assert.equal(rec.created, 2);
-    assert.match(rec.errors[0].message, /Mode "barter"/);
+    assert.match(rec.errors[0].message, /"barter" should be one of/);
     const invRow = await trx.selectFrom('invoices').select(['amount_paid', 'status']).where('number', '=', 'INV-9').where('org_id', '=', ctx.orgId).executeTakeFirstOrThrow();
     assert.equal(Number(invRow.amount_paid), 1000, 'the named invoice is settled by the receipt');
     const onAccount = await trx.selectFrom('payments').select('unapplied_amount').where('org_id', '=', ctx.orgId).where('kind', '=', 'received').where('amount', '=', '500.0000').executeTakeFirstOrThrow();
@@ -112,7 +112,7 @@ test('expenses and payments: posted, settling the named invoice or bill; bad row
       { date: '2026-09-16', vendor: 'Lakshmi Auto', amount: '10', account: 'HDFC Current', bill: 'LA/404' },
     ]);
     assert.equal(paid.created, 1);
-    assert.match(paid.errors[0].message, /Bill LA\/404 is not an open one/);
+    assert.match(paid.errors[0].message, /Bill LA\/404 is not one of Lakshmi Auto's/);
     assert.equal((await trx.selectFrom('bills').select('status').where('vendor_invoice_no', '=', 'LA/77').where('org_id', '=', ctx.orgId).executeTakeFirstOrThrow()).status, 'paid');
   });
 });

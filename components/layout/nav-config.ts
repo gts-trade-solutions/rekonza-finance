@@ -8,7 +8,7 @@ import {
   House, ShoppingBasket, ShoppingBag, Clock, UserRoundCog, ChartNoAxesColumn, Folder,
 } from 'lucide-react';
 // Status review 7, builder B.
-import { Copy } from 'lucide-react';
+import { Copy, History } from 'lucide-react';
 
 export interface NavItem {
   label: string;
@@ -210,6 +210,8 @@ export const NAV_GROUPS: NavGroup[] = [
       { label: 'Import Excel, CSV, Text', href: '/settings/import', icon: FileUp, module: 'accountant', exact: true },
       { label: 'Import invoices from PDF', href: '/settings/import?tab=pdf', icon: FileUp, module: 'accountant' },
       { label: 'Import from QuickBooks', href: '/settings/import/quickbooks', icon: FileUp, module: 'accountant' },
+      // Status review 7, item 3: every import, its rows left out and why, and undo.
+      { label: 'Import History', href: '/import/history', icon: History, module: 'accountant' },
       { label: 'Import from Tally', href: '/tally/import', icon: Download, module: 'tally', feature: 'tally' },
       { label: 'Export CSV, Text, Excel', href: '/settings/export', icon: FileDown, module: 'accountant' },
       { label: 'Export to Tally', href: '/tally/export', icon: Upload, module: 'tally', feature: 'tally' },
