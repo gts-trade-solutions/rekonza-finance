@@ -128,8 +128,9 @@ const fillMoney = async (scope, label, rupeesValue) => {
 /** Whether the menu links to a screen: the menu opened out, and the GST & Taxes group open. */
 const navHas = async (href) => {
   await page.locator('a[href="/dashboard"]').first().waitFor({ timeout: 120_000 });
-  const expand = page.getByRole('button', { name: 'Expand the menu' });
-  if (await expand.count()) { await expand.first().click(); await page.waitForTimeout(500); }
+  // Every page opens with the menu folded: the ☰ in the top bar opens it out.
+  const fold = page.locator('[data-slot="topbar-nav-fold"]');
+  if ((await fold.getAttribute('aria-label')) === 'Show the sidebar') { await fold.click(); await page.waitForTimeout(600); }
   const group = page.locator('[data-slot="sidebar-extras"]').getByText('GST & Taxes', { exact: true }).first();
   if (!(await page.locator('a[href="/gst/gstr1"]').count()) && await group.count()) { await group.click(); await page.waitForTimeout(500); }
   return (await page.locator(`a[href="${href}"]`).count()) > 0;
