@@ -22,6 +22,7 @@ import { toPaiseFromSql, toSqlFromPaise } from '../money-sql';
 import { reverseEntry } from '../ledger/posting';
 import { createBill, type CreateBillInput } from './purchases';
 import { createPurchaseOrder, createVendorCredit, type CreatePurchaseOrderInput, type CreateVendorCreditInput } from './purchase-documents';
+import { afterStockMoved } from './stock-ledger';
 import { receiveGoods, type ReceiptLineInput } from './order-flow';
 import { statusFor } from './order-release';
 import { removeLandedCost } from './landed-cost';
@@ -326,11 +327,24 @@ export async function vendorCreditForEdit(trx: Executor, orgId: number, creditId
   const against = vc.against_bill_id
     ? await trx.selectFrom('bills').select(['internal_no', 'vendor_invoice_no']).where('id', '=', vc.against_bill_id).executeTakeFirst()
     : undefined;
+  // Goods sent back line by line (migration 131): the window opens with them.
+  const lines = (await trx.selectFrom('vendor_credit_lines as l').leftJoin('items as i', 'i.id', 'l.item_id')
+    .select(['l.item_id', 'l.bill_line_id', 'l.description', 'l.hsn_sac', 'l.qty', 'l.rate', 'l.gst_rate_pct', 'l.taxable', 'l.stock_cost', 'i.name as item_name', 'i.uqc'])
+    .where('l.vendor_credit_id', '=', creditId).orderBy('l.line_no').execute()).map((l) => ({
+    itemId: l.item_id ? String(l.item_id) : null, itemName: l.item_name, billLineId: l.bill_line_id ? String(l.bill_line_id) : null,
+    description: l.description, hsnSac: l.hsn_sac, qty: Number(l.qty), uqc: l.uqc, ratePaise: toPaiseFromSql(l.rate), gstRatePct: Number(l.gst_rate_pct),
+    taxablePaise: toPaiseFromSql(l.taxable), stockCostPaise: l.stock_cost === null ? null : toPaiseFromSql(l.stock_cost),
+  }));
+  if (lines.length) {
+    amountPaise = lines.reduce((t, l) => t + l.taxablePaise, 0);
+    gstRatePct = lines[0].gstRatePct;
+  }
   return {
     id: String(vc.id), number: vc.number, status: vc.status, branchId: String(vc.branch_id), vendorId: String(vc.vendor_id),
     date: ymd(vc.credit_date), reason: vc.reason, againstBillId: vc.against_bill_id ? String(vc.against_bill_id) : null,
     againstBillNo: against?.internal_no ?? null, againstBillRef: against?.vendor_invoice_no ?? null,
     amountPaise, gstRatePct, itcClaimed, totalPaise: toPaiseFromSql(vc.total), appliedPaise: toPaiseFromSql(vc.applied_amount),
+    lines,
   };
 }
 
@@ -375,6 +389,7 @@ export async function updateVendorCredit(trx: Trx, orgId: number, userId: number
   await unapplyVendorCredit(trx, orgId, vc);
   // Set against its bill again, as New does whenever a bill is named.
   const made = await createVendorCredit(trx, orgId, userId, input, { replace: { id: creditId, number: vc.number } });
+  if (ymd(vc.credit_date) < input.date) await afterStockMoved(trx, orgId, userId, ymd(vc.credit_date), `vendor credit ${vc.number} edited`);
   return { ...made, before };
 }
 
@@ -393,7 +408,10 @@ export async function deleteVendorCredit(trx: Trx, orgId: number, userId: number
     totalPaise: toPaiseFromSql(vc.total), contactId: vc.vendor_id, branchId: vc.branch_id,
     journalEntryId: vc.journal_entry_id, reversalEntryId: reversal, reason, snapshot: { vendorCredit: plain(vc) },
   });
+  const hadGoods = await trx.selectFrom('vendor_credit_lines').select('id').where('vendor_credit_id', '=', creditId).where('item_id', 'is not', null).limit(1).executeTakeFirst();
   await trx.deleteFrom('vendor_credits').where('id', '=', creditId).where('org_id', '=', orgId).execute();
+  // The goods it sent back are stock again from its date.
+  if (hadGoods) await afterStockMoved(trx, orgId, userId, ymd(vc.credit_date), `vendor credit ${vc.number} deleted`);
   return { number: vc.number };
 }
 

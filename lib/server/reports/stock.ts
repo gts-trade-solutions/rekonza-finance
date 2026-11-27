@@ -53,9 +53,13 @@ export interface StockLine {
   adjustedQty: number;
   /** Moved in from other branches less moved out to them; nil for the whole business. */
   transferredQty: number;
+  /** Sent back to suppliers on vendor credits with item lines (migration 131). */
+  returnedToVendorQty?: number;
   qty: number;
   /** Weighted average for the financial year the date falls in. */
   unitCostPaise: Paise;
+  /** The same average unrounded, so a cost worked out from it rounds as the value does (services/stock-ledger.ts). */
+  exactUnitCost?: number;
   /** Negative when the documents say more left than arrived. Not hidden. */
   valuePaise: Paise;
   /** The stock group it is reported under, if any. */
@@ -105,20 +109,49 @@ interface Movement { item_id: number; fy: number; qty: string; cost?: string }
  * adjustments that name no branch belong to the primary branch, because that
  * is where an organisation with one location keeps everything.
  */
-/** One purchase layer of an item: a bill line (with its landed cost) or a production run. */
-export interface FifoLayer { qty: number; cost: Paise }
+/**
+ * One purchase layer of an item: a bill line (with its landed cost) or a
+ * production run. `qty` and `cost` are what is left of it after any goods sent
+ * back to the supplier out of it; the other fields say where it came from, for
+ * the item's FIFO layers view.
+ */
+export interface FifoLayer {
+  qty: number;
+  cost: Paise;
+  date?: string;
+  source?: 'bill' | 'production';
+  sourceId?: number;
+  lineId?: number;
+  /** Units the layer came in with, before any return to the supplier. */
+  receivedQty?: number;
+  returnedQty?: number;
+}
 
 /**
  * Each item's purchase layers, newest first: bill lines (with any landed cost
  * and the tax that could not be claimed) and finished production. FIFO values
  * what is left from these, newest back; the cost of a FIFO sale is what the
  * same stack loses when the sale's units go from its oldest end.
+ *
+ * Goods sent back to a supplier (a vendor credit with item lines, migration
+ * 131) leave the layer they came in on: the bill line the credit names, or, if
+ * it names none, the newest layer of the item received on or before the
+ * credit's date. They leave at that layer's own cost per unit, so the layer's
+ * rate does not change; what the supplier credits beyond or below it is a cost
+ * variance, posted with the credit (services/purchase-documents.ts).
  */
 export async function fifoLayers(ex: Executor, orgId: number, asOf: string, branchId?: number): Promise<Map<number, FifoLayer[]>> {
+  const all = await allFifoLayers(ex, orgId, asOf, branchId);
+  for (const [id, list] of all) all.set(id, list.filter((x) => x.qty > 0));
+  return all;
+}
+
+/** As fifoLayers, but keeping the layers sent back to the supplier in full, for the layers view. */
+export async function allFifoLayers(ex: Executor, orgId: number, asOf: string, branchId?: number): Promise<Map<number, FifoLayer[]>> {
   const docBranch = (col: string) => (branchId ? sql`AND ${sql.ref(col)} = ${branchId}` : sql``);
-  const { rows: layers } = await sql<{ item_id: number; qty: string; cost: string }>`
-    SELECT item_id, qty, cost FROM (
-      SELECT bl.item_id, b.bill_date AS d, bl.id AS seq, bl.qty,
+  const { rows: layers } = await sql<{ item_id: number; qty: string; cost: string; d: string | Date; src: string; seq: number }>`
+    SELECT item_id, qty, cost, d, src, seq FROM (
+      SELECT bl.item_id, b.bill_date AS d, bl.id AS seq, 'bill' AS src, bl.qty,
              bl.taxable + CASE WHEN bl.itc_eligibility NOT IN ('eligible', 'capital_goods') AND b.is_rcm = 0
                                THEN bl.cgst + bl.sgst + bl.igst + bl.cess ELSE 0 END
                         + COALESCE(landed.amt, 0) AS cost
@@ -135,7 +168,7 @@ export async function fifoLayers(ex: Executor, orgId: number, asOf: string, bran
        WHERE b.org_id = ${orgId} AND b.status NOT IN ('draft','void')
          AND bl.item_id IS NOT NULL AND bl.qty > 0 AND b.bill_date <= ${asOf} ${docBranch('b.branch_id')}
       UNION ALL
-      SELECT p.item_id, p.produced_on AS d, p.id AS seq, p.qty, p.cost
+      SELECT p.item_id, p.produced_on AS d, p.id AS seq, 'production' AS src, p.qty, p.cost
         FROM productions p
        WHERE p.org_id = ${orgId} AND p.status = 'done' AND p.produced_on <= ${asOf} ${docBranch('p.branch_id')}
     ) x ORDER BY d DESC, seq DESC
@@ -143,8 +176,42 @@ export async function fifoLayers(ex: Executor, orgId: number, asOf: string, bran
   const byItem = new Map<number, FifoLayer[]>();
   for (const l of layers) {
     const list = byItem.get(Number(l.item_id)) ?? [];
-    list.push({ qty: Number(l.qty), cost: toPaiseFromSql(l.cost) });
+    const qty = Number(l.qty);
+    list.push({
+      qty, cost: toPaiseFromSql(l.cost), date: String(l.d instanceof Date ? l.d.toISOString() : l.d).slice(0, 10),
+      source: l.src as 'bill' | 'production', sourceId: undefined, lineId: Number(l.seq), receivedQty: qty, returnedQty: 0,
+    });
     byItem.set(Number(l.item_id), list);
+  }
+
+  // Goods sent back to the supplier, oldest first, each out of its own layer.
+  const { rows: returns } = await sql<{ item_id: number; qty: string; bill_line_id: number | null; d: string | Date }>`
+    SELECT vcl.item_id, vcl.qty, vcl.bill_line_id, vc.credit_date AS d
+      FROM vendor_credit_lines vcl JOIN vendor_credits vc ON vc.id = vcl.vendor_credit_id
+     WHERE vc.org_id = ${orgId} AND vc.status <> 'void' AND vcl.item_id IS NOT NULL AND vcl.qty > 0
+       AND vc.credit_date <= ${asOf} ${docBranch('vc.branch_id')}
+     ORDER BY vc.credit_date, vcl.id
+  `.execute(ex);
+  for (const r of returns) {
+    const list = byItem.get(Number(r.item_id));
+    if (!list) continue;
+    const day = String(r.d instanceof Date ? r.d.toISOString() : r.d).slice(0, 10);
+    let left = Number(r.qty);
+    // The named bill line first; then (or else) the newest layers received by the credit's date.
+    const order = [
+      ...list.filter((x) => r.bill_line_id && x.source === 'bill' && x.lineId === Number(r.bill_line_id)),
+      ...list.filter((x) => !(r.bill_line_id && x.source === 'bill' && x.lineId === Number(r.bill_line_id)) && (x.date ?? '') <= day),
+    ];
+    for (const layer of order) {
+      if (left <= 0) break;
+      const take = Math.min(left, layer.qty);
+      if (take <= 0) continue;
+      const unit = layer.cost / layer.qty;
+      layer.qty -= take;
+      layer.cost = Math.round(layer.cost - unit * take);
+      layer.returnedQty = (layer.returnedQty ?? 0) + take;
+      left -= take;
+    }
   }
   return byItem;
 }
@@ -192,7 +259,7 @@ export async function stockPosition(
     .orderBy('name')
     .execute();
 
-  const [inward, outward, returned, adjusted, openingAdj] = await Promise.all([
+  const [inward, outward, returned, adjusted, openingAdj, toVendor] = await Promise.all([
     // What a purchase cost is what was posted to the cost: the taxable value,
     // plus the tax only when that tax could not be claimed back, plus any
     // landed cost (freight, duty) spread over it.
@@ -318,6 +385,20 @@ export async function stockPosition(
            : sql``}
        GROUP BY a.item_id
     `.execute(ex),
+    // Goods sent back to the supplier (vendor credits with item lines,
+    // migration 131): out of stock, and out of what the year's purchases cost,
+    // at the cost of the bill line they came in on when the credit names one,
+    // else at the credit's own taxable value.
+    sql<Movement>`
+      SELECT vcl.item_id, ${fySql(sql.ref('vc.credit_date'))} AS fy, SUM(vcl.qty) AS qty,
+             SUM(CASE WHEN bl.id IS NOT NULL AND bl.qty > 0 THEN bl.taxable / bl.qty * vcl.qty ELSE vcl.taxable END) AS cost
+        FROM vendor_credit_lines vcl
+        JOIN vendor_credits vc ON vc.id = vcl.vendor_credit_id
+        LEFT JOIN bill_lines bl ON bl.id = vcl.bill_line_id
+       WHERE vc.org_id = ${orgId} AND vc.status <> 'void' AND vcl.item_id IS NOT NULL
+         AND vc.credit_date <= ${asOf} ${docBranch('vc.branch_id')}
+       GROUP BY vcl.item_id, fy
+    `.execute(ex),
   ]);
 
   // item → fy → movement
@@ -355,10 +436,11 @@ export async function stockPosition(
   const outBy = index(outward.rows);
   const retBy = index(returned.rows);
   const adjBy = index(adjusted.rows);
+  const vrBy = index(toVendor.rows);
   const openAdj = new Map(openingAdj.rows.map((r) => [Number(r.item_id), Number(r.qty)]));
 
   const lastFy = fyOf(asOf);
-  const years = [inward, outward, returned, adjusted].flatMap((r) => r.rows.map((x) => Number(x.fy)));
+  const years = [inward, outward, returned, adjusted, toVendor].flatMap((r) => r.rows.map((x) => Number(x.fy)));
   const firstFy = years.length ? Math.min(lastFy, ...years) : lastFy;
 
   // An item valued by its own method, or else by the book's.
@@ -376,10 +458,13 @@ export async function stockPosition(
     let qty = openingQty;
     let value = openingValue;
     let avg = openingRate;
-    let inwardQty = 0, outwardQty = 0, returnedQty = 0, adjustedQty = 0, transferredQty = 0;
+    let inwardQty = 0, outwardQty = 0, returnedQty = 0, adjustedQty = 0, transferredQty = 0, returnedToVendorQty = 0;
 
     for (let fy = firstFy; fy <= lastFy; fy++) {
-      const inn = inBy.get(id)?.get(fy) ?? { qty: 0, cost: 0 };
+      const bought = inBy.get(id)?.get(fy) ?? { qty: 0, cost: 0 };
+      const sentBack = vrBy.get(id)?.get(fy) ?? { qty: 0, cost: 0 };
+      // What the year's purchases came to, less what went back to the supplier.
+      const inn = { qty: bought.qty - sentBack.qty, cost: bought.cost - sentBack.cost };
       const out = outBy.get(id)?.get(fy)?.qty ?? 0;
       const ret = retBy.get(id)?.get(fy)?.qty ?? 0;
       const adj = adjBy.get(id)?.get(fy)?.qty ?? 0;
@@ -394,7 +479,8 @@ export async function stockPosition(
       qty = qty + inn.qty - out + ret + adj + moved;
       value = qty * avg;
 
-      inwardQty += inn.qty;
+      inwardQty += bought.qty;
+      returnedToVendorQty += sentBack.qty;
       outwardQty += out;
       returnedQty += ret;
       adjustedQty += adj;
@@ -413,8 +499,10 @@ export async function stockPosition(
       returnedQty,
       adjustedQty,
       transferredQty,
+      returnedToVendorQty,
       qty,
       unitCostPaise: Math.round(avg),
+      exactUnitCost: avg,
       valuePaise: Math.round(value),
       stockGroupId: it.stock_group_id === null ? null : String(it.stock_group_id),
       valuation: it.valuation_method ?? bookMethod,
@@ -496,6 +584,10 @@ export async function stockByGodown(ex: Executor, orgId: number, asOf: string): 
       SELECT cl.item_id, c.warehouse_id, c.branch_id, cl.qty
         FROM credit_note_lines cl JOIN credit_notes c ON c.id = cl.credit_note_id
        WHERE c.org_id = ${orgId} AND c.status <> 'void' AND cl.item_id IS NOT NULL AND c.note_date <= ${asOf}
+      UNION ALL
+      SELECT vcl.item_id, NULL, vc.branch_id, -vcl.qty
+        FROM vendor_credit_lines vcl JOIN vendor_credits vc ON vc.id = vcl.vendor_credit_id
+       WHERE vc.org_id = ${orgId} AND vc.status <> 'void' AND vcl.item_id IS NOT NULL AND vc.credit_date <= ${asOf}
       UNION ALL
       SELECT cl.item_id, NULL, d.branch_id, -rl.qty_waste
         FROM job_work_receipt_lines rl JOIN job_work_receipts r ON r.id = rl.receipt_id

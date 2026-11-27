@@ -117,24 +117,35 @@ test('perpetual inventory: each sale posts its cost, purchases go to Inventory, 
     assert.ok(bs.balanced, 'still balances');
     assert.equal(bs.currentPeriodEarnings, 42_500);
 
-    // A purchase dated before the sale moves the average; the statements stay right
-    // before the month-end entry and after it.
+    // A purchase dated before the sale moves the average. Since status review 7
+    // the difference it makes to the later sale's cost is posted at once, as a
+    // stock cost variance naming the bill (stock-ledger.ts syncStockLedger), so
+    // the Inventory account agrees with the valuation without waiting for the
+    // month-end entry, which then has nothing left to move.
     await buy(f, '2026-05-20', 10, 20_000);
     const stock = (await stockPosition(f.trx, f.orgId, '2026-06-30')).totalValuePaise;
     const expected = 100_000 - (130_000 + 200_000 + 100_000 - stock);
     assert.equal((await profitAndLoss(f.trx, f.orgId, '2026-04-01', '2026-06-30')).netProfit, expected, 'before the true-up');
+    assert.equal(await inventoryInLedger(f.trx, f.orgId, '2026-06-30'), stock, 'Inventory already at the valuation');
+    const variance = await f.trx.selectFrom('journal_entries').select('memo').where('org_id', '=', f.orgId).where('source_type', '=', 'stock_variance').executeTakeFirst();
+    assert.match(variance?.memo ?? '', /bill .* dated 2026-05-20/, 'a visible cost variance naming the back-dated bill');
     const moved = await trueUpStock(f.trx, f.orgId, null, '2026-06-30');
-    assert.equal(moved, stock - 372_500, 'Inventory brought to the valuation');
+    assert.equal(moved, 0, 'nothing left for the month-end entry');
     assert.equal(await trueUpStock(f.trx, f.orgId, null, '2026-06-30'), 0, 'once in line, nothing more');
     const after = await profitAndLoss(f.trx, f.orgId, '2026-04-01', '2026-06-30');
     assert.equal(after.netProfit, expected, 'after the true-up');
     assert.equal(after.closingStockPaise, 0);
     assert.ok((await balanceSheet(f.trx, f.orgId, '2026-06-30')).balanced);
 
-    // Voiding the sale takes its cost back out of cost of goods sold.
-    const before = await inventoryInLedger(f.trx, f.orgId, '2026-06-30');
+    // Voiding the sale takes its cost back out of cost of goods sold, as it was
+    // posted (₹575); the goods back on the shelf then count at the average the
+    // later purchase made, and that difference is posted as a cost variance, so
+    // the ledger is still the valuation.
     await voidInvoice(f.trx, f.orgId, null, inv.id, 'Entered against the wrong customer');
-    assert.equal(await inventoryInLedger(f.trx, f.orgId, '2026-06-30'), before + 57_500);
+    const reversal = await f.trx.selectFrom('journal_entries').select('id').where('org_id', '=', f.orgId)
+      .where('reversal_of_entry_id', '=', invEntry.journal_entry_id!).executeTakeFirstOrThrow();
+    assert.deepEqual(await lineOn(f.trx, reversal.id, CODE.COGS), { dr: 0, cr: 57_500 });
+    assert.equal(await inventoryInLedger(f.trx, f.orgId, '2026-06-30'), (await stockPosition(f.trx, f.orgId, '2026-06-30')).totalValuePaise);
   });
 });
 

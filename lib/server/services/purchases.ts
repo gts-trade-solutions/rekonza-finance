@@ -32,7 +32,7 @@ import { computeTds, parseSections } from '../../tax/tds';
 import { hsnRateHistory, tdsRateOn } from '../tax/rates';
 import { certificateRate } from '../tax/tds-certificates';
 import { checkCashPayment } from './guards';
-import { stockPurchaseAccount } from './stock-ledger';
+import { afterStockMoved, stockPurchaseAccount } from './stock-ledger';
 import { voidReason, voidStamp } from './void-reason';
 import { registrationOn } from './statutory';
 import { findOrCreateBatch, type BatchInput } from './batches';
@@ -438,10 +438,12 @@ export async function postBill(
       ? stock.accountId
       : l.account_id ?? requireAccount(acc, CODE.PURCHASES);
     const lineTax = p(l.cgst) + p(l.sgst) + p(l.igst) + p(l.cess);
+    // An Inventory line names its item, so the account is kept item by item (ledger/posting.ts).
+    const itemId = stock && l.item_id && stock.items.has(l.item_id) ? l.item_id : null;
 
     if (claimable(l) && lineTax > 0 && !isRcm) {
       // Tax is recoverable, so it is an asset and stays out of the cost.
-      draft.push({ accountId: expenseAccount, debit: p(l.taxable), description: l.description });
+      draft.push({ accountId: expenseAccount, debit: p(l.taxable), description: l.description, itemId });
       if (p(l.cgst)) draft.push({ accountId: requireAccount(acc, CODE.ITC_CGST), debit: p(l.cgst) });
       if (p(l.sgst)) draft.push({ accountId: requireAccount(acc, CODE.ITC_SGST), debit: p(l.sgst) });
       if (p(l.igst)) draft.push({ accountId: requireAccount(acc, CODE.ITC_IGST), debit: p(l.igst) });
@@ -454,6 +456,7 @@ export async function postBill(
         accountId: expenseAccount,
         debit: p(l.taxable) + (isRcm && claimable(l) ? 0 : lineTax),
         description: l.description,
+        itemId,
       });
     }
   }
@@ -518,6 +521,14 @@ export async function postBill(
     .where('id', '=', billId)
     .execute();
 
+  // A bill dated before later sales changes what those sales cost under FIFO
+  // (or the year's average): the difference is posted as a cost variance, with
+  // this bill named as the reason (stock-ledger.ts syncStockLedger).
+  if (stock) {
+    const day = String(bill.bill_date).slice(0, 10);
+    await afterStockMoved(trx, orgId, userId, day, `bill ${bill.internal_no} (${bill.vendor_invoice_no}) dated ${day} changes the cost of stock from that day`);
+  }
+
   return entry.id;
 }
 
@@ -529,7 +540,7 @@ export async function voidBill(
   reason?: string,
 ): Promise<void> {
   const bill = await trx
-    .selectFrom('bills').select(['id', 'internal_no', 'status', 'journal_entry_id', 'amount_paid'])
+    .selectFrom('bills').select(['id', 'internal_no', 'status', 'journal_entry_id', 'amount_paid', 'bill_date'])
     .where('id', '=', billId).where('org_id', '=', orgId).executeTakeFirst();
   if (!bill) throw notFound('Bill not found.');
   if (bill.status === 'void') throw new ApiError(409, 'That bill is already void.', 'conflict');
@@ -559,6 +570,9 @@ export async function voidBill(
   await trx
     .updateTable('bills').set({ status: 'void', ...voidStamp(why, userId) })
     .where('id', '=', billId).execute();
+  // Its goods leave the FIFO layers: what later sales cost may change with them.
+  const voidDay = String(bill.bill_date).slice(0, 10);
+  await afterStockMoved(trx, orgId, userId, voidDay, `bill ${bill.internal_no} voided`);
 }
 
 // ── Expenses ─────────────────────────────────────────────────────────────────

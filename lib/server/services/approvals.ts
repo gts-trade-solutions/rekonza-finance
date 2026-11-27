@@ -24,7 +24,7 @@ import { ApiError, badRequest, conflict, forbidden, notFound } from '../http';
 
 export type ApprovalDoc = 'invoice' | 'bill';
 /** What a rule can cover: documents, and manual journals. */
-export type RuleDoc = ApprovalDoc | 'journal' | 'payment_batch';
+export type RuleDoc = ApprovalDoc | 'journal' | 'payment_batch' | 'credit_note';
 
 export interface ApprovalRule {
   id: string;
@@ -34,7 +34,7 @@ export interface ApprovalRule {
   isActive: boolean;
 }
 
-const LABEL: Record<RuleDoc, string> = { invoice: 'Invoices', bill: 'Bills', journal: 'Journals', payment_batch: 'Payment batches' };
+const LABEL: Record<RuleDoc, string> = { invoice: 'Invoices', bill: 'Bills', journal: 'Journals', payment_batch: 'Payment batches', credit_note: 'Credit notes' };
 
 export async function listRules(ex: Executor, orgId: number): Promise<ApprovalRule[]> {
   const rows = await ex.selectFrom('approval_rules').selectAll().where('org_id', '=', orgId)

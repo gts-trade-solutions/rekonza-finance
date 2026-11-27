@@ -567,6 +567,9 @@ export interface VendorCreditForEdit {
   id: string; number: string; status: string; branchId: string; vendorId: string; date: string; reason: string;
   againstBillId: string | null; againstBillNo: string | null; againstBillRef: string | null;
   amountPaise: number; gstRatePct: number; itcClaimed: boolean; totalPaise: number; appliedPaise: number;
+  /** Goods sent back, line by line (migration 131). */
+  lines?: { itemId: string | null; itemName: string | null; billLineId: string | null; description: string | null; hsnSac: string | null;
+    qty: number; uqc: string | null; ratePaise: number; gstRatePct: number; taxablePaise: number; stockCostPaise: number | null }[];
 }
 
 /** Zoho's Edit and Delete on a vendor credit (services/purchase-changes.ts). */
@@ -575,6 +578,7 @@ export const vendorCredits = {
   update: (id: string, input: {
     branchId: string; vendorId: string; date: string; reason: string; againstBillId: string | null;
     amountPaise: number; gstRatePct: number; itcClaimed: boolean;
+    lines?: { itemId: string | null; billLineId: string | null; qty: number; ratePaise: number; gstRatePct: number }[];
   }) => api.put<{ id: string; number: string; totalPaise: number; journalEntryId: string | null }>(`/api/vendor-credits/${id}`, input),
   remove: (id: string, reason?: string | null) =>
     api.delete<{ deleted: true; number: string }>(`/api/vendor-credits/${id}${reason ? `?reason=${encodeURIComponent(reason)}` : ''}`),
@@ -3267,4 +3271,30 @@ export const imports = {
   /** A connected company's vouchers, posted as journal entries. */
   tallyVouchers: (companyId: string, from: string | null, to: string | null, dryRun: boolean) =>
     api.post<ImportResponse>('/api/imports', { source: 'tally-vouchers', companyId, from, to, dryRun }),
+};
+
+// ── Status review 7, builder B: stock valuation vs ledger, FIFO layers ──────
+
+export interface StockRecLine {
+  itemId: string; name: string; sku: string | null; uqc: string; valuation: 'average' | 'fifo'; qty: number;
+  valuationPaise: number; ledgerPaise: number | null; variancePaise: number; reasons: string[];
+}
+export interface StockReconciliationResponse {
+  asOf: string; method: 'perpetual' | 'periodic'; perpetualFrom: string | null; lines: StockRecLine[];
+  unassigned: { amountPaise: number; entries: { entryId: string; entryNo: number; date: string; memo: string | null; amountPaise: number }[] };
+  totals: { valuationPaise: number; ledgerPaise: number; variancePaise: number; inStatementsPaise: number };
+  proof: { from: string; openingStockPaise: number; directCostsPaise: number; closingStockPaise: number; costOfGoodsSoldPaise: number; cogsAccountPaise: number };
+  notes: string[];
+}
+export interface ItemLayersResponse {
+  asOf: string; itemId: string; valuation: 'average' | 'fifo'; qty: number; valuePaise: number;
+  layers: { date: string; source: 'bill' | 'production'; documentId: string | null; document: string; party: string | null;
+    receivedQty: number; returnedQty: number; qty: number; onHandQty: number; ratePaise: number; valuePaise: number }[];
+  olderQty: number; olderRatePaise: number; olderValuePaise: number;
+}
+export const stockReconciliation = {
+  get: (asOf?: string) => api.get<StockReconciliationResponse>('/api/reports/stock-reconciliation', asOf ? { asOf } : undefined),
+  /** The existing true-up: Inventory brought into line with the valuation at a date. */
+  bringIntoLine: (asOf: string) => api.post<{ asOf: string; movedPaise: number }>('/api/settings/stock-accounting', { action: 'true_up', asOf }),
+  layers: (itemId: string, asOf?: string) => api.get<ItemLayersResponse>(`/api/items/${encodeURIComponent(itemId)}/layers`, asOf ? { asOf } : undefined),
 };

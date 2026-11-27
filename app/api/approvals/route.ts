@@ -16,8 +16,8 @@ import { postBill } from '@/lib/server/services/purchases';
 // Who may approve is the rule's business, checked by the service; this route
 // only makes sure the caller can see the kind of document at all.
 
-const MODULE: Record<RuleDoc, 'sales' | 'purchases' | 'accountant'> = { invoice: 'sales', bill: 'purchases', journal: 'accountant', payment_batch: 'purchases' };
-const LABEL: Record<RuleDoc, string> = { invoice: 'Invoices', bill: 'Bills', journal: 'Journals', payment_batch: 'Payment batches' };
+const MODULE: Record<RuleDoc, 'sales' | 'purchases' | 'accountant'> = { invoice: 'sales', bill: 'purchases', journal: 'accountant', payment_batch: 'purchases', credit_note: 'sales' };
+const LABEL: Record<RuleDoc, string> = { invoice: 'Invoices', bill: 'Bills', journal: 'Journals', payment_batch: 'Payment batches', credit_note: 'Credit notes' };
 
 export const GET = route(async ({ orgId, role, user, req }) => {
   const url = new URL(req.url);

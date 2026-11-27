@@ -88,6 +88,13 @@ export interface DraftLine {
   description?: string | null;
   /** The cost centre this income or expense belongs to. Ignored on balance-sheet lines. */
   costCentreId?: number | null;
+  /**
+   * The stock item an Inventory line is for. Such a line also writes a row of
+   * stock_postings, the Inventory account item by item, which the "Stock
+   * valuation vs ledger" report reads (services/stock-ledger.ts). Ignored on
+   * any other account.
+   */
+  itemId?: number | null;
 }
 
 export interface PostEntryInput {
@@ -422,6 +429,19 @@ export async function postEntry(trx: Trx, input: PostEntryInput): Promise<Posted
 
   const entryId = Number(entry.insertId);
 
+  // The Inventory account item by item: each Inventory line that names its
+  // item is kept beside the entry, signed as a debit, so summing an item's rows
+  // to a date gives its balance in the ledger (migration 131).
+  if (lines.some((l) => l.itemId)) {
+    const inventory = await trx.selectFrom('accounts').select('id')
+      .where('org_id', '=', input.orgId).where('code', '=', '1500').executeTakeFirst();
+    const rows = lines.filter((l) => l.itemId && inventory && l.accountId === inventory.id).map((l) => ({
+      org_id: input.orgId, entry_id: entryId, item_id: l.itemId!, posting_date: input.date,
+      amount: toSqlFromPaise((l.debit ?? 0) - (l.credit ?? 0)), source_type: input.sourceType, source_id: input.sourceId ?? null,
+    }));
+    if (rows.length) await trx.insertInto('stock_postings').values(rows).execute();
+  }
+
   await trx
     .insertInto('journal_lines')
     .values(
@@ -485,7 +505,7 @@ export async function reverseEntry(
     .orderBy('line_no')
     .execute();
 
-  return postEntry(trx, {
+  const reversal = await postEntry(trx, {
     orgId,
     branchId: original.branch_id,
     // Reversals default to the original date so the period they affect is the
@@ -508,6 +528,18 @@ export async function reverseEntry(
       costCentreId: l.cost_centre_id,
     })),
   });
+
+  // The item-by-item Inventory rows go back with it, so an item's balance in
+  // the ledger falls back exactly as the account does.
+  const stock = await trx.selectFrom('stock_postings').select(['item_id', 'amount', 'source_type', 'source_id'])
+    .where('org_id', '=', orgId).where('entry_id', '=', entryId).execute();
+  if (stock.length) {
+    await trx.insertInto('stock_postings').values(stock.map((r) => ({
+      org_id: orgId, entry_id: reversal.id, item_id: r.item_id, posting_date: opts.date ?? String(original.entry_date).slice(0, 10),
+      amount: toSqlFromPaise(-toPaiseFromSql(r.amount)), source_type: r.source_type, source_id: r.source_id,
+    }))).execute();
+  }
+  return reversal;
 }
 
 /** Each line's cost centre: its own, or the document's, on income and expense lines only. */

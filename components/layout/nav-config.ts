@@ -60,6 +60,8 @@ export const NAV_GROUPS: NavGroup[] = [
       { label: 'Batches & Expiry', href: '/inventory/batches', icon: CalendarClock, module: 'inventory', feature: 'inventory' },
       { label: 'Serial Numbers', href: '/inventory/serials', icon: ScanBarcode, module: 'inventory', feature: 'inventory' },
       { label: 'Warehouses', href: '/inventory/warehouses', icon: Building, module: 'inventory', feature: 'inventory' },
+      // Status review 7, item 5: the Inventory account against the valuation, item by item.
+      { label: 'Valuation vs Ledger', href: '/reports/stock-reconciliation', icon: Scale, module: 'accountant', feature: 'inventory' },
     ],
   },
   {

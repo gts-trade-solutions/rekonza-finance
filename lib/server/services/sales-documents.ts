@@ -33,7 +33,7 @@ import { toPaiseFromSql, toSqlFromPaise } from '../money-sql';
 import { allocateNumber, allocateOrgNumber, assertGstDocNumber, postEntry, reverseEntry, type DraftLine } from '../ledger/posting';
 import { seriesFor } from './voucher-types';
 import { registrationOn } from './statutory';
-import { returnCostLines } from './stock-ledger';
+import { afterStockMoved, returnCostLines } from './stock-ledger';
 import { CODE, accountIds, requireAccount } from '../ledger/chart-of-accounts';
 import { costLines, type DocumentLineInput } from './lines';
 import { fyLabelFor, createInvoice } from './sales';
@@ -788,6 +788,8 @@ export async function createCreditNote(
   });
 
   await trx.updateTable('credit_notes').set({ journal_entry_id: entry.id }).where('id', '=', id).execute();
+  // Goods back in stock from its date: on a back-dated note, what later sales cost may change.
+  await afterStockMoved(trx, orgId, userId, input.date, `credit note ${number} dated ${input.date}`);
 
   // Setting it against the invoice is an allocation, not a second posting. The
   // journal entry above already reduced receivables; this records *which*
@@ -1280,6 +1282,9 @@ export async function voidCreditNote(
     .set({ status: 'void', applied_amount: toSqlFromPaise(0), ...voidStamp(why, userId) })
     .where('id', '=', creditNoteId)
     .execute();
+  // The goods it took back leave stock again from its date.
+  const noteDay = (await trx.selectFrom('credit_notes').select('note_date').where('id', '=', creditNoteId).executeTakeFirstOrThrow()).note_date;
+  await afterStockMoved(trx, orgId, userId, String(noteDay).slice(0, 10), `credit note ${cn.number} voided`);
 }
 
 

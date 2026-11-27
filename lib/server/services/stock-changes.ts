@@ -45,6 +45,8 @@ import { checkTransfer, type TransferInput } from './stock-transfers';
 import { recordProduction, type ProductionInput } from './manufacturing';
 import { plain, recordDeletion, reverseForChange, unlinkDocument } from './doc-delete';
 import { indiaToday } from './held-journals';
+import { afterStockMoved, itemValues, perpetualOn, postStockChange } from './stock-ledger';
+import { CODE } from '../ledger/chart-of-accounts';
 
 const locked = (message: string) => new ApiError(409, message, 'locked_document');
 const inUse = (message: string) => new ApiError(409, message, 'in_use');
@@ -204,6 +206,7 @@ export async function adjustmentForEdit(ex: Executor, orgId: number, id: number)
 export async function createAdjustment(trx: Trx, orgId: number, userId: number | null, input: AdjustmentInput) {
   const item = await checkAdjustment(trx, orgId, input);
   const batchId = item.track_batches && input.batch ? await findOrCreateBatch(trx, orgId, item.id, input.batch) : null;
+  const valueBefore = (await perpetualOn(trx, orgId, input.date)) ? await itemValues(trx, orgId, input.date) : null;
   const id = Number((await trx.insertInto('stock_adjustments').values({
     org_id: orgId, batch_id: batchId, warehouse_id: input.warehouseId ?? null, item_id: item.id, adjust_date: input.date,
     qty_delta: String(input.qtyDelta), reason: input.reason, notes: input.notes ?? null, journal_entry_id: null, created_by_user_id: userId,
@@ -211,7 +214,33 @@ export async function createAdjustment(trx: Trx, orgId: number, userId: number |
   // Numbered pieces found (opening stock, a count) or written off.
   await recordSerials(trx, orgId, { type: 'adjustment', id }, input.qtyDelta > 0 ? 1 : -1,
     [{ lineId: null, itemId: item.id, qty: input.qtyDelta, serials: input.serials }], { check: true });
+  if (valueBefore) await postAdjustment(trx, orgId, userId, id, { ...input, itemName: item.name }, valueBefore);
   return { id, itemName: item.name };
+}
+
+/**
+ * On a perpetual book an adjustment posts on its own date, not at the month-end
+ * true-up: goods written off (damaged, stolen, expired, a stocktake short) leave
+ * Inventory at their FIFO or average cost on the day, into cost of goods sold,
+ * which is where the periodic method's smaller closing stock puts the same loss,
+ * so both methods report the same cost; goods found come back the other way.
+ * Opening stock entered as an adjustment is an opening balance: its other side
+ * is opening equity, as on the item itself. Before this the Inventory account
+ * and the valuation report disagreed from the adjustment until month end.
+ */
+async function postAdjustment(
+  trx: Trx, orgId: number, userId: number | null, id: number,
+  a: AdjustmentInput & { itemName: string }, before: Map<number, number>,
+) {
+  const opening = a.reason === 'opening';
+  const posted = await postStockChange(trx, orgId, userId, {
+    date: a.date, before, sourceType: 'stock_adjustment', sourceId: id,
+    counterCode: opening ? CODE.OPENING_BALANCE_EQUITY : CODE.COGS,
+    memo: `Stock adjustment ADJ-${id}: ${a.qtyDelta > 0 ? '+' : ''}${a.qtyDelta} ${a.itemName} (${a.reason})${a.notes ? ` - ${a.notes}` : ''}`.slice(0, 500),
+    describe: { in: 'Stock found: into Inventory', out: `Stock written off: ${a.reason}`, counter: opening ? 'Opening stock' : `Stock adjustment: ${a.reason}` },
+  });
+  await trx.updateTable('stock_adjustments').set({ journal_entry_id: posted?.entryId ?? null }).where('id', '=', id).execute();
+  await afterStockMoved(trx, orgId, userId, a.date, `stock adjustment ADJ-${id} dated ${a.date}`);
 }
 
 /**
@@ -236,12 +265,21 @@ export async function updateAdjustment(trx: Trx, orgId: number, userId: number |
     await reverseForChange(trx, orgId, row.journal_entry_id, { memo: `Stock adjustment of ${before.itemName} edited: the entry as it was, reversed`, userId, module: 'accountant' });
     await trx.deleteFrom('serial_moves').where('org_id', '=', orgId).where('doc_type', '=', 'adjustment').where('doc_id', '=', id).execute();
     const batchId = item.track_batches && input.batch ? await findOrCreateBatch(trx, orgId, item.id, input.batch) : null;
+    // On a perpetual book: the stock's value without this adjustment, for what the new one posts.
+    let valueBefore: Map<number, number> | null = null;
+    if (await perpetualOn(trx, orgId, input.date)) {
+      await trx.updateTable('stock_adjustments').set({ qty_delta: '0', journal_entry_id: null }).where('id', '=', id).execute();
+      valueBefore = await itemValues(trx, orgId, input.date);
+    }
     await trx.updateTable('stock_adjustments').set({
       batch_id: batchId, warehouse_id: input.warehouseId ?? null, item_id: item.id, adjust_date: input.date,
       qty_delta: String(input.qtyDelta), reason: input.reason, notes: input.notes ?? null, journal_entry_id: null,
     }).where('id', '=', id).execute();
     await recordSerials(trx, orgId, { type: 'adjustment', id }, input.qtyDelta > 0 ? 1 : -1,
       [{ lineId: null, itemId: item.id, qty: input.qtyDelta, serials: input.serials }], { check: true });
+    if (valueBefore) await postAdjustment(trx, orgId, userId, id, { ...input, itemName: item.name }, valueBefore);
+    const oldDay = ymd(row.adjust_date);
+    if (oldDay < input.date || !valueBefore) await afterStockMoved(trx, orgId, userId, oldDay < input.date ? oldDay : input.date, `stock adjustment ADJ-${id} edited`);
 
     const warnings: string[] = [];
     await guard.check(warnings);
@@ -267,6 +305,7 @@ export async function deleteAdjustment(trx: Trx, orgId: number, userId: number |
       journalEntryId: row.journal_entry_id, reversalEntryId: reversal, reason, snapshot: { adjustment: plain(row), ...snapshot },
     });
     await trx.deleteFrom('stock_adjustments').where('id', '=', id).where('org_id', '=', orgId).execute();
+    await afterStockMoved(trx, orgId, userId, ymd(row.adjust_date), `stock adjustment ADJ-${id} deleted`);
 
     const warnings: string[] = [];
     await guard.check(warnings);
@@ -381,9 +420,11 @@ export async function updateProduction(trx: Trx, orgId: number, userId: number |
   ], [p.item_id, bom?.item_id]);
   return atomically(trx, async () => {
     // Out of stock for a moment, so the components are counted without it.
-    await trx.updateTable('productions').set({ status: 'void' }).where('id', '=', id).execute();
+    await reverseForChange(trx, orgId, p.journal_entry_id, { memo: `Production ${p.number} edited: the entry as it was, reversed`, userId, module: 'accountant' });
+    await trx.updateTable('productions').set({ status: 'void', journal_entry_id: null }).where('id', '=', id).execute();
     await trx.deleteFrom('production_lines').where('production_id', '=', id).execute();
     const made = await recordProduction(trx, orgId, userId, input, { replace: { id, number: p.number, bomId: p.bom_id } });
+    if (ymd(p.produced_on) < input.date) await afterStockMoved(trx, orgId, userId, ymd(p.produced_on), `production ${p.number} edited`);
     await guard.check(made.warnings);
     return { ...made, before };
   });
@@ -396,12 +437,14 @@ export async function deleteProduction(trx: Trx, orgId: number, userId: number |
   const snapshot = await productionForEdit(trx, orgId, id);
   const guard = p.status === 'void' ? null : await stockGuard(trx, orgId, [{ branchId: p.branch_id, date: ymd(p.produced_on) }], [p.item_id]);
   return atomically(trx, async () => {
+    const reversal = await reverseForChange(trx, orgId, p.journal_entry_id, { memo: `Production ${p.number} deleted`, userId, module: 'accountant' });
     await unlinkDocument(trx, orgId, 'production', id);
     await recordDeletion(trx, {
       orgId, userId, docType: 'production', docId: id, number: p.number, date: ymd(p.produced_on), branchId: p.branch_id,
-      totalPaise: toPaiseFromSql(p.cost), reason, snapshot,
+      totalPaise: toPaiseFromSql(p.cost), reason, snapshot, journalEntryId: p.journal_entry_id, reversalEntryId: reversal,
     });
     await trx.deleteFrom('productions').where('id', '=', id).where('org_id', '=', orgId).execute();
+    await afterStockMoved(trx, orgId, userId, ymd(p.produced_on), `production ${p.number} deleted`);
     const warnings: string[] = [];
     await guard?.check(warnings);
     return { number: p.number, warnings };

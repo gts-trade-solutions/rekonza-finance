@@ -31,8 +31,8 @@ import { AsyncPage } from '@/components/shared/async-state';
 import { Field, MoneyInput } from '@/components/shared/form-bits';
 import { Input } from '@/components/ui/input';
 import {
-  ApiError, bills as billsApi, purchaseDocuments, vendorCredits,
-  type PurchaseDocListResponse, type PurchaseDocRow, type VendorCreditForEdit,
+  ApiError, bills as billsApi, items as itemsApi, purchaseDocuments, vendorCredits,
+  type BillDetail, type PurchaseDocListResponse, type PurchaseDocRow, type VendorCreditForEdit,
 } from '@/lib/api/client';
 import { useApi, useApiAction } from '@/lib/api/use-api';
 import { useAppStore } from '@/lib/store';
@@ -49,6 +49,13 @@ const REASONS = [
 
 const RATE_OPTIONS = [0, 5, 12, 18, 28].map((r) => ({ value: String(r), label: `${r}%` }));
 const today = () => new Date().toISOString().slice(0, 10);
+
+/**
+ * A line of goods going back: from a bill line (its item, rate and tax), or
+ * an item picked by hand. Sent as the credit's lines (migration 131), so the
+ * goods leave stock and their FIFO layer, and on a perpetual book Inventory.
+ */
+interface GoodsLine { key: string; itemId: string; billLineId: string | null; name: string; cameIn: number | null; qty: number; ratePaise: number; gstRatePct: number }
 const short = (d: string) => new Date(d).toLocaleDateString('en-IN');
 
 export default function VendorCreditsPage() {
@@ -72,9 +79,14 @@ export default function VendorCreditsPage() {
   // Zoho's Edit: the same window, filled with the credit as entered (PUT /api/vendor-credits/[id]).
   const [editing, setEditing] = useState<VendorCreditForEdit | null>(null);
   const [loadingEdit, setLoadingEdit] = useState(false);
+  // Zoho's vendor credit has item lines: goods sent back go out of stock with it.
+  const [mode, setMode] = useState<'amount' | 'goods'>('amount');
+  const [goods, setGoods] = useState<GoodsLine[]>([]);
+  const [pickItem, setPickItem] = useState('');
 
   const startNew = () => {
     setEditing(null); setVendorId(''); setBillId(''); setReason(REASONS[0]); setAmount(0); setGstRate(18); setItcClaimed(true); setDate(today());
+    setMode('amount'); setGoods([]); setPickItem('');
   };
   const startEdit = async (id: string) => {
     setLoadingEdit(true);
@@ -83,6 +95,9 @@ export default function VendorCreditsPage() {
       setEditing(vc);
       setVendorId(vc.vendorId); setBillId(vc.againstBillId ?? ''); setReason(vc.reason); setAmount(vc.amountPaise);
       setGstRate(vc.gstRatePct); setItcClaimed(vc.itcClaimed); setDate(vc.date);
+      const ls = vc.lines ?? [];
+      setMode(ls.length ? 'goods' : 'amount');
+      setGoods(ls.map((l, i) => ({ key: `e${i}`, itemId: l.itemId ?? '', billLineId: l.billLineId, name: l.itemName ?? l.description ?? 'Item', cameIn: null, qty: l.qty, ratePaise: l.ratePaise, gstRatePct: l.gstRatePct })));
       setOpen(true);
     } catch (e) {
       toast.error(e instanceof ApiError ? e.message : 'That vendor credit could not be opened.');
@@ -90,10 +105,23 @@ export default function VendorCreditsPage() {
   };
 
   // Only this vendor's open bills — a credit can only reduce something owed.
+  // Goods can go back on a bill already paid too: what the bill cannot take stays on account.
   const vendorBills = useApi(
-    async () => (vendorId ? billsApi.list({ vendorId, open: true, limit: 100 }) : { bills: [] as never[] }),
+    async () => (vendorId ? billsApi.list({ vendorId, limit: 100 }) : { bills: [] as never[] }),
     [vendorId],
   );
+  // The bill's own lines, to send goods back out of.
+  const bill = useApi<BillDetail | null>(async () => (billId ? billsApi.get(billId) : null), [billId]);
+  const stockItems = useApi(async () => (mode === 'goods' ? itemsApi.list({ kind: 'goods', limit: 500 }) : { items: [] as never[] }), [mode]);
+  useEffect(() => {
+    // Choosing a bill in goods mode lists its item lines, each at nothing to return yet.
+    if (mode !== 'goods' || !bill.data || editing) return;
+    setGoods(bill.data.lines.filter((l) => l.itemId).map((l) => ({
+      key: `b${l.id}`, itemId: String(l.itemId), billLineId: l.id, name: l.description ?? 'Item', cameIn: l.qty, qty: 0, ratePaise: l.ratePaise, gstRatePct: l.gstRatePct,
+    })));
+  }, [bill.data, mode, editing]);
+  const goodsTaxable = goods.reduce((t, g) => t + Math.round(g.qty * g.ratePaise), 0);
+  const goodsTax = goods.reduce((t, g) => t + Math.round((Math.round(g.qty * g.ratePaise) * g.gstRatePct) / 100), 0);
 
   // ?edit=<id> (the General Ledger's ⋯, say): open that credit's Edit window.
   useEffect(() => {
@@ -109,12 +137,16 @@ export default function VendorCreditsPage() {
   const refund = useApiAction(purchaseDocuments.refundVendorCredit);
 
   const save = async () => {
-    if (!vendorId || amount <= 0) {
-      toast.error('Pick a vendor and enter an amount.');
+    const sent = goods.filter((g) => g.qty > 0);
+    if (!vendorId || (mode === 'amount' ? amount <= 0 : !sent.length)) {
+      toast.error(mode === 'amount' ? 'Pick a vendor and enter an amount.' : 'Pick a vendor and give the quantity going back on at least one line.');
       return;
     }
     const input = {
-      vendorId, date, reason, againstBillId: billId || null, amountPaise: amount, gstRatePct: gstRate, itcClaimed,
+      vendorId, date, reason, againstBillId: billId || null, amountPaise: mode === 'amount' ? amount : 0, gstRatePct: gstRate, itcClaimed,
+      lines: mode === 'goods'
+        ? sent.map((g) => ({ itemId: g.itemId, billLineId: g.billLineId, qty: g.qty, ratePaise: g.ratePaise, gstRatePct: g.gstRatePct }))
+        : [],
     };
     const result = editing
       ? await update.run(editing.id, { ...input, branchId: editing.branchId })
@@ -251,6 +283,49 @@ export default function VendorCreditsPage() {
                       clearable
                     />
                   </Field>
+                  <div className="flex gap-1 rounded-md border p-1 text-[13px]" data-slot="vendor-credit-mode">
+                    {([['amount', 'By amount'], ['goods', 'Goods sent back (item lines)']] as const).map(([v, l]) => (
+                      <button key={v} type="button" onClick={() => { setMode(v); if (v === 'amount') setGoods([]); }}
+                        className={`flex-1 rounded px-2 py-1 ${mode === v ? 'bg-primary text-white' : 'hover:bg-muted'}`} data-slot={`vc-mode-${v}`}>{l}</button>
+                    ))}
+                  </div>
+                  {mode === 'goods' && (
+                    <div className="space-y-2 rounded-md border p-3" data-slot="vendor-credit-goods">
+                      <p className="text-xs text-muted-foreground">
+                        {billId ? 'Each item on the bill, with what came in. Enter how many go back: they leave stock out of this bill\'s FIFO layer.' : 'No bill named: the goods leave the newest layer received by the credit\'s date.'}
+                      </p>
+                      <table className="w-full text-[12.5px]">
+                        <thead className="text-[11px] uppercase text-muted-foreground"><tr><th className="py-1 text-left font-medium">Item</th><th className="py-1 text-right font-medium">Came in</th><th className="py-1 text-right font-medium">Qty back</th><th className="py-1 text-right font-medium">Rate</th><th className="py-1 text-right font-medium">GST</th></tr></thead>
+                        <tbody>
+                          {goods.map((g, i) => (
+                            <tr key={g.key} className="border-t" data-slot="vc-goods-row">
+                              <td className="py-1 pr-2">{g.name}</td>
+                              <td className="py-1 text-right tabular">{g.cameIn ?? '—'}</td>
+                              <td className="py-1 text-right"><Input type="number" min={0} step="any" value={g.qty || ''} placeholder="0" className="h-7 w-20 text-right" data-slot="vc-goods-qty"
+                                onChange={(e) => setGoods(goods.map((x, k) => (k === i ? { ...x, qty: Math.max(0, Number(e.target.value) || 0) } : x)))} /></td>
+                              <td className="py-1 text-right tabular">{formatINR(g.ratePaise)}</td>
+                              <td className="py-1 text-right tabular">{g.gstRatePct}%</td>
+                            </tr>
+                          ))}
+                          {!goods.length && <tr><td colSpan={5} className="py-2 text-center text-muted-foreground">{billId ? 'This bill has no item lines.' : 'Add the items going back.'}</td></tr>}
+                        </tbody>
+                      </table>
+                      {!billId && (
+                        <div className="flex items-center gap-2">
+                          <div className="flex-1">
+                            <Combobox options={(stockItems.data?.items ?? []).map((it) => ({ value: it.id, label: it.name, sublabel: it.sku ?? undefined }))}
+                              value={pickItem} onChange={setPickItem} placeholder="Add an item" searchPlaceholder="Search items" showAvatar={false} />
+                          </div>
+                          <Button size="sm" variant="outline" data-slot="vc-add-item" disabled={!pickItem} onClick={() => {
+                            const it = (stockItems.data?.items ?? []).find((x) => x.id === pickItem);
+                            if (!it) return;
+                            setGoods([...goods, { key: `i${Date.now()}`, itemId: it.id, billLineId: null, name: it.name, cameIn: null, qty: 1, ratePaise: it.purchasePricePaise ?? 0, gstRatePct: it.gstRatePct ?? gstRate }]);
+                            setPickItem('');
+                          }}>Add</Button>
+                        </div>
+                      )}
+                    </div>
+                  )}
                   <Field label="Reason" required>
                     <Combobox
                       options={[...(REASONS.includes(reason) ? [] : [reason]), ...REASONS].map((r) => ({ value: r, label: r }))}
@@ -259,7 +334,7 @@ export default function VendorCreditsPage() {
                       showAvatar={false}
                     />
                   </Field>
-                  <div className="grid grid-cols-2 gap-4">
+                  {mode === 'amount' && <div className="grid grid-cols-2 gap-4">
                     <Field label="Taxable amount" required>
                       <MoneyInput valuePaise={amount} onChangePaise={setAmount} />
                     </Field>
@@ -271,7 +346,7 @@ export default function VendorCreditsPage() {
                         showAvatar={false}
                       />
                     </Field>
-                  </div>
+                  </div>}
                   <div className="flex items-start justify-between gap-3 rounded-md border p-3">
                     <div className="min-w-0">
                       <p className="text-sm font-medium">Input credit was claimed on this cost</p>
@@ -285,7 +360,7 @@ export default function VendorCreditsPage() {
                   <div className="flex items-center justify-between rounded-md border bg-muted/30 px-3 py-2 text-sm">
                     <span className="text-muted-foreground">Credit incl. GST</span>
                     <Money
-                      value={amount + Math.round((amount * gstRate) / 100)}
+                      value={mode === 'goods' ? goodsTaxable + goodsTax : amount + Math.round((amount * gstRate) / 100)}
                       className="font-semibold"
                     />
                   </div>

@@ -23,7 +23,7 @@ import type { Paise, SupplyKind, SupplyType } from '../../types';
 import { computeLineTax, exportTaxFor, isExportSupply, placeOfSupplyFor, resolveSupplyType, totalTaxPaise } from '../../tax/gst';
 import { tradeProfile } from './trade-profile';
 import { checkCreditHold, checkCreditLimit, checkMrp, checkStock } from './guards';
-import { saleCostLines } from './stock-ledger';
+import { afterStockMoved, saleCostLines } from './stock-ledger';
 import { checkSerials, recordSerials } from './serials';
 import { checkGodown } from './godowns';
 import { voidReason, voidStamp } from './void-reason';
@@ -675,6 +675,11 @@ export async function postInvoice(
     .where('id', '=', invoiceId)
     .execute();
 
+  // A sale dated before others changes what the later ones cost under FIFO:
+  // the difference is posted as a cost variance naming this invoice (stock-ledger.ts).
+  const saleDay = String(inv.invoice_date).slice(0, 10);
+  await afterStockMoved(trx, orgId, userId, saleDay, `invoice ${inv.number} dated ${saleDay}`);
+
   // Now that it is issued, it may need an IRN to be legally valid.
   const customer = await trx
     .selectFrom('contacts').select('gst_treatment')
@@ -710,7 +715,7 @@ export async function voidInvoice(
 ): Promise<void> {
   const inv = await trx
     .selectFrom('invoices')
-    .select(['id', 'number', 'status', 'journal_entry_id', 'amount_paid'])
+    .select(['id', 'number', 'status', 'journal_entry_id', 'amount_paid', 'invoice_date'])
     .where('id', '=', invoiceId)
     .where('org_id', '=', orgId)
     // Held until the void is done: a second void at the same moment waits, then finds it void.
@@ -761,6 +766,8 @@ export async function voidInvoice(
     .set({ status: 'void', ...voidStamp(why, userId) })
     .where('id', '=', invoiceId)
     .execute();
+  // Its goods are back in stock from its date: what later sales cost may change.
+  await afterStockMoved(trx, orgId, userId, String(inv.invoice_date).slice(0, 10), `invoice ${inv.number} voided`);
 
   // A voided invoice is no longer reportable. Leaving it pending would keep it
   // on the compliance queue for an IRN it must never be given.
