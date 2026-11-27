@@ -54,6 +54,9 @@ export const CODE = {
   GST_IGST: '2230',
   RCM_PAYABLE: '2240',
   GST_CESS: '2250',
+  // GST withheld by this book in the roles of CGST Act s.51 and s.52 (migration 133).
+  GST_TDS_PAYABLE: '2260',
+  GST_TCS_PAYABLE: '2270',
   TDS_PAYABLE: '2300',
   TCS_PAYABLE: '2310',
   PF_PAYABLE: '2320',
@@ -165,6 +168,8 @@ export const STANDARD_ACCOUNTS: SeedAccount[] = [
   { code: CODE.GST_IGST, name: 'Output IGST Payable', type: 'liability', subtype: 'tax', system: true },
   { code: CODE.RCM_PAYABLE, name: 'GST Payable under Reverse Charge', type: 'liability', subtype: 'tax', system: true, description: 'GST we owe on purchases where the supplier does not charge it. Paid in cash; input credit cannot settle it' },
   { code: CODE.GST_CESS, name: 'Output Cess Payable', type: 'liability', subtype: 'tax', system: true },
+  { code: CODE.GST_TDS_PAYABLE, name: 'GST TDS Payable (section 51)', type: 'liability', subtype: 'tax', system: true, description: 'GST deducted at 2% from payments to suppliers under contracts above ₹2.5 lakh; paid with GSTR-7' },
+  { code: CODE.GST_TCS_PAYABLE, name: 'GST TCS Payable (section 52)', type: 'liability', subtype: 'tax', system: true, description: 'GST collected at source by an e-commerce operator on supplies made through it; paid with GSTR-8' },
   { code: CODE.TDS_PAYABLE, name: 'TDS Payable', type: 'liability', subtype: 'tax', system: true, description: 'Tax withheld from vendors, owed to the government' },
   { code: CODE.TCS_PAYABLE, name: 'TCS Payable', type: 'liability', subtype: 'tax', system: true },
   { code: CODE.PF_PAYABLE, name: 'PF Payable', type: 'liability', subtype: 'current', system: true, description: 'Provident fund deducted and contributed, due to EPFO by the 15th' },
