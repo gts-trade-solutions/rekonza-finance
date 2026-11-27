@@ -3306,3 +3306,25 @@ export const auditTrail = {
     api.get<AuditExportResponse>('/api/audit/export', { ...params, pii: params.pii === false ? '0' : '1' }),
   verify: () => api.post<AuditChainStatus>('/api/audit/verify', {}),
 };
+
+// ── Status review 7, builder A: voucher reversals ───────────────────────────
+
+/** A held entry with what it reverses, when it is a reversal waiting for approval or for its date. */
+export type HeldJournalWithReversal = HeldJournalRow & { reversesEntryId?: string | null; reversesEntryNo?: number | null; reason?: string | null };
+
+export interface ReversalPairRow {
+  entryId: string; entryNo: number; entryDate: string; memo: string | null; sourceType: string; sourceId: string | null;
+  reversalId: string | null; reversalNo: number | null; reversalDate: string | null;
+  amountPaise: number; reason: string | null; requestedBy: string | null; approvedBy: string | null;
+  kind: 'manual' | 'approved' | 'scheduled' | 'document' | 'waiting_approval' | 'scheduled_pending';
+  heldId: string | null;
+}
+
+export const voucherReversals = {
+  /** Reverse an entry on a date, for a reason: posted, or held for a second person under a journal approval rule. */
+  reverse: (entryId: string, date: string, reason: string) =>
+    api.patch<{ held: false; id: string; entryNo: number } | { held: true; heldId: string; approverRole: ApproverRole }>('/api/journal', { entryId, date, reason }),
+  register: (params?: { from?: string; to?: string }) => api.get<{ pairs: ReversalPairRow[] }>('/api/journal/reversals', params),
+  /** Post every post-dated entry and auto-reversal whose date has come. */
+  postDue: () => api.post<{ posted: number; held: number; failed: number; errors: string[] }>('/api/held-journals', { action: 'post-due' }),
+};

@@ -20,6 +20,7 @@ import { toPaiseFromSql, toSqlFromPaise } from '../money-sql';
 import { badRequest, conflict, forbidden, notFound } from '../http';
 import { postManualJournal, type ManualJournalInput } from './journals';
 import { mayApprove, recordApprovalAction, ruleFor } from './approvals';
+import { postReversal } from './voucher-reversals';
 
 export type HeldKind = 'optional' | 'post_dated' | 'approval';
 export type SaveMode = 'post' | 'optional' | 'post_dated';
@@ -112,9 +113,21 @@ async function markPosted(trx: Trx, id: number, entryId: number, userId: number 
  * `userId` is null. If an approval rule now catches it, it goes for approval
  * rather than posting, whoever released it.
  */
-export async function releaseHeldJournal(trx: Trx, orgId: number, userId: number | null, id: number) {
+export async function releaseHeldJournal(trx: Trx, orgId: number, userId: number | null, id: number, today = indiaToday()) {
   const row = await load(trx, orgId, id);
   if (row.kind === 'approval') throw conflict('That entry is waiting for approval; it posts when approved.');
+  // An auto-reversing journal's reversal, due: reverses that entry on its
+  // date. Its approval came with the journal (journals.ts), so none is asked.
+  if (row.reverses_entry_id) {
+    const date = String(row.entry_date).slice(0, 10);
+    if (date > today) throw badRequest(`This reversal is due on ${date}; it cannot be posted before its date.`);
+    const entry = await postReversal(trx, orgId, row.reverses_entry_id, {
+      date, reason: row.reason ?? 'Auto-reversing journal', memo: row.memo, kind: 'scheduled',
+      requestedBy: row.created_by_user_id, approvedBy: null, postedBy: row.created_by_user_id,
+    });
+    await markPosted(trx, id, entry.id, userId);
+    return { posted: true as const, entry };
+  }
   const input = inputOf(row);
   const rule = await ruleFor(trx, orgId, 'journal', totalOf(input));
   if (rule) {
@@ -131,10 +144,24 @@ export async function releaseHeldJournal(trx: Trx, orgId: number, userId: number
 export async function approveHeldJournal(trx: Trx, orgId: number, user: { userId: number; role: RoleName }, id: number, note?: string | null) {
   const row = await load(trx, orgId, id);
   if (row.kind !== 'approval') throw conflict('That entry is not waiting for approval.');
-  if (row.created_by_user_id === user.userId) throw forbidden('You entered this journal. Someone else has to approve it.');
+  if (row.created_by_user_id === user.userId) {
+    throw forbidden(row.reverses_entry_id
+      ? 'You asked for this reversal. Someone else has to approve it.'
+      : 'You entered this journal. Someone else has to approve it.');
+  }
   const input = inputOf(row);
-  const rule = await ruleFor(trx, orgId, 'journal', totalOf(input));
-  if (rule && !mayApprove(user.role, rule.approverRole)) throw forbidden(`This journal needs approval by ${roleName(rule.approverRole)}.`);
+  const rule = await ruleFor(trx, orgId, 'journal', row.reverses_entry_id ? toPaiseFromSql(row.total_amount) : totalOf(input));
+  if (rule && !mayApprove(user.role, rule.approverRole)) throw forbidden(`This ${row.reverses_entry_id ? 'reversal' : 'journal'} needs approval by ${roleName(rule.approverRole)}.`);
+  // A reversal waiting for its checker: the entry it names is reversed on the date asked for.
+  if (row.reverses_entry_id) {
+    const entry = await postReversal(trx, orgId, row.reverses_entry_id, {
+      date: String(row.entry_date).slice(0, 10), reason: row.reason ?? row.memo, memo: row.memo, kind: 'approved',
+      requestedBy: row.created_by_user_id, approvedBy: user.userId, postedBy: row.created_by_user_id,
+    });
+    await markPosted(trx, id, entry.id, user.userId);
+    await recordApprovalAction(trx, orgId, 'journal', id, 'approved', user.userId, note);
+    return entry;
+  }
   const entry = await postManualJournal(trx, orgId, row.created_by_user_id, { ...input, approved: true });
   await markPosted(trx, id, entry.id, user.userId);
   await recordApprovalAction(trx, orgId, 'journal', id, 'approved', user.userId, note);
@@ -174,6 +201,10 @@ export interface HeldJournal {
   createdById: string | null;
   createdAt: string;
   lastError: string | null;
+  /** A reversal waiting (for approval, or for its date): the entry it reverses, and why. */
+  reversesEntryId: string | null;
+  reversesEntryNo: number | null;
+  reason: string | null;
   lines: { accountId: string; accountCode: string; accountName: string; debitPaise: Paise; creditPaise: Paise; description: string | null }[];
 }
 
@@ -187,6 +218,10 @@ export async function listHeldJournals(ex: Executor, orgId: number): Promise<Hel
   const accounts = new Map(ids.length
     ? (await ex.selectFrom('accounts').select(['id', 'code', 'name']).where('org_id', '=', orgId).where('id', 'in', ids).execute()).map((a) => [a.id, a])
     : []);
+  const reverses = rows.map((r) => r.reverses_entry_id).filter((x): x is number => !!x);
+  const numbers = new Map(reverses.length
+    ? (await ex.selectFrom('journal_entries').select(['id', 'entry_no']).where('id', 'in', reverses).execute()).map((e) => [e.id, e.entry_no])
+    : []);
   return rows.map((r, i) => ({
     id: String(r.id),
     kind: r.kind,
@@ -198,6 +233,9 @@ export async function listHeldJournals(ex: Executor, orgId: number): Promise<Hel
     createdById: r.created_by_user_id ? String(r.created_by_user_id) : null,
     createdAt: new Date(r.created_at).toISOString(),
     lastError: r.last_error,
+    reversesEntryId: r.reverses_entry_id ? String(r.reverses_entry_id) : null,
+    reversesEntryNo: r.reverses_entry_id ? numbers.get(r.reverses_entry_id) ?? null : null,
+    reason: r.reason,
     lines: inputs[i].lines.map((l) => ({
       accountId: String(l.accountId),
       accountCode: accounts.get(l.accountId)?.code ?? '',

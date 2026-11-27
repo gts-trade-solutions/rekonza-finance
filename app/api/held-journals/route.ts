@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { db, transaction } from '@/lib/server/db';
 import { route, body, asId } from '@/lib/server/http';
 import { logAudit, auditMeta } from '@/lib/server/audit';
-import { discardHeldJournal, listHeldJournals, releaseHeldJournal } from '@/lib/server/services/held-journals';
+import { discardHeldJournal, indiaToday, listHeldJournals, releaseHeldJournal } from '@/lib/server/services/held-journals';
 
 // Journals held out of the books: optional, post-dated, and awaiting approval.
 // Approving and sending back go through /api/approvals with the other documents.
@@ -13,14 +13,41 @@ export const GET = route(
 );
 
 const Input = z.object({
-  action: z.enum(['post', 'discard']),
-  id: z.union([z.string(), z.number()]),
+  // post-due: everything due today or earlier, now — the scheduler's run, by hand, for a server that runs none.
+  action: z.enum(['post', 'discard', 'post-due']),
+  id: z.union([z.string(), z.number()]).optional(),
   reason: z.string().max(500).nullish(),
 });
 
 export const POST = route(
   async ({ orgId, user, req }) => {
     const input = await body(req, Input);
+    if (input.action === 'post-due') {
+      // Post-dated entries and auto-reversals whose date has come: what the
+      // scheduler posts, done by hand where no scheduler runs. Each in its own
+      // transaction, so one that cannot post (a locked period) leaves the rest.
+      const due = await db.selectFrom('held_journals').select(['id', 'memo']).where('org_id', '=', orgId)
+        .where('status', '=', 'held').where('kind', '=', 'post_dated').where('entry_date', '<=', indiaToday()).orderBy('entry_date').orderBy('id').execute();
+      const r = { posted: 0, held: 0, failed: 0, errors: [] as string[] };
+      for (const h of due) {
+        try {
+          await transaction(async (trx) => {
+            const out = await releaseHeldJournal(trx, orgId, user.userId, h.id);
+            await logAudit({
+              trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'create',
+              targetType: out.posted ? 'journal_entry' : 'held_journal', targetId: out.posted ? out.entry.id : h.id,
+              detail: out.posted ? `Due entry H-${h.id} posted as JE #${out.entry.entryNo}: ${h.memo}` : `Due entry H-${h.id} sent for ${out.approverRole} approval`,
+              ...auditMeta(req),
+            });
+            if (out.posted) r.posted++; else r.held++;
+          });
+        } catch (err) {
+          r.failed++;
+          r.errors.push(`H-${h.id}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+      return r;
+    }
     const id = Number(input.id);
     return transaction(async (trx) => {
       if (input.action === 'discard') {

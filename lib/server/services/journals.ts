@@ -121,10 +121,39 @@ export async function postManualJournal(trx: Trx, orgId: number, userId: number 
     }))).execute();
   }
   if (input.reverseOn) {
-    const reversal = await reverseEntry(trx, orgId, entry.id, { date: input.reverseOn, memo: `Automatic reversal of: ${input.memo}`, userId, module: 'accountant' });
-    return { ...entry, reversalId: reversal.id };
+    // Zoho's and Tally's reversing journal: an accrual undoes itself on the
+    // date given. A date already reached is reversed now; a later one waits as
+    // a post-dated held entry that reverses this one, and the scheduler posts
+    // it on its date (or a person does, from Manual Journals, when the
+    // scheduler is off) — so no report counts next month's reversal today.
+    // It needs no second approval: whoever approved the journal approved it
+    // with its reversal date on it.
+    const memo = `Automatic reversal of: ${input.memo}`.slice(0, 500);
+    if (input.reverseOn <= indiaToday()) {
+      const reversal = await reverseEntry(trx, orgId, entry.id, { date: input.reverseOn, memo, userId, module: 'accountant' });
+      await trx.insertInto('journal_reversals').values({
+        org_id: orgId, entry_id: entry.id, reversal_entry_id: reversal.id, reverse_on: input.reverseOn,
+        reason: 'Auto-reversing journal (accrual or provision)', kind: 'scheduled', requested_by_user_id: userId,
+      }).execute();
+      return { ...entry, reversalId: reversal.id };
+    }
+    const lines = input.lines.map((l) => ({
+      accountId: l.accountId, debitPaise: l.creditPaise ?? 0, creditPaise: l.debitPaise ?? 0,
+      description: l.description ?? null, contactId: l.contactId ?? null, costCentreId: l.costCentreId ?? null,
+    }));
+    const held = await trx.insertInto('held_journals').values({
+      org_id: orgId, branch_id: input.branchId, kind: 'post_dated', entry_date: input.reverseOn, memo,
+      entry_lines: JSON.stringify(lines), total_amount: toSqlFromPaise(entry.totalDebit), created_by_user_id: userId,
+      reverses_entry_id: entry.id, reason: 'Auto-reversing journal (accrual or provision)',
+    }).executeTakeFirstOrThrow();
+    return { ...entry, scheduledReversalId: Number(held.insertId), reversesOn: input.reverseOn };
   }
   return entry;
+}
+
+/** The date in India, which is the date the books keep, whatever the server's clock zone. */
+function indiaToday(now = new Date()): string {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(now);
 }
 
 /**
@@ -174,6 +203,17 @@ async function journalForChange(trx: Trx, orgId: number, entryId: number) {
   if (by) throw new ApiError(409, `Entry #${e.entry_no} has already been reversed by #${by.entry_no}.`, 'locked_document');
   if (await bankLineMatched(trx, orgId, 'journal_entry', entryId)) {
     throw new ApiError(409, `Entry #${e.entry_no} is matched to a bank statement line. Unmatch it in Banking first.`, 'locked_document');
+  }
+  // A reversal of it waiting for a checker: decided first, so the two cannot cross.
+  const waiting = await trx.selectFrom('held_journals').select(['id', 'kind']).where('org_id', '=', orgId)
+    .where('reverses_entry_id', '=', entryId).where('status', '=', 'held').execute();
+  const forApproval = waiting.find((w) => w.kind === 'approval');
+  if (forApproval) throw new ApiError(409, `A reversal of #${e.entry_no} is waiting for approval (H-${forApproval.id}). Approve or send it back first.`, 'locked_document');
+  // An auto-reversal still to come goes with the entry it would have reversed;
+  // an edit posts the corrected journal with its own reversal date, if any.
+  if (waiting.length) {
+    await trx.updateTable('held_journals').set({ status: 'discarded', note: `Journal #${e.entry_no} was edited or deleted before its reversal date`, decided_at: new Date() })
+      .where('id', 'in', waiting.map((w) => w.id)).execute();
   }
   return e;
 }
