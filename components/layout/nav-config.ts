@@ -25,7 +25,9 @@ export interface NavItem {
   sidebar?: boolean;
 }
 
-export type FeatureKey = 'inventory' | 'fixedAssets' | 'tdsTcs' | 'ewayBills' | 'approvals' | 'tally' | 'analytics' | 'payroll' | 'gst' | 'multiCurrency' | 'costCentres';
+export type FeatureKey = 'inventory' | 'fixedAssets' | 'tdsTcs' | 'ewayBills' | 'approvals' | 'tally' | 'analytics' | 'payroll' | 'gst' | 'multiCurrency' | 'costCentres'
+  // Not switches of their own: on for a GST TDS deductor (s.51) and an e-commerce operator (s.52), from Settings → Statutory.
+  | 'gstTds' | 'gstEco';
 
 export interface NavGroup {
   label: string;
@@ -173,6 +175,9 @@ export const NAV_GROUPS: NavGroup[] = [
       { label: 'CMP-08 & GSTR-4', href: '/gst/composition', icon: FileSpreadsheet, module: 'gst', registration: 'composition', feature: 'gst' },
       { label: 'Job Work (ITC-04)', href: '/gst/job-work', icon: ClipboardList, module: 'gst', feature: 'gst' },
       { label: 'TDS & TCS', href: '/gst/tds-tcs', icon: Receipt, module: 'gst', feature: 'tdsTcs' },
+      // Shown only to a book that holds the role (Settings → Statutory → GST TDS deductor / E-commerce operator).
+      { label: 'GSTR-7 (GST TDS)', href: '/gst/gstr7', icon: FileMinus, module: 'gst', feature: ['gst', 'gstTds'] },
+      { label: 'GSTR-8 (e-commerce TCS)', href: '/gst/gstr8', icon: ShoppingBag, module: 'gst', feature: ['gst', 'gstEco'] },
     ],
   },
   {

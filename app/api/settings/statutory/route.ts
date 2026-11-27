@@ -9,6 +9,7 @@ import {
 import { BASE_THRESHOLD_PAISE, thresholdPaise } from '@/lib/tax/eway';
 import { COMPOSITION_RATES } from '@/lib/server/gst/composition';
 import { stateName } from '@/lib/tax/gst';
+import { roleGstinProblem } from '@/lib/gst/withholding';
 
 // The statutory settings that change with the business: GST registration type
 // (dated), e-invoicing, the TDS deductor and the person responsible, and each
@@ -24,11 +25,12 @@ const DEDUCTOR_TYPES = {
 export const GET = route(async ({ orgId }) => {
   const [org, history, einvoicing, branches] = await Promise.all([
     db.selectFrom('organizations')
-      .select(['gst_registration_type', 'gst_filing_frequency', 'composition_category', 'deductor_type', 'tds_rp_name', 'tds_rp_designation', 'tds_rp_pan', 'tds_rp_mobile', 'tds_rp_email', 'pf_establishment_code', 'esi_employer_code'])
+      .select(['gst_registration_type', 'gst_filing_frequency', 'composition_category', 'deductor_type', 'tds_rp_name', 'tds_rp_designation', 'tds_rp_pan', 'tds_rp_mobile', 'tds_rp_email', 'pf_establishment_code', 'esi_employer_code',
+        'gst_tds_deductor', 'gst_tds_gstin', 'gst_eco_operator', 'gst_eco_gstin'])
       .where('id', '=', orgId).executeTakeFirstOrThrow(),
     registrationHistory(db, orgId),
     einvoiceApplicability(db, orgId),
-    db.selectFrom('branches').select(['id', 'name', 'state_code', 'eway_intra_threshold'])
+    db.selectFrom('branches').select(['id', 'name', 'state_code', 'eway_intra_threshold', 'gstin'])
       .where('org_id', '=', orgId).orderBy('is_primary', 'desc').orderBy('name').execute(),
   ]);
   return {
@@ -44,6 +46,12 @@ export const GET = route(async ({ orgId }) => {
       mobile: org.tds_rp_mobile, email: org.tds_rp_email,
     },
     payroll: { pfCode: org.pf_establishment_code, esiCode: org.esi_employer_code },
+    // The GST withholding roles (CGST Act s.51 and s.52): each turns on its own return, GSTR-7 or GSTR-8.
+    gstRoles: {
+      tdsDeductor: !!org.gst_tds_deductor, tdsGstin: org.gst_tds_gstin,
+      ecoOperator: !!org.gst_eco_operator, ecoGstin: org.gst_eco_gstin,
+      branchGstin: branches[0]?.gstin ?? null,
+    },
     branches: branches.map((b) => ({
       id: asId(b.id), name: b.name, stateCode: b.state_code, stateName: stateName(b.state_code),
       builtInPaise: thresholdPaise(b.state_code, b.state_code),
@@ -72,6 +80,11 @@ const Input = z.discriminatedUnion('action', [
   }),
   z.object({ action: z.literal('payroll-codes'), pfCode: z.string().trim().max(30).nullish(), esiCode: z.string().trim().max(30).nullish() }),
   z.object({ action: z.literal('eway-threshold'), branchId: z.coerce.number().int().positive(), thresholdPaise: z.number().int().nullable() }),
+  z.object({
+    action: z.literal('gst-roles'),
+    tdsDeductor: z.boolean(), tdsGstin: z.string().trim().toUpperCase().nullish(),
+    ecoOperator: z.boolean(), ecoGstin: z.string().trim().toUpperCase().nullish(),
+  }),
 ]);
 
 export const POST = route(
@@ -125,6 +138,26 @@ export const POST = route(
         case 'payroll-codes': {
           await trx.updateTable('organizations').set({ pf_establishment_code: input.pfCode || null, esi_employer_code: input.esiCode || null }).where('id', '=', orgId).execute();
           await audit(trx, 'PF and ESI registration numbers updated');
+          return { ok: true };
+        }
+        case 'gst-roles': {
+          // A deductor (s.51) and an operator (s.52) each register separately (Rule 12): the
+          // TDS GSTIN carries D in its 14th place, the TCS one C. Left empty, the primary
+          // branch's GSTIN stands in, and the GSTR-7 / GSTR-8 screens say so.
+          const tdsGstin = input.tdsGstin?.trim() || null;
+          const ecoGstin = input.ecoGstin?.trim() || null;
+          const tdsProblem = tdsGstin ? roleGstinProblem(tdsGstin, 'tds') : null;
+          if (tdsProblem) throw badRequest(`GST TDS registration: ${tdsProblem}`);
+          const ecoProblem = ecoGstin ? roleGstinProblem(ecoGstin, 'tcs') : null;
+          if (ecoProblem) throw badRequest(`E-commerce TCS registration: ${ecoProblem}`);
+          const before = await trx.selectFrom('organizations').select(['gst_tds_deductor', 'gst_tds_gstin', 'gst_eco_operator', 'gst_eco_gstin']).where('id', '=', orgId).executeTakeFirstOrThrow();
+          await trx.updateTable('organizations').set({
+            gst_tds_deductor: input.tdsDeductor ? 1 : 0, gst_tds_gstin: tdsGstin,
+            gst_eco_operator: input.ecoOperator ? 1 : 0, gst_eco_gstin: ecoGstin,
+          }).where('id', '=', orgId).execute();
+          await audit(trx,
+            `GST roles: TDS deductor ${input.tdsDeductor ? `on${tdsGstin ? ` (${tdsGstin})` : ''}` : 'off'}; e-commerce operator ${input.ecoOperator ? `on${ecoGstin ? ` (${ecoGstin})` : ''}` : 'off'}`,
+            { changes: { before, after: { gst_tds_deductor: input.tdsDeductor ? 1 : 0, gst_tds_gstin: tdsGstin, gst_eco_operator: input.ecoOperator ? 1 : 0, gst_eco_gstin: ecoGstin } } });
           return { ok: true };
         }
         case 'eway-threshold': {

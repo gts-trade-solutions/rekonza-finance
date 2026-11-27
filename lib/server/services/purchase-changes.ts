@@ -75,6 +75,10 @@ async function billBlocker(trx: Trx, orgId: number, b: BillRow, what: 'edit' | '
   const vc = await trx.selectFrom('vendor_credits').select('number').where('org_id', '=', orgId)
     .where('against_bill_id', '=', b.id).where('status', '<>', 'void').executeTakeFirst();
   if (vc) return refuse(`vendor credit ${vc.number} was raised against it. Delete or void that first.`);
+  // GST TDS deducted from it (s.51, GSTR-7) settled part of it and is reported deductee by deductee:
+  // the deduction is taken off first (or amended, once its month's GSTR-7 is filed).
+  const gstTds = await trx.selectFrom('gst_tds_deductions').select('period').where('org_id', '=', orgId).where('bill_id', '=', b.id).executeTakeFirst();
+  if (gstTds) return refuse(`GST TDS was deducted from it in ${gstTds.period} (GST & Taxes → GSTR-7). Delete that deduction first.`);
   const asset = await trx.selectFrom('fixed_assets').select('name').where('org_id', '=', orgId).where('bill_id', '=', b.id).executeTakeFirst()
     ?? await trx.selectFrom('asset_costs').select(sql<string>`'an asset'`.as('name')).where('bill_id', '=', b.id).executeTakeFirst();
   if (asset) return refuse(`${asset.name} was capitalised from it. Remove the asset first.`);
