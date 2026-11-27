@@ -6,7 +6,7 @@ import { logAudit, auditMeta, snapshot, changesBetween, describeChanges } from '
 import { toPaiseFromSql } from '@/lib/server/money-sql';
 import {
   addAsset, addCost, approveDisposal, assetRegister, assetSchedule, disposalsReport, disposeAsset, ensureAssetClasses,
-  getDisposalApproval, itDepreciation, listAssetClasses, listRuns, minimumGstOnSale, nextRunFrom, previewDepreciation, putToUse,
+  getDisposalApproval, itDepreciation, listAssetClasses, listRuns, minimumGstOnSale, nextRunFrom, previewDepreciation, previewDisposal, putToUse,
   recordVerification, rejectDisposal, reverseLatestRun, runDepreciation, saveAssetClass, setDisposalApproval, setItOpening,
   splitAsset, undoDisposal,
 } from '@/lib/server/services/fixed-assets';
@@ -28,7 +28,10 @@ const lastFy = () => {
 export const GET = route(
   async ({ orgId, req }) => {
     const q = query(req, z.object({
-      view: z.enum(['register', 'runs', 'it', 'asset', 'preview', 'sale-advice', 'disposals', 'schedule', 'approval']).default('register'),
+      view: z.enum(['register', 'runs', 'it', 'asset', 'preview', 'sale-advice', 'disposals', 'schedule', 'approval', 'disposal-preview']).default('register'),
+      salePaise: z.coerce.number().int().min(0).optional(),
+      partCostPaise: z.coerce.number().int().min(0).optional(),
+      via: z.enum(['invoice', 'bank', 'none']).optional(),
       from: DATE.optional(),
       id: z.string().optional(),
       branchId: z.string().optional(),
@@ -52,6 +55,11 @@ export const GET = route(
       }
       case 'approval':
         return getDisposalApproval(db, orgId);
+      case 'disposal-preview':
+        // What disposing of it on that date would post, before it is done.
+        return previewDisposal(db, orgId, Number(q.id), {
+          date: q.date ?? new Date().toISOString().slice(0, 10), salePaise: q.salePaise, partCostPaise: q.partCostPaise || null, proceedsVia: q.via,
+        });
       case 'runs': {
         const branches = await db.selectFrom('branches').select(['id', 'name']).where('org_id', '=', orgId).where('is_active', '=', 1).execute();
         const next = await Promise.all(branches.map(async (b) => ({ branchId: asId(b.id), branchName: b.name, from: await nextRunFrom(db, orgId, b.id) })));
@@ -82,7 +90,7 @@ export const GET = route(
             'a.status', 'a.acquired_on', 'a.put_to_use_on', 'a.disposed_on', 'a.disposal_kind', 'a.disposal_value',
             'a.insurance_policy_no', 'a.insurance_expiry', 'a.amc_vendor', 'a.amc_expiry', 'a.notes', 'a.itc_claimed',
             'a.useful_life_years', 'a.residual_value', 'a.opening_accumulated', 'a.branch_id',
-            'c.name as class_name', 'c.method', 'c.useful_life_years as class_life', 'c.residual_pct',
+            'c.name as class_name', 'c.method as class_method', 'a.method', 'c.useful_life_years as class_life', 'c.residual_pct',
             'v.display_name as vendor_name', 'b.internal_no as bill_no', 'i.number as invoice_no'])
           .where('a.id', '=', id).where('a.org_id', '=', orgId).executeTakeFirst();
         if (!a) throw notFound('That asset is not in the register.');
@@ -108,7 +116,7 @@ export const GET = route(
             disposalKind: a.disposal_kind, disposalValuePaise: a.disposal_value ? toPaiseFromSql(a.disposal_value) : null,
             insurancePolicyNo: a.insurance_policy_no, insuranceExpiry: d(a.insurance_expiry), amcVendor: a.amc_vendor,
             amcExpiry: d(a.amc_expiry), notes: a.notes, itcClaimedPaise: toPaiseFromSql(a.itc_claimed),
-            className: a.class_name, method: a.method,
+            className: a.class_name, method: a.method ?? a.class_method,
             usefulLifeYears: Number(a.useful_life_years ?? a.class_life),
             residualValuePaise: a.residual_value !== null ? toPaiseFromSql(a.residual_value) : null,
             residualPct: Number(a.residual_pct), openingAccumulatedPaise: toPaiseFromSql(a.opening_accumulated),
@@ -163,6 +171,7 @@ const Input = z.discriminatedUnion('action', [
     itcClaimedPaise: z.number().int().min(0).optional(),
     residualValuePaise: z.number().int().min(0).nullish(),
     usefulLifeYears: z.number().positive().max(100).nullish(),
+    method: z.enum(['slm', 'wdv']).nullish(),
     insurancePolicyNo: z.string().trim().max(60).nullish(),
     insuranceExpiry: DATE.nullish(),
     amcVendor: z.string().trim().max(150).nullish(),

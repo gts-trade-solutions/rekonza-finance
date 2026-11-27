@@ -88,7 +88,10 @@ ALTER TABLE asset_costs
 
 ALTER TABLE fixed_assets
   ADD COLUMN split_from_asset_id BIGINT NULL AFTER notes,
-  ADD COLUMN disposal_id BIGINT NULL AFTER disposal_entry_id;
+  ADD COLUMN disposal_id BIGINT NULL AFTER disposal_entry_id,
+  -- The asset's own method, where it differs from its class's (Schedule II
+  -- lets each asset be written off by straight line or written-down value).
+  ADD COLUMN method ENUM('slm','wdv') NULL AFTER useful_life_years;
 
 -- Depreciation posted outside a run (to a disposal's date, or the days an
 -- asset missed while a disposal later undone had it out of the register)

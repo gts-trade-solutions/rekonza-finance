@@ -202,6 +202,8 @@ export interface NewAssetInput {
   itcClaimedPaise?: Paise;
   residualValuePaise?: Paise | null;
   usefulLifeYears?: number | null;
+  /** Its own method, where it is not its class's. */
+  method?: 'slm' | 'wdv' | null;
   insurancePolicyNo?: string | null;
   insuranceExpiry?: string | null;
   amcVendor?: string | null;
@@ -298,6 +300,7 @@ export async function addAsset(trx: Trx, orgId: number, userId: number | null, i
     custodian: input.custodian ?? null, vendor_id: vendorId, bill_id: billId, acquired_on: input.acquiredOn,
     put_to_use_on: input.putToUseOn ?? null, status: input.putToUseOn ? 'in_use' : 'cwip',
     useful_life_years: input.usefulLifeYears ? String(input.usefulLifeYears) : null,
+    method: input.method ?? null,
     residual_value: input.residualValuePaise != null ? toSqlFromPaise(input.residualValuePaise) : null,
     opening_accumulated: toSqlFromPaise(opening), itc_claimed: toSqlFromPaise(itc), hsn_sac: input.hsnSac ?? null,
     insurance_policy_no: input.insurancePolicyNo ?? null, insurance_expiry: input.insuranceExpiry ?? null,
@@ -377,7 +380,7 @@ interface Loaded {
 export async function loadAssets(ex: Executor, orgId: number, f: { branchId?: number; ids?: number[] }): Promise<Loaded[]> {
   const rows = await ex.selectFrom('fixed_assets as a').innerJoin('asset_classes as c', 'c.id', 'a.class_id')
     .select(['a.id', 'a.tag_no', 'a.name', 'a.branch_id', 'a.status', 'a.put_to_use_on', 'a.useful_life_years',
-      'a.residual_value', 'a.opening_accumulated', 'c.method', 'c.useful_life_years as class_life', 'c.residual_pct'])
+      'a.residual_value', 'a.opening_accumulated', 'c.method as class_method', 'a.method', 'c.useful_life_years as class_life', 'c.residual_pct'])
     .where('a.org_id', '=', orgId)
     .$if(!!f.branchId, (q) => q.where('a.branch_id', '=', f.branchId!))
     .$if(!!f.ids?.length, (q) => q.where('a.id', 'in', f.ids!))
@@ -398,7 +401,7 @@ export async function loadAssets(ex: Executor, orgId: number, f: { branchId?: nu
         costPaise: cost,
         residualPaise: r.residual_value !== null ? toPaiseFromSql(r.residual_value) : Math.round((cost * Number(r.residual_pct)) / 100),
         lifeYears: Number(r.useful_life_years ?? r.class_life),
-        method: r.method,
+        method: r.method ?? r.class_method,
         putToUseOn: r.put_to_use_on ? String(r.put_to_use_on).slice(0, 10) : '9999-12-31',
       },
       openingAccumulated: toPaiseFromSql(r.opening_accumulated),
@@ -908,7 +911,7 @@ export async function splitAsset(
   const id = Number((await trx.insertInto('fixed_assets').values({
     org_id: orgId, branch_id: a.branch_id, class_id: a.class_id, tag_no: tagNo, name: (input.name?.trim() || `${a.name} (part)`).slice(0, 200),
     description: a.description, serial_no: null, location: a.location, custodian: a.custodian, vendor_id: a.vendor_id, bill_id: a.bill_id,
-    acquired_on: acquired, put_to_use_on: ymdOf(a.put_to_use_on), status: 'in_use', useful_life_years: a.useful_life_years,
+    acquired_on: acquired, put_to_use_on: ymdOf(a.put_to_use_on), status: 'in_use', useful_life_years: a.useful_life_years, method: a.method,
     residual_value: partResidual !== null ? toSqlFromPaise(partResidual) : null, opening_accumulated: toSqlFromPaise(partOpening),
     itc_claimed: toSqlFromPaise(partItc), hsn_sac: a.hsn_sac, notes: input.reason ?? `Split from ${a.tag_no}`,
     split_from_asset_id: assetId, created_by_user_id: userId,
@@ -930,6 +933,54 @@ export async function splitAsset(
     ]).execute();
   }
   return { id, tagNo, partCostPaise: input.partCostPaise, partDepreciationPaise: partDep + partOpening };
+}
+
+/**
+ * What a disposal would post, before anyone presses the button: the
+ * depreciation to the day before, the written-down value, the gain or loss,
+ * and the disposal entry's lines. Posts nothing.
+ */
+export async function previewDisposal(
+  ex: Executor, orgId: number, assetId: number,
+  input: { date: string; salePaise?: Paise; partCostPaise?: Paise | null; proceedsVia?: 'invoice' | 'bank' | 'none' },
+) {
+  const a = await ex.selectFrom('fixed_assets').selectAll().where('id', '=', assetId).where('org_id', '=', orgId).executeTakeFirst();
+  if (!a) throw notFound('That asset is not in the register.');
+  const [loaded] = await loadAssets(ex, orgId, { ids: [assetId] });
+  const problems: string[] = [];
+  if (a.status === 'disposed') problems.push(`${a.name} was already disposed of on ${ymdOf(a.disposed_on)}.`);
+  if (a.status === 'in_use' && loaded.lastTo && input.date <= loaded.lastTo) {
+    problems.push(`Depreciation is charged up to ${loaded.lastTo}: date the disposal after that, or undo that run first.`);
+  }
+  const share = input.partCostPaise && input.partCostPaise < loaded.basis.costPaise ? input.partCostPaise / loaded.basis.costPaise : 1;
+  const basis: AssetBasis = {
+    ...loaded.basis, costPaise: Math.round(loaded.basis.costPaise * share), residualPaise: Math.round(loaded.basis.residualPaise * share),
+  };
+  const before = Math.round((loaded.openingAccumulated + loaded.charged) * share);
+  let catchUp = 0;
+  let from: string | null = null;
+  const to = addDays(input.date, -1);
+  if (a.status === 'in_use' && !problems.length) {
+    const start = await booksStartDate(ex, orgId);
+    from = loaded.lastTo ? addDays(loaded.lastTo, 1) : maxDate(loaded.basis.putToUseOn, start.date);
+    catchUp = depreciationFor(basis, from, to, before).amountPaise;
+  }
+  const accumulated = before + catchUp;
+  const sale = input.salePaise ?? 0;
+  const gain = sale + accumulated - basis.costPaise;
+  return {
+    costPaise: basis.costPaise, chargedPaise: before, catchUpPaise: catchUp, catchUpFrom: from, catchUpTo: to,
+    accumulatedPaise: accumulated, writtenDownPaise: basis.costPaise - accumulated, salePaise: sale, gainPaise: gain,
+    lastRunTo: loaded.lastTo, problems,
+    lines: [
+      ...(catchUp > 0 ? [{ entry: 1, account: 'Depreciation', debitPaise: catchUp, creditPaise: 0 }, { entry: 1, account: 'Accumulated Depreciation', debitPaise: 0, creditPaise: catchUp }] : []),
+      ...(accumulated > 0 ? [{ entry: 2, account: 'Accumulated Depreciation', debitPaise: accumulated, creditPaise: 0 }] : []),
+      ...(sale > 0 ? [{ entry: 2, account: input.proceedsVia === 'bank' ? 'Bank' : 'Asset Disposal Clearing (the invoice)', debitPaise: sale, creditPaise: 0 }] : []),
+      { entry: 2, account: a.status === 'cwip' ? 'Capital Work-in-Progress' : 'The asset’s ledger (its cost)', debitPaise: 0, creditPaise: basis.costPaise },
+      ...(gain > 0 ? [{ entry: 2, account: 'Profit on Sale of Fixed Assets', debitPaise: 0, creditPaise: gain }] : []),
+      ...(gain < 0 ? [{ entry: 2, account: 'Loss on Sale or Discard of Fixed Assets', debitPaise: -gain, creditPaise: 0 }] : []),
+    ],
+  };
 }
 
 /** Disposals waiting for approval, for the Disposals tab. */

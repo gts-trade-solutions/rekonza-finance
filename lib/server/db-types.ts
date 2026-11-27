@@ -1592,6 +1592,7 @@ export interface FixedAssets {
   insurance_policy_no: string | null;
   itc_claimed: Generated<Decimal>;
   location: string | null;
+  method: "slm" | "wdv" | null;
   name: string;
   notes: string | null;
   opening_accumulated: Generated<Decimal>;

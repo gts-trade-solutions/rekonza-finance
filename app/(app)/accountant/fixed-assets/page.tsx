@@ -25,10 +25,11 @@ import { Money } from '@/components/shared/money';
 import { StatTile } from '@/components/shared/stat-tile';
 import { AsyncPage, LoadingRows } from '@/components/shared/async-state';
 import { Field, MoneyInput } from '@/components/shared/form-bits';
-import { downloadCsv, ReportTable } from '@/components/shared/report-shell';
+import { ReportTable } from '@/components/shared/report-shell';
 import { api } from '@/lib/api/client';
 import { RowActions, withReason } from '@/components/shared/row-actions';
 import { AddAssetDialog, AssetDialog, ClassDialog } from '@/components/assets/asset-dialogs';
+import { DisposalApprovalCard, DisposalsTab, ScheduleTab } from '@/components/assets/asset-disposal';
 import {
   fixedAssets, type AssetClassRow, type AssetRegisterRow, type DepreciationRunRow, type ItBlockRow,
 } from '@/lib/api/client';
@@ -53,15 +54,19 @@ export default function FixedAssetsPage() {
   const [openId, setOpenId] = useState<string | null>(null);
   const [openTab, setOpenTab] = useState<'history' | 'details'>('history');
   const open = (id: string, t: 'history' | 'details' = 'history') => { setOpenTab(t); setOpenId(id); };
-  const [tab, setTab] = useState('register');
+  // A tab can be opened by name (?tab=disposals), as the auditors' notes point to them.
+  const [tab, setTab] = useState(() => (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('tab')) || 'register');
 
   return (
     <>
       <PageHeader
         title="Fixed assets"
-        description="The register, depreciation under Schedule II, capital work in progress, and the Income-tax block schedule."
-        actions={canEdit && (
-          <Button size="sm" className="gap-1.5" onClick={() => setAdding(true)}><PackagePlus className="size-4" /> Add asset</Button>
+        description="The register, depreciation under Schedule II, disposals, the Schedule III asset schedule, capital work in progress, and the Income-tax block schedule."
+        actions={(
+          <div className="flex items-center gap-2">
+            <Button size="sm" variant="outline" onClick={() => setTab('disposals')} data-slot="open-disposals">Disposals report</Button>
+            {canEdit && <Button size="sm" className="gap-1.5" onClick={() => setAdding(true)} data-slot="add-asset"><PackagePlus className="size-4" /> Add asset</Button>}
+          </div>
         )}
       />
       <AsyncPage state={state} loading={<LoadingRows rows={8} />}>
@@ -70,7 +75,8 @@ export default function FixedAssetsPage() {
             <TabsList>
               <TabsTrigger value="register">Register ({d.assets.filter((a) => a.status !== 'disposed').length})</TabsTrigger>
               <TabsTrigger value="depreciation">Depreciation</TabsTrigger>
-              <TabsTrigger value="disposals">Disposals</TabsTrigger>
+              <TabsTrigger value="disposals" data-slot="tab-disposals">Disposals</TabsTrigger>
+              <TabsTrigger value="schedule" data-slot="tab-schedule">Schedule (Sch. III)</TabsTrigger>
               <TabsTrigger value="it">Income-tax book</TabsTrigger>
               <TabsTrigger value="classes">Classes</TabsTrigger>
             </TabsList>
@@ -81,13 +87,17 @@ export default function FixedAssetsPage() {
               <Depreciation canEdit={canEdit} onChanged={() => void state.refetch()} />
             </TabsContent>
             <TabsContent value="disposals" className="mt-4">
-              <Disposals onOpen={(id) => open(id)} />
+              <DisposalsTab onOpen={(id) => open(id)} />
+            </TabsContent>
+            <TabsContent value="schedule" className="mt-4">
+              <ScheduleTab />
             </TabsContent>
             <TabsContent value="it" className="mt-4">
               <ItBook canEdit={canEdit} classes={d.classes} />
             </TabsContent>
-            <TabsContent value="classes" className="mt-4">
+            <TabsContent value="classes" className="mt-4 space-y-4">
               <Classes classes={d.classes} canEdit={canEdit} canDelete={canDelete} onChanged={() => void state.refetch()} />
+              <DisposalApprovalCard />
             </TabsContent>
           </Tabs>
         )}
@@ -129,7 +139,7 @@ function Register({ assets, onOpen, canEdit, canDelete, onChanged }: {
         </div>
       ),
     },
-    { key: 'status', header: 'Status', sortValue: (r) => r.status, cell: (r) => <Badge variant="outline" className={`text-[10px] ${STATUS[r.status].tone}`}>{STATUS[r.status].label}</Badge> },
+    { key: 'status', header: 'Status', sortValue: (r) => r.status, cell: (r) => <Badge variant="outline" className={`text-[10px] ${STATUS[r.status].tone}`}>{STATUS[r.status].label}{r.disposedOn ? ` ${fmt(r.disposedOn)}` : ''}</Badge> },
     { key: 'use', header: 'In use from', sortValue: (r) => r.putToUseOn ?? '', cell: (r) => <span className="text-xs">{fmt(r.putToUseOn)}</span> },
     { key: 'cost', header: 'Cost', align: 'right', sortValue: (r) => r.costPaise, cell: (r) => <Money value={r.costPaise} /> },
     { key: 'acc', header: 'Depreciation', align: 'right', sortValue: (r) => r.accumulatedPaise, cell: (r) => <Money value={r.accumulatedPaise} showZero={false} className="text-muted-foreground" /> },
@@ -460,68 +470,3 @@ function Classes({ classes, canEdit, canDelete, onChanged }: { classes: AssetCla
     </div>
   );
 }
-
-interface DisposalRow {
-  id: string; tagNo: string; name: string; className: string; acquiredOn: string; disposedOn: string; kind: 'sold' | 'scrapped' | null;
-  costPaise: number; accumulatedPaise: number; writtenDownPaise: number; proceedsPaise: number; gainPaise: number; invoiceId: string | null;
-}
-
-/** The assets that left in a period: cost, depreciation to the day they left, written-down value, proceeds, gain or loss. */
-function Disposals({ onOpen }: { onOpen: (id: string) => void }) {
-  const fy = (() => { const d = new Date(); return d.getMonth() < 3 ? d.getFullYear() - 1 : d.getFullYear(); })();
-  const [from, setFrom] = useState(`${fy}-04-01`);
-  const [to, setTo] = useState(new Date().toISOString().slice(0, 10));
-  const state = useApi<{ rows: DisposalRow[] }>(() => api.get('/api/fixed-assets', { view: 'disposals', from, to }), [from, to]);
-  const rows = state.data?.rows ?? [];
-  const sum = (k: keyof DisposalRow) => rows.reduce((t, r) => t + Number(r[k]), 0);
-  const r2 = (p: number) => (p / 100).toFixed(2);
-  return (
-    <Card className="overflow-hidden p-0" data-slot="asset-disposals">
-      <div className="flex flex-wrap items-end gap-3 border-b px-4 py-3">
-        <Field label="From"><Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="h-8 w-40" /></Field>
-        <Field label="To"><Input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="h-8 w-40" /></Field>
-        <Button size="sm" variant="outline" className="ml-auto" disabled={!rows.length} onClick={() => downloadCsv(`asset-disposals-${from}-${to}.csv`, [
-          ['Tag', 'Asset', 'Class', 'Acquired', 'Disposed', 'How', 'Cost', 'Accumulated depreciation', 'Written-down value', 'Proceeds', 'Gain (loss)'],
-          ...rows.map((r) => [r.tagNo, r.name, r.className, r.acquiredOn, r.disposedOn, r.kind ?? '', r2(r.costPaise), r2(r.accumulatedPaise), r2(r.writtenDownPaise), r2(r.proceedsPaise), r2(r.gainPaise)]),
-          ['', 'Total', '', '', '', '', r2(sum('costPaise')), r2(sum('accumulatedPaise')), r2(sum('writtenDownPaise')), r2(sum('proceedsPaise')), r2(sum('gainPaise'))],
-        ])}>Export</Button>
-      </div>
-      {rows.length === 0 ? (
-        <p className="p-6 text-sm text-muted-foreground">{state.loading ? 'Loading…' : 'No asset was sold or scrapped in this period. Dispose of one from its record (Verify & dispose).'}</p>
-      ) : (
-        <ReportTable>
-          <thead>
-            <tr className="border-b bg-muted/50 text-[11px] uppercase tracking-wide text-muted-foreground">
-              <th className="px-3 py-2 text-left">Asset</th><th className="px-3 py-2 text-left">Disposed</th><th className="px-3 py-2 text-left">How</th>
-              <th className="px-3 py-2 text-right">Cost</th><th className="px-3 py-2 text-right">Acc. depreciation</th><th className="px-3 py-2 text-right">WDV</th>
-              <th className="px-3 py-2 text-right">Proceeds</th><th className="px-3 py-2 text-right">Gain (loss)</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r) => (
-              <tr key={r.id} className="cursor-pointer border-b hover:bg-row-hover" onClick={() => onOpen(r.id)}>
-                <td className="px-3 py-2"><span className="font-mono text-xs text-muted-foreground">{r.tagNo}</span> {r.name}<span className="block text-xs text-muted-foreground">{r.className}</span></td>
-                <td className="px-3 py-2">{r.disposedOn}</td>
-                <td className="px-3 py-2 capitalize">{r.kind ?? '—'}</td>
-                <td className="px-3 py-2 text-right"><Money value={r.costPaise} /></td>
-                <td className="px-3 py-2 text-right"><Money value={r.accumulatedPaise} /></td>
-                <td className="px-3 py-2 text-right"><Money value={r.writtenDownPaise} /></td>
-                <td className="px-3 py-2 text-right"><Money value={r.proceedsPaise} /></td>
-                <td className="px-3 py-2 text-right"><Money value={r.gainPaise} colored /></td>
-              </tr>
-            ))}
-            <tr className="border-t-2 bg-muted/40 font-semibold">
-              <td className="px-3 py-2" colSpan={3}>Total</td>
-              <td className="px-3 py-2 text-right"><Money value={sum('costPaise')} /></td>
-              <td className="px-3 py-2 text-right"><Money value={sum('accumulatedPaise')} /></td>
-              <td className="px-3 py-2 text-right"><Money value={sum('writtenDownPaise')} /></td>
-              <td className="px-3 py-2 text-right"><Money value={sum('proceedsPaise')} /></td>
-              <td className="px-3 py-2 text-right"><Money value={sum('gainPaise')} colored /></td>
-            </tr>
-          </tbody>
-        </ReportTable>
-      )}
-    </Card>
-  );
-}
-

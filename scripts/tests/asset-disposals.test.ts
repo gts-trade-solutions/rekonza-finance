@@ -104,8 +104,8 @@ test('sold by tax invoice: depreciation to the day before first, one disposal en
     const catchUp = depreciationFor(slm(6_00_000_00), '2026-09-01', '2026-09-15', charged).amountPaise;
     assert.equal(r.catchUpPaise, catchUp);
     assert.ok(r.depreciationEntryId && r.entryId && r.depreciationEntryId < r.entryId, 'the depreciation entry posts before the disposal');
-    const dep = await f.trx.selectFrom('journal_entries').select(['entry_date']).where('id', '=', r.depreciationEntryId!).executeTakeFirstOrThrow();
-    assert.equal(String(dep.entry_date).slice(0, 10) <= '2026-09-15' || dep.entry_date instanceof Date, true);
+    const { rows: [dep] } = await sql<{ d: string }>`SELECT DATE_FORMAT(entry_date, '%Y-%m-%d') d FROM journal_entries WHERE id = ${r.depreciationEntryId}`.execute(f.trx);
+    assert.equal(dep.d, '2026-09-15', 'dated the day before it left');
 
     // One entry: Dr Accumulated Depreciation, Dr Disposal Clearing (the invoice), Cr cost, gain or loss.
     const acc = charged + catchUp;

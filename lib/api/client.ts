@@ -3268,3 +3268,61 @@ export const imports = {
   tallyVouchers: (companyId: string, from: string | null, to: string | null, dryRun: boolean) =>
     api.post<ImportResponse>('/api/imports', { source: 'tally-vouchers', companyId, from, to, dryRun }),
 };
+
+// ── Status review 7, item 9: the asset disposal workflow ────────────────────
+// (app/api/fixed-assets: disposals report, Schedule III note, preview, approval)
+
+export interface AssetDisposalRecord {
+  id: string; status: 'pending' | 'posted' | 'undone' | 'rejected'; date: string; kind: 'sold' | 'scrapped'; via: 'invoice' | 'bank' | 'none';
+  salePaise: number; gstPaise: number; costPaise: number; accumulatedPaise: number; catchUpPaise: number; gainPaise: number;
+  invoiceId: string | null; invoiceNo: string | null; bankName: string | null; entryId: string | null; depreciationEntryId: string | null;
+  reason: string | null; requestedBy: string | null; undoReason: string | null; undoneBy: string | null; undoneAt: string | null; rejectedReason: string | null;
+}
+export type AssetDetailFull = AssetDetail & { disposals: AssetDisposalRecord[] };
+
+export interface DisposalReportRow {
+  id: string; disposalId: string; tagNo: string; name: string; className: string; acquiredOn: string; disposedOn: string;
+  kind: 'sold' | 'scrapped' | null; via: 'invoice' | 'bank' | 'none';
+  costPaise: number; accumulatedPaise: number; catchUpPaise: number; writtenDownPaise: number; proceedsPaise: number; gstPaise: number; gainPaise: number;
+  invoiceId: string | null; invoiceNumber: string | null; buyer: string | null; bankName: string | null;
+  entryId: string | null; depreciationEntryId: string | null; partOf: string | null; reason: string | null;
+}
+export interface PendingDisposal {
+  id: string; assetId: string; tagNo: string; name: string; date: string; kind: 'sold' | 'scrapped'; proceedsVia: string;
+  salePaise: number; gstRatePct: number | null; partCostPaise: number | null; reason: string | null; buyer: string | null;
+  requestedBy: string | null; requestedById: string | null; requestedAt: string;
+}
+export interface DisposalsReportData {
+  from: string; to: string; rows: DisposalReportRow[];
+  totals: { costPaise: number; accumulatedPaise: number; writtenDownPaise: number; proceedsPaise: number; gstPaise: number; gainPaise: number };
+  ledger: { profitPaise: number; lossPaise: number; netGainPaise: number; fromDisposalsPaise: number; otherPaise: number;
+    other: { entryId: string; entryNo: number; date: string; memo: string | null; amountPaise: number }[] };
+  ties: boolean; differencePaise: number;
+  undone: { disposalId: string; assetId: string; tagNo: string; name: string; disposedOn: string; undoneAt: string; by: string | null; reason: string | null }[];
+  pending: PendingDisposal[];
+}
+export interface AssetScheduleRow {
+  key: string; label: string; accountId: string | null; accountName: string | null;
+  grossOpeningPaise: number; additionsPaise: number; disposalsPaise: number; grossClosingPaise: number;
+  depOpeningPaise: number; depForYearPaise: number; depOnDisposalsPaise: number; depClosingPaise: number;
+  netOpeningPaise: number; netClosingPaise: number;
+}
+export interface AssetScheduleData {
+  from: string; to: string; rows: AssetScheduleRow[]; total: AssetScheduleRow;
+  cwip: { openingPaise: number; additionsPaise: number; capitalisedPaise: number; closingPaise: number };
+  ties: { label: string; registerPaise: number; ledgerPaise: number; differencePaise: number; accountId: string | null }[];
+}
+export interface DisposalPreview {
+  costPaise: number; chargedPaise: number; catchUpPaise: number; catchUpFrom: string | null; catchUpTo: string;
+  accumulatedPaise: number; writtenDownPaise: number; salePaise: number; gainPaise: number; lastRunTo: string | null; problems: string[];
+  lines: { entry: number; account: string; debitPaise: number; creditPaise: number }[];
+}
+
+export const assetDisposals = {
+  asset: (id: string) => api.get<AssetDetailFull>('/api/fixed-assets', { view: 'asset', id }),
+  report: (from: string, to: string) => api.get<DisposalsReportData>('/api/fixed-assets', { view: 'disposals', from, to }),
+  schedule: (fy: number) => api.get<AssetScheduleData>('/api/fixed-assets', { view: 'schedule', fy }),
+  preview: (id: string, p: { date: string; salePaise?: number; partCostPaise?: number; via?: string }) =>
+    api.get<DisposalPreview>('/api/fixed-assets', { view: 'disposal-preview', id, ...p }),
+  approval: () => api.get<{ isActive: boolean; thresholdPaise: number; approverRole: string }>('/api/fixed-assets', { view: 'approval' }),
+};
