@@ -3304,7 +3304,7 @@ export const auditTrail = {
   }) => api.get<AuditListResponse>('/api/audit', params),
   exportRows: (params: { targetType?: string; action?: string; actorUserId?: string; from?: string; to?: string; search?: string; pii?: boolean; format?: string }) =>
     api.get<AuditExportResponse>('/api/audit/export', { ...params, pii: params.pii === false ? '0' : '1' }),
-  verify: () => api.post<AuditChainStatus>('/api/audit/verify', {}),
+  verify: () => api.get<AuditChainStatus>('/api/audit/verify'),
 };
 
 // ── Status review 7, builder A: voucher reversals ───────────────────────────
@@ -3367,7 +3367,10 @@ export const budgetPlans = {
   }) => api.post<{ id: string }>('/api/budget-plans', { action: 'save', ...input }),
   clone: (id: string, name: string, fyLabel?: string, adjustPct?: number) => api.post<{ id: string }>('/api/budget-plans', { action: 'clone', id, name, fyLabel, adjustPct }),
   fill: (input: { fyLabel: string; period: BudgetPeriodKind; accountIds: string[]; adjustPct?: number; branchId?: string | null; costCentreId?: string | null; projectId?: string | null }) =>
-    api.post<{ sourceFy: string; lines: { accountId: string; amountsPaise: number[] }[] }>('/api/budget-plans', { action: 'fill', ...input }),
+    api.get<{ sourceFy: string; lines: { accountId: string; amountsPaise: number[] }[] }>('/api/budget-plans/fill', {
+      fyLabel: input.fyLabel, period: input.period, accountIds: input.accountIds.join(','), adjustPct: input.adjustPct ?? 0,
+      branchId: input.branchId ?? undefined, costCentreId: input.costCentreId ?? undefined, projectId: input.projectId ?? undefined,
+    }),
   remove: (id: string, reason?: string | null) => api.delete<{ deleted: true }>(`/api/budget-plans/${id}${reason ? `?reason=${encodeURIComponent(reason)}` : ''}`),
   variance: (id: string, params?: { columns?: BudgetColumnMode; upto?: string; threshold?: number }) => api.get<BudgetVarianceReport>(`/api/budget-plans/${id}/variance`, params),
   costing: (fy: string, upto?: string) => api.get<{ fy: string; from: string; to: string; centres: CostCentreBudgetRow[] }>('/api/budget-plans/costing', { fy, ...(upto ? { upto } : {}) }),

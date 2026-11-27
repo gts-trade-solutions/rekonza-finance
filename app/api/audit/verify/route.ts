@@ -11,6 +11,7 @@ import { verifyAuditChain } from '@/lib/server/audit-chain';
 // no record; it adds one: that the check was run, and what it found.
 // ─────────────────────────────────────────────────────────────────────────────
 
+// A GET as well, so the online demo (which replays recorded GETs) can run the check too.
 export const POST = route(
   async ({ orgId, user, req }) => {
     const status = await verifyAuditChain(orgId);
@@ -26,3 +27,5 @@ export const POST = route(
   },
   { permission: { module: 'accountant', action: 'view' } },
 );
+
+export const GET = POST;
