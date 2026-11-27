@@ -87,7 +87,7 @@ test('parent and 80% subsidiary: eliminations, unrealised profit, goodwill, NCI,
     assert.deepEqual([pair.receivablePaise, pair.counterpartPayablePaise, pair.balanceDifferencePaise], [6_000_00, 6_000_00, 0]);
     assert.deepEqual([pair.salesPaise, pair.counterpartPurchasesPaise], [10_000_00, 10_000_00]);
     assert.equal(g.totalIncome.total, 6_000_00, 'only the sale to the outsider is group income');
-    assert.equal(g.assets.find((r) => r.code === CODE.AR)!.total, 6_000_00, 'only the outsider's ₹6,000 is owed to the group');
+    assert.equal(g.assets.find((r) => r.code === CODE.AR)!.total, 6_000_00, "only the outsider's ₹6,000 is owed to the group");
     assert.equal(g.assets.find((r) => r.code === CODE.AR)!.elimination, -6_000_00);
     assert.equal(g.liabilities.find((r) => r.code === CODE.AP)!.elimination, -6_000_00);
     // 2. Unrealised profit: 6 kits still held, bought at ₹1,000, cost the parent ₹600.
