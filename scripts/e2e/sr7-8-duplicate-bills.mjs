@@ -95,18 +95,19 @@ if (FRESH) {
   await page.locator('[data-slot="import-next"]').click();
   await page.locator('[data-slot="import-next"]').click();
   await page.locator('[data-slot="import-counts"]').waitFor();
-  const dupRows = await page.locator('[data-slot="import-duplicates-list"] [data-slot="import-error-row"]').allInnerTexts().catch(() => []);
-  check(t, 'the import lists INV/001 as a duplicate, by row', dupRows.some((r) => /^2\b/.test(r.trim()) && /already in your books/.test(r)), dupRows.join(' | ').slice(0, 200));
+  const dupRows = await page.locator('[data-slot="import-skipped"] [data-slot="import-error-row"], [data-slot="import-duplicates-list"] [data-slot="import-error-row"]').evaluateAll((rows) => rows.map((r) => r.getAttribute('title') ?? ''));
+  check(t, 'the import leaves INV/001 out as a duplicate, by its row, naming the first bill', dupRows.some((r) => /^Row 2: INV\/001 from Vendor X Auto Parts is already in your books as BILL/.test(r)), dupRows.join(' | ').slice(0, 200));
+  check(t, 'and says so, instead of "all ready"', await page.locator('[data-slot="import-ready-skipping"]').isVisible());
   await shot(t, 'import-duplicates');
 
   // 8. An expense carrying Vendor X's invoice number INV-001 is refused too (through the app's API, as the Expenses form posts it).
-  const banks = await api(t, 'GET', '/api/banking/accounts');
-  const bank = (banks.json?.accounts ?? banks.json?.bankAccounts ?? [])[0]?.id;
+  const bank = (await api(t, 'POST', '/api/banking/accounts', { kind: 'bank', name: 'HDFC Current', openingBalancePaise: 0 })).json?.id;
+  const branchId = ((await api(t, 'GET', '/api/settings')).json?.branches ?? [])[0]?.id;
   const accounts = await api(t, 'GET', '/api/accounts');
   const rent = (accounts.json?.accounts ?? []).find((a) => a.code === '6100')?.id;
   const vendors = await api(t, 'GET', '/api/contacts?kind=vendor');
   const vx = (vendors.json?.contacts ?? []).find((c) => c.displayName === 'Vendor X Auto Parts')?.id;
-  const exp = await api(t, 'POST', '/api/expenses', { date: d, accountId: rent, paidThroughBankAccountId: bank, amountPaise: 50_000, vendorId: vx, reference: 'INV 001' });
+  const exp = await api(t, 'POST', '/api/expenses', { branchId: String(branchId), date: d, accountId: String(rent), paidThroughBankAccountId: String(bank), amountPaise: 50_000, vendorId: String(vx), reference: 'INV 001' });
   check(t, 'an expense with Vendor X\'s INV 001 is refused as already in the books', exp.status === 409 && /already in your books/.test(exp.json?.error ?? ''), `${exp.status} ${exp.json?.error ?? ''}`.slice(0, 140));
 
   // 9. The register: the near miss, with the reason given, cleared by an accountant with a note.

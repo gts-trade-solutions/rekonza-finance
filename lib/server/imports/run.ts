@@ -207,6 +207,8 @@ async function lookups(trx: Trx, orgId: number) {
     seen: new Map<string, number>(),
     /** The row being read, for the duplicate-in-file message. */
     row: 0,
+    /** Why the row being read was left out as already in the books, for the preview. */
+    skipReason: null as string | null,
     created: {} as Record<string, number[]>,
   };
 }
@@ -254,6 +256,7 @@ const contacts: Handler = async (trx, ctx, l, r) => {
   if (!['customer', 'vendor', 'both'].includes(type)) fail(`"${str(r.type)}" should be customer, vendor or both.`, 'Type', r.type);
   seenInFile(l, 'contact', l.key(name), 'Name', name);
   if (l.contacts.has(l.key(name))) {
+    l.skipReason = `"${name}" is already in your books: left as it is.`;
     if (ctx.onDuplicate === 'skip') return 'skipped';
     duplicate(`"${name}" is already in your books.`, 'Name', name);
   }
@@ -297,6 +300,7 @@ const items: Handler = async (trx, ctx, l, r) => {
   seenInFile(l, 'item', l.key(name), 'Name', name);
   if (str(r.sku)) seenInFile(l, 'sku', l.key(str(r.sku)), 'SKU', str(r.sku));
   if (l.items.has(l.key(name))) {
+    l.skipReason = `"${name}" is already in your items: left as it is.`;
     if (ctx.onDuplicate === 'skip') return 'skipped';
     duplicate(`"${name}" is already in your items.`, 'Name', name);
   }
@@ -442,6 +446,7 @@ const payment = (side: 'received' | 'made'): Handler => async (trx, ctx, l, r) =
     .where('status', '!=', 'void')
     .executeTakeFirst();
   if (twin) {
+    l.skipReason = `This ${side === 'received' ? 'receipt' : 'payment'} (${day}, ₹${(amount / 100).toLocaleString('en-IN')}${ref ? `, ${ref}` : ''}) is already in your books as ${twin.number}: left out, not entered twice.`;
     if (ctx.onDuplicate === 'skip') return 'skipped';
     duplicate(`This ${side === 'received' ? 'receipt' : 'payment'} (${day}, ₹${(amount / 100).toLocaleString('en-IN')}${ref ? `, ${ref}` : ''}) is already in your books as ${twin.number}.`, 'Reference', ref ?? '');
   }
@@ -624,6 +629,7 @@ const bills: GroupHandler = async (trx, ctx, l, rows) => {
   const vendorId = party(l, rows[0].vendor, 'vendor', 'Vendor');
   const twin = (await findBillDuplicates(trx, ctx.orgId, { vendorId, vendorInvoiceNo: str(rows[0].bill_no) })).exact;
   if (twin) {
+    l.skipReason = `${str(rows[0].bill_no)} from ${str(rows[0].vendor)} is already in your books as ${twin.internalNo}, dated ${twin.date} (${twin.why}): left out, not entered twice.`;
     if (ctx.onDuplicate === 'skip') return 'skipped';
     duplicate(`already in your books as ${twin.internalNo}, dated ${twin.date} (${twin.why}).`, "Supplier's bill number", rows[0].bill_no);
   }
@@ -743,13 +749,14 @@ export async function runImport(trx: Trx, ctx: ImportContext, kind: ImportKind, 
     const sp = sql.raw(`imp_${++n}`);
     await sql`SAVEPOINT ${sp}`.execute(trx);
     l.row = row;
+    l.skipReason = null;
     try {
       const r = await fn();
       await sql`RELEASE SAVEPOINT ${sp}`.execute(trx);
       if (r === 'skipped') {
         out.skipped++;
         out.duplicates!++;
-        out.skippedRows!.push({ row, message: 'Already in your books: left as it is (Skip Duplicates).', duplicate: true });
+        out.skippedRows!.push({ row, message: l.skipReason ?? 'Already in your books: left out, not entered twice.', duplicate: true });
       } else { out.created++; out.valid!++; }
     } catch (err) {
       await sql`ROLLBACK TO SAVEPOINT ${sp}`.execute(trx);

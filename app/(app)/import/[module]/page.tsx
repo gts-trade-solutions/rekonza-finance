@@ -371,7 +371,7 @@ function Preview({ m, rows, fields, unmapped, onDuplicate, canImport, loaded, on
   const router = useRouter();
   const [state, setState] = useState<{ kind: 'checking' } | { kind: 'checked'; r: ImportResponse } | { kind: 'demo' } | { kind: 'failed'; message: string }>({ kind: 'checking' });
   const [importing, setImporting] = useState(false);
-  const [open, setOpen] = useState<Record<string, boolean>>({ errors: true, duplicates: true });
+  const [open, setOpen] = useState<Record<string, boolean>>({ errors: true, duplicates: true, skipped: true });
   // What to do with rows that fail: keep the good ones, or import nothing until the file is right.
   const [mode, setMode] = useState<'valid_only' | 'all'>('all');
   const fileFormat = (loaded.file.name.match(/\.([a-z0-9]+)$/i)?.[1] ?? '').toLowerCase();
@@ -490,7 +490,11 @@ function Preview({ m, rows, fields, unmapped, onDuplicate, canImport, loaded, on
                 </div>
               ))}
             </div>
-            {errors.length === 0 ? (
+            {errors.length === 0 && skipped > 0 ? (
+              <p className="flex items-center gap-2 rounded-[6px] bg-[#fdf3e2] px-4 py-3 text-[13.5px] text-[#8a5a00]" data-slot="import-ready-skipping">
+                <AlertTriangle className="size-4" /> {ready} ready to be imported; {skipped} already in your books {skipped === 1 ? 'is' : 'are'} left out, each listed below with why.
+              </p>
+            ) : errors.length === 0 ? (
               <p className="flex items-center gap-2 rounded-[6px] bg-[#e7f6ee] px-4 py-3 text-[13.5px] text-[#1e7a46]" data-slot="import-ready">
                 <CheckCircle2 className="size-4" /> All {m.title} in your file are ready to be imported
               </p>
