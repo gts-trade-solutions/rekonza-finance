@@ -118,7 +118,7 @@ if (FRESH) {
   await shot(t, 'register-open');
   await row.locator('[data-slot="dup-note"]').fill('Checked with Vendor X: two deliveries');
   await row.locator('[data-slot="dup-clear"]').click();
-  await page.waitForTimeout(1200);
+  await page.getByText('Cleared: not a duplicate.').waitFor({ timeout: 120_000 }).catch(() => {});
   await page.locator('[data-slot="dup-filter-cleared"]').click();
   await page.locator('[data-slot="dup-row"][data-status="cleared"]').first().waitFor({ timeout: 60_000 }).catch(() => {});
   const cleared = await page.locator('[data-slot="dup-row"][data-status="cleared"]').first().innerText().catch(() => '');
