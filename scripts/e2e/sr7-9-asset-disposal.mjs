@@ -334,7 +334,7 @@ try {
   p2.on('pageerror', (e) => t.errors.push(`checker pageerror: ${e.message}`));
   await login(p2, checkerEmail, checkerPassword);
   p2.setDefaultTimeout(90_000);
-  await p2.goto(`${BASE}/accountant/fixed-assets?tab=disposals`, { waitUntil: 'load' });
+  await p2.goto(`${BASE}/accountant/fixed-assets?tab=disposals`, { waitUntil: 'domcontentloaded' });
   await p2.locator('[data-slot="disposals-pending"]').waitFor();
   await clickAndWait(p2, p2.locator('[data-slot="disposal-approve"]').first(), '/api/fixed-assets');
   await p2.locator('[data-sonner-toast]', { hasText: /Approved and posted/ }).first().waitFor();

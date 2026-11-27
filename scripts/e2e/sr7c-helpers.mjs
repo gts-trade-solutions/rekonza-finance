@@ -120,7 +120,7 @@ export async function signIn(t, { business = 'Audit Test', state = '33', stateNa
   await page.locator('#email').fill(email);
   await page.locator('#password').fill('Audit@2026x');
   await page.locator('button[type="submit"]').click();
-  await page.waitForURL('**/dashboard', { timeout: 90_000 });
+  await page.waitForURL('**/dashboard', { timeout: 90_000, waitUntil: 'domcontentloaded' });
   return { fresh: true, email, pan };
 }
 
@@ -130,18 +130,30 @@ export async function signIn(t, { business = 'Audit Test', state = '33', stateNa
  * temporary password goes through the change-password screen.
  */
 export async function login(page, email, password, newPassword = 'Checker@2026x') {
+  page.setDefaultTimeout(90_000);
+  page.setDefaultNavigationTimeout(150_000);
   await page.goto(`${BASE}/login`, { waitUntil: 'load' });
   await page.waitForTimeout(1500);
   await page.locator('#email').fill(email);
   await page.locator('#password').fill(password);
   await page.getByRole('button', { name: /^Sign in$/ }).click();
-  await page.waitForURL(/dashboard|change-password|two-step/, { timeout: 90_000 });
-  if (page.url().includes('change-password')) {
+  await page.waitForURL(/dashboard|change-password|two-step/, { timeout: 90_000, waitUntil: 'domcontentloaded' });
+  // A temporary password lands on the dashboard first and is sent on to change it;
+  // until it is changed the API answers 403 password_change_required.
+  await page.waitForTimeout(1500);
+  const mustChange = page.url().includes('change-password') || await page.evaluate(async () => {
+    const r = await fetch('/api/notifications');
+    if (r.status !== 403) return false;
+    const j = await r.json().catch(() => ({}));
+    return j.code === 'password_change_required';
+  }).catch(() => page.url().includes('change-password'));
+  if (mustChange && !page.url().includes('change-password')) await page.goto(`${BASE}/change-password`, { waitUntil: 'domcontentloaded' });
+  if (mustChange || page.url().includes('change-password')) {
     await page.locator('#cp-current').fill(password);
     await page.locator('#cp-next').fill(newPassword);
     await page.locator('#cp-again').fill(newPassword);
     await page.locator('button[type="submit"]').click();
-    await page.waitForURL('**/dashboard', { timeout: 90_000 });
+    await page.waitForURL('**/dashboard', { timeout: 90_000, waitUntil: 'domcontentloaded' });
   }
 }
 

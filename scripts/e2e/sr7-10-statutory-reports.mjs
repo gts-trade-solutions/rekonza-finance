@@ -74,7 +74,7 @@ try {
       await page.goto(`${BASE}/payroll/runs`, { waitUntil: 'load' });
       await page.locator('input[type="month"]').first().fill(m);
       await page.getByRole('button', { name: /Prepare payroll/ }).click();
-      await page.waitForURL(/\/payroll\/runs\/\d+/, { timeout: 150_000 });
+      await page.waitForURL(/\/payroll\/runs\/\d+/, { timeout: 150_000, waitUntil: 'domcontentloaded' });
       await clickAndWait(page, page.getByRole('button', { name: /^Post$/ }), '/api/payroll/runs/');
       await toast(page, /posted/);
       if (m === '2026-04') await shot('run-posted');
