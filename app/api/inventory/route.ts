@@ -166,9 +166,12 @@ export const GET = route(
 /**
  * Adjust stock.
  *
- * Quantity only, as in Tally. Stock is valued from the documents on the day a
- * report is run, so damage, theft or a short count reaches the profit and loss
- * as a smaller closing stock. Posting the loss as well would count it twice.
+ * On a periodic book, quantity only, as in Tally: stock is valued from the
+ * documents on the day a report is run, so damage, theft or a short count
+ * reaches the profit and loss as a smaller closing stock, and posting the loss
+ * as well would count it twice. On a perpetual book the adjustment posts its
+ * value on its own date (services/stock-changes.ts postAdjustment), so the
+ * Inventory account agrees with the valuation the same day.
  *
  * An adjustment with the reason 'opening' is opening stock, whatever its date:
  * it is an opening balance, and is carried in opening equity, not in profit.
