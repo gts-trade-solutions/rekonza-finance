@@ -303,6 +303,8 @@ export interface InvoiceDetail {
   /** Under reverse charge (the buyer pays the GST), and a bill of supply. */
   reverseCharge?: boolean;
   billOfSupply?: boolean;
+  /** Sold through an e-commerce operator: TCS under s.52, or the operator pays the tax under s.9(5). */
+  eco?: { gstin: string; section: '52' | '9_5' } | null;
   totalPaise: number;
   amountPaidPaise: number;
   balancePaise: number;

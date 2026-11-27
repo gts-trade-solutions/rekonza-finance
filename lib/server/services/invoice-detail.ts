@@ -28,7 +28,7 @@ export async function invoiceDetail(orgId: number, id: number) {
       'invoices.status', 'invoices.place_of_supply', 'invoices.supply_type',
       'invoices.supply_kind', 'invoices.subtotal', 'invoices.cgst', 'invoices.sgst',
       'invoices.igst', 'invoices.cess', 'invoices.tcs', 'invoices.shipping_charge',
-      'invoices.adjustment', 'invoices.adjustment_label', 'invoices.round_off', 'invoices.reverse_charge', 'invoices.bill_of_supply',
+      'invoices.adjustment', 'invoices.adjustment_label', 'invoices.round_off', 'invoices.reverse_charge', 'invoices.bill_of_supply', 'invoices.eco_gstin', 'invoices.eco_section',
       'invoices.total', 'invoices.amount_paid', 'invoices.order_number',
       'invoices.subject', 'invoices.payment_terms', 'invoices.print_template', 'invoices.notes', 'invoices.terms',
       'invoices.journal_entry_id', 'invoices.customer_id', 'invoices.branch_id',
@@ -287,6 +287,8 @@ export async function invoiceDetail(orgId: number, id: number) {
     /** Under reverse charge (the buyer pays the GST), and a bill of supply (migration 124). */
     reverseCharge: Number(inv.reverse_charge ?? 0) === 1,
     billOfSupply: Number(inv.bill_of_supply ?? 0) === 1,
+    /** Sold through an e-commerce operator (migration 133). */
+    eco: inv.eco_gstin ? { gstin: inv.eco_gstin, section: (inv.eco_section ?? '52') as '52' | '9_5' } : null,
     totalPaise: p(inv.total),
     amountPaidPaise: p(inv.amount_paid),
     balancePaise: p(inv.total) - p(inv.amount_paid),

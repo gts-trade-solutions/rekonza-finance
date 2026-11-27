@@ -114,6 +114,14 @@ export interface CreateInvoiceInput {
    */
   billOfSupply?: boolean;
   /**
+   * Sold through an e-commerce operator (migration 133): its GSTIN, and
+   * whether it collects TCS under s.52 (the invoice is taxed as usual) or
+   * pays the tax itself under s.9(5) — restaurant, passenger transport and
+   * accommodation services booked through an app — when this invoice charges
+   * none. GSTR-1 table 14 and GSTR-3B 3.1.1(ii) report them.
+   */
+  eco?: { gstin: string; section: '52' | '9_5' } | null;
+  /**
    * Round the total to the rupee (the default, as every invoice has been).
    * False keeps the paise: a recurring profile whose Rounding Off Preference
    * is Zoho's "No Rounding" (migration 126).
@@ -351,6 +359,17 @@ export async function createInvoice(
     if (problem) throw badRequest(problem);
     costed = withoutTax(costed);
   }
+  // Through an e-commerce operator: under s.9(5) the operator is the one liable
+  // for the tax, so this invoice charges none (as with reverse charge).
+  const eco = input.eco?.gstin?.trim() ? { gstin: input.eco.gstin.trim().toUpperCase(), section: input.eco.section } : null;
+  if (eco) {
+    if (!/^\d{2}[A-Z0-9]{13}$/.test(eco.gstin)) throw badRequest('Give the e-commerce operator\'s GSTIN: 15 characters, as on its TCS registration.');
+    if (['export_lut', 'export_with_tax', 'sez'].includes(supplyType)) throw badRequest('An export or SEZ supply is not made through an e-commerce operator\'s TCS or section 9(5).');
+    if (eco.section === '9_5') {
+      if (input.reverseCharge) throw badRequest('Under section 9(5) the operator pays the tax; the invoice cannot be under reverse charge as well.');
+      costed = withoutTax(costed);
+    }
+  }
   const computed = costed.lines;
 
   // A line may credit its own income head, or Asset Disposal Clearing when it
@@ -469,6 +488,8 @@ export async function createInvoice(
       adjustment_label: input.adjustmentLabel ?? null,
       reverse_charge: input.reverseCharge ? 1 : 0,
       bill_of_supply: input.billOfSupply ? 1 : 0,
+      eco_gstin: eco?.gstin ?? null,
+      eco_section: eco?.section ?? null,
       round_off: toSqlFromPaise(roundOff),
       total: toSqlFromPaise(rounded),
       amount_paid: toSqlFromPaise(0),

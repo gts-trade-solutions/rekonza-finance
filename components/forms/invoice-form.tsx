@@ -156,6 +156,12 @@ export function InvoiceForm({ variant = 'invoice', editing }: {
   const [markPaid, setMarkPaid] = useState(variant === 'receipt');
   // Zoho's "This transaction is applicable for reverse charge": the buyer pays the GST.
   const [reverseCharge, setReverseCharge] = useState(!!ed?.reverseCharge);
+  // Sold through an e-commerce operator (GSTR-1 table 14): TCS under s.52, or
+  // the operator pays the tax under s.9(5), when the invoice charges none.
+  const [viaEco, setViaEco] = useState(!!ed?.eco);
+  const [ecoGstin, setEcoGstin] = useState(ed?.eco?.gstin ?? '');
+  const [ecoSection, setEcoSection] = useState<'52' | '9_5'>(ed?.eco?.section ?? '52');
+  const eco95 = viaEco && ecoSection === '9_5';
   const billOfSupply = variant === 'bill_of_supply' || !!ed?.billOfSupply;
   const [paidMode, setPaidMode] = useState('cash');
   const [paidBankId, setPaidBankId] = useState('');
@@ -317,8 +323,8 @@ export function InvoiceForm({ variant = 'invoice', editing }: {
     );
     const full = sumTax(parts);
     // Under reverse charge the invoice charges no GST (the buyer pays it); the amount is shown as the buyer's.
-    const rcmTax = reverseCharge ? totalTaxPaise(full) : 0;
-    const tax = reverseCharge ? { ...full, cgstPaise: 0, sgstPaise: 0, igstPaise: 0, cessPaise: 0 } : full;
+    const rcmTax = reverseCharge || eco95 ? totalTaxPaise(full) : 0;
+    const tax = reverseCharge || eco95 ? { ...full, cgstPaise: 0, sgstPaise: 0, igstPaise: 0, cessPaise: 0 } : full;
     const grossBeforeDiscount = lines.reduce((t, l) => t + Math.round(l.ratePaise * l.qty), 0);
     const discount = grossBeforeDiscount - tax.taxablePaise;
     const tcsRate = tcsCode ? tcsHeads.find((h) => h.code === tcsCode) : undefined;
@@ -331,7 +337,7 @@ export function InvoiceForm({ variant = 'invoice', editing }: {
     const { rounded, roundOff } = roundToRupee(beforeRound);
     const qty = lines.reduce((t, l) => t + (l.qty || 0), 0);
     return { tax, discount, grossBeforeDiscount, tcs, rounded, roundOff, qty, rcmTax };
-  }, [lines, supplyType, shipping, adjustment, tcsCode, tcsHeads, customer, reverseCharge]);
+  }, [lines, supplyType, shipping, adjustment, tcsCode, tcsHeads, customer, reverseCharge, eco95]);
 
   const invoiceOptions = useMemo(
     () => (theirInvoices.data?.invoices ?? []).map((i) => ({ value: i.id, label: i.number, sublabel: `${i.date} · ${formatINR(i.totalPaise)}` })),
@@ -458,6 +464,7 @@ export function InvoiceForm({ variant = 'invoice', editing }: {
           adjustmentLabel,
           reverseCharge: reverseCharge || undefined,
           billOfSupply: billOfSupply || undefined,
+          eco: viaEco && ecoGstin.trim() ? { gstin: ecoGstin.trim().toUpperCase(), section: ecoSection } : null,
           tcsCode: tcsCode || null,
           lines: lines
             .filter((l) => l.qty > 0)
@@ -737,6 +744,29 @@ export function InvoiceForm({ variant = 'invoice', editing }: {
               <p className="mt-1 text-[12px] text-muted-foreground" data-slot="invoice-rcm-note">
                 The customer pays {formatINR(totals.rcmTax)} of GST to the government; this invoice charges none.
               </p>
+            )}
+          </FormRow>
+        )}
+        {(variant === 'invoice' || (ed && !ed.debitNote && !billOfSupply)) && !billOfSupply && (
+          <FormRow label="">
+            <label className="flex items-center gap-2 text-[13px]" data-slot="invoice-eco">
+              <Checkbox checked={viaEco} onCheckedChange={(v) => setViaEco(v === true)} />
+              Sold through an e-commerce operator
+            </label>
+            {viaEco && (
+              <div className="mt-2 space-y-2 rounded-md border bg-muted/20 p-3" data-slot="invoice-eco-details">
+                <Input value={ecoGstin} onChange={(e) => setEcoGstin(e.target.value.toUpperCase().replace(/\s/g, ''))} maxLength={15}
+                  placeholder="The operator's GSTIN (its TCS registration)" className="h-8 max-w-xs font-mono" data-slot="invoice-eco-gstin" />
+                <div className="flex flex-wrap gap-4 text-[13px]">
+                  <label className="flex items-center gap-1.5"><input type="radio" name="eco-section" checked={ecoSection === '52'} onChange={() => setEcoSection('52')} data-slot="invoice-eco-52" /> The operator collects TCS (section 52)</label>
+                  <label className="flex items-center gap-1.5"><input type="radio" name="eco-section" checked={ecoSection === '9_5'} onChange={() => { setEcoSection('9_5'); setReverseCharge(false); }} data-slot="invoice-eco-95" /> The operator pays the tax (section 9(5))</label>
+                </div>
+                <p className="text-[12px] text-muted-foreground">
+                  {ecoSection === '9_5'
+                    ? `The operator is liable for the GST (${formatINR(totals.rcmTax)}); this invoice charges none. Reported in GSTR-1 table 14(b) and GSTR-3B 3.1.1(ii).`
+                    : 'Taxed as usual; the operator deducts TCS from what it pays you. Reported in GSTR-1 table 14(a) as well as its own table.'}
+                </p>
+              </div>
             )}
           </FormRow>
         )}
