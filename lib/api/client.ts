@@ -3393,3 +3393,21 @@ export const withholding = {
   updatePayment: (id: string, b: WithholdingPaymentBody) => api.put(WH, { kind: 'payment', id, ...b }),
   deletePayment: (id: string, reason?: string | null) => api.delete(`${WH}?kind=payment&id=${id}${whReason(reason)}`),
 };
+
+// ── GSTR-9 (status review 7) ─────────────────────────────────────────────────
+// The annual return, tables 4 to 19, from /api/gst/annual (lib/server/gst/gstr9.ts).
+
+export type Gstr9Annual = import('../gst/gstr9-types').Gstr9 & { view: 'gstr9' };
+export type Gstr9AnnualInputs = import('../gst/gstr9-types').Gstr9Inputs;
+export type Gstr9AnnualHeads = import('../gst/gstr9-types').TaxHeads;
+export type Gstr9AnnualHsnRow = import('../gst/gstr9-types').HsnSummaryRow;
+
+export const gstr9Annual = {
+  /** `fy` is the year the financial year starts in: 2025 for 2025-26. */
+  get: (fy: number, branchId?: string) => api.get<Gstr9Annual>('/api/gst/annual', { view: 'gstr9', fy, branchId }),
+  /** The file the portal's offline tool takes, in the GSTN's own schema. */
+  file: (fy: number, branchId?: string) => api.get<Record<string, unknown>>('/api/gst/annual', { view: 'gstr9-file', fy, branchId }),
+  inputs: (fy: number) => api.get<{ fy: number; inputs: Gstr9AnnualInputs }>('/api/gst/annual', { view: 'gstr9-inputs', fy }),
+  saveInputs: (fy: number, inputs: Gstr9AnnualInputs) => api.put<{ fy: number; inputs: Gstr9AnnualInputs }>('/api/gst/annual', { fy, inputs }),
+  deleteInputs: (fy: number) => api.delete<{ fy: number; deleted: true }>(`/api/gst/annual?fy=${fy}`),
+};
