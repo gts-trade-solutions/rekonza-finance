@@ -53,10 +53,15 @@ function readRows(grid: unknown[][]): { rows: PayrollImportRow[]; missing: strin
   const head = (grid[0] ?? []).map((h) => String(h ?? '').trim().toLowerCase());
   const used = new Set<number>();
   const at = new Map<string, number>();
-  // Longest headings first, so "PF employer" is not taken by "PF".
-  for (const c of [...COLUMNS].sort((a, b) => Math.max(...b.words.map((w) => w.length)) - Math.max(...a.words.map((w) => w.length)))) {
-    const i = head.findIndex((h, n) => !used.has(n) && c.words.some((w) => h === w || h.startsWith(`${w} `) || h.includes(w)));
-    if (i >= 0) { at.set(c.key, i); used.add(i); }
+  // A heading that is exactly one of a column's names first; then headings that
+  // contain a name of four letters or more (never "pt" inside "department").
+  const passes: ((h: string, w: string) => boolean)[] = [(h, w) => h === w, (h, w) => w.length >= 4 && h.includes(w)];
+  for (const match of passes) {
+    for (const c of [...COLUMNS].sort((a, b) => Math.max(...b.words.map((w) => w.length)) - Math.max(...a.words.map((w) => w.length)))) {
+      if (at.has(c.key)) continue;
+      const i = head.findIndex((h, n) => !used.has(n) && c.words.some((w) => match(h, w)));
+      if (i >= 0) { at.set(c.key, i); used.add(i); }
+    }
   }
   const missing = COLUMNS.filter((c) => c.required && !at.has(c.key)).map((c) => c.label);
   const money = (v: unknown) => Math.round(Number(String(v ?? '').replace(/[₹,\s]/g, '') || 0) * 100);
