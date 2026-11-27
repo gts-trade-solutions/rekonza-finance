@@ -22,6 +22,21 @@ import 'server-only';
 //   nil-rated, exempt or non-GST       nil (table 8), never in the tables above
 // Credit notes follow the invoice: to a GSTIN → cdnr; against a B2CL invoice
 // or an export → cdnur; otherwise they reduce the B2CS figures.
+//
+// Sold through an e-commerce operator (migration 133), table 14 lists the
+// supplies by the operator's GSTIN: where the operator collected TCS under
+// s.52 the sale is also in its own table above; where the operator pays the
+// tax under s.9(5) the invoice charged none, and the supply is reported in
+// table 14(b) only, never in the tables above (Notification 26/2022-CT made
+// table 14 part of the form; the portal opened it from January 2024). A book
+// that is itself an operator reports the s.9(5) supplies it paid tax on in
+// table 15. A supply to an EOU or against an advance authorisation (a
+// customer treated as a deemed export, s.147) is B2B with inv_typ DE.
+//
+// Every document's entry is kept as well as placed in its table, so that the
+// return can be compared document by document with what was filed
+// (gstr1-amendments.ts): a filed document changed afterwards is reported
+// again in tables 9A / 9C / 10 of a later return.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { sql } from 'kysely';
@@ -31,6 +46,7 @@ import { toPaiseFromSql } from '../money-sql';
 import { b2clThreshold, monthRange } from './returns';
 import { advancesForMonth, type AdvanceRow } from './advances';
 import { reverseChargeTax } from '../../tax/reverse-charge';
+import { gstr1Amendments } from './gstr1-amendments';
 
 /** From the May 2025 period the HSN table has a B2B part and a B2C part. */
 const HSN_SPLIT_FROM = '2025-05';
@@ -80,6 +96,41 @@ interface DocHead {
   againstSupplyType?: string | null;
   /** Exports only: the shipping bill the refund and the return are matched on. */
   shippingBill?: { no: string | null; date: string | null; port: string | null } | null;
+  /** The buyer's GST treatment: a deemed export goes in B2B as DE. */
+  treatment?: string | null;
+  /** Sold through an e-commerce operator: its GSTIN and the section the tax runs under. */
+  ecoGstin?: string | null;
+  ecoSection?: '52' | '9_5' | null;
+}
+
+/** Which table of GSTR-1 a document went in. */
+export type Gstr1Section = 'b2b' | 'b2cl' | 'exp' | 'b2cs' | 'cdnr' | 'cdnur' | 'nil' | 'eco95';
+
+/** One document as the return carries it, for the screen and for amendments. */
+export interface Gstr1DocEntry {
+  docType: 'invoice' | 'debit_note' | 'credit_note';
+  docId: number;
+  number: string;
+  date: string;
+  section: Gstr1Section;
+  /** The buyer's GSTIN (b2b, cdnr). */
+  ctin: string | null;
+  pos: string;
+  /** Invoice value, as the return reports it. */
+  valuePaise: Paise;
+  /** Signed: a credit note takes value off. */
+  taxablePaise: Paise;
+  igstPaise: Paise;
+  cgstPaise: Paise;
+  sgstPaise: Paise;
+  cessPaise: Paise;
+  /** The entry placed in the table (b2b inv, b2cl inv, exp inv, cdnr nt, cdnur): what an amendment repeats. */
+  entry: Record<string, unknown> | null;
+  /** The keys of the table row it sits under: { exp_typ } for an export, { typ } for cdnur, { sply_ty } for B2CS. */
+  group: Record<string, unknown>;
+  /** Rate by rate, signed, in rupees as the file carries them. */
+  rates: { rt: number; txval: number; iamt: number; camt: number; samt: number; csamt: number }[];
+  eco?: { gstin: string; section: '52' | '9_5' } | null;
 }
 
 type Section = 'exp_wpay' | 'exp_wopay' | 'sez' | 'b2b' | 'b2cl' | 'b2cs';
@@ -149,13 +200,35 @@ export interface Gstr1PortalFile {
 /**
  * The GSTR-1 file for one month. `scope: 'iff'` gives the Invoice Furnishing
  * Facility file instead: the B2B invoices and the notes to registered buyers,
- * nothing else.
+ * nothing else. Amendments of documents in returns already filed (tables 9A,
+ * 9C and 10) go in with it, unless `amendments: false`.
  */
 export async function gstr1PortalFile(
   ex: Executor, orgId: number, month: string,
-  opts: { branchId?: number; scope?: 'gstr1' | 'iff' } = {},
+  opts: { branchId?: number; scope?: 'gstr1' | 'iff'; amendments?: boolean } = {},
 ): Promise<Gstr1PortalFile> {
+  const { file } = await gstr1Build(ex, orgId, month, opts);
+  if (opts.amendments === false || opts.branchId) return file;
+  const a = await gstr1Amendments(ex, orgId, month);
+  const put = (key: string, rows: unknown[]) => { if (rows.length) file[key] = rows; };
+  put('b2ba', a.file.b2ba);
+  put('cdnra', a.file.cdnra);
+  if (opts.scope !== 'iff') {
+    put('b2cla', a.file.b2cla);
+    put('expa', a.file.expa);
+    put('cdnura', a.file.cdnura);
+    put('b2csa', a.file.b2csa);
+  }
+  return file;
+}
+
+/** The file, and every document as it was placed in it. */
+export async function gstr1Build(
+  ex: Executor, orgId: number, month: string,
+  opts: { branchId?: number; scope?: 'gstr1' | 'iff' } = {},
+): Promise<{ file: Gstr1PortalFile; docs: Gstr1DocEntry[] }> {
   const { branchId, scope = 'gstr1' } = opts;
+  const docs: Gstr1DocEntry[] = [];
   const period = monthRange(month);
   const branchFilter = (alias: string) => (branchId ? sql`AND ${sql.ref(`${alias}.branch_id`)} = ${branchId}` : sql``);
 
@@ -166,8 +239,10 @@ export async function gstr1PortalFile(
     sb_no: string | null; sb_date: string | null; sb_port: string | null;
     doc_kind: 'invoice' | 'debit_note'; reverse_charge: number;
     against_total: string | null; against_date: string | null; against_supply_type: string | null;
+    treatment: string | null; eco_gstin: string | null; eco_section: '52' | '9_5' | null;
   }>`
     SELECT i.id, i.number, i.invoice_date, i.status, NULLIF(c.gstin, '') AS gstin, i.reverse_charge,
+           c.gst_treatment AS treatment, COALESCE(i.eco_gstin, o.eco_gstin) AS eco_gstin, COALESCE(i.eco_section, o.eco_section) AS eco_section,
            i.place_of_supply, i.supply_type, i.total, b.state_code AS branch_state,
            i.export_shipping_bill_no AS sb_no, i.export_shipping_bill_date AS sb_date, i.export_port_code AS sb_port,
            i.doc_kind, o.total AS against_total, o.invoice_date AS against_date, o.supply_type AS against_supply_type
@@ -203,9 +278,10 @@ export async function gstr1PortalFile(
     id: number; number: string; note_date: string; status: string; gstin: string | null;
     place_of_supply: string; supply_type: string; total: string; branch_state: string;
     against_total: string | null; against_date: string | null; against_supply_type: string | null;
-    against_rc: number | null;
+    against_rc: number | null; treatment: string | null; eco_gstin: string | null; eco_section: '52' | '9_5' | null;
   }>`
     SELECT n.id, n.number, n.note_date, n.status, NULLIF(c.gstin, '') AS gstin,
+           c.gst_treatment AS treatment, i.eco_gstin, i.eco_section,
            n.place_of_supply, n.supply_type, n.total, b.state_code AS branch_state,
            i.total AS against_total, i.invoice_date AS against_date, i.supply_type AS against_supply_type,
            i.reverse_charge AS against_rc
@@ -263,6 +339,9 @@ export async function gstr1PortalFile(
     againstTotalPaise: r.against_total == null ? null : toPaiseFromSql(r.against_total),
     againstDate: r.against_date == null ? null : String(r.against_date).slice(0, 10),
     againstSupplyType: r.against_supply_type,
+    treatment: r.treatment,
+    ecoGstin: r.eco_gstin,
+    ecoSection: r.eco_section,
     shippingBill: r.sb_no || r.sb_port
       ? { no: r.sb_no, date: r.sb_date ? String(r.sb_date).slice(0, 10) : null, port: r.sb_port }
       : null,
@@ -279,6 +358,9 @@ export async function gstr1PortalFile(
     againstSupplyType: r.against_supply_type,
     // A note against a reverse-charge invoice is reported as the invoice was: rchrg Y.
     reverseCharge: Number(r.against_rc ?? 0) === 1,
+    treatment: r.treatment,
+    ecoGstin: r.eco_gstin,
+    ecoSection: r.eco_section,
   }));
 
   // ── Sort every line into its table ────────────────────────────────────────
@@ -304,19 +386,65 @@ export async function gstr1PortalFile(
     b2cs.set(key, { ...prev, ...add(prev, l, sign) });
   };
 
+  // Table 14: supplies through an e-commerce operator, by its GSTIN.
+  const eco = { clttx: new Map<string, Money>(), paytx: new Map<string, Money>() };
+  const addEco = (head: DocHead, lines: RateRow[], sign: number) => {
+    if (!head.ecoGstin || !head.ecoSection) return;
+    const book = head.ecoSection === '9_5' ? eco.paytx : eco.clttx;
+    let sum = book.get(head.ecoGstin) ?? ZERO;
+    for (const l of lines) {
+      // Under s.9(5) the invoice charged nothing; the operator pays the tax at the line's rate.
+      let v: Money = l;
+      if (head.ecoSection === '9_5') {
+        const t = reverseChargeTax(l.taxable, l.rate, head.pos === head.branchState);
+        v = { taxable: l.taxable, cgst: t.cgstPaise, sgst: t.sgstPaise, igst: t.igstPaise, cess: 0 };
+      }
+      sum = add(sum, v, sign);
+    }
+    book.set(head.ecoGstin, sum);
+  };
+
+  const record = (head: DocHead, docType: Gstr1DocEntry['docType'], section: Gstr1Section, lines: RateRow[], sign: number,
+    entry: Record<string, unknown> | null, group: Record<string, unknown> = {}) => {
+    const t = lines.reduce((acc, l) => add(acc, l, sign), ZERO);
+    docs.push({
+      docType, docId: head.id, number: head.number, date: head.date, section,
+      ctin: section === 'b2b' || section === 'cdnr' ? head.gstin : null, pos: head.pos, valuePaise: head.totalPaise,
+      taxablePaise: t.taxable, igstPaise: t.igst, cgstPaise: t.cgst, sgstPaise: t.sgst, cessPaise: t.cess,
+      entry, group,
+      rates: lines.map((l) => ({ rt: l.rate, txval: r2(sign * l.taxable), iamt: r2(sign * l.igst), camt: r2(sign * l.cgst), samt: r2(sign * l.sgst), csamt: r2(sign * l.cess) })),
+      eco: head.ecoGstin && head.ecoSection ? { gstin: head.ecoGstin, section: head.ecoSection } : null,
+    });
+  };
+
   for (const head of invoices) {
     if (head.status === 'void') continue;
     const lines = invRates.get(head.id) ?? [];
+    // Under s.9(5) the operator pays the tax and reports the supply (table 15);
+    // the supplier reports it in table 14(b) alone.
+    if (head.ecoSection === '9_5' && head.ecoGstin) {
+      addEco(head, lines, 1);
+      record(head, 'invoice', 'eco95', lines, 1, null, { etin: head.ecoGstin });
+      continue;
+    }
     const taxed = lines.filter((l) => !isNilLine(head, l));
+    addEco(head, taxed, 1);
     for (const l of lines) if (isNilLine(head, l)) addNil(head, l, 1);
-    if (!taxed.length) continue;
+    if (!taxed.length) {
+      if (lines.length) record(head, 'invoice', 'nil', lines, 1, null, { sply_ty: nilKey(head) });
+      continue;
+    }
 
     const section = invoiceSection(head);
     const base = { inum: head.number, idt: dmy(head.date), val: r2(head.totalPaise) };
     switch (section) {
       case 'b2b':
       case 'sez': {
-        const inv_typ = section === 'b2b' ? 'R' : taxed.some((l) => l.igst > 0) ? 'SEWP' : 'SEWOP';
+        // A deemed export (s.147: supplies to an EOU, against an advance
+        // authorisation) is taxed like any B2B supply but marked DE.
+        const inv_typ = section === 'sez'
+          ? (taxed.some((l) => l.igst > 0) ? 'SEWP' : 'SEWOP')
+          : head.treatment === 'deemed_export' ? 'DE' : 'R';
         const list = b2b.get(head.gstin ?? '') ?? [];
         // Reverse charge: the invoice charged no GST, but the return reports the
         // tax the recipient owes on it, at each rate, with rchrg Y.
@@ -326,22 +454,27 @@ export async function gstr1PortalFile(
               return { ...l, cgst: owed.cgstPaise, sgst: owed.sgstPaise, igst: owed.igstPaise, cess: 0 as Paise };
             })
           : taxed;
-        list.push({ ...base, pos: head.pos, rchrg: head.reverseCharge ? 'Y' : 'N', inv_typ, itms: wrapped(items, 'all') });
+        const entry = { ...base, pos: head.pos, rchrg: head.reverseCharge ? 'Y' : 'N', inv_typ, itms: wrapped(items, 'all') };
+        list.push(entry);
         b2b.set(head.gstin ?? '', list);
+        record(head, 'invoice', 'b2b', items, 1, entry);
         break;
       }
       case 'b2cl': {
         const list = b2cl.get(head.pos) ?? [];
-        list.push({ ...base, itms: wrapped(taxed, 'igst') });
+        const entry = { ...base, itms: wrapped(taxed, 'igst') };
+        list.push(entry);
         b2cl.set(head.pos, list);
+        record(head, 'invoice', 'b2cl', taxed, 1, entry);
         break;
       }
       case 'b2cs':
         for (const l of taxed) addB2cs(head, l, 1);
+        record(head, 'invoice', 'b2cs', taxed, 1, null, { sply_ty: head.pos === head.branchState ? 'INTRA' : 'INTER' });
         break;
       case 'exp_wpay':
-      case 'exp_wopay':
-        (section === 'exp_wpay' ? exp.WPAY : exp.WOPAY).push({
+      case 'exp_wopay': {
+        const entry = {
           ...base,
           // The shipping bill, when it is known; the portal takes the invoice
           // without it and it can be amended in when it arrives.
@@ -349,8 +482,11 @@ export async function gstr1PortalFile(
           ...(head.shippingBill?.no ? { sbnum: head.shippingBill.no } : {}),
           ...(head.shippingBill?.date ? { sbdt: dmy(head.shippingBill.date) } : {}),
           itms: taxed.map((l) => ({ txval: r2(l.taxable), rt: l.rate, iamt: r2(l.igst), csamt: r2(l.cess) })),
-        });
+        };
+        (section === 'exp_wpay' ? exp.WPAY : exp.WOPAY).push(entry);
+        record(head, 'invoice', 'exp', taxed, 1, entry, { exp_typ: section === 'exp_wpay' ? 'WPAY' : 'WOPAY' });
         break;
+      }
     }
   }
 
@@ -358,6 +494,14 @@ export async function gstr1PortalFile(
   // reported where the invoice they follow was.
   const addNote = (head: DocHead, lines: RateRow[], ntty: 'C' | 'D', sign: 1 | -1) => {
     const base = { ntty, nt_num: head.number, nt_dt: dmy(head.date), val: r2(head.totalPaise) };
+    const docType = ntty === 'C' ? 'credit_note' as const : 'debit_note' as const;
+    // A note on a s.9(5) supply changes table 14(b) alone, as the supply did.
+    if (head.ecoSection === '9_5' && head.ecoGstin) {
+      addEco(head, lines, sign);
+      record(head, docType, 'eco95', lines, sign, null, { etin: head.ecoGstin });
+      return;
+    }
+    addEco(head, lines.filter((l) => !isNilLine(head, l)), sign);
     if (head.gstin) {
       // A note to a registered buyer goes in whole: the buyer has to reverse
       // the credit, nil-rated lines included.
@@ -370,24 +514,35 @@ export async function gstr1PortalFile(
             return { ...l, cgst: owed.cgstPaise, sgst: owed.sgstPaise, igst: owed.igstPaise, cess: 0 as Paise };
           })
         : lines;
-      list.push({ ...base, pos: head.pos, rchrg: head.reverseCharge ? 'Y' : 'N', inv_typ, itms: wrapped(items, 'all') });
+      const entry = { ...base, pos: head.pos, rchrg: head.reverseCharge ? 'Y' : 'N', inv_typ, itms: wrapped(items, 'all') };
+      list.push(entry);
       cdnr.set(head.gstin, list);
+      record(head, docType, 'cdnr', items, sign, entry);
       return;
     }
     for (const l of lines) if (isNilLine(head, l)) addNil(head, l, sign);
     const taxed = lines.filter((l) => !isNilLine(head, l));
-    if (!taxed.length) return;
+    if (!taxed.length) {
+      if (lines.length) record(head, docType, 'nil', lines, sign, null, { sply_ty: nilKey(head) });
+      return;
+    }
 
     const original = head.againstSupplyType ?? head.supplyType;
     if (original === 'export_with_tax' || original === 'export_lut') {
-      cdnur.push({ typ: original === 'export_with_tax' ? 'EXPWP' : 'EXPWOP', ...base, itms: wrapped(taxed, 'igst') });
+      const typ = original === 'export_with_tax' ? 'EXPWP' : 'EXPWOP';
+      const entry = { typ, ...base, itms: wrapped(taxed, 'igst') };
+      cdnur.push(entry);
+      record(head, docType, 'cdnur', taxed, sign, entry, { typ });
     } else if (
       original === 'inter' && head.againstTotalPaise != null && head.againstDate
       && head.againstTotalPaise > b2clThreshold(head.againstDate)
     ) {
-      cdnur.push({ typ: 'B2CL', ...base, pos: head.pos, itms: wrapped(taxed, 'igst') });
+      const entry = { typ: 'B2CL', ...base, pos: head.pos, itms: wrapped(taxed, 'igst') };
+      cdnur.push(entry);
+      record(head, docType, 'cdnur', taxed, sign, entry, { typ: 'B2CL' });
     } else {
       for (const l of taxed) addB2cs(head, l, sign);
+      record(head, docType, 'b2cs', taxed, sign, null, { sply_ty: head.pos === head.branchState ? 'INTRA' : 'INTER' });
     }
   };
   for (const head of notes) if (head.status !== 'void') addNote(head, cnRates.get(head.id) ?? [], 'C', -1);
@@ -474,7 +629,7 @@ export async function gstr1PortalFile(
 
   put('b2b', [...b2b].map(([ctin, inv]) => ({ ctin, inv })));
   put('cdnr', [...cdnr].map(([ctin, nt]) => ({ ctin, nt })));
-  if (scope === 'iff') return file;
+  if (scope === 'iff') return { file, docs: docs.filter((d) => d.section === 'b2b' || d.section === 'cdnr') };
 
   put('b2cl', [...b2cl].map(([pos, inv]) => ({ pos, inv })));
   put('b2cs', [...b2cs.values()]
@@ -546,5 +701,31 @@ export async function gstr1PortalFile(
   ].filter((d) => d.docs.length);
   if (docDet.length) file.doc_issue = { doc_det: docDet };
 
-  return file;
+  // Table 14, by operator: (a) s.52, the operator collected TCS; (b) s.9(5), the operator pays the tax.
+  const ecoRows = (m: Map<string, Money>) => [...m].filter(([, v]) => v.taxable !== 0)
+    .map(([etin, v]) => ({ etin, suppval: r2(v.taxable), igst: r2(v.igst), cgst: r2(v.cgst), sgst: r2(v.sgst), cess: r2(v.cess) }));
+  const clttx = ecoRows(eco.clttx);
+  const paytx = ecoRows(eco.paytx);
+  if (clttx.length || paytx.length) file.supeco = { ...(clttx.length ? { clttx } : {}), ...(paytx.length ? { paytx } : {}) };
+
+  // Table 15, for a book that is itself an e-commerce operator: the s.9(5)
+  // supplies it paid the tax on (gst_eco_supplies), by supplier, place of
+  // supply and rate. The operator does not hold each buyer's GSTIN, so they
+  // are reported in the summary part, as to unregistered recipients.
+  const { rows: op95 } = await sql<{ stin: string; pos: string; inter: number; rate: string; txval: string; igst: string; cgst: string; sgst: string }>`
+    SELECT supplier_gstin AS stin, place_of_supply AS pos, inter, rate_pct AS rate,
+           SUM(net_value) AS txval, SUM(igst) AS igst, SUM(cgst) AS cgst, SUM(sgst) AS sgst
+      FROM gst_eco_supplies
+     WHERE org_id = ${orgId} AND section = '9_5' AND period = ${month}
+       ${branchId ? sql`AND branch_id = ${branchId}` : sql``}
+     GROUP BY supplier_gstin, place_of_supply, inter, rate_pct
+  `.execute(ex);
+  if (op95.length) {
+    file.ecob2c = op95.map((r) => ({
+      stin: r.stin, pos: r.pos, sply_ty: Number(r.inter) === 1 ? 'INTER' : 'INTRA', rt: Number(r.rate),
+      txval: r2(toPaiseFromSql(r.txval)), iamt: r2(toPaiseFromSql(r.igst)), camt: r2(toPaiseFromSql(r.cgst)), samt: r2(toPaiseFromSql(r.sgst)), csamt: 0,
+    }));
+  }
+
+  return { file, docs };
 }
