@@ -4,7 +4,7 @@ import { route, body, query, asId, forbidden } from '@/lib/server/http';
 import { hasPermission } from '@/lib/rbac';
 import { logAudit, auditMeta } from '@/lib/server/audit';
 import {
-  bankFile, cancelBatch, createBatch, deleteBatch, listBatches, markBatchPaid, payableBills, submitBatch, updateBatch,
+  applyBankReply, bankFile, batchUploadFile, cancelBatch, createBatch, deleteBatch, listBatches, markBatchPaid, payableBills, submitBatch, updateBatch,
 } from '@/lib/server/services/payment-batches';
 
 // Payment batches: choose bills, release them (with a second person where an
@@ -48,6 +48,10 @@ const Input = z.discriminatedUnion('action', [
   z.object({ action: z.literal('submit'), id: Id }),
   z.object({ action: z.literal('cancel'), id: Id }),
   z.object({ action: z.literal('file'), id: Id }),
+  // The bulk upload file in one bank's layout (services/bank-upload.ts).
+  z.object({ action: z.literal('bank-file'), id: Id, format: z.enum(['generic', 'hdfc', 'icici', 'sbi', 'axis']) }),
+  // The bank's status file, read in the browser into a grid of cells.
+  z.object({ action: z.literal('bank-reply'), id: Id, grid: z.array(z.array(z.union([z.string(), z.number(), z.null()])).max(200)).max(5000) }),
   z.object({
     action: z.literal('paid'),
     id: Id,
@@ -98,6 +102,16 @@ export const POST = route(
         await cancelBatch(trx, orgId, id);
         await audit(id, 'Cancelled; its bills are free for another batch', 'void');
         return { id: asId(id), status: 'cancelled' as const };
+      }
+      if (input.action === 'bank-file') {
+        const file = await batchUploadFile(trx, orgId, id, input.format);
+        await audit(id, `Bank upload file made (${file.format.label}): ${file.transfers} transfer(s)`);
+        return file;
+      }
+      if (input.action === 'bank-reply') {
+        const r = await applyBankReply(trx, orgId, user.userId, id, input.grid);
+        await audit(id, `Bank's reply read: ${r.paid.length} paid${r.paid.length ? ` (${r.paid.map((p) => `${p.number}${p.utr ? ` UTR ${p.utr}` : ''}`).join(', ')})` : ''}, ${r.failed.length} failed${r.failed.length ? ` (${r.failed.map((f) => `${f.beneficiary}: ${f.reason}`).join('; ')})` : ''}`, 'create');
+        return { ...r, paid: r.paid.map((p) => ({ ...p, paymentId: asId(p.paymentId), vendorId: asId(p.vendorId) })), failed: r.failed.map((f) => ({ ...f, vendorId: asId(f.vendorId) })) };
       }
       if (input.action === 'file') {
         const file = await bankFile(trx, orgId, id);

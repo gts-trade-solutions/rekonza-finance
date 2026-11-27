@@ -30,6 +30,7 @@ import { mayApprove, recordApprovalAction, ruleFor } from './approvals';
 import { fyLabelFor } from './sales';
 import { seal, unseal } from '../crypto/fields';
 import { plain, recordDeletion, unlinkDocument } from './doc-delete';
+import { BANK_FORMATS, bankUploadFile, readBankReply, type BankFormat, type UploadTransfer } from './bank-upload';
 
 /** RTGS carries ₹2 lakh and above; below that a transfer goes by NEFT. */
 export const RTGS_FROM: Paise = 2_00_000_00;
@@ -350,20 +351,24 @@ export interface BatchRow {
   approvedBy: string | null;
   rejectionReason: string | null;
   fileDownloadedAt: string | null;
-  transfers: { vendorId: string; vendorName: string; accountNo: string | null; ifsc: string | null; amountPaise: Paise; mode: 'RTGS' | 'NEFT'; paymentNumber: string | null; bills: { billId: string; number: string; vendorInvoiceNo: string; amountPaise: Paise }[] }[];
+  transfers: { vendorId: string; vendorName: string; accountNo: string | null; ifsc: string | null; amountPaise: Paise; mode: 'RTGS' | 'NEFT'; paymentNumber: string | null; bills: { billId: string; number: string; vendorInvoiceNo: string; amountPaise: Paise }[];
+    /** What the bank's reply said (migration 131): pending until it is read. */
+    bankStatus: 'pending' | 'paid' | 'failed'; utr: string | null; failureReason: string | null; reference: string }[];
+  /** The bank layout the file was made in. */
+  bankFormat: string | null;
 }
 
 export async function listBatches(ex: Executor, orgId: number): Promise<BatchRow[]> {
   const batches = await ex.selectFrom('payment_batches as p').innerJoin('bank_accounts as a', 'a.id', 'p.bank_account_id')
     .leftJoin('users as u', 'u.id', 'p.created_by_user_id').leftJoin('users as v', 'v.id', 'p.approved_by_user_id')
     .select(['p.id', 'p.number', 'p.status', 'p.pay_date', 'p.bank_account_id', 'a.name as bank_name', 'p.total_amount', 'p.notes',
-      'u.name as created_by', 'p.created_by_user_id', 'v.name as approved_by', 'p.rejection_reason', 'p.file_downloaded_at'])
+      'u.name as created_by', 'p.created_by_user_id', 'v.name as approved_by', 'p.rejection_reason', 'p.file_downloaded_at', 'p.bank_format'])
     .where('p.org_id', '=', orgId).orderBy('p.id', 'desc').limit(200).execute();
   const lines = batches.length
     ? await ex.selectFrom('payment_batch_lines as l').innerJoin('contacts as c', 'c.id', 'l.vendor_id').innerJoin('bills as b', 'b.id', 'l.bill_id')
       .leftJoin('payments as pay', 'pay.id', 'l.payment_id')
       .select(['l.batch_id', 'l.vendor_id', 'c.display_name', 'c.bank_account_no', 'c.bank_ifsc', 'l.account_no', 'l.ifsc', 'l.amount',
-        'l.bill_id', 'b.internal_no', 'b.vendor_invoice_no', 'pay.number as payment_number'])
+        'l.bill_id', 'b.internal_no', 'b.vendor_invoice_no', 'pay.number as payment_number', 'l.bank_status', 'l.utr', 'l.failure_reason'])
       .where('l.batch_id', 'in', batches.map((b) => b.id)).orderBy('l.id').execute()
     : [];
   return batches.map((b) => {
@@ -372,6 +377,7 @@ export async function listBatches(ex: Executor, orgId: number): Promise<BatchRow
       const t = by.get(l.vendor_id) ?? {
         vendorId: String(l.vendor_id), vendorName: l.display_name, accountNo: unseal(l.account_no ?? l.bank_account_no), ifsc: l.ifsc ?? l.bank_ifsc,
         amountPaise: 0, mode: 'NEFT' as const, paymentNumber: l.payment_number, bills: [],
+        bankStatus: l.bank_status, utr: l.utr, failureReason: l.failure_reason, reference: transferRef(b.number, l.vendor_id),
       };
       t.amountPaise += toPaiseFromSql(l.amount);
       t.mode = t.amountPaise >= RTGS_FROM ? 'RTGS' : 'NEFT';
@@ -383,7 +389,81 @@ export async function listBatches(ex: Executor, orgId: number): Promise<BatchRow
       totalPaise: toPaiseFromSql(b.total_amount), notes: b.notes, createdBy: b.created_by,
       createdById: b.created_by_user_id ? String(b.created_by_user_id) : null, approvedBy: b.approved_by, rejectionReason: b.rejection_reason,
       fileDownloadedAt: b.file_downloaded_at ? new Date(b.file_downloaded_at).toISOString() : null,
+      bankFormat: b.bank_format ?? null,
       transfers: [...by.values()],
     };
   });
+}
+
+// ── Bank upload files and the bank's reply (status review 7, item 6) ────────
+
+/** Our reference on a transfer, echoed back in the bank's status file: "<batch>/<vendor>". */
+function transferRef(batchNumber: string, vendorId: number) { return `${batchNumber}/${vendorId}`; }
+
+/**
+ * The bulk payment file of a released batch, in one bank's layout
+ * (services/bank-upload.ts). Remembered on the batch, with when it was first
+ * downloaded, so the reply is read in the same terms.
+ */
+export async function batchUploadFile(trx: Trx, orgId: number, id: number, format: BankFormat) {
+  const b = await load(trx, orgId, id);
+  if (b.status !== 'approved' && b.status !== 'paid') throw conflict(`${b.number} has not been released; the file is made once it is.`);
+  const bank = await trx.selectFrom('bank_accounts').select(['account_number', 'name']).where('id', '=', b.bank_account_id).executeTakeFirstOrThrow();
+  const list: UploadTransfer[] = (await transfers(trx, id)).map((t) => ({
+    vendorId: t.vendorId, beneficiary: t.beneficiary, accountNo: t.accountNo, ifsc: t.ifsc, amountPaise: t.amountPaise,
+    mode: t.amountPaise >= RTGS_FROM ? 'RTGS' : 'NEFT', reference: transferRef(b.number, t.vendorId),
+    remarks: `${b.number} ${t.bills.map((x) => x.number).join(' ')}`, bills: t.bills.map((x) => x.number).join(', '),
+  }));
+  const file = bankUploadFile(format, { number: b.number, payDate: ymd(b.pay_date), debitAccountNo: bank.account_number ?? '' }, list);
+  await trx.updateTable('payment_batches').set({ bank_format: format, ...(b.file_downloaded_at ? {} : { file_downloaded_at: new Date() }) }).where('id', '=', id).execute();
+  return { ...file, number: b.number, bankName: bank.name, debitAccountMissing: !bank.account_number, transfers: list.length, format: BANK_FORMATS.find((f) => f.id === format)! };
+}
+
+/**
+ * The bank's status file for a released batch, applied: each transfer the
+ * bank paid gets its payment recorded with the UTR (markBatchPaid), each it
+ * returned is left out with the bank's reason, and its bills are free for the
+ * next batch. A line matches a transfer by our reference, else by the
+ * beneficiary account and amount. Lines that match nothing are reported.
+ */
+export async function applyBankReply(trx: Trx, orgId: number, userId: number | null, id: number, grid: unknown[][]) {
+  const b = await load(trx, orgId, id);
+  if (b.status !== 'approved') throw conflict(`${b.number} is ${b.status}; only a released batch takes the bank's reply.`);
+  const reply = readBankReply(grid);
+  if (reply.problem) throw badRequest(reply.problem);
+  const list = await transfers(trx, id);
+  const key = (s: string | null) => (s ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const result = new Map<number, { status: 'paid' | 'failed'; utr: string | null; reason: string | null }>();
+  const unmatched: { row: number; why: string }[] = [];
+  for (const line of reply.lines) {
+    const t = list.find((x) => line.reference && key(line.reference) === key(transferRef(b.number, x.vendorId)))
+      ?? list.find((x) => line.accountNo && key(line.accountNo) === key(x.accountNo) && (line.amountPaise === null || line.amountPaise === x.amountPaise));
+    if (!t) { unmatched.push({ row: line.row, why: `matches no transfer of ${b.number}${line.reference ? ` (reference ${line.reference})` : ''}` }); continue; }
+    if (line.status === 'unknown') { unmatched.push({ row: line.row, why: 'its status says neither paid nor failed' }); continue; }
+    if (line.amountPaise !== null && line.amountPaise !== t.amountPaise) {
+      unmatched.push({ row: line.row, why: `the bank's amount ₹${(line.amountPaise / 100).toFixed(2)} is not the transfer's ₹${(t.amountPaise / 100).toFixed(2)}` });
+      continue;
+    }
+    result.set(t.vendorId, { status: line.status, utr: line.utr, reason: line.reason });
+  }
+  const missing = list.filter((t) => !result.has(t.vendorId));
+  if (missing.length) {
+    throw badRequest(`The bank's file does not say what happened to ${missing.length} transfer(s)${missing.length <= 3 ? `: ${missing.map((m) => m.beneficiary).join(', ')}` : ''}. ` +
+      `Each transfer needs a line with its reference (${transferRef(b.number, missing[0].vendorId)}) and a status.${unmatched.length ? ` Lines not used: ${unmatched.map((u) => `row ${u.row} ${u.why}`).join('; ')}.` : ''}`);
+  }
+  for (const t of list) {
+    const r = result.get(t.vendorId)!;
+    await trx.updateTable('payment_batch_lines').set({ bank_status: r.status, utr: r.utr?.slice(0, 40) ?? null, failure_reason: r.status === 'failed' ? (r.reason ?? 'Returned by the bank').slice(0, 300) : null })
+      .where('batch_id', '=', id).where('vendor_id', '=', t.vendorId).execute();
+  }
+  const failed = list.filter((t) => result.get(t.vendorId)!.status === 'failed').map((t) => t.vendorId);
+  const references = Object.fromEntries(list.filter((t) => result.get(t.vendorId)!.utr).map((t) => [String(t.vendorId), result.get(t.vendorId)!.utr!]));
+  let paid: Awaited<ReturnType<typeof markBatchPaid>> = [];
+  if (failed.length < list.length) paid = await markBatchPaid(trx, orgId, userId, id, { references, failedVendorIds: failed });
+  else await trx.updateTable('payment_batches').set({ status: 'cancelled' }).where('id', '=', id).execute();
+  return {
+    paid: paid.map((p) => ({ ...p, utr: references[String(p.vendorId)] ?? null })),
+    failed: list.filter((t) => failed.includes(t.vendorId)).map((t) => ({ vendorId: t.vendorId, beneficiary: t.beneficiary, amountPaise: t.amountPaise, reason: result.get(t.vendorId)!.reason ?? 'Returned by the bank' })),
+    unmatched,
+  };
 }

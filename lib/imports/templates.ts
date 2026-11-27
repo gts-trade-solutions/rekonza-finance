@@ -382,13 +382,15 @@ export const ALIASES: Partial<Record<ImportKind, Record<string, string[]>>> = {
     reference: ['Reference#', 'Reference Number', 'Ref No'], notes: ['Description', 'Expense Description'], customer: ['Customer Name'],
   },
   'payments-received': {
-    date: ['Payment Date', 'Date'], customer: ['Customer Name'], amount: ['Amount', 'Payment Amount', 'Amount Received'], mode: ['Payment Mode', 'Mode of Payment'],
-    account: ['Deposit To', 'Deposited To', 'Deposit Account'], reference: ['Reference Number', 'Reference#', 'Payment Reference'],
+    date: ['Payment Date', 'Date', 'Txn Date', 'Transaction Date', 'Value Date'], customer: ['Customer Name', 'Remitter', 'Remitter Name', 'Payer', 'Party Name'],
+    amount: ['Amount', 'Payment Amount', 'Amount Received', 'Credit Amount', 'Amount Credited'], mode: ['Payment Mode', 'Mode of Payment', 'Payment Type', 'Transfer Type'],
+    account: ['Deposit To', 'Deposited To', 'Deposit Account', 'Bank Account'], reference: ['Reference Number', 'Reference#', 'Payment Reference', 'UTR', 'UTR No', 'UTR Number', 'Cheque No', 'Chq No', 'Transaction Reference'],
     tds: ['TDS', 'Tax Deducted', 'Withholding Tax Amount'], bank_charges: ['Bank Charges (if any)', 'Bank Charge'], invoice: ['Invoice Number', 'Invoice#'], notes: ['Description', 'Notes'],
   },
   'payments-made': {
-    date: ['Payment Date', 'Date'], vendor: ['Vendor Name', 'Supplier'], amount: ['Amount', 'Payment Amount', 'Amount Paid'], mode: ['Payment Mode', 'Mode of Payment'],
-    account: ['Paid Through', 'Paid From Account'], reference: ['Reference Number', 'Reference#'], tds: ['TDS', 'Tax Deducted'],
+    date: ['Payment Date', 'Date', 'Txn Date', 'Transaction Date', 'Value Date'], vendor: ['Vendor Name', 'Supplier', 'Beneficiary', 'Beneficiary Name', 'Payee'],
+    amount: ['Amount', 'Payment Amount', 'Amount Paid', 'Debit Amount', 'Amount Debited'], mode: ['Payment Mode', 'Mode of Payment', 'Payment Type', 'Transfer Type'],
+    account: ['Paid Through', 'Paid From Account', 'Bank Account', 'Debit Account'], reference: ['Reference Number', 'Reference#', 'UTR', 'UTR No', 'UTR Number', 'Cheque No', 'Chq No', 'Transaction Reference'], tds: ['TDS', 'Tax Deducted', 'TDS Amount'],
     bank_charges: ['Bank Charges (if any)', 'Bank Charge'], bill: ['Bill Number', 'Bill#'], notes: ['Description', 'Notes'],
   },
 };

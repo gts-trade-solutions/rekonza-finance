@@ -3340,3 +3340,28 @@ export const importHistory = {
   setNote: (id: string, note: string | null) => api.patch<{ id: string }>(`/api/imports/history/${id}`, { note }),
   undo: (id: string) => api.delete<{ undone: true; deleted: Record<string, number> }>(`/api/imports/history/${id}`),
 };
+
+// ── Status review 7, builder B: bulk payments and bank upload files ─────────
+
+export const bulkPayments = {
+  record: (input: {
+    side: 'received' | 'made'; date: string; mode: string; bankAccountId: string; reference?: string | null;
+    rows: { docId: string; amountPaise: number; tdsPaise?: number; reference?: string | null }[];
+  }) => api.post<{ payments: { partyId: string; partyName: string; paymentId: string; number: string; amountPaise: number; tdsPaise: number; documents: number }[] }>('/api/payments/bulk', input),
+};
+export type BankUploadFormat = 'generic' | 'hdfc' | 'icici' | 'sbi' | 'axis';
+export const BANK_UPLOAD_FORMATS: { id: BankUploadFormat; label: string; verified: boolean }[] = [
+  { id: 'generic', label: 'NEFT / RTGS / IMPS (generic CSV)', verified: true },
+  { id: 'hdfc', label: 'HDFC Bank ENet', verified: false },
+  { id: 'icici', label: 'ICICI Bank CIB', verified: false },
+  { id: 'sbi', label: 'SBI CINB', verified: false },
+  { id: 'axis', label: 'Axis Bank CIB', verified: false },
+];
+export const batchBank = {
+  file: (id: string, format: BankUploadFormat) => api.post<{ fileName: string; text: string; mime: string; number: string; bankName: string; debitAccountMissing: boolean; transfers: number; format: { id: string; label: string; verified: boolean; note: string } }>('/api/payment-batches', { action: 'bank-file', id, format }),
+  reply: (id: string, grid: (string | number | null)[][]) => api.post<{
+    paid: { vendorId: string; paymentId: string; number: string; amountPaise: number; utr: string | null }[];
+    failed: { vendorId: string; beneficiary: string; amountPaise: number; reason: string }[];
+    unmatched: { row: number; why: string }[];
+  }>('/api/payment-batches', { action: 'bank-reply', id, grid }),
+};

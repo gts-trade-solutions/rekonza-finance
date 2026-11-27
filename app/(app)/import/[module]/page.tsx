@@ -34,6 +34,7 @@ import { cn } from '@/lib/utils';
 import { downloadWorkbook } from '@/lib/xlsx';
 import { cellText, readGrid } from '@/lib/imports/read-file';
 import { readTallyReportGrid } from '@/lib/tally/reports';
+import { findHeader } from '@/lib/imports/header';
 import { columnFor, MAX_IMPORT_ROWS, TEMPLATES, templateCsv, templateSheets, type ColumnSpec } from '@/lib/imports/templates';
 import { ENCODINGS, importModule, type ImportModule } from '@/lib/imports/modules';
 
@@ -93,11 +94,14 @@ function Wizard({ m }: { m: ImportModule }) {
       const tallyLaid = grid.slice(0, 20).some((r) => r.some((c) => /^particulars$/i.test(cellText(c).trim())));
       const tally = tallyLaid ? readTallyReportGrid(grid.map((r) => r.map((c) => ({ v: typeof c === 'number' ? c : cellText(c) }))), 'Excel') : null;
       setTallyReport(tally ? tally.label : null);
-      const rows = grid.map((r) => r.map((c) => cellText(c).trim()));
-      const start = rows.findIndex((r) => r.filter(Boolean).length >= 2);
-      if (start < 0 || rows.length - start < 2) throw new Error('The file needs a row of headings and at least one row under it.');
-      const headings = rows[start];
-      const kept = rows.map((r, i) => ({ r, line: i + 1 })).slice(start + 1).filter(({ r }) => r.some((c) => c !== ''));
+      const rows = grid.map((r) => r.map((c) => cellText(c).replace(/^\uFEFF/, '').trim()));
+      // The headings may sit under a bank's logo and account lines, or run over
+      // two rows under a merged cell (lib/imports/header.ts): the row naming the
+      // most of this import's columns.
+      const found = findHeader(rows, (cells) => cells.filter((c) => c && columnFor(m.kind, c)).length);
+      if (!found || rows.length - found.bodyFrom < 1) throw new Error('The file needs a row of headings and at least one row under it.');
+      const headings = found.headings;
+      const kept = rows.map((r, i) => ({ r, line: i + 1 })).slice(found.bodyFrom).filter(({ r }) => r.some((c) => c !== ''));
       const body = kept.map((k) => k.r);
       if (body.length > MAX_IMPORT_ROWS) throw new Error(`The file has ${body.length} rows; import up to ${MAX_IMPORT_ROWS} at a time.`);
       setLoaded({ file, headings, body, lines: kept.map((k) => k.line) });
