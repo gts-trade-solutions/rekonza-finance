@@ -21,6 +21,7 @@ import { toPaiseFromSql } from '../money-sql';
 import { advancesForMonth } from './advances';
 import { creditUsedFor, setOffCredit } from './set-off';
 import { claimShifts, shiftTotal } from './itc-claims';
+import { amendmentDeltas } from './gstr1-amendments';
 
 /**
  * The B2CL threshold: an inter-state sale to a consumer above this is listed
@@ -500,12 +501,17 @@ export async function gstr3b(ex: Executor, orgId: number, month: string, branchI
   const adv = await advancesForMonth(ex, orgId, period, branchId);
   const advTax = (rows: typeof adv.received) => rows.reduce((t, r) => t + r.cgstPaise + r.sgstPaise + r.igstPaise, 0);
 
+  // Amendments of earlier filed GSTR-1 documents reported this month, as the form adds them.
+  const am = (branchId ? [] : await amendmentDeltas(ex, orgId, [month])).reduce(
+    (t, d) => ({ taxable: t.taxable + d.delta.taxablePaise, cgst: t.cgst + d.delta.cgstPaise, sgst: t.sgst + d.delta.sgstPaise, igst: t.igst + d.delta.igstPaise, cess: t.cess + d.delta.cessPaise }),
+    { taxable: 0, cgst: 0, sgst: 0, igst: 0, cess: 0 },
+  );
   const outward = {
-    taxablePaise: p(o.taxable) - p(n.taxable) + adv.net.taxablePaise,
-    cgstPaise: p(o.cgst) - p(n.cgst) + adv.net.cgstPaise,
-    sgstPaise: p(o.sgst) - p(n.sgst) + adv.net.sgstPaise,
-    igstPaise: p(o.igst) - p(n.igst) + adv.net.igstPaise,
-    cessPaise: p(o.cess) - p(n.cess),
+    taxablePaise: p(o.taxable) - p(n.taxable) + adv.net.taxablePaise + am.taxable,
+    cgstPaise: p(o.cgst) - p(n.cgst) + adv.net.cgstPaise + am.cgst,
+    sgstPaise: p(o.sgst) - p(n.sgst) + adv.net.sgstPaise + am.sgst,
+    igstPaise: p(o.igst) - p(n.igst) + adv.net.igstPaise + am.igst,
+    cessPaise: p(o.cess) - p(n.cess) + am.cess,
   };
 
   const inwardRcm = {

@@ -69,6 +69,8 @@ export interface Gstr1Amendment {
   movedTo: Gstr1Section | null;
   /** In the file the return downloads. */
   inFile: boolean;
+  /** An export or SEZ supply: its difference goes in GSTR-3B 3.1(b), not 3.1(a). */
+  zeroRated: boolean;
 }
 
 export interface Gstr1AmendmentFile {
@@ -234,6 +236,37 @@ function b2csRevision(period: string, docsNow: Gstr1DocEntry[], touched: { pos: 
   });
 }
 
+/** An export or a supply to an SEZ: zero-rated (IGST Act s.16). */
+function isZeroRated(d: Gstr1DocEntry) {
+  const e = (d.entry ?? {}) as Record<string, unknown>;
+  return d.section === 'exp' || ['SEWP', 'SEWOP'].includes(String(e.inv_typ)) || ['EXPWP', 'EXPWOP'].includes(String(e.typ));
+}
+
+/**
+ * What the amendments a return period carries add to (or take off) the tax of
+ * that period: GSTR-3B is filled from GSTR-1 amendments and all, so the
+ * difference an amended invoice makes is declared, and paid, in the month the
+ * amendment is reported (s.37(3) with s.39). Voided or moved documents are
+ * left out: the portal does not take those as amendments (see above).
+ */
+export async function amendmentDeltas(ex: Executor, orgId: number, months: string[]) {
+  const out: { row: '3.1a' | '3.1b'; month: string; a: Gstr1Amendment; delta: Gstr1Figures }[] = [];
+  for (const m of months) {
+    const { rows } = await gstr1Amendments(ex, orgId, m);
+    for (const a of rows) {
+      if (a.cancelled || a.movedTo) continue;
+      const delta: Gstr1Figures = {
+        valuePaise: a.after.valuePaise - a.before.valuePaise, taxablePaise: a.after.taxablePaise - a.before.taxablePaise,
+        igstPaise: a.after.igstPaise - a.before.igstPaise, cgstPaise: a.after.cgstPaise - a.before.cgstPaise,
+        sgstPaise: a.after.sgstPaise - a.before.sgstPaise, cessPaise: a.after.cessPaise - a.before.cessPaise,
+      };
+      if (!delta.taxablePaise && !delta.igstPaise && !delta.cgstPaise && !delta.sgstPaise && !delta.cessPaise) continue;
+      out.push({ row: a.zeroRated ? '3.1b' : '3.1a', month: m, a, delta });
+    }
+  }
+  return out;
+}
+
 /** Has GSTR-1 for the month been marked filed? */
 async function isFiled(ex: Executor, orgId: number, month: string) {
   const f = await ex.selectFrom('compliance_filings').select('id').where('org_id', '=', orgId).where('item_key', 'in', ['gstr1', 'iff']).where('period', '=', month).executeTakeFirst();
@@ -275,7 +308,7 @@ export async function gstr1Amendments(ex: Executor, orgId: number, month: string
         a: {
           ...map, docType: r.doc_type, docId: Number(r.doc_id), originalPeriod: orig.period, originalNumber: orig.number, originalDate: day(orig.doc_date),
           number: r.number, date: day(r.doc_date), ctin: r.ctin, pos: r.pos ?? '', before: figuresOfRow(before), after: figuresOfRow(r),
-          changes: differences(before, now), cancelled: false, movedTo: null, inFile: r.section !== 'b2cs',
+          changes: differences(before, now), cancelled: false, movedTo: null, inFile: r.section !== 'b2cs', zeroRated: isZeroRated(now),
         },
         now,
       });
@@ -320,7 +353,7 @@ export async function gstr1Amendments(ex: Executor, orgId: number, month: string
     };
     if (!now) {
       out.push({
-        a: { ...base, number: before.number, date: day(before.doc_date), after: NIL, changes: ['void or deleted since it was filed'], cancelled: true, movedTo: null, inFile: false },
+        a: { ...base, number: before.number, date: day(before.doc_date), after: NIL, changes: ['void or deleted since it was filed'], cancelled: true, movedTo: null, inFile: false, zeroRated: before.section === 'exp' },
         now: null,
       });
       continue;
@@ -334,7 +367,7 @@ export async function gstr1Amendments(ex: Executor, orgId: number, month: string
       if (before.pos && before.pos !== now.pos) b2csTouched.get(orig.period)!.push({ pos: before.pos, sply: String(parse(before.detail)?.group?.sply_ty ?? 'INTRA') });
     }
     out.push({
-      a: { ...base, number: now.number, date: now.date, after: figuresOfDoc(now), changes, cancelled: false, movedTo: moved, inFile: !moved && before.section !== 'b2cs' },
+      a: { ...base, number: now.number, date: now.date, after: figuresOfDoc(now), changes, cancelled: false, movedTo: moved, inFile: !moved && before.section !== 'b2cs', zeroRated: isZeroRated(now) },
       now,
     });
   }

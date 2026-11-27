@@ -44,6 +44,7 @@ import { monthRange } from './returns';
 import { creditUsedFor, setOffCredit, TAX_HEADS, type TaxHead } from './set-off';
 import { calendarProfile, obligations } from '../tax/compliance-calendar';
 import { claimShifts } from './itc-claims';
+import { amendmentDeltas } from './gstr1-amendments';
 import { GSTR3B_ROWS, ZERO_HEADS, type Gstr3bHeads, type Gstr3bRowKey } from '../../gst/gstr3b-layout';
 
 // ── The period ───────────────────────────────────────────────────────────────
@@ -258,6 +259,20 @@ export async function gstr3bDocuments(ex: Executor, orgId: number, period: Gstr3
   };
   sales(invHeads.rows, invLines.rows, 1);
   sales(cnHeads.rows, cnLines.rows, -1);
+
+  // Amendments of documents in GSTR-1 returns already filed, reported this
+  // period (gstr1-amendments.ts): the difference each makes is declared here.
+  if (!branchId) {
+    for (const d of await amendmentDeltas(ex, orgId, period.months)) {
+      const docType: Gstr3bDocType = d.a.docType === 'credit_note' ? 'credit_note' : d.a.docType === 'debit_note' ? 'debit_note' : 'invoice';
+      out.push({
+        row: d.row, docType, docId: String(d.a.docId), number: d.a.number, date: d.a.date, party: null, gstin: d.a.ctin, pos: d.a.pos,
+        inter: d.delta.igstPaise !== 0, href: HREF[docType](String(d.a.docId)),
+        taxablePaise: d.delta.taxablePaise, igstPaise: d.delta.igstPaise, cgstPaise: d.delta.cgstPaise, sgstPaise: d.delta.sgstPaise, cessPaise: d.delta.cessPaise,
+        note: `Amendment (GSTR-1 table ${d.a.table}) of ${d.a.originalNumber}, filed for ${d.a.originalPeriod}: the difference`,
+      });
+    }
+  }
 
   // ── Advances for services: taxed when received, untaxed when invoiced ──────
   for (const m of period.months) {
