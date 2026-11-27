@@ -109,6 +109,9 @@ try {
     check('Perpetual mid-month: stock valuation and the Inventory account shown side by side; any difference explained by item',
       mid.inventory.method === 'perpetual' && (mid.inventory.differencePaise === 0 || mid.inventory.items.some((i) => i.name === 'Brake pad set')),
       `difference ${inr(mid.inventory.differencePaise)}`);
+    // A bill raised stock in the Inventory account, an invoice took its cost out to COGS (since the stock was taken in on 1 May).
+    check('Perpetual: the bill and invoice moved the Inventory account (stock in, COGS out)',
+      mid.inventory.movements.some((m) => m.sourceType === 'bill' && m.amountPaise > 0) && mid.inventory.movements.some((m) => m.sourceType === 'invoice' && m.amountPaise < 0), JSON.stringify(mid.inventory.movements));
     await shot('inventory-mid-month');
     // Month end: the true-up the scheduler posts on the 1st (here from Settings → Stock accounting).
     await api('POST', '/api/settings/stock-accounting', { action: 'true_up', asOf: '2026-05-31' });
@@ -163,7 +166,6 @@ try {
     const left = may.lines.find((l) => l.label === 'PF Payable').registerPaise + june.lines.find((l) => l.label === 'PF Payable').registerPaise;
     check('PF paid for April cleared from PF Payable: what is left is May\'s and the imported June\'s', pf.ok && pf.ledgerPaise === left, `${inr(pf.ledgerPaise)} = ${inr(left)}`);
     check('May, reopened and reposted: its entries net to the register', may.ok && may.entryIds.length === 3, `${may.entryIds.length} entries (posting, reversal, posting)`);
-    check('Perpetual: the bill and invoice moved the Inventory account (stock in, COGS out)', data.inventory.movements.some((m) => m.sourceType === 'bill') && data.inventory.movements.some((m) => m.sourceType === 'invoice'), JSON.stringify(data.inventory.movements));
   }
 
   // Drill-down: a run's lines, its entry, the ledger.
