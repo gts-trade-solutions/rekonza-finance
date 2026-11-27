@@ -25,6 +25,7 @@ import { GstnReturnsProvider, gstnConfigFromEnv, retPeriod } from './gstn-return
 import { gstinFacts, lookupParty, type PartyDetails, type PaidLookupCheck } from '../party-lookup';
 import { standinReturns, type ReturnsContext, type ReturnsProvider, type ReturnsSession, type ReturnType } from './returns-provider';
 import { gstr1PortalFile } from '../../gst/gstr1-json';
+import { snapshotReturn } from '../../gst/filed-snapshots';
 import { gstr3bForm, gstr3bPortalJson } from '../../gst/gstr3b-form';
 import { importGstr2b, parseGstr2b } from '../../gst/gstr2b-import';
 
@@ -398,6 +399,8 @@ export async function fileReturn(
       const values = { done_on: doneOn, reference: r.arn, note: 'Filed with EVC through the GST system', created_by_user_id: userId };
       await trx.insertInto('compliance_filings').values({ org_id: orgId, item_key: type === 'GSTR3B' ? 'gstr3b' : type === 'IFF' ? 'iff' : 'gstr1', period: periodKey, ...values })
         .onDuplicateKeyUpdate(values).execute();
+      // Its documents kept as filed, for the amendments of later returns (gst/filed-snapshots.ts).
+      await snapshotReturn(trx, orgId, type === 'GSTR3B' ? 'gstr3b' : type === 'IFF' ? 'iff' : 'gstr1', periodKey);
     }
     return sid;
   });

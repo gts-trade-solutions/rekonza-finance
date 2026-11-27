@@ -29,7 +29,7 @@ import { downloadJson } from '@/components/shared/report-shell';
 import {
   InterestCard, PaymentCard, RoleOffCard, TableCard, TieOutCard, localDay, localMonth, shortDate, td, th,
 } from '@/components/gst/withholding-parts';
-// FILING-BAR import { ReturnFilingBar } from '@/components/gst/return-filing';
+import { ReturnFilingBar } from '@/components/gst/return-filing';
 import {
   ApiError, withholding, type Gstr7AmendmentRow, type Gstr7DeductionRow, type Gstr7Response, type PendingTdsBillRow, type TdsPreview,
 } from '@/lib/api/client';
@@ -41,8 +41,6 @@ import { downloadWorkbook, type Sheet } from '@/lib/xlsx';
 import { printPage } from '@/lib/output-guard';
 import { cn } from '@/lib/utils';
 
-// FILING-BAR stub, until the shared filing bar lands.
-function ReturnFilingBarStub(_: { returnType: string; period: string; title: string; payableCashPaise?: number; onChange?: () => void }) { void _; return null; }
 const err = (e: unknown) => (e instanceof ApiError || e instanceof Error ? e.message : String(e));
 const rs = (p: number) => Math.round(p) / 100;
 const states = Object.entries(GST_STATES).sort((a, b) => a[0].localeCompare(b[0]));
@@ -109,7 +107,7 @@ export default function Gstr7Page() {
               </div>
             </Card>
 
-            {/* FILING-BAR */}{false && <ReturnFilingBarStub returnType="gstr7" period={month} title="GSTR-7" payableCashPaise={Math.max(0, d.table5.balance.igstPaise + d.table5.balance.cgstPaise + d.table5.balance.sgstPaise)} onChange={() => state.refetch()} />}
+            <ReturnFilingBar returnType="gstr7" period={month} title="GSTR-7" payableCashPaise={Math.max(0, d.table5.balance.igstPaise + d.table5.balance.cgstPaise + d.table5.balance.sgstPaise)} onChange={() => state.refetch()} />
 
             <div className="grid gap-3 sm:grid-cols-3">
               <Card className="p-4"><p className="micro-label">Amount paid to deductees</p><Money value={d.totals.taxablePaise} className="mt-1 block text-2xl font-semibold" /><p className="text-xs text-muted-foreground">{d.totals.deductees} deductee(s)</p></Card>

@@ -29,7 +29,7 @@ import { Money } from '@/components/shared/money';
 import { AsyncPage, LoadingRows } from '@/components/shared/async-state';
 import { downloadJson } from '@/components/shared/report-shell';
 import { useConfirmDelete } from '@/components/shared/row-actions';
-// FILING-BAR import { ReturnFilingBar } from '@/components/gst/return-filing';
+import { ReturnFilingBar } from '@/components/gst/return-filing';
 import {
   ApiError, gstr9Annual, type Gstr9Annual, type Gstr9AnnualHeads, type Gstr9AnnualHsnRow, type Gstr9AnnualInputs,
 } from '@/lib/api/client';
@@ -39,9 +39,6 @@ import { toRupees } from '@/lib/money';
 import { downloadWorkbook, type Cell, type Sheet } from '@/lib/xlsx';
 import { cn } from '@/lib/utils';
 
-// FILING-BAR: the main builder's filing bar (components/gst/return-filing.tsx)
-// goes here once it lands; until then nothing is drawn in its place.
-function ReturnFilingBar(_: { returnType: string; period: string; title: string; onChange?: () => void }) { void _; return null; }
 
 /** The financial year now running, by the year it starts in. */
 const currentFy = () => {
