@@ -20,6 +20,7 @@ import { downloadWorkbook } from '@/lib/xlsx';
 import { toDelimited } from '@/lib/delimited';
 import { allowOutput, printPage } from '@/lib/output-guard';
 import { useDocumentTitle } from '@/lib/use-document-title';
+import { downloadPdf, istNow, pdfFromRows } from '@/lib/pdf';
 
 export type { DateRange } from '@/lib/date-range';
 
@@ -95,13 +96,20 @@ export function BasisSelect({ value, onChange }: { value: ReportBasis; onChange:
  * downloadCsv; the Export menu sets this first, so choosing Excel gets the same
  * rows as a workbook without thirty reports each learning a second format.
  */
-let nextExport: { as: 'xlsx'; title: string } | { as: 'text'; delimiter: string } | null = null;
+let nextExport: { as: 'xlsx'; title: string } | { as: 'text'; delimiter: string } | { as: 'pdf'; title: string; org: string; lines: string[] } | null = null;
 
 const NUMBER = /^-?\d+(\.\d+)?$/;
 
 /** Download any table as CSV — or Excel, when chosen from the Export menu. */
 export function downloadCsv(filename: string, rows: (string | number)[][]) {
   if (!allowOutput('export', filename)) return;
+  // PDF (status review 7): the same rows, A4 with the company, the heading lines and page numbers (lib/pdf.ts).
+  if (nextExport?.as === 'pdf') {
+    const { title, org, lines } = nextExport;
+    nextExport = null;
+    downloadPdf(filename.replace(/\.csv$/i, ''), pdfFromRows(rows, { title, org, lines, footer: `Exported ${istNow()}` }));
+    return;
+  }
   if (nextExport?.as === 'text') {
     const { delimiter } = nextExport;
     nextExport = null;
@@ -166,6 +174,7 @@ export function ReportShell({
   children,
   extraActions,
   dataDates,
+  headerLines,
 }: {
   title: string;
   description: string;
@@ -178,6 +187,8 @@ export function ReportShell({
   extraActions?: ReactNode;
   /** Transaction dates, so the picker only offers financial years with data. */
   dataDates?: string[];
+  /** Under the title when printed and at the top of a PDF: the filters applied (Customize Report). */
+  headerLines?: string[];
 }) {
   const s = useAppStore();
   // Printed to PDF, the file is named after the report and its period.
@@ -221,7 +232,7 @@ export function ReportShell({
             {extraActions}
             {onExport && (
               <DropdownMenu>
-                <DropdownMenuTrigger className="inline-flex h-8 items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm font-medium hover:bg-muted">
+                <DropdownMenuTrigger className="inline-flex h-8 items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm font-medium hover:bg-muted" data-slot="report-export">
                   <Download className="size-3.5" /> Export
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
@@ -229,6 +240,10 @@ export function ReportShell({
                     Excel (.xlsx)
                   </DropdownMenuItem>
                   <DropdownMenuItem onClick={() => { nextExport = null; onExport(); }}>CSV</DropdownMenuItem>
+                  <DropdownMenuItem data-slot="report-export-pdf" onClick={() => {
+                    nextExport = { as: 'pdf', title, org: s.org?.name ?? '', lines: headerLines ?? (range ? [asOfOnly ? `As at ${range.to}` : describeRangeLong(range)] : []) };
+                    try { onExport(); } finally { nextExport = null; }
+                  }}>PDF</DropdownMenuItem>
                   <DropdownMenuItem onClick={() => { nextExport = { as: 'text', delimiter: '\t' }; try { onExport(); } finally { nextExport = null; } }}>
                     Text, tab-separated (.txt)
                   </DropdownMenuItem>
@@ -249,13 +264,14 @@ export function ReportShell({
       <div className="print-only mb-4 border-b pb-3">
         <p className="text-lg font-bold">{s.org?.name}</p>
         <p className="text-sm font-semibold">{title}</p>
-        {range && (
+        {range && !headerLines && (
           <p className="text-xs text-neutral-600">
             {asOfOnly
               ? `As at ${new Date(range.to).toLocaleDateString('en-IN')}`
               : describeRangeLong(range)}
           </p>
         )}
+        {headerLines?.map((l) => <p key={l} className="text-xs text-neutral-600">{l}</p>)}
       </div>
 
       {children}

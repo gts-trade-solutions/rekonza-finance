@@ -7,11 +7,13 @@
 // one journal endpoint serving both this and the entry-shaped journal report.
 
 import Link from 'next/link';
+import { Suspense } from 'react';
+import { CustomizeButton, CustomizePanel, CustomReportView, appliedLines, customRows, useCustomReport, useCustomReportData, useOrgName } from '@/components/reports/customize-report';
 import { Badge } from '@/components/ui/badge';
 import { Money } from '@/components/shared/money';
 import { downloadCsv, ReportShell, useReportRange } from '@/components/shared/report-shell';
 import { ReportGrid, gridCsv, type GridColumn } from '@/components/shared/report-grid';
-import { AsyncPage } from '@/components/shared/async-state';
+import { AsyncPage, LoadingRows } from '@/components/shared/async-state';
 import { journal, type JournalResponse } from '@/lib/api/client';
 import { journalRowRef, LedgerEntryActions, type LedgerRowRef } from '@/components/reports/ledger-entry-actions';
 import { useApi } from '@/lib/api/use-api';
@@ -90,7 +92,15 @@ const baseColumns: GridColumn<Row>[] = [
 ];
 
 export default function AccountTransactionsPage() {
+  return <Suspense fallback={<LoadingRows rows={10} />}><AccountTransactions /></Suspense>;
+}
+
+function AccountTransactions() {
   const [range, setRange] = useReportRange();
+  // Customize Report (status review 7): accounts, customer, vendor, cost centre, project, tag and branch filters.
+  const custom = useCustomReport('account-transactions', () => ({ from: range.from, to: range.to }));
+  const cstate = useCustomReportData(custom.spec);
+  const org = useOrgName();
   const state = useApi<JournalResponse>(
     () => journal.list({ from: range.from, to: range.to, limit: 500 }),
     [range.from, range.to],
@@ -111,13 +121,19 @@ export default function AccountTransactionsPage() {
       description="Every journal line in the period, across every account. This is the widest view of the books — the raw material behind every other report."
       range={range}
       onRangeChange={setRange}
+      extraActions={<CustomizeButton onClick={() => custom.setOpen(true)} active={!!custom.spec} />}
+      headerLines={custom.spec ? appliedLines(cstate.data) : undefined}
       onExport={() => {
+        if (custom.spec) { if (cstate.data) downloadCsv('account-transactions-customised.csv', customRows(cstate.data, org)); return; }
         if (state.data) downloadCsv('account-transactions.csv', gridCsv(flatten(state.data), baseColumns));
       }}
     >
+      <CustomizePanel open={custom.open} onOpenChange={custom.setOpen} initial={custom.start()} onApply={custom.apply} saved={custom.saved} onSaved={custom.onSaved} />
+      {custom.spec ? <CustomReportView state={cstate} saved={custom.saved} onEdit={() => custom.setOpen(true)} onClear={custom.clear} /> : (
       <AsyncPage state={state}>
         {(d) => <ReportGrid rows={flatten(d)} columns={columns} emptyMessage="No transactions in this period." />}
       </AsyncPage>
+      )}
     </ReportShell>
   );
 }

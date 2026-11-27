@@ -3372,3 +3372,48 @@ export const budgetPlans = {
   variance: (id: string, params?: { columns?: BudgetColumnMode; upto?: string; threshold?: number }) => api.get<BudgetVarianceReport>(`/api/budget-plans/${id}/variance`, params),
   costing: (fy: string, upto?: string) => api.get<{ fy: string; from: string; to: string; centres: CostCentreBudgetRow[] }>('/api/budget-plans/costing', { fy, ...(upto ? { upto } : {}) }),
 };
+
+// ── Status review 7, builder A: Customize Report and custom reports ─────────
+
+export type CustomReportKind = 'profit-and-loss' | 'balance-sheet' | 'trial-balance' | 'general-ledger' | 'account-transactions' | 'cash-flow';
+export interface CustomReportFilter {
+  branchId?: string | null; costCentreIds?: string[]; projectIds?: string[]; tagOptionIds?: string[]; contactIds?: string[]; accountIds?: string[];
+  accountTypes?: ('asset' | 'liability' | 'equity' | 'income' | 'expense')[];
+}
+export interface CustomReportSpec {
+  report: CustomReportKind; from: string; to: string; basis?: 'accrual' | 'cash';
+  reportBy?: 'total' | 'month' | 'quarter' | 'year'; compareMode?: 'none' | 'previous_period' | 'previous_year'; compareCount?: number;
+  accounts?: 'all' | 'non_zero' | 'with_txns'; filter?: CustomReportFilter; accountId?: string | null;
+  /** Show/Hide columns: kept with a saved report, read by the screen only. */
+  columns?: Record<string, boolean>;
+}
+export interface CustomReportRow { accountId: string; code: string; name: string; type?: string; computed?: boolean; values: number[]; debit?: number[]; credit?: number[] }
+export interface CustomReportData {
+  spec: CustomReportSpec;
+  columns: { key: string; label: string; from: string; to: string }[];
+  sections: { key: string; label: string; depth: number; rows: CustomReportRow[]; totals: number[]; headingOnly?: boolean }[];
+  results: { key: string; label: string; values: number[] }[];
+  lines?: { date: string; entryId: string; entryNo: number; account?: string; accountCode?: string; description: string; contact: string | null; sourceType: string; sourceId: string | null; debitPaise: number; creditPaise: number; runningPaise?: number }[];
+  opening?: number; closing?: number; account?: { id: string; code: string; name: string; type: string } | null; truncated?: boolean;
+  applied: string[]; notes: string[]; balanced: boolean[] | null; cannotBalance: boolean;
+}
+export interface SavedCustomReport { id: string; report: CustomReportKind; name: string; shared: boolean; mine: boolean; owner: string | null; createdAt: string; spec: CustomReportSpec }
+
+/** The spec as the server reads it: ids as numbers, the screen's column choices left out. */
+const specForServer = (s: CustomReportSpec) => {
+  const n = (l?: string[]) => (l ?? []).map(Number).filter((x) => x > 0);
+  const f = s.filter ?? {};
+  return JSON.stringify({
+    report: s.report, from: s.from, to: s.to, basis: s.basis, reportBy: s.reportBy, compareMode: s.compareMode, compareCount: s.compareCount, accounts: s.accounts, accountId: s.accountId ?? null,
+    filter: { branchId: f.branchId ? Number(f.branchId) : null, costCentreIds: n(f.costCentreIds), projectIds: n(f.projectIds), tagOptionIds: n(f.tagOptionIds), contactIds: n(f.contactIds), accountIds: n(f.accountIds), accountTypes: f.accountTypes ?? [] },
+  });
+};
+
+export const customReports = {
+  run: (spec: CustomReportSpec) => api.get<CustomReportData>('/api/reports/custom', { spec: specForServer(spec) }),
+  list: () => api.get<{ reports: SavedCustomReport[] }>('/api/custom-reports'),
+  get: (id: string) => api.get<{ reports: SavedCustomReport[] }>('/api/custom-reports', { id }),
+  save: (report: CustomReportKind, name: string, shared: boolean, spec: CustomReportSpec) => api.post<{ id: string }>('/api/custom-reports', { report, name, shared, spec }),
+  update: (id: string, patch: { name?: string; shared?: boolean; spec?: CustomReportSpec }) => api.patch<{ id: string }>('/api/custom-reports', { id, ...patch }),
+  remove: (id: string, reason?: string | null) => api.delete<{ deleted: true }>(`/api/custom-reports?id=${id}${reason ? `&reason=${encodeURIComponent(reason)}` : ''}`),
+};

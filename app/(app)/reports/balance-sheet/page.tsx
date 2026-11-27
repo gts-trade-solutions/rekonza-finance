@@ -21,6 +21,7 @@ import { Card } from '@/components/ui/card';
 import { Money } from '@/components/shared/money';
 import { BasisSelect, BranchSelect, CompareSelect, downloadCsv, ReportShell, useBranchName, useReportRange, type ReportBasis } from '@/components/shared/report-shell';
 import { SavedViews } from '@/components/shared/saved-views';
+import { CustomizeButton, CustomizePanel, CustomReportView, appliedLines, customRows, useCustomReport, useCustomReportData, useOrgName } from '@/components/reports/customize-report';
 
 import { AsyncPage, LoadingRows } from '@/components/shared/async-state';
 import { reports, type GroupedBalanceSheetReport } from '@/lib/api/client';
@@ -51,6 +52,10 @@ function BalanceSheet() {
   const cmpTo = compare === 'none' || format !== 'general' ? null : comparisonRange(range, compare).to;
   const prevState = useApi<GroupedBalanceSheetReport | null>(() => (cmpTo ? reports.groupedBalanceSheet(cmpTo, branch || undefined, basis) : Promise.resolve(null)), [cmpTo, basis, branch]);
   const prev = cmpTo ? prevState.data ?? null : null;
+  // Customize Report (status review 7).
+  const custom = useCustomReport('balance-sheet', () => ({ from: `${range.to.slice(0, 4)}-04-01`, to: range.to, basis, filter: { branchId: branch || null } }));
+  const cstate = useCustomReportData(custom.spec);
+  const org = useOrgName();
 
   return (
     <ReportShell
@@ -64,11 +69,14 @@ function BalanceSheet() {
           <div className="w-32"><BasisSelect value={basis} onChange={setBasis} /></div>
           <div className="w-40"><BranchSelect value={branch} onChange={setBranch} /></div>
           {format === 'general' && <div className="w-52"><CompareSelect value={compare} onChange={setCompare} /></div>}
+          <CustomizeButton onClick={() => custom.setOpen(true)} active={!!custom.spec} />
           <div className="self-end"><SavedViews list="report-balance-sheet" current={{ to: range.to, basis, branch, compare }}
             onApply={(v) => { if (v.to) setRange({ ...range, to: String(v.to), mode: 'day' }); setBasis((v.basis as ReportBasis) ?? 'accrual'); setBranch(String(v.branch ?? '')); setCompare((v.compare as CompareMode) ?? 'none'); }} /></div>
         </div>
       )}
+      headerLines={custom.spec ? appliedLines(cstate.data) : undefined}
       onExport={() => {
+        if (custom.spec) { if (cstate.data) downloadCsv('balance-sheet-customised.csv', customRows(cstate.data, org)); return; }
         const bs = state.data;
         if (!bs) return;
         downloadCsv(format === 'horizontal' ? 'balance-sheet-horizontal.csv' : 'balance-sheet.csv', [
@@ -77,6 +85,8 @@ function BalanceSheet() {
         ]);
       }}
     >
+      <CustomizePanel open={custom.open} onOpenChange={custom.setOpen} initial={custom.start()} onApply={custom.apply} saved={custom.saved} onSaved={custom.onSaved} />
+      {custom.spec ? <CustomReportView state={cstate} saved={custom.saved} onEdit={() => custom.setOpen(true)} onClear={custom.clear} /> : <>
       <FormatSwitch value={format} statement="bs" base="/reports/balance-sheet" />
       <AsyncPage state={state} loading={<LoadingRows rows={10} />}>
         {(bs) => (
@@ -102,6 +112,7 @@ function BalanceSheet() {
           </>
         )}
       </AsyncPage>
+      </>}
     </ReportShell>
   );
 }

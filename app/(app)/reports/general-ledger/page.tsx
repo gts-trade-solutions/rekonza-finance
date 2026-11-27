@@ -19,6 +19,7 @@ import { api, reports, type GeneralLedgerReport } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
 import { toRupees } from '@/lib/money';
 import { sourceHref } from '@/lib/source-links';
+import { CustomizeButton, CustomizePanel, CustomReportView, appliedLines, customRows, useCustomReport, useCustomReportData, useOrgName } from '@/components/reports/customize-report';
 
 export default function GeneralLedgerPage() {
   return (
@@ -61,6 +62,12 @@ function GeneralLedger() {
   );
   // After an edit or delete from a row's ⋯: the ledger as it now stands.
   const refresh = () => { void state.refetch(); };
+  // Customize Report (status review 7): the ledger's lines narrowed by customer, vendor, cost centre, project, tag or branch.
+  // A budget's or a filtered report's drill-down brings its filters in the address.
+  const custom = useCustomReport('general-ledger', () => ({ from: range.from, to: range.to, accountId }));
+  const spec = custom.spec ? { ...custom.spec, accountId: custom.spec.accountId || accountId, from: custom.spec.from || range.from, to: custom.spec.to || range.to } : null;
+  const cstate = useCustomReportData(spec);
+  const org = useOrgName();
 
   return (
     <ReportShell
@@ -68,7 +75,7 @@ function GeneralLedger() {
       description="Every movement through a single account, in order, with a running balance. This is the drill-down behind every other report."
       range={range}
       onRangeChange={setRange}
-      extraActions={
+      extraActions={<div className="flex gap-2">
         <div className="w-64 space-y-1">
           <label className="text-[11px] font-medium text-muted-foreground">Account</label>
           <Combobox
@@ -80,8 +87,11 @@ function GeneralLedger() {
             showAvatar={false}
           />
         </div>
-      }
+        <CustomizeButton onClick={() => custom.setOpen(true)} active={!!spec} />
+      </div>}
+      headerLines={spec ? appliedLines(cstate.data) : undefined}
       onExport={() => {
+        if (spec) { if (cstate.data) downloadCsv('general-ledger-customised.csv', customRows(cstate.data, org)); return; }
         const gl = state.data;
         if (!gl) return;
         downloadCsv(`general-ledger-${gl.account.code}.csv`, [
@@ -95,6 +105,8 @@ function GeneralLedger() {
         ]);
       }}
     >
+      <CustomizePanel open={custom.open} onOpenChange={custom.setOpen} initial={spec ?? custom.start()} onApply={custom.apply} saved={custom.saved} onSaved={custom.onSaved} />
+      {spec ? <CustomReportView state={cstate} saved={custom.saved} onEdit={() => custom.setOpen(true)} onClear={custom.clear} /> : (
       <AsyncPage state={state} loading={<LoadingRows rows={10} />}>
         {(gl) =>
           !gl ? (
@@ -193,6 +205,7 @@ function GeneralLedger() {
           )
         }
       </AsyncPage>
+      )}
     </ReportShell>
   );
 }
