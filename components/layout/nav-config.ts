@@ -148,6 +148,8 @@ export const NAV_GROUPS: NavGroup[] = [
       { label: 'Cost Centres', href: '/accountant/cost-centres', icon: Split, module: 'accountant', feature: 'costCentres' },
       { label: 'Period Close', href: '/accountant/period-close', icon: CalendarClock, module: 'accountant' },
       { label: 'Audit Trail', href: '/accountant/audit-trail', icon: ShieldCheck, module: 'accountant' },
+      // Status review 7, item 14: payroll and inventory against the general ledger.
+      { label: 'Integration Check', href: '/accountant/integration-check', icon: Scale, module: 'accountant' },
     ],
   },
   { label: 'Reports', icon: ChartNoAxesColumn, module: 'reports', href: '/reports', items: [] },
@@ -191,6 +193,8 @@ export const NAV_GROUPS: NavGroup[] = [
       { label: 'Statutory Reports', href: '/payroll/statutory', icon: FileSpreadsheet, module: 'payroll' },
       { label: 'Form 16 / 130', href: '/payroll/form-16', icon: FileText, module: 'payroll' },
       { label: 'Full & Final', href: '/payroll/full-and-final', icon: HandCoins, module: 'payroll' },
+      // Status review 7, item 14: a month's payroll run in another system, imported.
+      { label: 'Import Salary Register', href: '/payroll/import', icon: FileUp, module: 'payroll' },
     ],
   },
   {

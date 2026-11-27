@@ -3402,3 +3402,50 @@ export const payrollStatutory = {
   reversePayment: (runId: string, paymentId: string, reason: string | null) =>
     api.post(`/api/payroll/runs/${runId}/payments`, { action: 'reverse', paymentId, reason }),
 };
+
+// ── Status review 7, item 14: the integration check and payroll imports ─────
+
+export interface IntegrationCheckLine { label: string; code: string | null; accountId: string | null; registerPaise: number; ledgerPaise: number; differencePaise: number }
+export interface IntegrationCheckData {
+  from: string; to: string; monthEnd: string;
+  payroll: {
+    ok: boolean;
+    runs: { kind: 'run' | 'import'; id: string; month: string; status: string; label: string; employees: number; components: { label: string; amountPaise: number }[]; lines: IntegrationCheckLine[]; entryIds: string[]; ok: boolean }[];
+    liabilities: { code: string; label: string; accountId: string | null; postedPaise: number; settledPaise: number; subledgerPaise: number; ledgerPaise: number; settlementsPaise: number;
+      otherPaise: number; differencePaise: number; ok: boolean; other: { entryId: string; entryNo: number; date: string; source: string; memo: string | null; amountPaise: number }[] }[];
+  };
+  inventory: {
+    asOf: string; method: 'perpetual' | 'periodic'; perpetualFrom: string | null; stockValuePaise: number; ledgerPaise: number; differencePaise: number;
+    status: 'pass' | 'pass_periodic' | 'difference'; itemCount: number; lastTrueUp: string | null; inventoryAccountId: string | null;
+    movements: { sourceType: string; entries: number; amountPaise: number }[];
+    items: { itemId: string; name: string; sku: string | null; qty: number; valuePaise: number; atTrueUpPaise: number; movedPaise: number }[];
+  };
+  external: {
+    payrollImport: { month: string; source: string | null; at: string | null; status: string } | null;
+    tallySync: { company: string; lastSyncedAt: string | null; lastError: string | null; inventory: boolean }[];
+    tallyVoucherImport: { at: string | null; vouchers: number } | null;
+    tallyExport: { kind: string; at: string | null; vouchers: number; ledgers: number; from: string | null; to: string | null } | null;
+    tallyFileImport: { at: string | null; detail: string | null } | null;
+  };
+}
+export interface PayrollImportRow {
+  code: string; name: string; department?: string | null; basicPaise?: number; hraPaise?: number; otherPaise?: number; grossPaise: number;
+  pfEmployeePaise?: number; pfEmployerPaise?: number; esiEmployeePaise?: number; esiEmployerPaise?: number; ptPaise?: number;
+  lwfEmployeePaise?: number; lwfEmployerPaise?: number; tdsPaise?: number; advancePaise?: number; netPaise: number;
+}
+export interface PayrollImportResult {
+  posted: boolean; importId: string | null; problems: { row: number; code: string; message: string }[];
+  totals: { employees: number; basicPaise: number; hraPaise: number; otherPaise: number; grossPaise: number; pfPaise: number; esiPaise: number; ptPaise: number; lwfPaise: number; tdsPaise: number; advancesPaise: number; netPaise: number; employerPaise: number };
+}
+export interface PayrollImportListRow {
+  id: string; month: string; sourceSystem: string | null; fileName: string | null; employees: number; status: 'posted' | 'reversed';
+  grossPaise: number; employerPaise: number; pfPaise: number; esiPaise: number; ptPaise: number; lwfPaise: number; tdsPaise: number; advancesPaise: number; netPaise: number;
+  entryId: string | null; reverseReason: string | null; by: string | null; at: string;
+}
+
+export const integration = {
+  check: (from: string, to: string) => api.get<IntegrationCheckData>('/api/integration-check', { from, to }),
+  imports: () => api.get<{ imports: PayrollImportListRow[] }>('/api/payroll/imports'),
+  importRegister: (input: { month: string; sourceSystem?: string | null; fileName?: string | null; rows: PayrollImportRow[]; dryRun: boolean; paidFromBankAccountId?: string | null; paidOn?: string | null }) =>
+    api.post<PayrollImportResult>('/api/payroll/imports', input),
+};
