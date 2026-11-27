@@ -16,6 +16,7 @@ import { bootstrap } from '../lib/server/seed/bootstrap';
 import { seedDemoBook } from '../lib/server/seed/demo-book';
 import { seedDemoDocuments } from '../lib/server/seed/demo-documents';
 import { seedDemoCoverage, seedDemoHistory, seedDemoIrns } from '../lib/server/seed/demo-coverage';
+import { seedDemoSr7A } from '../lib/server/seed/demo-sr7-a';
 import { turnOnDemoControls } from '../lib/server/seed/demo-controls';
 import { wipeOrganizations } from '../lib/server/seed/wipe';
 import { verifyLedgerBalances } from '../lib/server/ledger/posting';
@@ -63,6 +64,8 @@ async function main() {
     const around = masters ? null : await seedDemoDocuments(trx, created);
     // Then every other area of the software checklist, so none of them is empty.
     if (!masters) await seedDemoCoverage(trx, created);
+    // Status review 7 (builder A): consolidation group, reversals, budgets, report filters.
+    if (!masters) await seedDemoSr7A(trx, created);
     // Last: perpetual inventory takes the stock the documents above left on hand.
     if (!masters) await turnOnDemoControls(trx, created.orgId);
     // And the reminders and audit trail the book would carry by its date.
