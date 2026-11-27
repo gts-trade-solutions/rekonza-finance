@@ -17,6 +17,7 @@ import { seedDemoBook } from '../lib/server/seed/demo-book';
 import { seedDemoDocuments } from '../lib/server/seed/demo-documents';
 import { seedDemoCoverage, seedDemoHistory, seedDemoIrns } from '../lib/server/seed/demo-coverage';
 import { turnOnDemoControls } from '../lib/server/seed/demo-controls';
+import { seedSr7c, seedSr7cBefore } from '../lib/server/seed/demo-sr7-c';
 import { wipeOrganizations } from '../lib/server/seed/wipe';
 import { verifyLedgerBalances } from '../lib/server/ledger/posting';
 
@@ -62,9 +63,11 @@ async function main() {
     // invoices and the retainer is applied against one.
     const around = masters ? null : await seedDemoDocuments(trx, created);
     // Then every other area of the software checklist, so none of them is empty.
+    if (!masters) await seedSr7cBefore(trx, created); // status review 7, items 9/10/14: employees and assets the coverage runs take in
     if (!masters) await seedDemoCoverage(trx, created);
     // Last: perpetual inventory takes the stock the documents above left on hand.
     if (!masters) await turnOnDemoControls(trx, created.orgId);
+    if (!masters) await seedSr7c(trx, created); // status review 7, items 9/10/14: disposals, deposits, an import, the stock true-up
     // And the reminders and audit trail the book would carry by its date.
     if (!masters) await seedDemoHistory(trx, created);
     return { ids: created, book: history, docs: around };
