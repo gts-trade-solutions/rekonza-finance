@@ -91,6 +91,10 @@ export function startJobWorker(): void {
         if (stock) console.info('[scheduler] stock brought into line:', stock);
         const fx = await runFxFeeds();
         if (fx) console.info('[scheduler] exchange rates fetched for', fx, 'book(s)');
+        // The audit trail's new rows into its hash chain (audit-chain.ts).
+        const { sealAllAuditChains } = await import('../audit-chain');
+        const sealed = await sealAllAuditChains();
+        if (sealed) console.info('[scheduler] audit rows sealed:', sealed);
         // Last, so it sees what the rest of the sweep did.
         const raised = await runExceptions();
         if (raised) console.info('[scheduler] exceptions raised:', raised);

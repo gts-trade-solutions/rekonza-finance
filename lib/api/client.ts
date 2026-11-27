@@ -3268,3 +3268,41 @@ export const imports = {
   tallyVouchers: (companyId: string, from: string | null, to: string | null, dryRun: boolean) =>
     api.post<ImportResponse>('/api/imports', { source: 'tally-vouchers', companyId, from, to, dryRun }),
 };
+
+// ── Status review 7, builder A: audit trail integrity and export ─────────────
+
+export interface AuditChainHead { headHash: string; headSeq: number; verifiedAt: string | null; verifiedOk: boolean | null }
+
+export interface AuditListResponse extends AuditResponse {
+  /** Everyone in the trail, for the User filter. */
+  actors: { id: string; name: string; count: number }[];
+  chain: AuditChainHead;
+}
+
+export interface AuditExportResponse {
+  header: string[];
+  rows: string[][];
+  /** Each row's instant (ISO), so a spreadsheet carries a real date and time. */
+  instants: string[];
+  truncated: boolean;
+  company: string;
+  /** The filters in words, for the file's heading. */
+  filters: string[];
+  chain: { headHash: string; headSeq: number };
+}
+
+export interface AuditChainStatus {
+  ok: boolean; sealed: number; checked: number; unsealed: number;
+  problems: { seq: number; auditId: number; kind: 'changed' | 'missing' | 'broken'; detail: string }[];
+  headHash: string; headSeq: number; verifiedAt: string;
+}
+
+export const auditTrail = {
+  list: (params?: {
+    targetType?: string; action?: string; actorUserId?: string;
+    from?: string; to?: string; search?: string; limit?: number; offset?: number;
+  }) => api.get<AuditListResponse>('/api/audit', params),
+  exportRows: (params: { targetType?: string; action?: string; actorUserId?: string; from?: string; to?: string; search?: string; pii?: boolean; format?: string }) =>
+    api.get<AuditExportResponse>('/api/audit/export', { ...params, pii: params.pii === false ? '0' : '1' }),
+  verify: () => api.post<AuditChainStatus>('/api/audit/verify', {}),
+};

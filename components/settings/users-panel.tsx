@@ -71,14 +71,29 @@ function PasswordShown({ who, password, onClose }: { who: string; password: stri
   );
 }
 
-function RoleEditor({ role, onClose, onSaved }: { role: CustomRole | 'new'; onClose: () => void; onSaved: () => void }) {
-  const start = role === 'new' ? null : role;
-  const [name, setName] = useState(start?.name ?? '');
-  const [baseRole, setBaseRole] = useState<BaseRole>(start?.baseRole ?? 'staff');
-  const [description, setDescription] = useState(start?.description ?? '');
+/**
+ * The ready-made Auditor role: everything in the book read, printed and
+ * exported (the audit trail included, under Accountant), nothing created,
+ * changed, approved or deleted. A statutory auditor examines the books and
+ * the edit log (Companies (Audit and Auditors) Rules, rule 11(g)); they do not
+ * keep them.
+ */
+export function auditorPermissions(): CustomPermissions {
+  return Object.fromEntries(PERMISSION_MODULES
+    .map((m) => [m.key, m.actions.filter((a) => a === 'view' || a === 'print' || a === 'export')] as const)
+    .filter(([, a]) => a.length));
+}
+
+function RoleEditor({ role, onClose, onSaved }: { role: CustomRole | 'new' | 'auditor'; onClose: () => void; onSaved: () => void }) {
+  const auditor = role === 'auditor';
+  const start = role === 'new' || role === 'auditor' ? null : role;
+  const [name, setName] = useState(start?.name ?? (auditor ? 'Auditor' : ''));
+  const [baseRole, setBaseRole] = useState<BaseRole>(start?.baseRole ?? (auditor ? 'viewer' : 'staff'));
+  const [description, setDescription] = useState(start?.description ?? (auditor ? 'Statutory or internal auditor: reads, prints and exports everything, the audit trail included; changes nothing.' : ''));
   // A role saved before printing and exporting were rights of their own has
   // them wherever it may view; shown that way, and saved that way from now on.
   const [perms, setPerms] = useState<CustomPermissions>(() => {
+    if (auditor) return auditorPermissions();
     if (!start) return matrixOf('staff');
     if ('output' in start.permissions) return start.permissions;
     return Object.fromEntries(Object.entries(start.permissions).map(([k, a]) => {
@@ -133,6 +148,7 @@ function RoleEditor({ role, onClose, onSaved }: { role: CustomRole | 'new'; onCl
           {(['accountant', 'sales', 'staff', 'viewer'] as const).map((r) => (
             <Button key={r} size="xs" variant="outline" className="capitalize" onClick={() => setPerms(matrixOf(r))}>{r}</Button>
           ))}
+          <Button size="xs" variant="outline" onClick={() => { setPerms(auditorPermissions()); setBaseRole('viewer'); if (!name.trim()) setName('Auditor'); }} data-slot="role-template-auditor">Auditor</Button>
         </div>
         <div className="max-h-[50vh] overflow-auto rounded-md border thin-scroll">
           <table className="w-full text-sm">
@@ -239,7 +255,7 @@ export function UsersPanel({ canEdit, currentUserId, branches }: {
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState({ name: '', email: '', phone: '', roleValue: 'role:staff', homeBranchId: '' });
   const [shown, setShown] = useState<{ who: string; password: string } | null>(null);
-  const [editingRole, setEditingRole] = useState<CustomRole | 'new' | null>(null);
+  const [editingRole, setEditingRole] = useState<CustomRole | 'new' | 'auditor' | null>(null);
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const del = useConfirmDelete();
@@ -378,7 +394,16 @@ export function UsersPanel({ canEdit, currentUserId, branches }: {
                   Roles of your own: a billing clerk who raises invoices and sees only the sales reports, a storekeeper who sees stock and nothing that costs it.
                 </p>
               </div>
-              {canEdit && <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setEditingRole('new')} data-slot="add-role"><Plus className="size-3.5" /> Add role</Button>}
+              {canEdit && (
+                <div className="flex gap-2">
+                  {!d.roles.some((r) => r.name.toLowerCase() === 'auditor') && (
+                    <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setEditingRole('auditor')} data-slot="add-auditor-role" title="Read, print and export everything, the audit trail included; change nothing">
+                      <Plus className="size-3.5" /> Add Auditor role
+                    </Button>
+                  )}
+                  <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setEditingRole('new')} data-slot="add-role"><Plus className="size-3.5" /> Add role</Button>
+                </div>
+              )}
             </div>
             {d.roles.length === 0 ? (
               <p className="rounded-md border px-3 py-4 text-center text-sm text-muted-foreground">None yet: everyone has one of the standard roles below.</p>

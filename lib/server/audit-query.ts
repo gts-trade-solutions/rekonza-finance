@@ -11,7 +11,7 @@ import 'server-only';
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { z } from 'zod';
-import { db } from './db';
+import { db, type Executor } from './db';
 
 export const AuditFilter = z.object({
   targetType: z.string().optional(),
@@ -27,8 +27,8 @@ export type AuditFilterInput = z.infer<typeof AuditFilter>;
 export const istStart = (day: string) => new Date(`${day}T00:00:00.000+05:30`);
 export const istEnd = (day: string) => new Date(`${day}T23:59:59.999+05:30`);
 
-export function auditRows(orgId: number, q: AuditFilterInput) {
-  let base = db.selectFrom('audit_log').where('org_id', '=', orgId);
+export function auditRows(orgId: number, q: AuditFilterInput, ex: Executor = db) {
+  let base = ex.selectFrom('audit_log').where('org_id', '=', orgId);
   if (q.targetType && q.targetType !== 'all') base = base.where('target_type', '=', q.targetType);
   if (q.action && q.action !== 'all') base = base.where('action', '=', q.action);
   if (q.actorUserId) base = base.where('actor_user_id', '=', Number(q.actorUserId));
