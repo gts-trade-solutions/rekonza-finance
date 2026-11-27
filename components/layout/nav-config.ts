@@ -178,6 +178,8 @@ export const NAV_GROUPS: NavGroup[] = [
       // Shown only to a book that holds the role (Settings → Statutory → GST TDS deductor / E-commerce operator).
       { label: 'GSTR-7 (GST TDS)', href: '/gst/gstr7', icon: FileMinus, module: 'gst', feature: ['gst', 'gstTds'] },
       { label: 'GSTR-8 (e-commerce TCS)', href: '/gst/gstr8', icon: ShoppingBag, module: 'gst', feature: ['gst', 'gstEco'] },
+      // GSTR-1 against GSTR-3B against the books, month by month (status review 7).
+      { label: 'GST Reconciliation', href: '/gst/reconciliation', icon: Scale, module: 'gst', registration: 'regular', feature: 'gst' },
     ],
   },
   {
