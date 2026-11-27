@@ -128,8 +128,8 @@ test('GSTR-9 splits the year’s supplies, and table 9 adds up the monthly retur
     assert.equal(y.table4.b2b.taxablePaise, 12_000_00, 'both registered buyers');
     assert.equal(y.table4.b2c.taxablePaise, 5_000_00);
     assert.equal(y.table4.rcmInward.taxablePaise, 1_000_00);
-    assert.equal(y.table6.inputs.cgstPaise, 360_00);
-    assert.equal(y.table6.rcmUnregistered.cgstPaise, 90_00);
+    assert.equal(y.table6.inward.inputs.cgstPaise, 360_00);
+    assert.equal(y.table6.rcmUnregistered.inputs.cgstPaise, 90_00);
 
     const months = ['2026-04', '2026-05', '2026-06', '2026-07', '2026-08', '2026-09', '2026-10', '2026-11',
       '2026-12', '2027-01', '2027-02', '2027-03'];

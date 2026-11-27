@@ -39,7 +39,12 @@ test('a bill of entry: duty to cost, IGST to credit in 4(A)(1); blocked credit s
       assert.equal(r.itc.importsPaise, 1_99_800_00, '4(A)(1): only the claimable one');
       assert.equal(r.itc.igstPaise, 1_99_800_00);
       assert.equal(r.itc.blockedPaise, 18_000_00);
-      assert.equal((await gstr9(trx, orgId, 2026)).table6.imports.igstPaise, 1_99_800_00, 'GSTR-9 6E');
+      // GSTR-9 shows credit as GSTR-3B 4(A) did, blocked credit included, and
+      // takes the blocked part back out in 7E (Circular 170/02/2022-GST).
+      const nine = await gstr9(trx, orgId, 2026);
+      assert.equal(nine.table6.imports.igstPaise, 1_99_800_00 + 18_000_00, 'GSTR-9 6E');
+      assert.equal(nine.table7.section17_5.igstPaise, 18_000_00, 'GSTR-9 7E: the blocked IGST reversed');
+      assert.equal(nine.table7.netAvailable.igstPaise, 1_99_800_00, 'GSTR-9 7J: only the claimable credit');
 
       await voidBillOfEntry(trx, orgId, null, a.id, 'Entered twice');
       assert.equal((await gstr3b(trx, orgId, '2026-09')).itc.importsPaise, 0, 'a void takes the credit back out');
