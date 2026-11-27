@@ -87,7 +87,7 @@ export default function GstReconciliationPage() {
                   </thead>
                   <tbody>
                     {d.months.map((m) => (
-                      <tr key={m.month} className="border-b align-top last:border-0" data-slot={`recon-row-${m.month}`} data-agrees={m.differences.length === 0}>
+                      <tr key={m.month} className="border-b align-top last:border-0" data-slot={`recon-row-${m.month}`} data-agrees={m.differences.every((x) => x.explained)}>
                         <td className="px-3 py-2 font-medium">
                           {periodLabel(m.month)}
                           <span className="block text-[10px] text-muted-foreground">
@@ -106,8 +106,12 @@ export default function GstReconciliationPage() {
                             <span className="flex items-center gap-1 text-emerald-700"><CheckCircle2 className="size-3.5" /> All three agree</span>
                           ) : (
                             <ul className="space-y-1">
+                              {m.differences.every((x) => x.explained) && <li className="flex items-center gap-1 text-emerald-700"><CheckCircle2 className="size-3.5" /> Agree, once these are counted:</li>}
                               {m.differences.map((x) => (
-                                <li key={x.between} className="flex gap-1.5"><AlertTriangle className="mt-0.5 size-3 shrink-0 text-amber-600" /><span><b>{x.between}</b> <Money value={x.paise} />: {x.reason}</span></li>
+                                <li key={x.between} className="flex gap-1.5">
+                                  {x.explained ? <CheckCircle2 className="mt-0.5 size-3 shrink-0 text-emerald-600" /> : <AlertTriangle className="mt-0.5 size-3 shrink-0 text-amber-600" />}
+                                  <span><b>{x.between}</b> <Money value={x.paise} />: {x.reason}</span>
+                                </li>
                               ))}
                             </ul>
                           )}

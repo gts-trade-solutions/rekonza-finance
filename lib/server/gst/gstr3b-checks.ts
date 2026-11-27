@@ -264,7 +264,8 @@ export interface ReconMonth {
   books: { taxablePaise: Paise; taxPaise: Paise };
   /** Output tax in the ledger for the month. */
   ledgerTaxPaise: Paise;
-  differences: { between: string; paise: Paise; reason: string }[];
+  /** Explained: a reason the law itself makes (an amendment, an advance). Otherwise for a person to look into. */
+  differences: { between: string; paise: Paise; reason: string; explained: boolean }[];
   filed: { gstr1: string | null; gstr3b: string | null };
 }
 
@@ -315,18 +316,18 @@ export async function reconciliation(ex: Executor, orgId: number, fyStart: numbe
     const advTaxable = adv.reduce((t, d) => t + d.taxablePaise, 0);
     const advTax = adv.reduce((t, d) => t + taxOf(d), 0);
     if (g1Taxable !== b3Taxable || g1Tax !== b3Tax) {
-      differences.push({ between: 'GSTR-1 and GSTR-3B', paise: (b3Taxable - g1Taxable) || (b3Tax - g1Tax), reason: 'Charges on a document header (shipping) with tax of their own are reported line by line in GSTR-1; or a document changed after one of the two was prepared.' });
+      differences.push({ between: 'GSTR-1 and GSTR-3B', paise: (b3Taxable - g1Taxable) || (b3Tax - g1Tax), explained: false, reason: 'Charges on a document header (shipping) with tax of their own are reported line by line in GSTR-1; or a document changed after one of the two was prepared.' });
     }
     if (b3Taxable - amendTaxable - advTaxable !== books.taxablePaise) {
-      differences.push({ between: 'GSTR-3B and the sales register (taxable value)', paise: b3Taxable - amendTaxable - advTaxable - books.taxablePaise, reason: 'Look at the documents of the month: the register counts every invoice and credit note dated in it.' });
+      differences.push({ between: 'GSTR-3B and the sales register (taxable value)', paise: b3Taxable - amendTaxable - advTaxable - books.taxablePaise, explained: false, reason: 'Look at the documents of the month: the register counts every invoice and credit note dated in it.' });
     }
-    if (amendTaxable || amendTax) differences.push({ between: 'GSTR-3B and the books', paise: amendTax, reason: `Amendments of earlier filed GSTR-1 documents declared this month (taxable ${rupees(amendTaxable)}); the books hold them in their own months.` });
-    if (advTaxable || advTax) differences.push({ between: 'GSTR-3B and the sales register', paise: advTax, reason: `GST on advances for services (taxable ${rupees(advTaxable)}): taxed when received, not in the register until invoiced.` });
+    if (amendTaxable || amendTax) differences.push({ between: 'GSTR-3B and the books', paise: amendTax, explained: true, reason: `Amendments of earlier filed GSTR-1 documents declared this month (taxable ${rupees(amendTaxable)}); the books hold them in their own months.` });
+    if (advTaxable || advTax) differences.push({ between: 'GSTR-3B and the sales register', paise: advTax, explained: true, reason: `GST on advances for services (taxable ${rupees(advTaxable)}): taxed when received, not in the register until invoiced.` });
     const ledgerGap = (b3Tax + taxOf(f['3.1.1i'])) - amendTax - ledgerTaxPaise;
     if (ledgerGap !== 0) {
       const odd = ledger.filter((x) => !REPORTED.has(x.source));
       differences.push({
-        between: 'GSTR-3B and the ledger (output tax)', paise: ledgerGap,
+        between: 'GSTR-3B and the ledger (output tax)', paise: ledgerGap, explained: false,
         reason: odd.length ? `Posted by ${odd.map((o) => `${o.source.replace(/_/g, ' ')} (${rupees(o.paise)})`).join(', ')}, which no document of the return explains.` : 'Output tax posted in the month does not match the return: look at the general ledger for the output tax accounts.',
       });
     }
