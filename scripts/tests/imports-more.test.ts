@@ -153,7 +153,7 @@ test('a supplier’s bill entered twice: refused by name; skipped on import; a v
     const bill = await trx.selectFrom('bills').select(['id', 'total']).where('org_id', '=', ctx.orgId).where('vendor_invoice_no', '=', 'LA/77').executeTakeFirstOrThrow();
     const look = await findBillDuplicates(trx, ctx.orgId, { vendorId, vendorInvoiceNo: 'LA-077' });
     assert.equal(look.exact, null);
-    assert.match(look.likely[0].why, /same bill number written as LA\/77/);
+    assert.match(look.likely[0].why, /same bill number but for leading zeros, written as LA\/77/);
     const sameDay = await findBillDuplicates(trx, ctx.orgId, { vendorId, vendorInvoiceNo: 'ZZ-1', totalPaise: Math.round(Number(bill.total) * 100), date: '2026-09-04' });
     assert.match(sameDay.likely[0].why, /same amount on the same day/);
     // Voided, the number is free for the corrected bill.

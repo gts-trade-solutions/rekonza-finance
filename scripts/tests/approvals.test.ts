@@ -46,6 +46,8 @@ async function withFixture(fn: (f: Fixture) => Promise<void>) {
 
 const bill = (f: Fixture, rupees: number, status: 'draft' | 'open') => createBill(f.trx, f.orgId, f.maker, {
   branchId: f.branchId, vendorId: f.vendor, vendorInvoiceNo: `S-${rupees}-${status}`, date: '2026-08-01', dueDate: '2026-08-31', status,
+  // Several bills of one amount on one day here are meant: said so, as the duplicate check asks (bill-duplicates.ts).
+  duplicateReason: 'Separate test bills',
   lines: [{ description: 'Stock', qty: 1, ratePaise: rupees * 100, gstRatePct: 0 }],
 });
 

@@ -487,7 +487,7 @@ export interface BillPick extends LinePick {
  */
 export async function billFromGoodsReceipt(
   trx: Trx, orgId: number, userId: number | null, grnId: number,
-  input: { vendorInvoiceNo: string; date: string; dueDate: string; lines?: BillPick[] },
+  input: { vendorInvoiceNo: string; date: string; dueDate: string; lines?: BillPick[]; duplicateReason?: string | null },
 ): Promise<{ id: number; internalNo: string; totalPaise: Paise; heldForApproval: boolean; match: { status: 'matched' | 'exception'; note: string | null } }> {
   if (!input.vendorInvoiceNo?.trim()) throw badRequest("The supplier's own invoice number is needed — GSTR-2B is matched on it.");
   const grn = await trx.selectFrom('goods_receipts')
@@ -538,6 +538,8 @@ export async function billFromGoodsReceipt(
     branchId: grn.branch_id, vendorId: grn.vendor_id, vendorInvoiceNo: input.vendorInvoiceNo.trim(),
     date: input.date, dueDate: input.dueDate, sourcePoId: grn.source_po_id, sourceGrnId: grn.id, status: 'open',
     lines: billLines, lineSources: picked.map(({ line }) => ({ type: 'goods_receipt', id: line.id })), match, holdForApproval: true,
+    // A look-alike of another bill is still billed from its receipt, and put on the register for a second look.
+    duplicateReason: input.duplicateReason?.trim() || `Billed from goods receipt ${grn.number}`,
   });
 
   // Take back the accrual for what is now billed, at the rate it was accrued at.
@@ -584,7 +586,7 @@ export async function billFromGoodsReceipt(
  */
 export async function billFromPurchaseOrder(
   trx: Trx, orgId: number, userId: number | null, poId: number,
-  input: { vendorInvoiceNo: string; date: string; dueDate: string; lines?: BillPick[] },
+  input: { vendorInvoiceNo: string; date: string; dueDate: string; lines?: BillPick[]; duplicateReason?: string | null },
 ): Promise<{ id: number; internalNo: string; totalPaise: Paise; heldForApproval: boolean; match: { status: 'matched' | 'exception'; note: string | null } }> {
   if (!input.vendorInvoiceNo?.trim()) throw badRequest("The supplier's own invoice number is needed — GSTR-2B is matched on it.");
   const { po, lines } = await loadPurchaseOrder(trx, orgId, poId);
@@ -639,6 +641,7 @@ export async function billFromPurchaseOrder(
     branchId: po.branch_id, vendorId: po.vendor_id, vendorInvoiceNo: input.vendorInvoiceNo.trim(),
     date: input.date, dueDate: input.dueDate, sourcePoId: po.id, status: 'open',
     lines: billLines, lineSources: picked.map(({ line }) => ({ type: 'purchase_order', id: line.id })), match, holdForApproval: true,
+    duplicateReason: input.duplicateReason?.trim() || `Billed from purchase order ${po.number}`,
   });
   for (const { line, qty } of picked) {
     await trx.updateTable('purchase_order_lines')

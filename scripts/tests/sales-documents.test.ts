@@ -336,6 +336,9 @@ test('Apply to Invoices later, across two invoices; a part refund leaves the res
   });
 });
 
+// Since status review 7 a credit note may be raised on an invoice already paid
+// (the rest stays open to apply or refund); it cannot credit more than the
+// invoice, nor take back more goods than the invoice sent out.
 test('a credit note cannot exceed what is still owed on the invoice it names', async () => {
   await withFixture(async ({ trx, orgId, branchId, customerId, itemId }) => {
     const inv = await createInvoice(trx, orgId, null, {
@@ -347,7 +350,7 @@ test('a credit note cannot exceed what is still owed on the invoice it names', a
         branchId, customerId, date: '2026-08-07', reason: 'Too much',
         againstInvoiceId: inv.id, lines: [{ itemId, qty: 5 }],
       }),
-      /larger than what is still owed/,
+      /Only 2 of .* can come back/,
     );
   });
 });

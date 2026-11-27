@@ -292,7 +292,7 @@ test('the threshold is annual, so later bills catch up once it is crossed', asyn
     const deducted: number[] = [];
     for (let i = 0; i < 6; i++) {
       const bill = await createBill(trx, orgId, null, {
-        branchId, vendorId, vendorInvoiceNo: `PROF-RUN-${i}`,
+        branchId, vendorId, vendorInvoiceNo: `PROF-RUN-${i}`, duplicateReason: 'Separate professional bills, one a run',
         date: '2026-08-07', dueDate: '2026-09-06',
         tdsSectionOverride: '194J',
         lines: [{ description: 'Retainer', qty: 1, ratePaise: 10_000_00, gstRatePct: 18 }],

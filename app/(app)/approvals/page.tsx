@@ -22,10 +22,11 @@ import { useApi } from '@/lib/api/use-api';
 import { RowActions, useConfirmDelete } from '@/components/shared/row-actions';
 
 const th = 'px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground';
-const DOC_LABEL: Record<ApprovalDoc, string> = { invoice: 'Invoices', bill: 'Bills', journal: 'Manual journals', payment_batch: 'Payment batches' };
+const DOC_LABEL: Record<ApprovalDoc, string> = { invoice: 'Invoices', bill: 'Bills', journal: 'Manual journals', payment_batch: 'Payment batches', credit_note: 'Credit notes' };
 const ROLES: ApproverRole[] = ['admin', 'accountant', 'sales', 'staff'];
 const href = (doc: ApprovalDoc, id: string) =>
   doc === 'invoice' ? `/sales/invoices/${id}` : doc === 'bill' ? `/purchases/bills/${id}`
+    : doc === 'credit_note' ? `/sales/credit-notes/${id}`
     : doc === 'journal' ? '/accountant/journals' : '/purchases/payment-batches';
 
 export default function ApprovalsPage() {
@@ -225,6 +226,7 @@ function Rules({ rules, canEdit, onChanged }: { rules: ApprovalRule[]; canEdit: 
               <option value="invoice">Invoices</option>
               <option value="journal">Manual journals</option>
               <option value="payment_batch">Payment batches</option>
+              <option value="credit_note">Credit notes</option>
             </select>
           </Field>
           <Field label="From amount"><MoneyInput valuePaise={threshold} onChangePaise={setThreshold} /></Field>

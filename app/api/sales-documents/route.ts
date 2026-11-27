@@ -199,6 +199,9 @@ export const POST = route(
       number: created.number,
       totalPaise: created.totalPaise,
       journalEntryId: created.journalEntryId === null ? null : asId(created.journalEntryId),
+      // A credit note an approval rule caught waits as a draft; one past the s.34 time limit says so.
+      heldForApproval: 'heldForApproval' in created ? !!created.heldForApproval : false,
+      warnings: 'warnings' in created ? created.warnings ?? [] : [],
     };
   },
   { permission: { module: 'sales', action: 'create' } },
@@ -420,11 +423,14 @@ export const PATCH = route(
           const out = await openCreditNote(trx, orgId, user.userId, id);
           await logAudit({
             trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'update', targetType: 'credit-note', targetId: id,
-            targetLabel: out.number, detail: `Draft credit note ${out.number} converted to open and posted`, ...auditMeta(req),
+            targetLabel: out.number, detail: out.heldForApproval ? `Draft credit note ${out.number} submitted for approval` : `Draft credit note ${out.number} converted to open and posted`, ...auditMeta(req),
           });
           return out;
         });
-        return { id: asId(made.id), number: made.number, status: 'open', journalEntryId: made.journalEntryId === null ? null : asId(made.journalEntryId) };
+        return {
+          id: asId(made.id), number: made.number, status: made.heldForApproval ? 'draft' : 'open', heldForApproval: !!made.heldForApproval,
+          journalEntryId: made.journalEntryId === null ? null : asId(made.journalEntryId), warnings: made.warnings ?? [],
+        };
       }
 
       case 'cancel-items': {

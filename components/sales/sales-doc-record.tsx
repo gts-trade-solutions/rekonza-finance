@@ -144,7 +144,18 @@ function Record({ kind, doc, printDoc, reload }: { kind: SalesDocKindZ; doc: Edi
   const cnDraft = kind === 'credit-note' && doc.status === 'draft';
   const cnLeft = (doc.balancePaise ?? 0) > 0 && doc.status !== 'void' && !cnDraft;
   // A draft credit note, posted (Zoho's Convert to Open).
-  const openDraft = () => run(() => salesDocuments.openCreditNote(doc.id), `${doc.number} converted to open and posted`);
+  // Converted to open, or (when an approval rule covers it) submitted for approval.
+  const openDraft = async () => {
+    setBusy(true);
+    try {
+      const r = await salesDocuments.openCreditNote(doc.id) as { heldForApproval?: boolean };
+      if (r.heldForApproval) toast.info(`${doc.number} is waiting for approval`, { description: 'It posts when someone else approves it in Approvals.' });
+      else toast.success(`${doc.number} converted to open and posted`);
+      reload();
+    } catch (e) {
+      toast.error('Not done', { description: e instanceof Error ? e.message : String(e) });
+    } finally { setBusy(false); }
+  };
   // What is still to invoice or deliver on an order, that Cancel Items can take off.
   const soLeft = kind === 'sales-order' && doc.lines.some((l) => l.qty - (l.qtyInvoiced ?? 0) - (l.qtyCancelled ?? 0) > 0 && l.qty - (l.qtyDelivered ?? 0) - (l.qtyCancelled ?? 0) > 0);
 
@@ -419,8 +430,14 @@ function WhatsNext(p: {
       text = 'Convert this delivery challan to an invoice once the customer keeps the goods.';
       buttons = p.canCreate && <Button size="sm" onClick={p.onChallanInvoice} disabled={p.busy}>Convert to Invoice</Button>;
     }
+  } else if (kind === 'credit-note' && doc.status === 'draft' && doc.approvalStatus === 'pending') {
+    // Maker and checker: it posts when someone else approves it (Approvals).
+    text = 'Waiting for approval: an approval rule covers credit notes of this amount. It posts when someone else approves it in Approvals.';
+    buttons = <Button size="sm" variant="outline" onClick={() => window.location.assign('/approvals')} data-slot="cn-awaiting-approval">Open Approvals</Button>;
   } else if (kind === 'credit-note' && doc.status === 'draft') {
-    text = 'This credit note is a draft: nothing is posted until you convert it to open.';
+    text = doc.approvalStatus === 'rejected'
+      ? `Sent back by the approver${doc.rejectionReason ? `: ${doc.rejectionReason}` : ''}. Edit it, then convert it to open to submit it again.`
+      : 'This credit note is a draft: nothing is posted until you convert it to open.';
     buttons = p.canEdit && <Button size="sm" onClick={p.onOpenDraft} disabled={p.busy} data-slot="whats-next-open">Convert to Open</Button>;
   } else if (kind === 'credit-note' && (doc.balancePaise ?? 0) > 0 && doc.status !== 'void') {
     text = `Credits remaining: ${formatINR(doc.balancePaise ?? 0)}. Apply them to the customer’s invoices or refund them.`;

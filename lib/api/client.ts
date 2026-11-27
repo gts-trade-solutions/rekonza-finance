@@ -1298,6 +1298,9 @@ export interface EditableSalesDoc {
     qty: number; uqc: string | null; ratePaise: number; discountPct: number; gstRatePct: number; amountPaise?: number;
     qtyInvoiced?: number; qtyDelivered?: number; qtyCancelled?: number;
   }[];
+  /** A credit note's approval (status review 7): none, pending, approved or rejected. */
+  approvalStatus?: string | null;
+  rejectionReason?: string | null;
 }
 
 export interface ExpenseDetail {
@@ -1332,10 +1335,10 @@ export const salesDocuments = {
   list: (kind: SalesDocKind, params?: { from?: string; to?: string; status?: string; customerId?: string; search?: string; limit?: number }) =>
     api.get<SalesDocListResponse>('/api/sales-documents', { kind, ...params }),
   create: (input: unknown) =>
-    api.post<{ id: string; number: string; totalPaise: number; journalEntryId: string | null }>(
+    api.post<{ id: string; number: string; totalPaise: number; journalEntryId: string | null; heldForApproval?: boolean; warnings?: string[] }>(
       '/api/sales-documents',
       input,
-    ),
+    ).then((r) => (toastWarnings(r), r)),
   convert: (kind: 'estimate' | 'sales-order', id: string, date: string, dueDate: string, status?: 'draft' | 'approved') =>
     api.patch<{ invoiceId: string; number: string; totalPaise: number; heldForApproval?: boolean }>('/api/sales-documents', {
       action: 'convert', kind, id, date, dueDate, status,
@@ -1764,6 +1767,7 @@ export interface Gstr1Row {
   /** C for a credit note, D for a debit note. */
   noteType?: 'C' | 'D';
   againstNumber?: string | null;
+  againstDate?: string | null;
   irnStatus?: string;
   /** Reported with rchrg Y: the recipient pays the GST. */
   reverseCharge?: boolean;
@@ -3197,7 +3201,7 @@ export const orderFlow = {
 
 // ── Approvals ────────────────────────────────────────────────────────────────
 
-export type ApprovalDoc = 'invoice' | 'bill' | 'journal' | 'payment_batch';
+export type ApprovalDoc = 'invoice' | 'bill' | 'journal' | 'payment_batch' | 'credit_note';
 export type ApproverRole = 'admin' | 'accountant' | 'sales' | 'staff';
 
 export interface ApprovalRule {

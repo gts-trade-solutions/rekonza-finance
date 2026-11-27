@@ -23,7 +23,8 @@ import 'server-only';
 
 import type { Insertable, Updateable } from 'kysely';
 import type { DB } from '../db-types';
-import type { Trx } from '../db';
+import type { Executor, Trx } from '../db';
+import { recordApprovalAction, ruleFor } from './approvals';
 import type { Paise, SupplyType } from '../../types';
 import { exportTaxFor, exportTaxOf, isExportSupply, resolveSupplyType, totalTaxPaise } from '../../tax/gst';
 import { tradeProfile } from './trade-profile';
@@ -203,6 +204,8 @@ export interface CreatedDocument {
   journalEntryId: number | null;
   /** Saved as a draft for approval because a rule caught it. */
   heldForApproval?: boolean;
+  /** What the person saving it should know (a credit note past the s.34 time limit). */
+  warnings?: string[];
 }
 
 type DocTable = 'estimates' | 'sales_orders' | 'delivery_challans';
@@ -567,6 +570,30 @@ export interface CreateCreditNoteInput extends BaseDocInput {
 }
 
 /**
+ * The last day output tax can be reduced by a credit note for a supply (CGST
+ * Act s.34(2), as amended from 1 October 2022): 30 November after the end of
+ * the financial year in which the supply was made, or the day the annual
+ * return for that year was filed, if earlier. After it a credit note may
+ * still be issued as a commercial note, but the GST on it cannot be reduced.
+ */
+export async function section34Deadline(ex: Executor, orgId: number, invoiceDate: string): Promise<{ deadline: string; why: string }> {
+  const startMonth = Number((await ex.selectFrom('organizations').select('fiscal_year_start_month').where('id', '=', orgId).executeTakeFirst())?.fiscal_year_start_month ?? 4);
+  const y = Number(invoiceDate.slice(0, 4));
+  const m = Number(invoiceDate.slice(5, 7));
+  const fyStart = m < startMonth ? y - 1 : y;
+  const nov30 = `${fyStart + 1}-11-30`;
+  // The annual return (GSTR-9) for that year, if it is recorded as filed earlier.
+  const fyLabel = `${fyStart}-${String((fyStart + 1) % 100).padStart(2, '0')}`;
+  // (Recorded from the compliance calendar, item gstr9, period the year it starts.)
+  const filed = await ex.selectFrom('compliance_filings').select('done_on').where('org_id', '=', orgId)
+    .where('item_key', '=', 'gstr9').where('period', 'in', [String(fyStart), fyLabel]).orderBy('done_on').executeTakeFirst();
+  const early = filed?.done_on ? String(filed.done_on).slice(0, 10) : null;
+  return early && early < nov30
+    ? { deadline: early, why: `the annual return for ${fyLabel} was filed on ${early}` }
+    : { deadline: nov30, why: `30 November after the end of financial year ${fyLabel}` };
+}
+
+/**
  * Create a credit note, and post it.
  *
  * The entry is the invoice's, reversed for the part being credited:
@@ -615,11 +642,12 @@ export async function createCreditNote(
     }
   }
 
-  let invoice: { id: number; number: string; total: string; amount_paid: string } | undefined;
+  let invoice: { id: number; number: string; total: string; amount_paid: string; invoice_date: string } | undefined;
+  const warnings: string[] = [];
   if (input.againstInvoiceId) {
     invoice = await trx
       .selectFrom('invoices')
-      .select(['id', 'number', 'total', 'amount_paid'])
+      .select(['id', 'number', 'total', 'amount_paid', 'invoice_date'])
       .where('id', '=', input.againstInvoiceId)
       .where('org_id', '=', orgId)
       .where('customer_id', '=', input.customerId)
@@ -627,13 +655,58 @@ export async function createCreditNote(
     if (!invoice) {
       throw badRequest('That invoice does not exist, or belongs to a different customer.');
     }
-    const balance = toPaiseFromSql(invoice.total) - toPaiseFromSql(invoice.amount_paid);
-    if (rounded > balance) {
+    // Goods coming back cannot be more than went out on the invoice, less what earlier notes took back.
+    const sold = await trx.selectFrom('invoice_lines').select(['item_id', (eb) => eb.fn.sum<string>('qty').as('q')])
+      .where('invoice_id', '=', invoice.id).where('item_id', 'is not', null).groupBy('item_id').execute();
+    const back = await trx.selectFrom('credit_note_lines as l').innerJoin('credit_notes as c', 'c.id', 'l.credit_note_id')
+      .select(['l.item_id', (eb) => eb.fn.sum<string>('l.qty').as('q')])
+      .where('c.org_id', '=', orgId).where('c.against_invoice_id', '=', invoice.id).where('c.status', '<>', 'void').where('l.item_id', 'is not', null)
+      .$if(!!opts.replace, (q) => q.where('c.id', '<>', opts.replace!.id)).groupBy('l.item_id').execute();
+    const wanted = new Map<number, number>();
+    for (const c of costed.lines) if (c.itemId) wanted.set(c.itemId, (wanted.get(c.itemId) ?? 0) + Number(c.qty));
+    for (const [itemId, q] of wanted) {
+      const out = Number(sold.find((s) => s.item_id === itemId)?.q ?? 0);
+      const already = Number(back.find((b) => b.item_id === itemId)?.q ?? 0);
+      if (out > 0 && q > out - already + 1e-9) {
+        const name = costed.lines.find((c) => c.itemId === itemId)?.description ?? 'that item';
+        throw badRequest(`Only ${out - already} of ${name} can come back on ${invoice.number}: ${out} went out${already ? `, ${already} came back on earlier credit notes` : ''}.`);
+      }
+    }
+    // CGST Act s.34(2): past the time limit the output tax can no longer be reduced.
+    const limit = await section34Deadline(trx, orgId, String(invoice.invoice_date).slice(0, 10));
+    if (input.date > limit.deadline) {
+      warnings.push(`Past the time limit of CGST Act s.34(2) for ${invoice.number} (${limit.deadline}: ${limit.why}). ` +
+        'GST on this credit note cannot reduce your output tax: set its lines to 0% GST to issue it as a commercial credit note, or check with your tax adviser.');
+    }
+    // A credit note can be raised on an invoice already paid (goods returned
+    // after payment, a rate cut agreed later): it is capped by the invoice,
+    // less what earlier credit notes took off it, not by what is still owed.
+    // What it cannot set off against the invoice stays open, to apply to
+    // another invoice or refund.
+    const earlier = await trx.selectFrom('credit_notes').select((eb) => eb.fn.sum<string>('total').as('t'))
+      .where('org_id', '=', orgId).where('against_invoice_id', '=', invoice.id).where('status', 'not in', ['void', 'draft'])
+      .$if(!!opts.replace, (q) => q.where('id', '<>', opts.replace!.id)).executeTakeFirst();
+    const creditable = toPaiseFromSql(invoice.total) - toPaiseFromSql(earlier?.t ?? '0');
+    if (rounded > creditable) {
       throw badRequest(
-        `The credit is larger than what is still owed on ${invoice.number}. ` +
-          'Credit only the outstanding amount, or raise it without linking an invoice.',
+        `The credit (₹${(rounded / 100).toLocaleString('en-IN', { minimumFractionDigits: 2 })}) is more than ${invoice.number} has left to credit ` +
+          `(₹${(creditable / 100).toLocaleString('en-IN', { minimumFractionDigits: 2 })}). Credit no more than the invoice, or raise it without linking an invoice.`,
       );
     }
+  }
+
+  // Maker and checker (approvals.ts): a rule that catches a credit note of this
+  // amount keeps a new one (or a draft being opened) as a draft waiting for
+  // approval; it posts when someone else approves it. An open note being edited
+  // has posted already and is corrected in place.
+  const existing = opts.replace
+    ? await trx.selectFrom('credit_notes').select(['status', 'approval_status']).where('id', '=', opts.replace.id).where('org_id', '=', orgId).executeTakeFirst()
+    : undefined;
+  const opening = !draft && (!existing || existing.status === 'draft');
+  const rule = opening && existing?.approval_status !== 'approved' ? await ruleFor(trx, orgId, 'credit_note', rounded) : null;
+  const held = !!rule;
+  if (held && existing?.approval_status === 'pending') {
+    throw new ApiError(403, `${opts.replace?.number ?? 'This credit note'} is waiting for approval by ${rule!.approverRole === 'admin' ? 'an admin' : `an ${rule!.approverRole}`}; it posts when they approve it.`, 'needs_approval');
   }
 
   const typed = opts.replace ? null : input.number?.trim();
@@ -677,7 +750,7 @@ export async function createCreditNote(
       against_invoice_id: input.againstInvoiceId ?? null,
       place_of_supply: ctx.placeOfSupply,
       supply_type: ctx.supplyType,
-      status: draft ? 'draft' : 'open',
+      status: draft || held ? 'draft' : 'open',
       subtotal: toSqlFromPaise(costed.tax.taxablePaise),
       cgst: toSqlFromPaise(costed.tax.cgstPaise),
       sgst: toSqlFromPaise(costed.tax.sgstPaise),
@@ -734,6 +807,13 @@ export async function createCreditNote(
       })),
     )
     .execute();
+  // Held for approval: a draft that waits in the Approvals inbox (approvals.ts).
+  if (held) {
+    await trx.updateTable('credit_notes').set({ approval_status: 'pending', submitted_by_user_id: userId, submitted_at: new Date(), rejection_reason: null })
+      .where('id', '=', id).execute();
+    await recordApprovalAction(trx, orgId, 'credit_note', id, 'submitted', userId);
+    return { id, number, totalPaise: rounded, journalEntryId: null, heldForApproval: true, warnings };
+  }
   // A draft stops here: nothing is posted, returned to stock or applied until it is open.
   if (draft) return { id, number, totalPaise: rounded, journalEntryId: null };
 
@@ -795,24 +875,30 @@ export async function createCreditNote(
   // journal entry above already reduced receivables; this records *which*
   // invoice the reduction belongs to, so the ageing report and the control
   // account keep saying the same thing.
-  if (invoice && input.applyImmediately !== false) {
+  // Only what is still owed on the invoice is set off; the rest stays open.
+  const owing = invoice
+    ? toPaiseFromSql((await trx.selectFrom('invoices').select(['total']).where('id', '=', invoice.id).executeTakeFirstOrThrow()).total)
+      - toPaiseFromSql((await trx.selectFrom('invoices').select(['amount_paid']).where('id', '=', invoice.id).executeTakeFirstOrThrow()).amount_paid)
+    : 0;
+  const setOff = Math.min(rounded, Math.max(0, owing));
+  if (invoice && input.applyImmediately !== false && setOff > 0) {
     await trx
       .updateTable('invoices')
-      .set((eb) => ({ amount_paid: eb('amount_paid', '+', toSqlFromPaise(rounded)) }))
+      .set((eb) => ({ amount_paid: eb('amount_paid', '+', toSqlFromPaise(setOff)) }))
       .where('id', '=', invoice.id)
       .execute();
     await trx
       .updateTable('credit_notes')
-      .set({ applied_amount: toSqlFromPaise(rounded), status: 'applied' })
+      .set({ applied_amount: toSqlFromPaise(setOff), status: setOff >= rounded ? 'applied' : 'open' })
       .where('id', '=', id)
       .execute();
     await trx.insertInto('credit_note_applications').values({
-      org_id: orgId, credit_note_id: id, invoice_id: invoice.id, amount: toSqlFromPaise(rounded), applied_on: input.date, created_by_user_id: userId,
+      org_id: orgId, credit_note_id: id, invoice_id: invoice.id, amount: toSqlFromPaise(setOff), applied_on: input.date, created_by_user_id: userId,
     }).execute();
     await settleIfPaid(trx, orgId, invoice.id);
   }
 
-  return { id, number, totalPaise: rounded, journalEntryId: entry.id };
+  return { id, number, totalPaise: rounded, journalEntryId: entry.id, warnings };
 }
 
 /**
@@ -1276,6 +1362,9 @@ export async function voidCreditNote(
       .execute();
     await settleIfPaid(trx, orgId, b.invoiceId);
   }
+  // Its applications are undone: they no longer hold anything against an invoice.
+  // The void, its reason and the reversed entry are the record of them.
+  await trx.deleteFrom('credit_note_applications').where('org_id', '=', orgId).where('credit_note_id', '=', creditNoteId).execute();
 
   await trx
     .updateTable('credit_notes')
