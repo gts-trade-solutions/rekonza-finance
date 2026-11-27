@@ -27,7 +27,7 @@ import type { Paise } from '../../types';
 import { toPaiseFromSql, toSqlFromPaise } from '../money-sql';
 import { allocateNumber, postEntry, reverseEntry, type DraftLine } from '../ledger/posting';
 import { CODE, accountIds, requireAccount } from '../ledger/chart-of-accounts';
-import { badRequest, conflict, notFound } from '../http';
+import { ApiError, badRequest, conflict, notFound } from '../http';
 import { createInvoice, fyLabelFor } from './sales';
 import { findOrCreateBatch, type BatchInput } from './batches';
 import { recordSerials } from './serials';
@@ -363,6 +363,23 @@ export async function receiveGoods(
     batchIds.push(await findOrCreateBatch(trx, orgId, l.itemId, l.batch));
   }
 
+  // The supplier's challan or invoice number on a receipt is checked as a
+  // bill's is (bill-duplicates.ts): the same number from the same vendor on
+  // another receipt that stands is the same delivery entered twice, which
+  // would put the goods into stock twice. Case, spaces and separators ignored.
+  if (input.vendorChallanNo?.trim()) {
+    const { billNumberKey } = await import('./bill-duplicates');
+    const key = billNumberKey(input.vendorChallanNo);
+    const others = await trx.selectFrom('goods_receipts').select(['id', 'number', 'vendor_challan_no', 'receipt_date'])
+      .where('org_id', '=', orgId).where('vendor_id', '=', input.vendorId).where('status', '<>', 'cancelled')
+      .where('vendor_challan_no', 'is not', null)
+      .$if(!!opts.replace, (q) => q.where('id', '<>', opts.replace!.id)).execute();
+    const twin = others.find((g) => billNumberKey(g.vendor_challan_no ?? '') === key);
+    if (twin) {
+      throw new ApiError(409, `Challan / invoice ${input.vendorChallanNo.trim()} from this vendor is already on goods receipt ${twin.number}, dated ${String(twin.receipt_date).slice(0, 10)}. ` +
+        'The same delivery is received once: open that receipt instead.', 'duplicate_receipt', { href: `/purchases/goods-receipts?open=${twin.id}`, twinId: String(twin.id), twinNo: twin.number });
+    }
+  }
   const number = opts.replace?.number ?? await allocateNumber(trx, orgId, input.branchId, 'GRN', fyLabelFor(input.date), { prefix: 'GRN' });
   const warehouseId = await checkGodown(trx, orgId, input.branchId, input.warehouseId);
   let id: number;

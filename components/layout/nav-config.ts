@@ -7,6 +7,8 @@ import {
   ScanBarcode, BellRing, Download, Upload, ArrowLeftRight, FileUp, FileDown, AlertOctagon, Radar, FilePlus2, Timer, FolderKanban, Ship, PhoneCall, ListChecks, LayoutTemplate, Shuffle, Globe,
   House, ShoppingBasket, ShoppingBag, Clock, UserRoundCog, ChartNoAxesColumn, Folder,
 } from 'lucide-react';
+// Status review 7, builder B.
+import { Copy } from 'lucide-react';
 
 export interface NavItem {
   label: string;
@@ -99,6 +101,8 @@ export const NAV_GROUPS: NavGroup[] = [
       { label: 'Purchase Orders', href: '/purchases/purchase-orders', icon: ClipboardList, module: 'purchases' },
       { label: 'Bills', href: '/purchases/bills', icon: FileText, module: 'purchases' },
       { label: 'Recurring Bills', href: '/purchases/recurring?kind=bill', icon: Repeat, module: 'purchases' },
+      // Status review 7, item 8: bills saved although they looked like one already in the books.
+      { label: 'Possible Duplicate Bills', href: '/purchases/duplicate-bills', icon: Copy, module: 'purchases' },
       { label: 'Payments Made', href: '/purchases/payments', icon: Banknote, module: 'purchases' },
       { label: 'Vendor Credits', href: '/purchases/vendor-credits', icon: FileMinus, module: 'purchases' },
       { label: 'Goods Receipts', href: '/purchases/goods-receipts', icon: PackageCheck, module: 'purchases' },

@@ -43,7 +43,7 @@ import { assertApproved, ruleFor, submitForApproval } from './approvals';
 import { allocateOrgNumber, postEntry, reverseEntry, type DraftLine } from '../ledger/posting';
 import { CODE, accountIds, requireAccount } from '../ledger/chart-of-accounts';
 import { ApiError, badRequest, conflict, notFound } from '../http';
-import { findBillDuplicates } from './bill-duplicates';
+import { findBillDuplicates, guardSupplierInvoice, registerDuplicates } from './bill-duplicates';
 import { atRate, foreignOf, fyLabelFor } from './sales';
 import { removeLandedCost } from './landed-cost';
 import { bankLineMatched, plain, recordDeletion, reverseForChange, unlinkDocument } from './doc-delete';
@@ -94,6 +94,12 @@ export interface CreateBillInput {
   /** As on an invoice: a bill an approval rule catches is saved as a draft submitted for approval. */
   holdForApproval?: boolean;
   status?: 'draft' | 'open';
+  /**
+   * Why this is not a duplicate, when it looks like a bill already in the
+   * books (bill-duplicates.ts): kept in the audit trail and on the Possible
+   * duplicate bills register. Without it such a bill is refused.
+   */
+  duplicateReason?: string | null;
 }
 
 /**
@@ -161,10 +167,13 @@ export async function createBill(
     .where('id', '=', input.vendorId).where('org_id', '=', orgId).executeTakeFirst();
   if (!vendor) throw notFound('That vendor does not exist.');
   // A supplier's bill number is entered once (bill-duplicates.ts): the second
-  // time is refused by name, before anything is posted or paid.
+  // time is refused by name, before anything is posted or paid, however the
+  // number is written. (One that only looks like another is checked below,
+  // once its total is known.)
   const twin = (await findBillDuplicates(trx, orgId, { vendorId: input.vendorId, vendorInvoiceNo: input.vendorInvoiceNo, excludeId: opts.replace?.id ?? null })).exact;
   if (twin) {
-    throw conflict(`Bill ${input.vendorInvoiceNo} from ${twin.vendorName} is already in your books as ${twin.internalNo}, dated ${twin.date}. A supplier's bill is entered once: open that one, or void it first if it was wrong.`);
+    throw new ApiError(409, `Bill ${input.vendorInvoiceNo.trim()} from ${twin.vendorName} is already in your books as ${twin.internalNo}, dated ${twin.date} (${twin.why}). ` +
+      'A supplier\'s bill is entered once: open that one, or void it first if it was wrong.', 'duplicate_bill', { href: twin.href, twinId: twin.id, twinNo: twin.internalNo });
   }
 
   // A composition dealer cannot charge GST, so there is no tax on the bill and
@@ -279,6 +288,20 @@ export async function createBill(
 
   // Our own reference for the vendor's bill, unique across the organisation
   // (uq_bill_internal). The vendor's own number is theirs and may repeat.
+  // The same vendor and amount within a week under another number, or a near
+  // twin of the number: saved only with a reason (bill-duplicates.ts). An edit
+  // of a bill already saved with one keeps that reason unless a new one comes.
+  let duplicateReason = input.duplicateReason?.trim() || null;
+  if (!duplicateReason && opts.replace) {
+    duplicateReason = (await trx.selectFrom('duplicate_reviews').select('entered_reason').where('org_id', '=', orgId)
+      .where('doc_type', '=', 'bill').where('doc_id', '=', opts.replace.id).where('entered_reason', 'is not', null)
+      .orderBy('id', 'desc').executeTakeFirst())?.entered_reason ?? null;
+  }
+  const twins = await guardSupplierInvoice(trx, orgId, {
+    vendorId: input.vendorId, vendorInvoiceNo: input.vendorInvoiceNo, totalPaise: totalPayable, date: input.date,
+    excludeId: opts.replace?.id ?? null, duplicateReason,
+  });
+
   const held = !opts.replace && (input.status ?? 'open') !== 'draft' && !!input.holdForApproval
     && !!(await ruleFor(trx, orgId, 'bill', totalPayable));
   const status = held ? 'draft' : (input.status ?? 'open');
@@ -399,6 +422,10 @@ export async function createBill(
   }
   if (held) await submitForApproval(trx, orgId, userId, 'bill', billId);
 
+  if (twins.length) {
+    await registerDuplicates(trx, orgId, userId, { type: 'bill', id: billId }, twins, duplicateReason);
+    warnings.push(`Saved although it looks like ${twins.map((t) => `${t.internalNo} (${t.why})`).join('; ')}. It is on the Possible duplicate bills list for an accountant to clear.`);
+  }
   return { id: billId, internalNo, totalPaise: totalPayable, journalEntryId, heldForApproval: held, warnings };
 }
 
@@ -594,6 +621,8 @@ export interface CreateExpenseInput {
   /** The project it is a cost of (services/projects.ts). */
   projectId?: number | null;
   reference?: string | null;
+  /** Why this is not a duplicate of a supplier invoice already in the books (bill-duplicates.ts). */
+  duplicateReason?: string | null;
   notes?: string | null;
   /**
    * A journey claimed by the kilometre: the amount is the distance times the
@@ -625,6 +654,16 @@ export async function createExpense(
     input = { ...input, amountPaise: Math.round(km * ratePaise), gstRatePct: 0 };
   }
   if (input.amountPaise <= 0) throw badRequest('An expense needs an amount above zero.');
+  // An expense with the supplier's invoice number as its reference is that
+  // invoice booked: the same number from the same vendor again (as a bill or
+  // another expense) is refused, and one that only looks like another needs a
+  // reason, exactly as for a bill (bill-duplicates.ts).
+  const expenseTwins = input.vendorId && input.reference?.trim()
+    ? await guardSupplierInvoice(trx, orgId, {
+        vendorId: input.vendorId, vendorInvoiceNo: input.reference, totalPaise: input.amountPaise, date: input.date,
+        excludeExpenseId: opts.replace?.id ?? null, duplicateReason: input.duplicateReason,
+      })
+    : [];
   // A cost of a project, and re-charged to its customer when billable.
   let billTo = input.isBillable ? input.billableCustomerId ?? null : null;
   if (input.projectId) {
@@ -749,6 +788,7 @@ export async function createExpense(
     .updateTable('expenses').set({ journal_entry_id: entry.id })
     .where('id', '=', expenseId).execute();
 
+  if (expenseTwins.length) await registerDuplicates(trx, orgId, userId, { type: 'expense', id: expenseId }, expenseTwins, input.duplicateReason ?? null);
   return { id: expenseId, number, totalPaise: input.amountPaise, journalEntryId: entry.id, warnings };
 }
 

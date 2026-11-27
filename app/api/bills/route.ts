@@ -121,7 +121,8 @@ export const POST = route(
       targetType: 'bill',
       targetId: created.id,
       targetLabel: created.internalNo,
-      detail: `Recorded bill ${created.internalNo} (${input.vendorInvoiceNo})`,
+      // A bill saved although it looked like another keeps the reason given in the trail (services/bill-duplicates.ts).
+      detail: `Recorded bill ${created.internalNo} (${input.vendorInvoiceNo})${input.duplicateReason ? `. Saved as not a duplicate: ${input.duplicateReason}` : ''}`,
       ...auditMeta(req),
     });
 

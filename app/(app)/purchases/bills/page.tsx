@@ -154,6 +154,10 @@ export default function BillsPage() {
           <>
             <Refreshing active={state.refreshing} />
             <SavedViews list="bills" current={{ status: filter, range }} onApply={(v) => { setFilter(String(v.status ?? 'all')); if (v.range) setRange(v.range as RangeValue); }} />
+            {/* The register of bills saved although they looked like another (status review 7, item 8). */}
+            <Button size="sm" variant="outline" asChild data-slot="bills-possible-duplicates">
+              <Link href="/purchases/duplicate-bills">Possible duplicates</Link>
+            </Button>
             {canCreate && (
               <Button size="sm" asChild className="gap-1.5">
                 <Link href="/purchases/bills/new"><Plus className="size-4" /> New bill</Link>

@@ -439,6 +439,34 @@ export async function createInvoice(
     (await allocateNumber(trx, orgId, input.branchId, series.docType, fyLabelFor(input.date), {
       prefix: series.prefix,
     }));
+  // A tax invoice number is used once in its series (CGST Rules r.46(b));
+  // the unique key enforces it, and a typed number already taken is refused
+  // here by name rather than as a database error.
+  if (typed && !replace) {
+    const taken = await trx.selectFrom('invoices as i').innerJoin('contacts as c', 'c.id', 'i.customer_id')
+      .select(['i.id', 'i.invoice_date', 'c.display_name']).where('i.org_id', '=', orgId).where('i.branch_id', '=', input.branchId)
+      .where('i.number', '=', typed).executeTakeFirst();
+    if (taken) {
+      throw new ApiError(409, `Invoice number ${typed} is already used, by the invoice of ${String(taken.invoice_date).slice(0, 10)} to ${taken.display_name}. ` +
+        'Every invoice has a number of its own in the series: leave the number for the next one to be given, or type another.', 'duplicate_number', { href: `/sales/invoices/${taken.id}` });
+    }
+  }
+  // The customer's purchase order quoted on another of their invoices: the
+  // same order billed twice is how a customer is invoiced twice. Warned, not
+  // refused (one order can be billed in parts), and put on the register.
+  const poTwins: { kind: 'invoice'; id: string; why: string }[] = [];
+  if (input.orderNumber?.trim() && !debitNote) {
+    const { billNumberKey } = await import('./bill-duplicates');
+    const key = billNumberKey(input.orderNumber);
+    const others = await trx.selectFrom('invoices').select(['id', 'number', 'order_number', 'invoice_date'])
+      .where('org_id', '=', orgId).where('customer_id', '=', input.customerId).where('status', '<>', 'void')
+      .where('order_number', 'is not', null).where('doc_kind', '=', 'invoice')
+      .$if(!!replace, (q) => q.where('id', '<>', replace!.id)).execute();
+    for (const o of others.filter((x) => billNumberKey(x.order_number ?? '') === key)) {
+      poTwins.push({ kind: 'invoice', id: String(o.id), why: `the same customer PO ${o.order_number} as invoice ${o.number} of ${String(o.invoice_date).slice(0, 10)}` });
+    }
+    if (poTwins.length) warnings.push(`Customer PO ${input.orderNumber.trim()} is already on ${poTwins.map((t) => t.why.replace(/^the same customer PO \S+ as /, '')).join(', ')}. Check the order is not being billed twice.`);
+  }
 
   const values: Insertable<DB['invoices']> = {
       org_id: orgId,
@@ -582,6 +610,10 @@ export async function createInvoice(
   }
   if (held) await submitForApproval(trx, orgId, userId, 'invoice', invoiceId);
 
+  if (poTwins.length) {
+    const { registerDuplicates } = await import('./bill-duplicates');
+    await registerDuplicates(trx, orgId, userId, { type: 'invoice', id: invoiceId }, poTwins, null);
+  }
   return { id: invoiceId, number, totalPaise: rounded, journalEntryId, heldForApproval: held, warnings };
 }
 

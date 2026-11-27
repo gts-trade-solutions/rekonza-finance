@@ -3298,3 +3298,17 @@ export const stockReconciliation = {
   bringIntoLine: (asOf: string) => api.post<{ asOf: string; movedPaise: number }>('/api/settings/stock-accounting', { action: 'true_up', asOf }),
   layers: (itemId: string, asOf?: string) => api.get<ItemLayersResponse>(`/api/items/${encodeURIComponent(itemId)}/layers`, asOf ? { asOf } : undefined),
 };
+
+// ── Status review 7, builder B: the Possible duplicate bills register ───────
+
+export interface DuplicateDocView { type: 'bill' | 'expense' | 'goods_receipt' | 'invoice'; id: string; number: string; reference: string | null; party: string; date: string; totalPaise: number; status: string; href: string }
+export interface DuplicateReviewRow {
+  id: string; status: 'open' | 'cleared' | 'confirmed'; why: string; enteredReason: string | null; enteredBy: string | null; createdAt: string;
+  reviewedBy: string | null; reviewedAt: string | null; reviewNote: string | null; doc: DuplicateDocView; twin: DuplicateDocView;
+}
+export const duplicateReviews = {
+  list: (status?: 'open' | 'cleared' | 'confirmed' | 'all') =>
+    api.get<{ counts: Record<'open' | 'cleared' | 'confirmed', number>; rows: DuplicateReviewRow[] }>('/api/duplicate-reviews', status ? { status } : undefined),
+  review: (id: string, action: 'clear' | 'confirm' | 'reopen', note?: string) => api.post<{ id: number; status: string }>('/api/duplicate-reviews', { action, id, note }),
+  scan: () => api.post<{ added: number }>('/api/duplicate-reviews', { action: 'scan' }),
+};

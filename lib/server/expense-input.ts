@@ -20,6 +20,8 @@ export const ExpenseInput = z.object({
   billableCustomerId: z.string().nullish(),
   projectId: z.union([z.string(), z.number()]).nullish(),
   reference: z.string().nullish(),
+  /** Why it is not a duplicate of a supplier invoice it looks like (services/bill-duplicates.ts). */
+  duplicateReason: z.string().trim().max(500).nullish(),
   notes: z.string().nullish(),
   /** A journey claimed by the kilometre; the amount is worked out from it. */
   mileage: z.object({ km: z.number().positive().max(100000), ratePaise: z.number().int().positive().max(100000) }).nullish(),
@@ -42,6 +44,7 @@ export function toExpenseInput(input: ExpenseBody): CreateExpenseInput {
     billableCustomerId: input.billableCustomerId ? Number(input.billableCustomerId) : null,
     projectId: input.projectId ? Number(input.projectId) : null,
     reference: input.reference,
+    duplicateReason: input.duplicateReason ?? null,
     notes: input.notes,
     mileage: input.mileage ?? null,
   };
