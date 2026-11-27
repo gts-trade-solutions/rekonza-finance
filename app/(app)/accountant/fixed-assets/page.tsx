@@ -8,7 +8,7 @@
 // for a period at a time and posted; the Income-tax book is worked out beside
 // it, by blocks, and never posted.
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Building2, Calculator, Landmark, Loader2, PackagePlus, Plus, Undo2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
@@ -54,8 +54,12 @@ export default function FixedAssetsPage() {
   const [openId, setOpenId] = useState<string | null>(null);
   const [openTab, setOpenTab] = useState<'history' | 'details'>('history');
   const open = (id: string, t: 'history' | 'details' = 'history') => { setOpenTab(t); setOpenId(id); };
+  const [tab, setTab] = useState('register');
   // A tab can be opened by name (?tab=disposals), as the auditors' notes point to them.
-  const [tab, setTab] = useState(() => (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('tab')) || 'register');
+  useEffect(() => {
+    const named = new URLSearchParams(window.location.search).get('tab');
+    if (named) setTab(named);
+  }, []);
 
   return (
     <>

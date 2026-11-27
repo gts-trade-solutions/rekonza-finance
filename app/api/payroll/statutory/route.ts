@@ -6,6 +6,13 @@ import { hasPermission } from '@/lib/rbac';
 import { logAudit, auditMeta } from '@/lib/server/audit';
 import { COMPONENT_LABEL, payStatutory, statutoryRegister } from '@/lib/server/payroll/statutory-dues';
 import { deleteStatutoryPayment, updateStatutoryPayment } from '@/lib/server/payroll/changes';
+import { esiReport, lwfReport, pfReport, ptReport, tdsRegister } from '@/lib/server/payroll/statutory-reports';
+import { salaryTdsMonths } from '@/lib/server/payroll/salary-tds';
+
+const nextMonth = (m: string) => {
+  const [y, mo] = m.split('-').map(Number);
+  return mo === 12 ? `${y + 1}-01` : `${y}-${String(mo + 1).padStart(2, '0')}`;
+};
 
 // The payroll statutory registers (PF, ESI, PT, LWF, TDS on salary) and each
 // month's dues against what has been paid; paying a due posts it to the ledger.
@@ -15,8 +22,23 @@ const Month = z.string().regex(/^\d{4}-\d{2}$/);
 
 export const GET = route(
   async ({ orgId, req }) => {
-    const q = query(req, z.object({ from: Month, to: Month }));
-    return statutoryRegister(db, orgId, q.from, q.to);
+    const q = query(req, z.object({
+      from: Month, to: Month,
+      // The statutory reports (statutory-reports.ts): each register with its file and its tie to the ledger.
+      view: z.enum(['register', 'pf', 'esi', 'pt', 'lwf', 'tds']).default('register'),
+    }));
+    switch (q.view) {
+      case 'pf': return pfReport(db, orgId, q.from, q.to);
+      case 'esi': return esiReport(db, orgId, q.from, q.to);
+      case 'pt': return ptReport(db, orgId, q.from, q.to);
+      case 'lwf': return lwfReport(db, orgId, q.from, q.to);
+      case 'tds': {
+        const months: string[] = [];
+        for (let m = q.from; m <= q.to; m = nextMonth(m)) months.push(m);
+        return { ...(await tdsRegister(db, orgId, q.from, q.to)), months: await salaryTdsMonths(db, orgId, months) };
+      }
+      default: return statutoryRegister(db, orgId, q.from, q.to);
+    }
   },
   { permission: { module: 'payroll', action: 'view' } },
 );

@@ -325,7 +325,9 @@ try {
   const p2 = await ctx2.newPage();
   p2.on('pageerror', (e) => t.errors.push(`checker pageerror: ${e.message}`));
   await login(p2, checkerEmail, checkerPassword);
-  await p2.goto(`${BASE}/accountant/fixed-assets?tab=disposals`, { waitUntil: 'domcontentloaded' });
+  p2.setDefaultTimeout(60_000);
+  await p2.goto(`${BASE}/accountant/fixed-assets?tab=disposals`, { waitUntil: 'load' });
+  await p2.locator('[data-slot="disposals-pending"]').waitFor();
   await clickAndWait(p2, p2.locator('[data-slot="disposal-approve"]').first(), '/api/fixed-assets');
   await p2.locator('[data-sonner-toast]', { hasText: /Approved and posted/ }).first().waitFor();
   await p2.screenshot({ path: `${process.env.SHOTS || 'scripts/e2e/shots'}/9-${String(++t.state.n).padStart(2, '0')}-approved-by-checker${FRESH ? '-fresh' : ''}.png` });

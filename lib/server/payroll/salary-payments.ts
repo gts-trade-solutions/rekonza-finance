@@ -139,8 +139,10 @@ export async function reverseSalaryPayment(trx: Trx, orgId: number, userId: numb
     throw conflict('That payment is matched to a line of the bank statement. Undo the match in Banking first.');
   }
   const why = reason?.trim() ? ` — ${reason.trim()}` : '';
+  // The entry itself is reversed only when it paid this employee alone; one
+  // that paid others (even others already taken back) gets an entry of its own.
   const sharing = await trx.selectFrom('payroll_payments').select('id').where('journal_entry_id', '=', x.journal_entry_id)
-    .where('id', '<>', paymentId).where('reversed', '=', 0).execute();
+    .where('id', '<>', paymentId).execute();
   let reversal: number;
   const already = await trx.selectFrom('journal_entries').select('id').where('reversal_of_entry_id', '=', x.journal_entry_id).executeTakeFirst();
   if (!sharing.length && !already) {

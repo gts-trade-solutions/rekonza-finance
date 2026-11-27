@@ -1,6 +1,9 @@
 'use client';
 
-// One employee's Form 16 Part B (Form 130 from April 2026), set out to print.
+// One employee's Form 16 (Form 130 from April 2026), set out to print: Part A,
+// the tax deducted and deposited by quarter with the 24Q receipt numbers and
+// the challans that carried it (the same links Form 24Q reports), and Part B,
+// the salary and the tax on it.
 
 import Link from 'next/link';
 import { Suspense, use } from 'react';
@@ -23,6 +26,11 @@ interface Form16 {
   professionalTaxPaise: number; incomeFromSalaryPaise: number; chapterVIA: { section: string; amountPaise: number }[]; chapterVIAPaise: number;
   taxablePaise: number; slabTaxPaise: number; rebatePaise: number; surchargePaise: number; cessPaise: number; taxPaise: number;
   deductedPaise: number; balancePaise: number; quarters: { quarter: number; months: string[]; paidPaise: number; tdsPaise: number }[];
+  partA: {
+    quarters: { quarter: number; receiptNo: string | null; paidPaise: number; deductedPaise: number; depositedPaise: number }[];
+    challans: { challanId: string; month: string; bsrCode: string; date: string; serial: string; amountPaise: number }[];
+    totals: { paidPaise: number; deductedPaise: number; depositedPaise: number };
+  };
 }
 
 const dmy = (d: string) => new Date(`${d}T00:00:00`).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
@@ -59,7 +67,43 @@ function Form16View({ employeeId }: { employeeId: string }) {
               <Link href="/payroll/form-16" className={cn(buttonVariants({ size: 'sm', variant: 'ghost' }), 'gap-1.5')}><ArrowLeft className="size-3.5" /> Back</Link>
               <Button size="sm" className="ml-auto gap-1.5" onClick={() => printPage()}><Printer className="size-3.5" /> Print</Button>
             </div>
-            <div className="mx-auto max-w-3xl rounded-lg border bg-white p-8 text-[13px] text-slate-900 print:max-w-none print:rounded-none print:border-0 print:p-0">
+            <div className="mx-auto max-w-3xl rounded-lg border bg-white p-8 text-[13px] text-slate-900 print:max-w-none print:rounded-none print:border-0 print:p-0" data-slot="form16-part-a">
+              <div className="border-b pb-3 text-center">
+                <p className="text-base font-semibold">{f.form}, Part A</p>
+                <p className="text-xs text-slate-500">Certificate under section 203 of tax deducted at source on salary · Financial year {f.fyStart}-{String(f.fyStart + 1).slice(2)} · Assessment year {f.assessmentYear}</p>
+              </div>
+              <div className="grid grid-cols-2 gap-6 border-b py-3 text-xs">
+                <div><p className="mb-1 font-semibold">Deductor</p><p>{f.employer.name}</p><p>PAN {f.employer.pan ?? '—'} · TAN {f.employer.tan ?? '—'}</p></div>
+                <div><p className="mb-1 font-semibold">Employee</p><p>{f.employee.name}</p><p>PAN {f.employee.pan ?? '—'}</p><p>Period {dmy(f.employee.from)} to {dmy(f.employee.to)}</p></div>
+              </div>
+              <p className="mt-3 mb-1 font-semibold">Summary of amount paid and tax deducted and deposited</p>
+              <table className="w-full text-xs">
+                <thead><tr className="border-b text-left text-slate-500"><th className="py-1">Quarter</th><th className="py-1">Receipt no. of 24Q</th><th className="py-1 text-right">Amount paid</th><th className="py-1 text-right">Tax deducted</th><th className="py-1 text-right">Tax deposited</th></tr></thead>
+                <tbody>
+                  {f.partA.quarters.map((q) => (
+                    <tr key={q.quarter} className="border-b last:border-0">
+                      <td className="py-1">Q{q.quarter}</td><td className="py-1 font-mono">{q.receiptNo ?? '— (not filed yet)'}</td>
+                      <td className="py-1 text-right tabular-nums">{formatINR(q.paidPaise)}</td><td className="py-1 text-right tabular-nums">{formatINR(q.deductedPaise)}</td>
+                      <td className="py-1 text-right tabular-nums">{formatINR(q.depositedPaise)}</td>
+                    </tr>
+                  ))}
+                  <tr className="font-semibold"><td className="py-1" colSpan={2}>Total</td><td className="py-1 text-right tabular-nums">{formatINR(f.partA.totals.paidPaise)}</td><td className="py-1 text-right tabular-nums">{formatINR(f.partA.totals.deductedPaise)}</td><td className="py-1 text-right tabular-nums">{formatINR(f.partA.totals.depositedPaise)}</td></tr>
+                </tbody>
+              </table>
+              <p className="mt-3 mb-1 font-semibold">Tax deposited through challan (ITNS 281)</p>
+              {f.partA.challans.length === 0 ? <p className="text-xs text-slate-500">No challan is linked to this employee&apos;s tax yet (Payroll → Statutory Reports → TDS on salary).</p> : (
+                <table className="w-full text-xs">
+                  <thead><tr className="border-b text-left text-slate-500"><th className="py-1">Month</th><th className="py-1">BSR code</th><th className="py-1">Date deposited</th><th className="py-1">Challan serial no.</th><th className="py-1 text-right">Tax deposited for the employee</th></tr></thead>
+                  <tbody>
+                    {f.partA.challans.map((c) => (
+                      <tr key={`${c.challanId}-${c.month}`} className="border-b last:border-0"><td className="py-1">{c.month}</td><td className="py-1 font-mono">{c.bsrCode}</td><td className="py-1">{dmy(c.date)}</td><td className="py-1 font-mono">{c.serial}</td><td className="py-1 text-right tabular-nums">{formatINR(c.amountPaise)}</td></tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+              <p className="mt-2 text-[11px] text-slate-500">The TRACES-issued Part A carries the same figures once the 24Q is processed; this one is drawn from the challans and links recorded here.</p>
+            </div>
+            <div className="mx-auto max-w-3xl rounded-lg border bg-white p-8 text-[13px] text-slate-900 print:max-w-none print:rounded-none print:border-0 print:p-0" data-slot="form16-part-b">
               <div className="border-b pb-3 text-center">
                 <p className="text-base font-semibold">{f.form}, Part B</p>
                 <p className="text-xs text-slate-500">Details of salary paid and tax deducted · Financial year {f.fyStart}-{String(f.fyStart + 1).slice(2)} · Assessment year {f.assessmentYear}</p>
@@ -116,7 +160,6 @@ function Form16View({ employeeId }: { employeeId: string }) {
                 </tbody>
               </table>
               <p className="mt-4 text-[11px] text-slate-500">
-                Part A, the certificate of tax deducted and deposited with its challan and receipt numbers, is issued through TRACES and is attached to this.
                 Worked out from {f.monthsPaid} posted payroll month{f.monthsPaid === 1 ? '' : 's'}.
               </p>
               <div className="mt-10 flex justify-end text-xs">
