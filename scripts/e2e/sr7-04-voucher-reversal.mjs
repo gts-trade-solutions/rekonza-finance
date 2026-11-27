@@ -12,7 +12,7 @@
 //   FRESH=1 node scripts/e2e/sr7-04-voucher-reversal.mjs   (a new company)
 //   node scripts/e2e/sr7-04-voucher-reversal.mjs           (the demo book)
 
-import { start, FRESH, BASE, rupees, today } from './_sr7-common.mjs';
+import { start, FRESH, BASE, rupees, today, signInOn } from './_sr7-common.mjs';
 
 const t = await start('04');
 const { page, check, shot, idle, go, api, expect4xx, finish } = t;
@@ -39,11 +39,7 @@ try {
   const cctx = await t.browser.newContext({ viewport: { width: 1500, height: 950 }, extraHTTPHeaders: { 'X-Forwarded-For': '10.7.7.7' } });
   const cpage = await cctx.newPage();
   cpage.setDefaultTimeout(60000);
-  await cpage.goto(`${BASE}/login`, { waitUntil: 'domcontentloaded', timeout: 180000 });
-  await cpage.locator('#email').fill(checkerEmail);
-  await cpage.locator('#password').fill(checkerPassword);
-  await cpage.getByRole('button', { name: /^Sign in$/ }).click();
-  await cpage.waitForURL(/\/(dashboard|change-password|two-step-setup)/, { timeout: 180000 }).catch(() => {});
+  await signInOn(cpage, checkerEmail, checkerPassword);
   check('the checker signs in', /\/dashboard/.test(cpage.url()), cpage.url());
 
   // ── A journal approval rule: journals of ₹1,000 and more need an accountant.

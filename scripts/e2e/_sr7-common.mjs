@@ -111,3 +111,22 @@ export const rupees = (t) => Number(String(t ?? '').replace(/[^0-9.-]/g, '')) ||
 export const today = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date());
 export const fyStart = () => { const d = today(); const y = Number(d.slice(0, 4)) - (Number(d.slice(5, 7)) < 4 ? 1 : 0); return `${y}-04-01`; };
 export const fyLabel = () => { const y = Number(fyStart().slice(0, 4)); return `${y}-${String((y + 1) % 100).padStart(2, '0')}`; };
+
+/**
+ * Sign a second person in, on their own page: wait until the form is live (a
+ * click before the page hydrates submits it as a plain GET), and try once more
+ * if the first attempt did not get past the form.
+ */
+export async function signInOn(p, email, password) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await p.goto(`${BASE}/login`, { waitUntil: 'domcontentloaded', timeout: 180000 });
+    await p.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => {});
+    await p.waitForTimeout(1500);
+    await p.locator('#email').fill(email);
+    await p.locator('#password').fill(password);
+    await p.getByRole('button', { name: /^Sign in$/ }).click();
+    const ok = await p.waitForURL(/\/(dashboard|change-password|two-step-setup)/, { timeout: 120000 }).then(() => true).catch(() => false);
+    if (ok) return true;
+  }
+  return false;
+}

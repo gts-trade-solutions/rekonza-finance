@@ -16,7 +16,7 @@
 
 import { readFileSync } from 'node:fs';
 import mysql from 'mysql2/promise';
-import { start, FRESH, BASE, today } from './_sr7-common.mjs';
+import { start, FRESH, BASE, today, signInOn } from './_sr7-common.mjs';
 
 const t = await start('02');
 const { page, check, shot, idle, go, api, expect4xx, finish } = t;
@@ -124,11 +124,7 @@ try {
   // ── 6. A read-only viewer can view and export, and cannot change anything.
   const vctx = await t.browser.newContext({ viewport: { width: 1500, height: 950 }, extraHTTPHeaders: { 'X-Forwarded-For': '10.6.6.6' }, acceptDownloads: true });
   const vpage = await vctx.newPage();
-  await vpage.goto(`${BASE}/login`, { waitUntil: 'domcontentloaded', timeout: 180000 });
-  await vpage.locator('#email').fill(viewerEmail);
-  await vpage.locator('#password').fill(viewerPassword);
-  await vpage.getByRole('button', { name: /^Sign in$/ }).click();
-  await vpage.waitForURL(/\/dashboard/, { timeout: 180000 });
+  check('the viewer signs in', await signInOn(vpage, viewerEmail, viewerPassword));
   await vpage.goto(`${BASE}/accountant/audit-trail`, { waitUntil: 'domcontentloaded' });
   await vpage.waitForSelector('[data-slot="audit-export"]', { timeout: 60000 });
   await vpage.click('[data-slot="audit-export"]');
