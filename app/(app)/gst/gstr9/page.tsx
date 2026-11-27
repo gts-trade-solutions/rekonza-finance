@@ -38,6 +38,7 @@ import { usePermission } from '@/lib/store/hooks';
 import { toRupees } from '@/lib/money';
 import { downloadWorkbook, type Cell, type Sheet } from '@/lib/xlsx';
 import { cn } from '@/lib/utils';
+import { useUrlPeriod } from '@/lib/gst/url-period';
 
 
 /** The financial year now running, by the year it starts in. */
@@ -186,6 +187,7 @@ const T15_COLS = [
 
 export default function Gstr9Page() {
   const [fy, setFy] = useState(currentFy() - 1);
+  useUrlPeriod((v) => setFy(Number(v)), 'fy', /^\d{4}$/);
   const state = useApi<Gstr9Annual>(() => gstr9Annual.get(fy), [fy]);
   const years = useMemo(() => Array.from({ length: 6 }, (_, i) => currentFy() - i), []);
   const canEdit = usePermission('gst', 'edit');

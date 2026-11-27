@@ -40,6 +40,7 @@ import { GST_STATES } from '@/lib/tax/gst';
 import { downloadWorkbook, type Sheet } from '@/lib/xlsx';
 import { printPage } from '@/lib/output-guard';
 import { cn } from '@/lib/utils';
+import { useUrlPeriod } from '@/lib/gst/url-period';
 
 const err = (e: unknown) => (e instanceof ApiError || e instanceof Error ? e.message : String(e));
 const rs = (p: number) => Math.round(p) / 100;
@@ -47,6 +48,7 @@ const states = Object.entries(GST_STATES).sort((a, b) => a[0].localeCompare(b[0]
 
 export default function Gstr7Page() {
   const [month, setMonth] = useState(localMonth());
+  useUrlPeriod(setMonth, 'period', /^\d{4}-\d{2}$/);
   const state = useApi<Gstr7Response>(() => withholding.gstr7(month), [month]);
   const canCreate = usePermission('gst', 'create');
   const canEdit = usePermission('gst', 'edit');

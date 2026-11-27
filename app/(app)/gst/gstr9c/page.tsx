@@ -22,6 +22,8 @@ import { downloadCsv, ReportTable } from '@/components/shared/report-shell';
 import { gst, type Gstr9cLine, type Gstr9cReason, type Gstr9cResponse } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
 import { toRupees } from '@/lib/money';
+import { useUrlPeriod } from '@/lib/gst/url-period';
+import { ReturnFilingBar } from '@/components/gst/return-filing';
 
 const lastFy = () => {
   const d = new Date();
@@ -86,6 +88,7 @@ function Reasons({ title, rows, empty }: { title: string; rows: Gstr9cReason[]; 
 
 export default function Gstr9cPage() {
   const [fy, setFy] = useState(lastFy());
+  useUrlPeriod((v) => setFy(Number(v)), 'fy', /^\d{4}$/);
   const state = useApi<Gstr9cResponse>(() => gst.gstr9c(fy), [fy]);
   const years = useMemo(() => Array.from({ length: 6 }, (_, i) => lastFy() + 1 - i), []);
 
@@ -123,6 +126,7 @@ export default function Gstr9cPage() {
           </>
         }
       />
+      <ReturnFilingBar returnType="gstr9c" period={String(fy)} title="GSTR-9C" onChange={() => state.refetch()} />
       <AsyncPage state={state} loading={<LoadingRows rows={10} />}>
         {(d) => {
           const u = d.unreconciled;

@@ -35,6 +35,7 @@ import { toRupees } from '@/lib/money';
 import { GSTR3B_ROWS, GSTR3B_TABLES, stateLabel, type Gstr3bHeads, type Gstr3bRowKey } from '@/lib/gst/gstr3b-layout';
 import { ReturnFilingBar } from '@/components/gst/return-filing';
 import { Gstr3bChecksPanel, Gstr3bPaymentCard } from '@/components/gst/gstr3b-extras';
+import { useUrlPeriod } from '@/lib/gst/url-period';
 
 type Heads = 'IGST' | 'CGST' | 'SGST' | 'CESS';
 const HEAD_LABEL: Record<Heads, string> = { IGST: 'Integrated Tax', CGST: 'Central Tax', SGST: 'State/UT Tax', CESS: 'Cess' };
@@ -91,6 +92,8 @@ export default function Gstr3bPage() {
   const frequency = mode ?? calendar.data?.profile.frequency ?? 'monthly';
   const [month, setMonth] = useState(localMonth());
   const [quarter, setQuarter] = useState(quarterOf(localMonth()));
+  // Opened for one period (from Return Status): a month, or a quarter of a quarterly filer.
+  useUrlPeriod((v) => { if (/Q/.test(v)) { setMode('quarterly'); setQuarter(v); } else { setMode('monthly'); setMonth(v); } });
   const ret = frequency === 'quarterly' ? quarter : month;
   const state = useApi<Gstr3bFormResponse>(() => gst.gstr3bForm(ret), [ret]);
   const [drill, setDrill] = useState<Drill | null>(null);

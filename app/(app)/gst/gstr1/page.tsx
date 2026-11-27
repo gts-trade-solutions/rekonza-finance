@@ -35,6 +35,7 @@ import { downloadJson } from '@/components/shared/report-shell';
 import { downloadWorkbook, type Cell, type Sheet } from '@/lib/xlsx';
 import { toRupees } from '@/lib/money';
 import { stateLabel } from '@/lib/gst/gstr3b-layout';
+import { useUrlPeriod } from '@/lib/gst/url-period';
 
 const thisMonth = () => {
   const d = new Date();
@@ -205,6 +206,7 @@ function exportExcel(d: Gstr1ReportView) {
 
 export default function Gstr1Page() {
   const [month, setMonth] = useState(thisMonth());
+  useUrlPeriod(setMonth, 'period', /^\d{4}-\d{2}$/);
   const state = useApi<Gstr1ReportView>(() => gstReturns.gstr1Report(month), [month]);
   const [busy, setBusy] = useState(false);
 
