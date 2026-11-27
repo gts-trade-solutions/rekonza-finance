@@ -434,9 +434,9 @@ function AmendDialog({ month, row, amendment, onClose, onDone }: {
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Date of the correction" required><Input type="date" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} /></Field>
-          <Field label="Deductee GSTIN"><Input value={f.deducteeGstin} onChange={(e) => setF({ ...f, deducteeGstin: e.target.value.toUpperCase().trim() })} className="font-mono" maxLength={15} /></Field>
-          <Field label="Amount paid, excluding GST" hint="Nil if nothing should have been deducted" className="sm:col-span-2"><MoneyInput valuePaise={f.taxablePaise} onChangePaise={(v) => setF({ ...f, taxablePaise: v })} /></Field>
+          <Field label="Date of the correction" required><Input type="date" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} data-slot="gstr7-amend-date" /></Field>
+          <Field label="Deductee GSTIN"><Input value={f.deducteeGstin} onChange={(e) => setF({ ...f, deducteeGstin: e.target.value.toUpperCase().trim() })} className="font-mono" maxLength={15} data-slot="gstr7-amend-gstin" /></Field>
+          <Field label="Amount paid, excluding GST" hint="Nil if nothing should have been deducted" className="sm:col-span-2"><div data-slot="gstr7-amend-taxable"><MoneyInput valuePaise={f.taxablePaise} onChangePaise={(v) => setF({ ...f, taxablePaise: v })} /></div></Field>
           <Field label="Why" className="sm:col-span-2"><Input value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} placeholder="GSTIN keyed wrong; amount short" maxLength={300} /></Field>
         </div>
         {problem && <p className="rounded-md border border-destructive/30 bg-destructive/5 p-2.5 text-xs text-destructive">{problem}</p>}
