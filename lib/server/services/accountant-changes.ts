@@ -294,6 +294,12 @@ export async function deleteAsset(trx: Trx, orgId: number, userId: number | null
   if (Number(dep?.n ?? 0) > 0) {
     throw conflict(`Depreciation has been posted on ${a.name} (${a.tag_no}). Undo those depreciation runs first (Depreciation tab), then delete it.`);
   }
+  // A split moved cost between two assets without posting anything; deleting
+  // one half would take its cost out of the register and leave it in the ledger.
+  const split = await trx.selectFrom('asset_costs').select('id').where('asset_id', '=', id).where('kind', '=', 'split').executeTakeFirst();
+  if (split) throw conflict(`${a.name} (${a.tag_no}) was split from, or into, another asset; it stays in the register. Dispose of it instead.`);
+  const waiting = await trx.selectFrom('asset_disposals').select('id').where('asset_id', '=', id).where('status', '=', 'pending').executeTakeFirst();
+  if (waiting) throw conflict(`A disposal of ${a.name} is waiting for approval. Send it back first.`);
   const costs = await trx.selectFrom('asset_costs').selectAll().where('asset_id', '=', id).orderBy('id').execute();
   const verifications = await trx.selectFrom('asset_verifications').selectAll().where('asset_id', '=', id).execute();
   // What it posted: each cost's entry, and its putting to use.
@@ -306,6 +312,9 @@ export async function deleteAsset(trx: Trx, orgId: number, userId: number | null
     if (done) continue;
     reversals.push((await reverseEntry(trx, orgId, entryId, { memo: `Asset ${a.tag_no} ${a.name} deleted`, userId, module: 'accountant' })).id);
   }
+  // Disposals undone or sent back are kept in the snapshot below.
+  const disposals = await trx.selectFrom('asset_disposals').selectAll().where('asset_id', '=', id).execute();
+  await trx.deleteFrom('asset_disposals').where('asset_id', '=', id).execute();
   await trx.deleteFrom('depreciation_lines').where('asset_id', '=', id).execute();
   await trx.deleteFrom('asset_verifications').where('asset_id', '=', id).execute();
   await trx.deleteFrom('asset_costs').where('asset_id', '=', id).execute();
@@ -315,7 +324,7 @@ export async function deleteAsset(trx: Trx, orgId: number, userId: number | null
   await recordDeletion(trx, {
     orgId, userId, docType: 'fixed_asset', docId: id, number: a.tag_no, date: String(a.acquired_on).slice(0, 10), totalPaise: cost,
     contactId: a.vendor_id, branchId: a.branch_id, journalEntryId: entries[0] ?? null, reversalEntryId: reversals[0] ?? null, reason,
-    snapshot: { asset: plain(a), costs: costs.map(plain), verifications: verifications.map(plain), reversals },
+    snapshot: { asset: plain(a), costs: costs.map(plain), verifications: verifications.map(plain), disposals: disposals.map(plain), reversals },
   });
   return { tagNo: a.tag_no, name: a.name, reversed: reversals.length };
 }

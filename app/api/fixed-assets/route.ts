@@ -5,10 +5,13 @@ import { deleteAsset, deleteAssetClass } from '@/lib/server/services/accountant-
 import { logAudit, auditMeta, snapshot, changesBetween, describeChanges } from '@/lib/server/audit';
 import { toPaiseFromSql } from '@/lib/server/money-sql';
 import {
-  addAsset, addCost, assetDisposals, assetRegister, disposeAsset, ensureAssetClasses, itDepreciation, listAssetClasses,
-  listRuns, minimumGstOnSale, nextRunFrom, previewDepreciation, putToUse, recordVerification, reverseLatestRun,
-  runDepreciation, saveAssetClass, setItOpening,
+  addAsset, addCost, approveDisposal, assetRegister, assetSchedule, disposalsReport, disposeAsset, ensureAssetClasses,
+  getDisposalApproval, itDepreciation, listAssetClasses, listRuns, minimumGstOnSale, nextRunFrom, previewDepreciation, putToUse,
+  recordVerification, rejectDisposal, reverseLatestRun, runDepreciation, saveAssetClass, setDisposalApproval, setItOpening,
+  splitAsset, undoDisposal,
 } from '@/lib/server/services/fixed-assets';
+import { forbidden } from '@/lib/server/http';
+import { hasPermission } from '@/lib/rbac';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Fixed assets: the register, depreciation runs, disposals and the Income-tax
@@ -25,7 +28,7 @@ const lastFy = () => {
 export const GET = route(
   async ({ orgId, req }) => {
     const q = query(req, z.object({
-      view: z.enum(['register', 'runs', 'it', 'asset', 'preview', 'sale-advice', 'disposals']).default('register'),
+      view: z.enum(['register', 'runs', 'it', 'asset', 'preview', 'sale-advice', 'disposals', 'schedule', 'approval']).default('register'),
       from: DATE.optional(),
       id: z.string().optional(),
       branchId: z.string().optional(),
@@ -38,9 +41,17 @@ export const GET = route(
 
     switch (q.view) {
       case 'disposals': {
+        // The Disposals report: each disposal with its gain or loss, tied to the ledger.
         const fyFrom = `${lastFy()}-04-01`;
-        return { rows: await assetDisposals(db, orgId, q.from ?? fyFrom, q.to ?? new Date().toISOString().slice(0, 10)) };
+        return disposalsReport(db, orgId, q.from ?? fyFrom, q.to ?? new Date().toISOString().slice(0, 10));
       }
+      case 'schedule': {
+        // The Schedule III note: opening, additions, disposals, depreciation, closing, class by class.
+        const fy = q.fy ?? lastFy();
+        return assetSchedule(db, orgId, q.from ?? `${fy}-04-01`, q.to ?? `${fy + 1}-03-31`);
+      }
+      case 'approval':
+        return getDisposalApproval(db, orgId);
       case 'runs': {
         const branches = await db.selectFrom('branches').select(['id', 'name']).where('org_id', '=', orgId).where('is_active', '=', 1).execute();
         const next = await Promise.all(branches.map(async (b) => ({ branchId: asId(b.id), branchName: b.name, from: await nextRunFrom(db, orgId, b.id) })));
@@ -75,12 +86,18 @@ export const GET = route(
             'v.display_name as vendor_name', 'b.internal_no as bill_no', 'i.number as invoice_no'])
           .where('a.id', '=', id).where('a.org_id', '=', orgId).executeTakeFirst();
         if (!a) throw notFound('That asset is not in the register.');
-        const [costs, dep, checks] = await Promise.all([
+        const [costs, dep, checks, disposals] = await Promise.all([
           db.selectFrom('asset_costs').selectAll().where('asset_id', '=', id).orderBy('cost_date').execute(),
           db.selectFrom('depreciation_lines').selectAll().where('asset_id', '=', id).where('reversed', '=', 0).orderBy('period_to').execute(),
           db.selectFrom('asset_verifications as v').leftJoin('users as u', 'u.id', 'v.verified_by_user_id')
             .select(['v.id', 'v.verified_on', 'v.found', 'v.condition', 'v.location', 'v.notes', 'u.name as by'])
             .where('v.asset_id', '=', id).orderBy('v.verified_on', 'desc').execute(),
+          db.selectFrom('asset_disposals as x').leftJoin('invoices as i', 'i.id', 'x.invoice_id').leftJoin('bank_accounts as b', 'b.id', 'x.bank_account_id')
+            .leftJoin('users as u', 'u.id', 'x.undone_by_user_id').leftJoin('users as r', 'r.id', 'x.requested_by_user_id')
+            .select(['x.id', 'x.status', 'x.disposed_on', 'x.kind', 'x.proceeds_via', 'x.sale_value', 'x.gst_amount', 'x.cost', 'x.accumulated',
+              'x.catch_up', 'x.gain', 'x.invoice_id', 'i.number as invoice_no', 'b.name as bank_name', 'x.disposal_entry_id', 'x.depreciation_entry_id',
+              'x.undo_reason', 'x.undone_at', 'u.name as undone_by', 'x.reason', 'r.name as requested_by', 'x.rejected_reason'])
+            .where('x.asset_id', '=', id).orderBy('x.id', 'desc').execute(),
         ]);
         const d = (v: unknown) => (v ? String(v).slice(0, 10) : null);
         return {
@@ -100,6 +117,16 @@ export const GET = route(
           costs: costs.map((c) => ({ id: asId(c.id), date: d(c.cost_date), amountPaise: toPaiseFromSql(c.amount), kind: c.kind, description: c.description })),
           depreciation: dep.map((l) => ({ id: asId(l.id), from: d(l.period_from), to: d(l.period_to), days: l.days, amountPaise: toPaiseFromSql(l.amount), disposal: !!l.disposal })),
           verifications: checks.map((v) => ({ id: asId(v.id), date: d(v.verified_on), found: !!v.found, condition: v.condition, location: v.location, notes: v.notes, by: v.by })),
+          // Every disposal on record, newest first: what it fetched, the gain or loss, its entries; undone ones with why.
+          disposals: disposals.map((x) => ({
+            id: asId(x.id), status: x.status, date: d(x.disposed_on), kind: x.kind, via: x.proceeds_via,
+            salePaise: toPaiseFromSql(x.sale_value), gstPaise: toPaiseFromSql(x.gst_amount), costPaise: toPaiseFromSql(x.cost),
+            accumulatedPaise: toPaiseFromSql(x.accumulated), catchUpPaise: toPaiseFromSql(x.catch_up), gainPaise: toPaiseFromSql(x.gain),
+            invoiceId: x.invoice_id ? asId(x.invoice_id) : null, invoiceNo: x.invoice_no, bankName: x.bank_name,
+            entryId: x.disposal_entry_id ? asId(x.disposal_entry_id) : null, depreciationEntryId: x.depreciation_entry_id ? asId(x.depreciation_entry_id) : null,
+            reason: x.reason, requestedBy: x.requested_by, undoReason: x.undo_reason, undoneBy: x.undone_by,
+            undoneAt: x.undone_at ? new Date(x.undone_at).toISOString() : null, rejectedReason: x.rejected_reason,
+          })),
         };
       }
       default: {
@@ -148,7 +175,17 @@ const Input = z.discriminatedUnion('action', [
   z.object({ action: z.literal('reverse-run'), branchId: Id }),
   z.object({
     action: z.literal('dispose'), id: Id, date: DATE, kind: z.enum(['sold', 'scrapped']),
+    proceedsVia: z.enum(['invoice', 'bank']).nullish(), bankAccountId: Id.nullish(),
     customerId: Id.nullish(), salePaise: z.number().int().positive().nullish(), gstRatePct: z.number().min(0).max(40).nullish(),
+    partCostPaise: z.number().int().positive().nullish(), reason: z.string().trim().max(300).nullish(),
+  }),
+  z.object({ action: z.literal('undo-disposal'), id: Id, reason: z.string().trim().min(4, 'Give the reason for undoing it.').max(300) }),
+  z.object({ action: z.literal('split'), id: Id, partCostPaise: z.number().int().positive(), name: z.string().trim().max(200).nullish(), tagNo: z.string().trim().max(30).nullish() }),
+  z.object({ action: z.literal('approve-disposal'), disposalId: Id }),
+  z.object({ action: z.literal('reject-disposal'), disposalId: Id, reason: z.string().trim().min(3, 'Say why it is sent back.').max(300) }),
+  z.object({
+    action: z.literal('disposal-approval'), isActive: z.boolean(), thresholdPaise: z.number().int().min(0),
+    approverRole: z.enum(['admin', 'accountant', 'sales', 'staff']),
   }),
   z.object({
     action: z.literal('verify'), id: Id, date: DATE, found: z.boolean(),
@@ -171,9 +208,9 @@ const Input = z.discriminatedUnion('action', [
 ]);
 
 export const POST = route(
-  async ({ orgId, user, branchId, req }) => {
+  async ({ orgId, user, role, branchId, req }) => {
     const input = await body(req, Input);
-    const audit = (action: 'create' | 'update' | 'void', targetId: number, label: string, detail: string, payload?: unknown) => ({
+    const audit = (action: 'create' | 'update' | 'void' | 'approve', targetId: number, label: string, detail: string, payload?: unknown) => ({
       orgId, actorUserId: user.userId, actorName: user.name, action, targetType: 'fixed_asset', targetId, targetLabel: label, detail, payload, ...auditMeta(req),
     });
     const n = (v: string | number | null | undefined) => (v === null || v === undefined || v === '' ? null : Number(v));
@@ -217,16 +254,62 @@ export const POST = route(
         }
         case 'dispose': {
           const r = await disposeAsset(trx, orgId, user.userId, Number(input.id), {
-            date: input.date, kind: input.kind, customerId: n(input.customerId) ?? undefined,
-            salePaise: input.salePaise ?? undefined, gstRatePct: input.gstRatePct ?? undefined,
+            date: input.date, kind: input.kind, proceedsVia: input.proceedsVia ?? undefined, bankAccountId: n(input.bankAccountId) ?? undefined,
+            customerId: n(input.customerId) ?? undefined, salePaise: input.salePaise ?? undefined, gstRatePct: input.gstRatePct ?? undefined,
+            partCostPaise: input.partCostPaise ?? undefined, reason: input.reason,
           });
-          await logAudit({ trx, ...audit('void', Number(input.id), String(input.id),
-            `${input.kind === 'sold' ? `Sold on ${input.date}${r.invoiceNumber ? ` by ${r.invoiceNumber}` : ''}` : `Scrapped on ${input.date}`}; ` +
-              `${r.gainPaise >= 0 ? 'gain' : 'loss'} ₹${(Math.abs(r.gainPaise) / 100).toLocaleString('en-IN')}`) });
+          const how = input.kind === 'sold'
+            ? `Sold on ${input.date}${r.invoiceNumber ? ` by ${r.invoiceNumber}` : input.proceedsVia === 'bank' ? ', proceeds into the bank' : ''}`
+            : `Scrapped on ${input.date}`;
+          const rupee = (p: number) => `₹${(Math.abs(p) / 100).toLocaleString('en-IN')}`;
+          await logAudit({ trx, ...audit(r.pending ? 'update' : 'void', r.assetId, String(r.assetId), r.pending
+            ? `${how}: disposal asked for, waiting for approval by ${r.approverRole}`
+            : `${how}${input.partCostPaise ? ` (part costing ${rupee(input.partCostPaise)})` : ''}; ${r.gainPaise >= 0 ? 'gain' : 'loss'} ${rupee(r.gainPaise)}${input.reason ? ` — ${input.reason}` : ''}`) });
           return {
+            disposalId: asId(r.disposalId), pending: r.pending, assetId: asId(r.assetId), approverRole: r.approverRole ?? null,
             invoiceId: r.invoiceId ? asId(r.invoiceId) : null, invoiceNumber: r.invoiceNumber, gainPaise: r.gainPaise,
+            catchUpPaise: r.catchUpPaise, accumulatedPaise: r.accumulatedPaise, costPaise: r.costPaise, salePaise: r.salePaise,
+            entryId: r.entryId ? asId(r.entryId) : null, depreciationEntryId: r.depreciationEntryId ? asId(r.depreciationEntryId) : null,
             minimumTaxPaise: r.minimumTaxPaise, invoiceTaxPaise: r.invoiceTaxPaise, shortTaxPaise: r.shortTaxPaise,
           };
+        }
+        case 'undo-disposal': {
+          // Taking a disposal back reverses posted entries: the right to void, as deleting an asset needs.
+          if (!hasPermission(role, 'accountant', 'void')) throw forbidden('Undoing a disposal reverses its entries; it needs the right to void in Accountant.');
+          const r = await undoDisposal(trx, orgId, user.userId, Number(input.id), input.reason);
+          const missed = r.missedDepreciationPaise ? `; ₹${(r.missedDepreciationPaise / 100).toLocaleString('en-IN')} of depreciation it missed charged` : '';
+          await logAudit({ trx, ...audit('update', Number(input.id), r.tagNo,
+            `Disposal of ${r.name} undone — ${input.reason}; its entries reversed${r.invoiceVoided ? ', its sale invoice voided' : ''}${missed}`) });
+          return { ok: true, invoiceVoided: r.invoiceVoided, missedDepreciationPaise: r.missedDepreciationPaise };
+        }
+        case 'split': {
+          const r = await splitAsset(trx, orgId, user.userId, Number(input.id), { partCostPaise: input.partCostPaise, name: input.name, tagNo: input.tagNo });
+          await logAudit({ trx, ...audit('create', r.id, r.tagNo,
+            `Split from asset ${input.id}: cost ₹${(r.partCostPaise / 100).toLocaleString('en-IN')} and depreciation ₹${(r.partDepreciationPaise / 100).toLocaleString('en-IN')} moved`) });
+          return { id: asId(r.id), tagNo: r.tagNo };
+        }
+        case 'approve-disposal': {
+          const r = await approveDisposal(trx, orgId, { userId: user.userId, role }, Number(input.disposalId));
+          await logAudit({ trx, ...audit('approve', r.assetId, String(r.assetId),
+            `Disposal approved and posted; ${r.gainPaise >= 0 ? 'gain' : 'loss'} ₹${(Math.abs(r.gainPaise) / 100).toLocaleString('en-IN')}${r.invoiceNumber ? `, invoice ${r.invoiceNumber}` : ''}`) });
+          return { ok: true, assetId: asId(r.assetId), gainPaise: r.gainPaise, invoiceNumber: r.invoiceNumber };
+        }
+        case 'reject-disposal': {
+          await rejectDisposal(trx, orgId, user.userId, Number(input.disposalId), input.reason);
+          await logAudit({ trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'update', targetType: 'asset_disposal',
+            targetId: Number(input.disposalId), targetLabel: `Disposal ${input.disposalId}`, detail: `Sent back: ${input.reason}`, ...auditMeta(req) });
+          return { ok: true };
+        }
+        case 'disposal-approval': {
+          if (role !== 'admin') throw forbidden('Only an admin sets who approves disposals.');
+          await setDisposalApproval(trx, orgId, user.userId, { isActive: input.isActive, thresholdPaise: input.thresholdPaise, approverRole: input.approverRole });
+          await logAudit({ trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'update', targetType: 'asset_disposal_approval',
+            targetId: orgId, targetLabel: 'Disposal approval',
+            detail: input.isActive
+              ? `Disposals of ₹${(input.thresholdPaise / 100).toLocaleString('en-IN')} and above need approval by ${input.approverRole}`
+              : 'Disposals need no approval',
+            ...auditMeta(req) });
+          return { ok: true };
         }
         case 'verify': {
           await recordVerification(trx, orgId, user.userId, Number(input.id), {

@@ -27,13 +27,14 @@ import 'server-only';
 
 import { sql } from 'kysely';
 import { db, transaction, type Executor, type Trx } from '../db';
-import type { Paise } from '../../types';
+import type { Paise, RoleName } from '../../types';
 import { toPaiseFromSql, toSqlFromPaise } from '../money-sql';
 import { nextSequence, postEntry, reverseEntry, type DraftLine } from '../ledger/posting';
 import { CODE, accountIds, requireAccount } from '../ledger/chart-of-accounts';
-import { badRequest, conflict, notFound } from '../http';
+import { badRequest, conflict, forbidden, notFound } from '../http';
 import { booksStartDate } from './opening-balances';
-import { createInvoice } from './sales';
+import { createInvoice, voidInvoice } from './sales';
+import { bankLineMatched } from './doc-delete';
 import { getPolicies } from './org-settings';
 import { dayLabel } from '../../date-range';
 
@@ -337,7 +338,7 @@ export async function addCost(
   return { entryId: entry.id };
 }
 
-async function lockAsset(trx: Trx, orgId: number, id: number) {
+export async function lockAsset(trx: Trx, orgId: number, id: number) {
   const a = await trx.selectFrom('fixed_assets').selectAll().where('id', '=', id).where('org_id', '=', orgId).forUpdate().executeTakeFirst();
   if (!a) throw notFound('That asset is not in the register.');
   return a;
@@ -373,7 +374,7 @@ interface Loaded {
   basis: AssetBasis; openingAccumulated: Paise; charged: Paise; lastTo: string | null;
 }
 
-async function loadAssets(ex: Executor, orgId: number, f: { branchId?: number; ids?: number[] }): Promise<Loaded[]> {
+export async function loadAssets(ex: Executor, orgId: number, f: { branchId?: number; ids?: number[] }): Promise<Loaded[]> {
   const rows = await ex.selectFrom('fixed_assets as a').innerJoin('asset_classes as c', 'c.id', 'a.class_id')
     .select(['a.id', 'a.tag_no', 'a.name', 'a.branch_id', 'a.status', 'a.put_to_use_on', 'a.useful_life_years',
       'a.residual_value', 'a.opening_accumulated', 'c.method', 'c.useful_life_years as class_life', 'c.residual_pct'])
@@ -478,6 +479,13 @@ export async function reverseLatestRun(trx: Trx, orgId: number, userId: number |
   if (disposedSince) {
     throw conflict(`${disposedSince.name} was disposed of after this run began; its depreciation to that day was settled at disposal.`);
   }
+  // A split shares out the depreciation charged so far; a run before it stays.
+  const splitSince = await trx.selectFrom('depreciation_lines as l').innerJoin('fixed_assets as a', 'a.id', 'l.asset_id')
+    .select('a.name').where('l.org_id', '=', orgId).where('a.branch_id', '=', branchId).where('l.split', '=', 1)
+    .where('l.reversed', '=', 0).where('l.period_to', '>=', run.period_from).executeTakeFirst();
+  if (splitSince) {
+    throw conflict(`${splitSince.name} was split after this run; the depreciation it carried was shared out between the parts, so the run stays.`);
+  }
   if (run.journal_entry_id) {
     await reverseEntry(trx, orgId, run.journal_entry_id, { userId, module: 'accountant', memo: `Depreciation run to ${dayLabel(String(run.period_to))} undone` });
   }
@@ -487,107 +495,457 @@ export async function reverseLatestRun(trx: Trx, orgId: number, userId: number |
 }
 
 // ── Disposal ─────────────────────────────────────────────────────────────────
+//
+// An asset leaves the register in one of three ways:
+//
+//   * sold by a tax invoice to a buyer — GST is charged on the sale of a used
+//     asset like on any supply (section 7 of the CGST Act; at least the credit
+//     taken less five percentage points a quarter, section 18(6) and rule
+//     44(6)), and the invoice reaches GSTR-1 like any other;
+//   * sold for money received straight into a bank, with no invoice — for a
+//     business not registered for GST, or a receipt GST does not reach (an
+//     insurer settling a claim for an asset destroyed, say);
+//   * scrapped, with nothing received.
+//
+// Either way two entries post, in this order:
+//
+//   1. Depreciation from the day after the last run to the day before it left,
+//      pro rata by days (Schedule II: depreciation is charged to the date of
+//      disposal, and not after):  Dr Depreciation  Cr Accumulated Depreciation
+//   2. The disposal itself, one entry:
+//        Dr Accumulated Depreciation       all of it, to the day it left
+//        Dr Asset Disposal Clearing        the invoiced sale value, which the
+//           (or Dr the bank)               invoice credited there; or the bank
+//        Cr the asset's ledger             its whole cost
+//        Cr Profit on Sale of Fixed Assets / Dr Loss on Sale or Discard
+//
+// Part of an asset (one machine of a line, a component replaced) is disposed of
+// by splitting it first: the part's cost and its share of the depreciation move
+// to an asset of its own (Ind AS 16 paragraph 43 / AS 10: each significant part
+// depreciated, and derecognised, separately), and that one is disposed of.
+//
+// A disposal can be undone, with a reason: both entries are reversed on their
+// own dates, the sale invoice voided, and the asset goes back into use — with
+// the depreciation it missed in the meantime charged, so it is exactly where it
+// would have been. The disposal stays on record, marked undone.
+//
+// A book can require a second person to approve disposals above an amount
+// (Fixed Assets → Classes → Disposal approval): such a disposal waits, with
+// nothing posted, until someone other than the person who asked approves it.
 
 export interface DisposalInput {
   date: string;
   kind: 'sold' | 'scrapped';
-  /** A sale: who bought it, for how much before GST, and at what rate. */
+  /** A sale: by tax invoice to a buyer (the default), or received straight into a bank. */
+  proceedsVia?: 'invoice' | 'bank';
+  /** An invoiced sale: who bought it, for how much before GST, and at what rate. */
   customerId?: number;
   salePaise?: Paise;
   gstRatePct?: number;
+  /** A sale received into a bank: which account. */
+  bankAccountId?: number;
+  /** Dispose of only this much of the cost: the asset is split first and the part disposed of. */
+  partCostPaise?: Paise;
+  reason?: string | null;
 }
 
-export async function disposeAsset(trx: Trx, orgId: number, userId: number | null, assetId: number, input: DisposalInput) {
-  const a = await lockAsset(trx, orgId, assetId);
-  if (a.status === 'disposed') throw conflict(`${a.name} was already disposed of on ${String(a.disposed_on).slice(0, 10)}.`);
-  const acquired = String(a.acquired_on).slice(0, 10);
+export interface DisposalResult {
+  disposalId: number;
+  /** Waiting for a second person: nothing is posted yet. */
+  pending: boolean;
+  assetId: number;
+  entryId: number | null;
+  depreciationEntryId: number | null;
+  invoiceId: number | null;
+  invoiceNumber: string | null;
+  costPaise: Paise;
+  accumulatedPaise: Paise;
+  catchUpPaise: Paise;
+  salePaise: Paise;
+  gainPaise: Paise;
+  minimumTaxPaise: Paise;
+  invoiceTaxPaise: Paise;
+  shortTaxPaise: Paise;
+  approverRole?: string | null;
+}
+
+/** Who must approve a disposal, if anyone. */
+export interface DisposalApproval { isActive: boolean; thresholdPaise: Paise; approverRole: RoleName }
+
+export async function getDisposalApproval(ex: Executor, orgId: number): Promise<DisposalApproval> {
+  const r = await ex.selectFrom('asset_disposal_approval').selectAll().where('org_id', '=', orgId).executeTakeFirst();
+  return r
+    ? { isActive: !!r.is_active, thresholdPaise: toPaiseFromSql(r.threshold), approverRole: r.approver_role as RoleName }
+    : { isActive: false, thresholdPaise: 0, approverRole: 'admin' };
+}
+
+export async function setDisposalApproval(trx: Trx, orgId: number, userId: number | null, input: DisposalApproval) {
+  if (input.thresholdPaise < 0) throw badRequest('The amount cannot be negative.');
+  if (input.approverRole === 'viewer') throw badRequest('A viewer cannot approve anything; choose another role.');
+  const values = { is_active: input.isActive ? 1 : 0, threshold: toSqlFromPaise(input.thresholdPaise), approver_role: input.approverRole, updated_by_user_id: userId };
+  await trx.insertInto('asset_disposal_approval').values({ org_id: orgId, ...values }).onDuplicateKeyUpdate(values).execute();
+}
+
+const ymdOf = (v: unknown) => (v ? String(v instanceof Date ? v.toISOString() : v).slice(0, 10) : null);
+
+/** Checks that need nothing posted: the asset can leave on that date, and the sale is complete. */
+async function checkDisposal(trx: Trx, orgId: number, a: Awaited<ReturnType<typeof lockAsset>>, input: DisposalInput) {
+  if (a.status === 'disposed') throw conflict(`${a.name} was already disposed of on ${ymdOf(a.disposed_on)}.`);
+  const acquired = ymdOf(a.acquired_on)!;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(input.date)) throw badRequest('Give the date it left as yyyy-mm-dd.');
   if (input.date < acquired) throw badRequest('It cannot leave before it arrived.');
-  const acc = await accountIds(trx, orgId);
-  const cls = await classOf(trx, orgId, a.class_id);
-  const home = a.status === 'in_use' ? cls.account_id : requireAccount(acc, CODE.CWIP);
-  const [loaded] = await loadAssets(trx, orgId, { ids: [assetId] });
+  const [loaded] = await loadAssets(trx, orgId, { ids: [a.id] });
   // Depreciation already charged past the disposal date would stay in the
   // books for days the asset was gone: date the disposal after the last run,
   // or reverse that run first.
   if (a.status === 'in_use' && loaded.lastTo && input.date <= loaded.lastTo) {
     throw badRequest(`Depreciation on ${a.name} has been charged up to ${loaded.lastTo}. Date the disposal after that, or reverse that depreciation run first.`);
   }
+  if (input.kind === 'sold') {
+    if (!(input.salePaise && input.salePaise > 0)) throw badRequest('Give the sale value before GST. Nil is a scrapping.');
+    if ((input.proceedsVia ?? 'invoice') === 'invoice') {
+      if (!input.customerId) throw badRequest('Say who bought it.');
+      if (input.gstRatePct === undefined || input.gstRatePct === null) throw badRequest('Give the GST rate on the sale.');
+    } else {
+      if (!input.bankAccountId) throw badRequest('Say which bank account the money came into.');
+      const bank = await trx.selectFrom('bank_accounts').select('id').where('id', '=', input.bankAccountId).where('org_id', '=', orgId).executeTakeFirst();
+      if (!bank) throw notFound('That bank account does not exist.');
+    }
+  }
+  if (input.partCostPaise !== undefined && input.partCostPaise !== null) {
+    if (a.status !== 'in_use') throw badRequest('Only an asset in use can be disposed of in part.');
+    if (!(input.partCostPaise > 0 && input.partCostPaise < loaded.basis.costPaise)) {
+      throw badRequest(`The part's cost must be above nil and below the asset's cost of ₹${(loaded.basis.costPaise / 100).toLocaleString('en-IN')}. All of it is a whole disposal.`);
+    }
+  }
+  return loaded;
+}
 
-  // Depreciation up to the day before it leaves, posted now.
+/**
+ * Dispose of an asset, or ask for its disposal to be approved when a rule
+ * catches it. What it would carry out of the books — its written-down value,
+ * or the proceeds if higher — is what the rule's threshold is set against.
+ */
+export async function disposeAsset(trx: Trx, orgId: number, userId: number | null, assetId: number, input: DisposalInput): Promise<DisposalResult> {
+  const a = await lockAsset(trx, orgId, assetId);
+  const loaded = await checkDisposal(trx, orgId, a, input);
+  const rule = await getDisposalApproval(trx, orgId);
+  const share = input.partCostPaise ? input.partCostPaise / loaded.basis.costPaise : 1;
+  const wdv = Math.round((loaded.basis.costPaise - loaded.openingAccumulated - loaded.charged) * share);
+  const stake = Math.max(wdv, input.salePaise ?? 0);
+  const values = {
+    org_id: orgId, asset_id: assetId, disposed_on: input.date, kind: input.kind,
+    proceeds_via: input.kind === 'scrapped' ? 'none' as const : input.proceedsVia ?? 'invoice' as const,
+    customer_id: input.kind === 'sold' && (input.proceedsVia ?? 'invoice') === 'invoice' ? input.customerId ?? null : null,
+    bank_account_id: input.kind === 'sold' && input.proceedsVia === 'bank' ? input.bankAccountId ?? null : null,
+    sale_value: toSqlFromPaise(input.kind === 'sold' ? input.salePaise ?? 0 : 0),
+    gst_rate_pct: input.kind === 'sold' && (input.proceedsVia ?? 'invoice') === 'invoice' ? String(input.gstRatePct ?? 0) : null,
+    part_pct: input.partCostPaise ? String(Math.round(share * 1_000_000) / 10_000) : null,
+    reason: input.reason?.trim() || null, requested_by_user_id: userId,
+  };
+  const open = await trx.selectFrom('asset_disposals').select('id').where('asset_id', '=', assetId).where('status', '=', 'pending').executeTakeFirst();
+  if (open) throw conflict(`A disposal of ${a.name} is already waiting for approval. Approve or send it back first.`);
+  if (rule.isActive && stake >= rule.thresholdPaise) {
+    // The part's cost is kept until it is approved; the split happens then.
+    const id = Number((await trx.insertInto('asset_disposals').values({
+      ...values, status: 'pending', cost: toSqlFromPaise(input.partCostPaise ?? loaded.basis.costPaise),
+    }).executeTakeFirstOrThrow()).insertId);
+    return {
+      disposalId: id, pending: true, assetId, entryId: null, depreciationEntryId: null, invoiceId: null, invoiceNumber: null,
+      costPaise: input.partCostPaise ?? loaded.basis.costPaise, accumulatedPaise: 0, catchUpPaise: 0, salePaise: input.salePaise ?? 0,
+      gainPaise: 0, minimumTaxPaise: 0, invoiceTaxPaise: 0, shortTaxPaise: 0, approverRole: rule.approverRole,
+    };
+  }
+  const id = Number((await trx.insertInto('asset_disposals').values({ ...values, status: 'pending' }).executeTakeFirstOrThrow()).insertId);
+  return postDisposal(trx, orgId, userId, id, input);
+}
+
+/** Post a disposal on record (just asked for, or just approved). */
+async function postDisposal(trx: Trx, orgId: number, userId: number | null, disposalId: number, input: DisposalInput): Promise<DisposalResult> {
+  const d = await trx.selectFrom('asset_disposals').selectAll().where('id', '=', disposalId).where('org_id', '=', orgId).forUpdate().executeTakeFirstOrThrow();
+  let assetId = d.asset_id;
+  let partOf: number | null = null;
+  if (input.partCostPaise) {
+    const split = await splitAsset(trx, orgId, userId, d.asset_id, { partCostPaise: input.partCostPaise, reason: `Part disposed of on ${input.date}` }, { forDisposal: true });
+    partOf = d.asset_id;
+    assetId = split.id;
+  }
+  const a = await lockAsset(trx, orgId, assetId);
+  const loaded = await checkDisposal(trx, orgId, a, { ...input, partCostPaise: undefined });
+  const acquired = ymdOf(a.acquired_on)!;
+  const acc = await accountIds(trx, orgId);
+  const cls = await classOf(trx, orgId, a.class_id);
+  const home = a.status === 'in_use' ? cls.account_id : requireAccount(acc, CODE.CWIP);
+
+  // 1. Depreciation up to the day before it leaves, posted first.
   let catchUp = 0;
+  let depEntryId: number | null = null;
   if (a.status === 'in_use') {
     const start = await booksStartDate(trx, orgId);
     const from = loaded.lastTo ? addDays(loaded.lastTo, 1) : maxDate(loaded.basis.putToUseOn, start.date);
     const to = addDays(input.date, -1);
-    const d = depreciationFor(loaded.basis, from, to, loaded.openingAccumulated + loaded.charged);
-    if (d.amountPaise > 0) {
-      await postEntry(trx, {
+    const dep = depreciationFor(loaded.basis, from, to, loaded.openingAccumulated + loaded.charged);
+    if (dep.amountPaise > 0) {
+      depEntryId = (await postEntry(trx, {
         orgId, branchId: a.branch_id, date: to, module: 'accountant',
-        memo: `Depreciation on ${a.name} (${a.tag_no}) to the day it left`, sourceType: 'depreciation', userId,
+        memo: `Depreciation on ${a.name} (${a.tag_no}) to the day it left`, sourceType: 'depreciation', sourceId: assetId, userId,
         lines: [
-          { accountId: requireAccount(acc, CODE.DEPRECIATION), debit: d.amountPaise },
-          { accountId: requireAccount(acc, CODE.ACCUMULATED_DEPRECIATION), credit: d.amountPaise },
+          { accountId: requireAccount(acc, CODE.DEPRECIATION), debit: dep.amountPaise },
+          { accountId: requireAccount(acc, CODE.ACCUMULATED_DEPRECIATION), credit: dep.amountPaise },
         ],
-      });
+      })).id;
       await trx.insertInto('depreciation_lines').values({
-        run_id: null, org_id: orgId, asset_id: assetId, period_from: from, period_to: to, days: d.days,
-        amount: toSqlFromPaise(d.amountPaise), disposal: 1,
+        run_id: null, org_id: orgId, asset_id: assetId, period_from: from, period_to: to, days: dep.days,
+        amount: toSqlFromPaise(dep.amountPaise), disposal: 1, journal_entry_id: depEntryId,
       }).execute();
-      catchUp = d.amountPaise;
+      catchUp = dep.amountPaise;
     }
   }
 
   const cost = loaded.basis.costPaise;
   const accumulated = loaded.openingAccumulated + loaded.charged + catchUp;
+  const via = input.kind === 'scrapped' ? 'none' : input.proceedsVia ?? 'invoice';
   let sale = 0;
   let invoiceId: number | null = null;
   let invoiceNumber: string | null = null;
   let minimumTax = 0;
   let invoiceTax = 0;
+  let bankLedger: number | null = null;
 
   if (input.kind === 'sold') {
-    if (!input.customerId) throw badRequest('Say who bought it.');
-    if (!(input.salePaise && input.salePaise > 0)) throw badRequest('Give the sale value before GST. Nil is a scrapping.');
-    if (input.gstRatePct === undefined) throw badRequest('Give the GST rate on the sale.');
-    sale = input.salePaise;
-    const inv = await createInvoice(trx, orgId, userId, {
-      branchId: a.branch_id, customerId: input.customerId, date: input.date, dueDate: input.date, status: 'approved',
-      lines: [{
-        description: `Sale of ${a.name} (${a.tag_no})`, hsnSac: a.hsn_sac, qty: 1, ratePaise: sale,
-        gstRatePct: input.gstRatePct, accountId: requireAccount(acc, CODE.ASSET_DISPOSAL),
-      }],
-      notes: `Sale of a used fixed asset, ${a.tag_no}.`,
-    });
-    invoiceId = inv.id;
-    const row = await trx.selectFrom('invoices').select(['number', 'cgst', 'sgst', 'igst', 'cess']).where('id', '=', inv.id).executeTakeFirstOrThrow();
-    invoiceNumber = row.number;
-    invoiceTax = toPaiseFromSql(row.cgst) + toPaiseFromSql(row.sgst) + toPaiseFromSql(row.igst) + toPaiseFromSql(row.cess);
-    minimumTax = minimumGstOnSale(toPaiseFromSql(a.itc_claimed), acquired, input.date);
+    sale = input.salePaise!;
+    if (via === 'invoice') {
+      const inv = await createInvoice(trx, orgId, userId, {
+        branchId: a.branch_id, customerId: input.customerId!, date: input.date, dueDate: input.date, status: 'approved',
+        lines: [{
+          description: `Sale of ${a.name} (${a.tag_no})`, hsnSac: a.hsn_sac, qty: 1, ratePaise: sale,
+          gstRatePct: input.gstRatePct!, accountId: requireAccount(acc, CODE.ASSET_DISPOSAL),
+        }],
+        notes: `Sale of a used fixed asset, ${a.tag_no}.`,
+      });
+      invoiceId = inv.id;
+      const row = await trx.selectFrom('invoices').select(['number', 'cgst', 'sgst', 'igst', 'cess']).where('id', '=', inv.id).executeTakeFirstOrThrow();
+      invoiceNumber = row.number;
+      invoiceTax = toPaiseFromSql(row.cgst) + toPaiseFromSql(row.sgst) + toPaiseFromSql(row.igst) + toPaiseFromSql(row.cess);
+      minimumTax = minimumGstOnSale(toPaiseFromSql(a.itc_claimed), acquired, input.date);
+    } else {
+      const bank = await trx.selectFrom('bank_accounts').select(['ledger_account_id']).where('id', '=', input.bankAccountId!).where('org_id', '=', orgId).executeTakeFirstOrThrow();
+      bankLedger = bank.ledger_account_id;
+    }
   }
 
+  // 2. The disposal: one entry.
   const lines: DraftLine[] = [];
-  if (sale > 0) lines.push({ accountId: requireAccount(acc, CODE.ASSET_DISPOSAL), debit: sale, description: invoiceNumber ?? undefined });
-  if (accumulated > 0) lines.push({ accountId: requireAccount(acc, CODE.ACCUMULATED_DEPRECIATION), debit: accumulated });
-  lines.push({ accountId: home, credit: cost });
+  if (accumulated > 0) lines.push({ accountId: requireAccount(acc, CODE.ACCUMULATED_DEPRECIATION), debit: accumulated, description: `Depreciation on ${a.tag_no} to the day it left` });
+  if (sale > 0 && via === 'invoice') lines.push({ accountId: requireAccount(acc, CODE.ASSET_DISPOSAL), debit: sale, description: `Invoice ${invoiceNumber}` });
+  if (sale > 0 && via === 'bank') lines.push({ accountId: bankLedger!, debit: sale, description: `Sale proceeds of ${a.tag_no}` });
+  lines.push({ accountId: home, credit: cost, description: `Cost of ${a.tag_no}` });
   const gain = sale + accumulated - cost;
   if (gain > 0) lines.push({ accountId: requireAccount(acc, CODE.PROFIT_ON_ASSET_SALE), credit: gain });
   else if (gain < 0) lines.push({ accountId: requireAccount(acc, CODE.LOSS_ON_ASSET_SALE), debit: -gain });
 
   const entry = await postEntry(trx, {
-    orgId, branchId: a.branch_id, date: input.date, module: 'accountant',
-    memo: `${input.kind === 'sold' ? 'Sold' : 'Scrapped'}: ${a.name} (${a.tag_no})`,
+    orgId, branchId: a.branch_id, date: input.date, module: via === 'bank' ? 'banking' : 'accountant',
+    memo: `${input.kind === 'sold' ? 'Sold' : 'Scrapped'}: ${a.name} (${a.tag_no})${invoiceNumber ? ` by ${invoiceNumber}` : via === 'bank' ? ', proceeds into the bank' : ''}`,
     sourceType: 'asset_disposal', sourceId: assetId, userId, lines,
   });
   await trx.updateTable('fixed_assets').set({
     status: 'disposed', disposed_on: input.date, disposal_kind: input.kind, disposal_value: toSqlFromPaise(sale),
-    disposal_invoice_id: invoiceId, disposal_entry_id: entry.id,
+    disposal_invoice_id: invoiceId, disposal_entry_id: entry.id, disposal_id: disposalId,
   }).where('id', '=', assetId).execute();
+  await trx.updateTable('asset_disposals').set({
+    status: 'posted', asset_id: assetId, part_of_asset_id: partOf, invoice_id: invoiceId,
+    gst_amount: toSqlFromPaise(invoiceTax), cost: toSqlFromPaise(cost), accumulated: toSqlFromPaise(accumulated),
+    catch_up: toSqlFromPaise(catchUp), gain: toSqlFromPaise(gain), depreciation_entry_id: depEntryId, disposal_entry_id: entry.id,
+  }).where('id', '=', disposalId).execute();
 
   return {
-    entryId: entry.id, invoiceId, invoiceNumber, costPaise: cost, accumulatedPaise: accumulated, salePaise: sale,
-    gainPaise: gain, minimumTaxPaise: minimumTax, invoiceTaxPaise: invoiceTax,
-    shortTaxPaise: Math.max(0, minimumTax - invoiceTax),
+    disposalId, pending: false, assetId, entryId: entry.id, depreciationEntryId: depEntryId, invoiceId, invoiceNumber,
+    costPaise: cost, accumulatedPaise: accumulated, catchUpPaise: catchUp, salePaise: sale, gainPaise: gain,
+    minimumTaxPaise: minimumTax, invoiceTaxPaise: invoiceTax, shortTaxPaise: Math.max(0, minimumTax - invoiceTax),
   };
+}
+
+const inputOf = (d: { disposed_on: unknown; kind: 'sold' | 'scrapped'; proceeds_via: string; customer_id: number | null; bank_account_id: number | null; sale_value: string; gst_rate_pct: string | null; part_pct: string | null; reason: string | null; cost: string }, fullCost: Paise): DisposalInput => ({
+  date: ymdOf(d.disposed_on)!, kind: d.kind,
+  proceedsVia: d.proceeds_via === 'bank' ? 'bank' : 'invoice',
+  customerId: d.customer_id ?? undefined, bankAccountId: d.bank_account_id ?? undefined,
+  salePaise: toPaiseFromSql(d.sale_value) || undefined, gstRatePct: d.gst_rate_pct !== null ? Number(d.gst_rate_pct) : undefined,
+  partCostPaise: d.part_pct !== null && toPaiseFromSql(d.cost) < fullCost ? toPaiseFromSql(d.cost) : undefined,
+  reason: d.reason,
+});
+
+/** Approve a disposal waiting for it, and post it. Never by the person who asked. */
+export async function approveDisposal(trx: Trx, orgId: number, user: { userId: number; role: RoleName }, disposalId: number) {
+  const d = await trx.selectFrom('asset_disposals').selectAll().where('id', '=', disposalId).where('org_id', '=', orgId).forUpdate().executeTakeFirst();
+  if (!d) throw notFound('That disposal is not on record.');
+  if (d.status !== 'pending') throw conflict('That disposal is not waiting for approval.');
+  if (d.requested_by_user_id === user.userId) throw forbidden('You asked for this disposal. Someone else has to approve it.');
+  const rule = await getDisposalApproval(trx, orgId);
+  if (rule.isActive && user.role !== 'admin' && user.role !== rule.approverRole) {
+    throw forbidden(`Disposals need approval by ${rule.approverRole === 'admin' ? 'an admin' : `an ${rule.approverRole}`}.`);
+  }
+  const [loaded] = await loadAssets(trx, orgId, { ids: [d.asset_id] });
+  await trx.updateTable('asset_disposals').set({ approved_by_user_id: user.userId, approved_at: new Date() }).where('id', '=', disposalId).execute();
+  return postDisposal(trx, orgId, user.userId, disposalId, inputOf(d, loaded.basis.costPaise));
+}
+
+/** Send a disposal back: nothing was posted, and the asset stays in use. */
+export async function rejectDisposal(trx: Trx, orgId: number, userId: number | null, disposalId: number, reason: string) {
+  if (reason.trim().length < 3) throw badRequest('Say why the disposal is sent back.');
+  const d = await trx.selectFrom('asset_disposals').select(['id', 'status']).where('id', '=', disposalId).where('org_id', '=', orgId).forUpdate().executeTakeFirst();
+  if (!d) throw notFound('That disposal is not on record.');
+  if (d.status !== 'pending') throw conflict('That disposal is not waiting for approval.');
+  await trx.updateTable('asset_disposals').set({ status: 'rejected', rejected_reason: reason.trim(), approved_by_user_id: userId, approved_at: new Date() })
+    .where('id', '=', disposalId).execute();
+}
+
+/**
+ * Undo a disposal, with a reason: its depreciation and its disposal entry are
+ * reversed on their own dates, an invoiced sale's invoice is voided (refused
+ * while money is received against it: take the receipt off first), and the
+ * asset goes back into use. The days of depreciation it missed while it was
+ * out of the register, up to the branch's last run, are charged at once.
+ */
+export async function undoDisposal(trx: Trx, orgId: number, userId: number | null, assetId: number, reason: string) {
+  if (!reason || reason.trim().length < 4) throw badRequest('Give the reason for undoing the disposal.');
+  const why = reason.trim();
+  const a = await lockAsset(trx, orgId, assetId);
+  if (a.status !== 'disposed') throw conflict(`${a.name} has not been disposed of.`);
+  const d = a.disposal_id
+    ? await trx.selectFrom('asset_disposals').selectAll().where('id', '=', a.disposal_id).forUpdate().executeTakeFirst()
+    : null;
+  const entryId = d?.disposal_entry_id ?? a.disposal_entry_id;
+  if (entryId && await bankLineMatched(trx, orgId, 'journal_entry', entryId)) {
+    throw conflict(`The money received for ${a.name} is matched to a line of the bank statement. Undo that match in Banking first.`);
+  }
+  // The sale invoice goes first: voidInvoice refuses one with money received or a live IRN, and says why.
+  const invoiceId = d?.invoice_id ?? a.disposal_invoice_id;
+  if (invoiceId) {
+    const inv = await trx.selectFrom('invoices').select(['status']).where('id', '=', invoiceId).executeTakeFirst();
+    if (inv && inv.status !== 'void') await voidInvoice(trx, orgId, userId, invoiceId, `Disposal of ${a.tag_no} undone: ${why}`);
+  }
+  if (entryId) await reverseEntry(trx, orgId, entryId, { memo: `Disposal of ${a.name} (${a.tag_no}) undone — ${why}`, userId, module: 'accountant' });
+  const depEntry = d?.depreciation_entry_id ?? null;
+  if (depEntry) {
+    await reverseEntry(trx, orgId, depEntry, { memo: `Depreciation to the disposal of ${a.tag_no} undone — ${why}`, userId, module: 'accountant' });
+    await trx.updateTable('depreciation_lines').set({ reversed: 1 }).where('asset_id', '=', assetId).where('journal_entry_id', '=', depEntry).execute();
+  }
+  await trx.updateTable('fixed_assets').set({
+    status: 'in_use', disposed_on: null, disposal_kind: null, disposal_value: null, disposal_invoice_id: null,
+    disposal_entry_id: null, disposal_id: null,
+  }).where('id', '=', assetId).execute();
+  if (d) {
+    await trx.updateTable('asset_disposals').set({ status: 'undone', undone_by_user_id: userId, undone_at: new Date(), undo_reason: why })
+      .where('id', '=', d.id).execute();
+  }
+
+  // The days it missed: runs at its branch after the day it was taken out.
+  let missedPaise = 0;
+  const lastRun = await trx.selectFrom('depreciation_runs').select('period_to')
+    .where('org_id', '=', orgId).where('branch_id', '=', a.branch_id).where('reversed', '=', 0)
+    .orderBy('period_to', 'desc').limit(1).executeTakeFirst();
+  const [loaded] = await loadAssets(trx, orgId, { ids: [assetId] });
+  const runTo = lastRun ? ymdOf(lastRun.period_to)! : null;
+  if (runTo && loaded.basis.putToUseOn <= runTo) {
+    const start = await booksStartDate(trx, orgId);
+    const from = loaded.lastTo ? addDays(loaded.lastTo, 1) : maxDate(loaded.basis.putToUseOn, start.date);
+    if (from <= runTo) {
+      const dep = depreciationFor(loaded.basis, from, runTo, loaded.openingAccumulated + loaded.charged);
+      if (dep.amountPaise > 0) {
+        const acc = await accountIds(trx, orgId);
+        const e = await postEntry(trx, {
+          orgId, branchId: a.branch_id, date: runTo, module: 'accountant',
+          memo: `Depreciation on ${a.name} (${a.tag_no}) for ${dayLabel(from)} to ${dayLabel(runTo)}, missed while its disposal stood`,
+          sourceType: 'depreciation', sourceId: assetId, userId,
+          lines: [
+            { accountId: requireAccount(acc, CODE.DEPRECIATION), debit: dep.amountPaise },
+            { accountId: requireAccount(acc, CODE.ACCUMULATED_DEPRECIATION), credit: dep.amountPaise },
+          ],
+        });
+        await trx.insertInto('depreciation_lines').values({
+          run_id: null, org_id: orgId, asset_id: assetId, period_from: from, period_to: runTo, days: dep.days,
+          amount: toSqlFromPaise(dep.amountPaise), disposal: 0, journal_entry_id: e.id,
+        }).execute();
+        missedPaise = dep.amountPaise;
+      }
+    }
+  }
+  return { name: a.name, tagNo: a.tag_no, invoiceVoided: !!invoiceId, missedDepreciationPaise: missedPaise };
+}
+
+/**
+ * Split part of an asset off into an asset of its own: the part's cost, and the
+ * same share of the depreciation charged on it (and of the credit taken on it,
+ * and of its residual value), move across. Nothing posts: both stay in the same
+ * class and ledger. The part keeps the original's dates, life and method.
+ */
+export async function splitAsset(
+  trx: Trx, orgId: number, userId: number | null, assetId: number,
+  input: { partCostPaise: Paise; name?: string | null; tagNo?: string | null; reason?: string | null },
+  opts: { forDisposal?: boolean } = {},
+): Promise<{ id: number; tagNo: string; partCostPaise: Paise; partDepreciationPaise: Paise }> {
+  const a = await lockAsset(trx, orgId, assetId);
+  if (a.status !== 'in_use') throw conflict(`${a.name} is ${a.status === 'cwip' ? 'still being built' : 'disposed of'}; only an asset in use is split.`);
+  const pending = await trx.selectFrom('asset_disposals').select('id').where('asset_id', '=', assetId).where('status', '=', 'pending').executeTakeFirst();
+  if (pending && !opts.forDisposal) throw conflict(`A disposal of ${a.name} is waiting for approval; decide it first.`);
+  const [loaded] = await loadAssets(trx, orgId, { ids: [assetId] });
+  const cost = loaded.basis.costPaise;
+  if (!(input.partCostPaise > 0 && input.partCostPaise < cost)) {
+    throw badRequest(`The part's cost must be above nil and below ${a.name}'s cost of ₹${(cost / 100).toLocaleString('en-IN')}.`);
+  }
+  const share = input.partCostPaise / cost;
+  const partDep = Math.round(loaded.charged * share);
+  const partOpening = Math.round(toPaiseFromSql(a.opening_accumulated) * share);
+  const partItc = Math.round(toPaiseFromSql(a.itc_claimed) * share);
+  const partResidual = a.residual_value !== null ? Math.round(toPaiseFromSql(a.residual_value) * share) : null;
+  const siblings = await trx.selectFrom('fixed_assets').select(sql<string>`COUNT(*)`.as('n')).where('split_from_asset_id', '=', assetId).executeTakeFirst();
+  const tagNo = input.tagNo?.trim() || `${a.tag_no}-${Number(siblings?.n ?? 0) + 1}`.slice(0, 30);
+  const taken = await trx.selectFrom('fixed_assets').select('id').where('org_id', '=', orgId).where('tag_no', '=', tagNo).executeTakeFirst();
+  if (taken) throw conflict(`Tag ${tagNo} is already in the register. Give the part another tag.`);
+  const acquired = ymdOf(a.acquired_on)!;
+
+  const id = Number((await trx.insertInto('fixed_assets').values({
+    org_id: orgId, branch_id: a.branch_id, class_id: a.class_id, tag_no: tagNo, name: (input.name?.trim() || `${a.name} (part)`).slice(0, 200),
+    description: a.description, serial_no: null, location: a.location, custodian: a.custodian, vendor_id: a.vendor_id, bill_id: a.bill_id,
+    acquired_on: acquired, put_to_use_on: ymdOf(a.put_to_use_on), status: 'in_use', useful_life_years: a.useful_life_years,
+    residual_value: partResidual !== null ? toSqlFromPaise(partResidual) : null, opening_accumulated: toSqlFromPaise(partOpening),
+    itc_claimed: toSqlFromPaise(partItc), hsn_sac: a.hsn_sac, notes: input.reason ?? `Split from ${a.tag_no}`,
+    split_from_asset_id: assetId, created_by_user_id: userId,
+  }).executeTakeFirstOrThrow()).insertId);
+  await trx.updateTable('fixed_assets').set({
+    opening_accumulated: toSqlFromPaise(toPaiseFromSql(a.opening_accumulated) - partOpening),
+    itc_claimed: toSqlFromPaise(toPaiseFromSql(a.itc_claimed) - partItc),
+    ...(partResidual !== null ? { residual_value: toSqlFromPaise(toPaiseFromSql(a.residual_value!) - partResidual) } : {}),
+  }).where('id', '=', assetId).execute();
+  // Dated on the day it was bought: componentisation reads as if it had always been two assets.
+  await trx.insertInto('asset_costs').values([
+    { org_id: orgId, asset_id: assetId, cost_date: acquired, amount: toSqlFromPaise(-input.partCostPaise), kind: 'split', description: `Split off to ${tagNo}` },
+    { org_id: orgId, asset_id: id, cost_date: acquired, amount: toSqlFromPaise(input.partCostPaise), kind: 'split', description: `Split from ${a.tag_no}` },
+  ]).execute();
+  if (partDep !== 0 && loaded.lastTo) {
+    await trx.insertInto('depreciation_lines').values([
+      { run_id: null, org_id: orgId, asset_id: assetId, period_from: loaded.lastTo, period_to: loaded.lastTo, days: 0, amount: toSqlFromPaise(-partDep), split: 1 },
+      { run_id: null, org_id: orgId, asset_id: id, period_from: loaded.lastTo, period_to: loaded.lastTo, days: 0, amount: toSqlFromPaise(partDep), split: 1 },
+    ]).execute();
+  }
+  return { id, tagNo, partCostPaise: input.partCostPaise, partDepreciationPaise: partDep + partOpening };
+}
+
+/** Disposals waiting for approval, for the Disposals tab. */
+export async function pendingDisposals(ex: Executor, orgId: number) {
+  const rows = await ex.selectFrom('asset_disposals as d').innerJoin('fixed_assets as a', 'a.id', 'd.asset_id')
+    .leftJoin('users as u', 'u.id', 'd.requested_by_user_id').leftJoin('contacts as c', 'c.id', 'd.customer_id')
+    .select(['d.id', 'd.asset_id', 'a.tag_no', 'a.name', 'd.disposed_on', 'd.kind', 'd.proceeds_via', 'd.sale_value', 'd.gst_rate_pct',
+      'd.cost', 'd.part_pct', 'd.reason', 'd.requested_at', 'd.requested_by_user_id', 'u.name as requested_by', 'c.display_name as buyer'])
+    .where('d.org_id', '=', orgId).where('d.status', '=', 'pending').orderBy('d.requested_at').execute();
+  return rows.map((r) => ({
+    id: String(r.id), assetId: String(r.asset_id), tagNo: r.tag_no, name: r.name, date: ymdOf(r.disposed_on)!, kind: r.kind,
+    proceedsVia: r.proceeds_via, salePaise: toPaiseFromSql(r.sale_value), gstRatePct: r.gst_rate_pct !== null ? Number(r.gst_rate_pct) : null,
+    partCostPaise: r.part_pct !== null ? toPaiseFromSql(r.cost) : null, reason: r.reason, buyer: r.buyer,
+    requestedBy: r.requested_by, requestedById: r.requested_by_user_id ? String(r.requested_by_user_id) : null,
+    requestedAt: new Date(r.requested_at).toISOString(),
+  }));
 }
 
 // ── The register ─────────────────────────────────────────────────────────────
@@ -603,39 +961,246 @@ export interface RegisterRow {
 }
 
 export interface DisposalRow {
-  id: string; tagNo: string; name: string; className: string; acquiredOn: string; disposedOn: string; kind: 'sold' | 'scrapped' | null;
-  costPaise: number; accumulatedPaise: number; writtenDownPaise: number; proceedsPaise: number; gainPaise: number;
-  invoiceId: string | null; entryId: string | null;
+  id: string; disposalId: string; tagNo: string; name: string; className: string; acquiredOn: string; disposedOn: string;
+  kind: 'sold' | 'scrapped' | null; via: 'invoice' | 'bank' | 'none';
+  costPaise: number; accumulatedPaise: number; catchUpPaise: number; writtenDownPaise: number; proceedsPaise: number; gstPaise: number; gainPaise: number;
+  invoiceId: string | null; invoiceNumber: string | null; buyer: string | null; bankName: string | null;
+  entryId: string | null; depreciationEntryId: string | null; partOf: string | null; reason: string | null;
 }
 
 /**
  * The assets that left between two dates: what each cost, the depreciation
  * charged to the day it left, the written-down value, what it fetched, and the
  * gain or loss — the disposals column of the Schedule III movement schedule.
+ * Read from the disposal records, so a disposal later undone is not in it.
  */
 export async function assetDisposals(ex: Executor, orgId: number, from: string, to: string): Promise<DisposalRow[]> {
-  const rows = await ex.selectFrom('fixed_assets as a').innerJoin('asset_classes as c', 'c.id', 'a.class_id')
-    .select(['a.id', 'a.tag_no', 'a.name', 'c.name as class_name', 'a.acquired_on', 'a.disposed_on', 'a.disposal_kind', 'a.disposal_value',
-      'a.disposal_invoice_id', 'a.disposal_entry_id', 'a.opening_accumulated'])
-    .where('a.org_id', '=', orgId).where('a.status', '=', 'disposed')
-    .where('a.disposed_on', '>=', from).where('a.disposed_on', '<=', to).orderBy('a.disposed_on').execute();
-  if (!rows.length) return [];
-  const ids = rows.map((r) => r.id);
-  const [costs, charged] = await Promise.all([
-    ex.selectFrom('asset_costs').select(['asset_id', sql<string>`SUM(amount)`.as('v')]).where('asset_id', 'in', ids).groupBy('asset_id').execute(),
-    ex.selectFrom('depreciation_lines').select(['asset_id', sql<string>`SUM(amount)`.as('v')]).where('asset_id', 'in', ids).where('reversed', '=', 0).groupBy('asset_id').execute(),
-  ]);
+  const rows = await ex.selectFrom('asset_disposals as d').innerJoin('fixed_assets as a', 'a.id', 'd.asset_id')
+    .innerJoin('asset_classes as c', 'c.id', 'a.class_id')
+    .leftJoin('invoices as i', 'i.id', 'd.invoice_id').leftJoin('contacts as k', 'k.id', 'd.customer_id')
+    .leftJoin('bank_accounts as b', 'b.id', 'd.bank_account_id').leftJoin('fixed_assets as p', 'p.id', 'd.part_of_asset_id')
+    .select(['d.id as disposal_id', 'a.id', 'a.tag_no', 'a.name', 'c.name as class_name', 'a.acquired_on', 'd.disposed_on', 'd.kind',
+      'd.proceeds_via', 'd.cost', 'd.accumulated', 'd.catch_up', 'd.sale_value', 'd.gst_amount', 'd.gain', 'd.invoice_id',
+      'i.number as invoice_number', 'k.display_name as buyer', 'b.name as bank_name', 'd.disposal_entry_id', 'd.depreciation_entry_id',
+      'p.tag_no as part_of', 'd.reason'])
+    .where('d.org_id', '=', orgId).where('d.status', '=', 'posted')
+    .where('d.disposed_on', '>=', from).where('d.disposed_on', '<=', to).orderBy('d.disposed_on').orderBy('d.id').execute();
   return rows.map((r) => {
-    const cost = toPaiseFromSql(costs.find((c) => c.asset_id === r.id)?.v ?? '0');
-    const acc = toPaiseFromSql(r.opening_accumulated) + toPaiseFromSql(charged.find((c) => c.asset_id === r.id)?.v ?? '0');
-    const proceeds = r.disposal_value ? toPaiseFromSql(r.disposal_value) : 0;
+    const cost = toPaiseFromSql(r.cost);
+    const acc = toPaiseFromSql(r.accumulated);
     return {
-      id: String(r.id), tagNo: r.tag_no, name: r.name, className: r.class_name, acquiredOn: String(r.acquired_on).slice(0, 10),
-      disposedOn: String(r.disposed_on).slice(0, 10), kind: r.disposal_kind, costPaise: cost, accumulatedPaise: acc,
-      writtenDownPaise: cost - acc, proceedsPaise: proceeds, gainPaise: proceeds - (cost - acc),
-      invoiceId: r.disposal_invoice_id ? String(r.disposal_invoice_id) : null, entryId: r.disposal_entry_id ? String(r.disposal_entry_id) : null,
+      id: String(r.id), disposalId: String(r.disposal_id), tagNo: r.tag_no, name: r.name, className: r.class_name,
+      acquiredOn: ymdOf(r.acquired_on)!, disposedOn: ymdOf(r.disposed_on)!, kind: r.kind, via: r.proceeds_via,
+      costPaise: cost, accumulatedPaise: acc, catchUpPaise: toPaiseFromSql(r.catch_up), writtenDownPaise: cost - acc,
+      proceedsPaise: toPaiseFromSql(r.sale_value), gstPaise: toPaiseFromSql(r.gst_amount), gainPaise: toPaiseFromSql(r.gain),
+      invoiceId: r.invoice_id ? String(r.invoice_id) : null, invoiceNumber: r.invoice_number, buyer: r.buyer, bankName: r.bank_name,
+      entryId: r.disposal_entry_id ? String(r.disposal_entry_id) : null,
+      depreciationEntryId: r.depreciation_entry_id ? String(r.depreciation_entry_id) : null, partOf: r.part_of, reason: r.reason,
     };
   });
+}
+
+/** A ledger's movement between two dates, debit less credit. */
+async function movement(ex: Executor, orgId: number, accountIds_: number[], from: string | null, to: string) {
+  if (!accountIds_.length) return 0;
+  const r = await ex.selectFrom('journal_lines').select(sql<string>`COALESCE(SUM(debit - credit), 0)`.as('v'))
+    .where('org_id', '=', orgId).where('account_id', 'in', accountIds_)
+    .$if(!!from, (q) => q.where('entry_date', '>=', from!)).where('entry_date', '<=', to).executeTakeFirst();
+  return toPaiseFromSql(r?.v ?? '0');
+}
+
+export interface DisposalsReport {
+  from: string; to: string;
+  rows: DisposalRow[];
+  totals: { costPaise: Paise; accumulatedPaise: Paise; writtenDownPaise: Paise; proceedsPaise: Paise; gstPaise: Paise; gainPaise: Paise };
+  /**
+   * The same figures from the general ledger: the disposal entries' movement in
+   * Profit on Sale and Loss on Sale (and in all postings to them, to show what
+   * else, a manual journal say, sits there).
+   */
+  ledger: {
+    profitPaise: Paise; lossPaise: Paise; netGainPaise: Paise; fromDisposalsPaise: Paise; otherPaise: Paise;
+    other: { entryId: string; entryNo: number; date: string; memo: string | null; amountPaise: Paise }[];
+  };
+  ties: boolean;
+  differencePaise: Paise;
+  undone: { disposalId: string; assetId: string; tagNo: string; name: string; disposedOn: string; undoneAt: string; by: string | null; reason: string | null }[];
+  pending: Awaited<ReturnType<typeof pendingDisposals>>;
+}
+
+/** The Disposals report, with its tie to the ledger. */
+export async function disposalsReport(ex: Executor, orgId: number, from: string, to: string): Promise<DisposalsReport> {
+  const rows = await assetDisposals(ex, orgId, from, to);
+  const sum = (k: keyof DisposalRow) => rows.reduce((t, r) => t + Number(r[k]), 0);
+  const acc = await accountIds(ex, orgId);
+  const profit = acc[CODE.PROFIT_ON_ASSET_SALE];
+  const loss = acc[CODE.LOSS_ON_ASSET_SALE];
+  const lines = await ex.selectFrom('journal_lines as l').innerJoin('journal_entries as e', 'e.id', 'l.entry_id')
+    .select(['e.id', 'e.entry_no', 'e.entry_date', 'e.memo', 'e.source_type', 'l.account_id', 'l.debit', 'l.credit'])
+    .where('l.org_id', '=', orgId).where('l.account_id', 'in', [profit, loss].filter(Boolean))
+    .where('l.entry_date', '>=', from).where('l.entry_date', '<=', to).execute();
+  let profitPaise = 0;
+  let lossPaise = 0;
+  let fromDisposals = 0;
+  const other = new Map<number, { entryId: string; entryNo: number; date: string; memo: string | null; amountPaise: Paise }>();
+  for (const l of lines) {
+    const gain = toPaiseFromSql(l.credit) - toPaiseFromSql(l.debit);
+    if (l.account_id === profit) profitPaise += gain; else lossPaise -= gain;
+    if (l.source_type === 'asset_disposal') fromDisposals += gain;
+    else {
+      const o = other.get(l.id) ?? { entryId: String(l.id), entryNo: l.entry_no, date: ymdOf(l.entry_date)!, memo: l.memo, amountPaise: 0 };
+      o.amountPaise += gain;
+      other.set(l.id, o);
+    }
+  }
+  const undone = await ex.selectFrom('asset_disposals as d').innerJoin('fixed_assets as a', 'a.id', 'd.asset_id')
+    .leftJoin('users as u', 'u.id', 'd.undone_by_user_id')
+    .select(['d.id', 'd.asset_id', 'a.tag_no', 'a.name', 'd.disposed_on', 'd.undone_at', 'u.name as by', 'd.undo_reason'])
+    .where('d.org_id', '=', orgId).where('d.status', '=', 'undone')
+    .where('d.disposed_on', '>=', from).where('d.disposed_on', '<=', to).orderBy('d.undone_at', 'desc').execute();
+  const totalGain = sum('gainPaise');
+  return {
+    from, to, rows,
+    totals: {
+      costPaise: sum('costPaise'), accumulatedPaise: sum('accumulatedPaise'), writtenDownPaise: sum('writtenDownPaise'),
+      proceedsPaise: sum('proceedsPaise'), gstPaise: sum('gstPaise'), gainPaise: totalGain,
+    },
+    ledger: {
+      profitPaise, lossPaise, netGainPaise: profitPaise - lossPaise, fromDisposalsPaise: fromDisposals,
+      otherPaise: [...other.values()].reduce((t, o) => t + o.amountPaise, 0), other: [...other.values()].filter((o) => o.amountPaise !== 0),
+    },
+    // The disposals' own entries in the gain and loss ledgers equal the register's gain, to the paisa.
+    ties: fromDisposals === totalGain,
+    differencePaise: fromDisposals - totalGain,
+    undone: undone.map((u) => ({
+      disposalId: String(u.id), assetId: String(u.asset_id), tagNo: u.tag_no, name: u.name, disposedOn: ymdOf(u.disposed_on)!,
+      undoneAt: u.undone_at ? new Date(u.undone_at).toISOString() : '', by: u.by, reason: u.undo_reason,
+    })),
+    pending: await pendingDisposals(ex, orgId),
+  };
+}
+
+// ── The fixed asset schedule (Schedule III note) ────────────────────────────
+
+export interface ScheduleRow {
+  key: string; label: string; accountId: string | null; accountName: string | null;
+  grossOpeningPaise: Paise; additionsPaise: Paise; disposalsPaise: Paise; grossClosingPaise: Paise;
+  depOpeningPaise: Paise; depForYearPaise: Paise; depOnDisposalsPaise: Paise; depClosingPaise: Paise;
+  netOpeningPaise: Paise; netClosingPaise: Paise;
+}
+
+export interface AssetSchedule {
+  from: string; to: string;
+  rows: ScheduleRow[];
+  total: ScheduleRow;
+  /** Capital work-in-progress: opening, spent in the year, put to use (capitalised), closing. */
+  cwip: { openingPaise: Paise; additionsPaise: Paise; capitalisedPaise: Paise; closingPaise: Paise };
+  /** Each figure against the ledger at the end of the period. */
+  ties: { label: string; registerPaise: Paise; ledgerPaise: Paise; differencePaise: Paise; accountId: string | null }[];
+}
+
+/**
+ * Property, plant and equipment for the year, class by class, as the notes to
+ * the accounts set it out (Schedule III to the Companies Act, Part I, note on
+ * tangible assets): gross block at the start, additions, disposals, gross
+ * block at the end; depreciation at the start, for the year, on disposals, at
+ * the end; net block at the start and the end. Each closing figure is checked
+ * against its ledger.
+ */
+export async function assetSchedule(ex: Executor, orgId: number, from: string, to: string): Promise<AssetSchedule> {
+  const [classes, assets] = await Promise.all([
+    listAssetClasses(ex, orgId),
+    ex.selectFrom('fixed_assets').select(['id', 'class_id', 'status', 'put_to_use_on', 'disposed_on', 'opening_accumulated'])
+      .where('org_id', '=', orgId).execute(),
+  ]);
+  const ids = assets.map((a) => a.id);
+  const [costs, lines] = ids.length
+    ? await Promise.all([
+      ex.selectFrom('asset_costs').select(['asset_id', 'cost_date', 'amount']).where('asset_id', 'in', ids).execute(),
+      ex.selectFrom('depreciation_lines').select(['asset_id', 'period_to', 'amount']).where('asset_id', 'in', ids).where('reversed', '=', 0).execute(),
+    ])
+    : [[], []];
+  const blank = (key: string, label: string, accountId: string | null, accountName: string | null): ScheduleRow => ({
+    key, label, accountId, accountName, grossOpeningPaise: 0, additionsPaise: 0, disposalsPaise: 0, grossClosingPaise: 0,
+    depOpeningPaise: 0, depForYearPaise: 0, depOnDisposalsPaise: 0, depClosingPaise: 0, netOpeningPaise: 0, netClosingPaise: 0,
+  });
+  const byClass = new Map(classes.map((c) => [Number(c.id), blank(c.id, c.name, c.accountId, c.accountName)]));
+  const cwip = { openingPaise: 0, additionsPaise: 0, capitalisedPaise: 0, closingPaise: 0 };
+  for (const a of assets) {
+    const row = byClass.get(a.class_id);
+    if (!row) continue;
+    const used = ymdOf(a.put_to_use_on);
+    const gone = a.status === 'disposed' ? ymdOf(a.disposed_on) : null;
+    if (gone && gone < from) continue; // left before the year: in no column
+    const mine = costs.filter((c) => c.asset_id === a.id);
+    const costBefore = mine.filter((c) => ymdOf(c.cost_date)! < from).reduce((t, c) => t + toPaiseFromSql(c.amount), 0);
+    const costTo = mine.filter((c) => ymdOf(c.cost_date)! <= to).reduce((t, c) => t + toPaiseFromSql(c.amount), 0);
+    const dep = lines.filter((l) => l.asset_id === a.id);
+    const depBefore = toPaiseFromSql(a.opening_accumulated) + dep.filter((l) => ymdOf(l.period_to)! < from).reduce((t, l) => t + toPaiseFromSql(l.amount), 0);
+    const depYear = dep.filter((l) => ymdOf(l.period_to)! >= from && ymdOf(l.period_to)! <= to).reduce((t, l) => t + toPaiseFromSql(l.amount), 0);
+    const inUseAtStart = !!used && used < from;
+    const inUseByEnd = !!used && used <= to;
+    // Capital work in progress: cost spent while it was being built.
+    if (!inUseAtStart) {
+      cwip.openingPaise += costBefore;
+      cwip.additionsPaise += costTo - costBefore;
+      if (inUseByEnd) cwip.capitalisedPaise += costTo;
+    }
+    if (inUseAtStart) {
+      row.grossOpeningPaise += costBefore;
+      row.additionsPaise += costTo - costBefore;
+      row.depOpeningPaise += depBefore;
+    } else if (inUseByEnd) {
+      row.additionsPaise += costTo;
+      row.depOpeningPaise += depBefore; // nil for an asset put to use in the year
+    }
+    if (inUseAtStart || inUseByEnd) row.depForYearPaise += depYear;
+    if (gone && gone <= to) {
+      if (used && used <= to) {
+        row.disposalsPaise += costTo;
+        row.depOnDisposalsPaise += depBefore + depYear;
+      } else {
+        cwip.capitalisedPaise += costTo; // a CWIP asset scrapped: out of CWIP, not into a class
+      }
+    }
+  }
+  cwip.closingPaise = cwip.openingPaise + cwip.additionsPaise - cwip.capitalisedPaise;
+  const rows = [...byClass.values()].map((r) => {
+    r.grossClosingPaise = r.grossOpeningPaise + r.additionsPaise - r.disposalsPaise;
+    r.depClosingPaise = r.depOpeningPaise + r.depForYearPaise - r.depOnDisposalsPaise;
+    r.netOpeningPaise = r.grossOpeningPaise - r.depOpeningPaise;
+    r.netClosingPaise = r.grossClosingPaise - r.depClosingPaise;
+    return r;
+  }).filter((r) => r.grossOpeningPaise || r.additionsPaise || r.disposalsPaise || r.depOpeningPaise || r.depForYearPaise);
+  const total = blank('total', 'Total', null, null);
+  for (const r of rows) {
+    for (const k of Object.keys(total) as (keyof ScheduleRow)[]) {
+      if (typeof total[k] === 'number') (total[k] as number) += r[k] as number;
+    }
+  }
+
+  // The ties: each ledger's closing balance, accumulated depreciation, the
+  // year's charge, and CWIP.
+  const acc = await accountIds(ex, orgId);
+  const ties: AssetSchedule['ties'] = [];
+  const ledgers = new Map<string, { name: string; register: Paise }>();
+  for (const r of rows) {
+    if (!r.accountId) continue;
+    const l = ledgers.get(r.accountId) ?? { name: r.accountName ?? '', register: 0 };
+    l.register += r.grossClosingPaise;
+    ledgers.set(r.accountId, l);
+  }
+  for (const [accountId, l] of ledgers) {
+    const ledger = await movement(ex, orgId, [Number(accountId)], null, to);
+    ties.push({ label: `Gross block — ${l.name}`, registerPaise: l.register, ledgerPaise: ledger, differencePaise: ledger - l.register, accountId });
+  }
+  const accDep = -(await movement(ex, orgId, [acc[CODE.ACCUMULATED_DEPRECIATION]].filter(Boolean), null, to));
+  ties.push({ label: 'Accumulated depreciation', registerPaise: total.depClosingPaise, ledgerPaise: accDep, differencePaise: accDep - total.depClosingPaise, accountId: acc[CODE.ACCUMULATED_DEPRECIATION] ? String(acc[CODE.ACCUMULATED_DEPRECIATION]) : null });
+  const charge = await movement(ex, orgId, [acc[CODE.DEPRECIATION]].filter(Boolean), from, to);
+  ties.push({ label: 'Depreciation for the period (P&L)', registerPaise: total.depForYearPaise, ledgerPaise: charge, differencePaise: charge - total.depForYearPaise, accountId: acc[CODE.DEPRECIATION] ? String(acc[CODE.DEPRECIATION]) : null });
+  const cwipLedger = await movement(ex, orgId, [acc[CODE.CWIP]].filter(Boolean), null, to);
+  ties.push({ label: 'Capital work-in-progress', registerPaise: cwip.closingPaise, ledgerPaise: cwipLedger, differencePaise: cwipLedger - cwip.closingPaise, accountId: acc[CODE.CWIP] ? String(acc[CODE.CWIP]) : null });
+  return { from, to, rows, total, cwip, ties };
 }
 
 export async function assetRegister(ex: Executor, orgId: number, asOf = new Date().toISOString().slice(0, 10)): Promise<RegisterRow[]> {
@@ -763,7 +1328,9 @@ export async function itDepreciation(ex: Executor, orgId: number, fyStart: numbe
         const used = String(a.put_to_use_on).slice(0, 10);
         const gone = a.status === 'disposed' ? String(a.disposed_on).slice(0, 10) : null;
         // Assets brought in at the books' start are already in the entered opening.
-        const purchased = costs.filter((c) => c.asset_id === a.id && c.kind !== 'opening').reduce((s, c) => s + toPaiseFromSql(c.v), 0);
+        // A split moves cost between two assets of the same block on the same
+        // dates; the block's additions are the original purchase, once.
+        const purchased = costs.filter((c) => c.asset_id === a.id && c.kind !== 'opening' && c.kind !== 'split').reduce((s, c) => s + toPaiseFromSql(c.v), 0);
         if (used >= from && used <= to && purchased > 0) {
           if (daysBetween(used, to) >= 180) full += purchased;
           else half += purchased;
