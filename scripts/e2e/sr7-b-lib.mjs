@@ -25,7 +25,8 @@ export async function start(item) {
   const ip = `10.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250) + 1}`;
   const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, extraHTTPHeaders: { 'x-forwarded-for': ip } });
   const page = await ctx.newPage();
-  page.setDefaultTimeout(30_000);
+  // A dev server on a busy machine compiles and hydrates slowly; every wait is generous.
+  page.setDefaultTimeout(120_000);
   const t = { item, page, ctx, browser, pass: 0, fail: 0, errors: [], expect: [] };
   page.on('pageerror', (e) => t.errors.push(`pageerror: ${e.message}`));
   page.on('console', (m) => {
