@@ -24,6 +24,7 @@ import type { Paise } from '../../types';
 import { CODE } from '../ledger/chart-of-accounts';
 import { balanceSheet, profitAndLoss, type AccountBalance, type ReportBasis } from './statements';
 import { lineOf, overrides } from './schedule-iii';
+import type { LineFilter } from './line-filters';
 
 export interface GroupLine {
   /** An account id, or a figure worked out rather than posted (stock, earnings). */
@@ -74,9 +75,9 @@ const COGS_LINES = new Set(['purchases_stock_in_trade', 'cost_of_materials', 'ch
 const NON_OPERATING_EXPENSE_CODES = new Set<string>([CODE.FX_LOSS, CODE.LOSS_ON_ASSET_SALE]);
 
 export async function groupedProfitAndLoss(
-  ex: Executor, orgId: number, from: string, to: string, branchId?: number, basis: ReportBasis = 'accrual',
+  ex: Executor, orgId: number, from: string, to: string, branchId?: number, basis: ReportBasis = 'accrual', filter?: LineFilter | null,
 ): Promise<GroupedProfitAndLoss> {
-  const [pl, over] = await Promise.all([profitAndLoss(ex, orgId, from, to, branchId, basis), overrides(ex, orgId)]);
+  const [pl, over] = await Promise.all([profitAndLoss(ex, orgId, from, to, branchId, basis, filter), overrides(ex, orgId)]);
 
   const opIncome: GroupLine[] = [];
   const nonOpIncome: GroupLine[] = [];
@@ -136,9 +137,9 @@ export interface GroupedBalanceSheet {
 }
 
 export async function groupedBalanceSheet(
-  ex: Executor, orgId: number, asOf: string, branchId?: number, basis: ReportBasis = 'accrual',
+  ex: Executor, orgId: number, asOf: string, branchId?: number, basis: ReportBasis = 'accrual', filter?: LineFilter | null,
 ): Promise<GroupedBalanceSheet> {
-  const bs = await balanceSheet(ex, orgId, asOf, branchId, basis);
+  const bs = await balanceSheet(ex, orgId, asOf, branchId, basis, filter);
 
   const cash: GroupLine[] = [];
   const bank: GroupLine[] = [];
