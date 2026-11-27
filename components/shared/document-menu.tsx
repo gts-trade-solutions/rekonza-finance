@@ -228,10 +228,30 @@ function SendItems({ a, separated = false }: { a: ReturnType<typeof useDocumentA
 }
 
 /** Send and Clone beside Print on the printed copy's screen. */
-export function DocumentScreenActions({ kind, id, proforma = false }: { kind: PrintKind; id: string; proforma?: boolean }) {
+export function DocumentScreenActions({ kind, id, proforma = false, number = '' }: { kind: PrintKind; id: string; proforma?: boolean; number?: string }) {
   const a = useDocumentActions(kind, id, undefined, proforma);
+  const router = useRouter();
+  // A purchase order has no record page of its own: its printed copy is where it is looked at, so Edit and Delete are here too.
+  const order = kind === 'purchase-order';
+  const mayEdit = usePermission('purchases', 'edit');
+  const mayDelete = usePermission('purchases', 'void');
+  const [deleting, setDeleting] = useState(false);
   return (
     <>
+      {order && mayEdit && (
+        <Button variant="outline" size="sm" asChild data-slot="document-edit">
+          <Link href={`/purchases/purchase-orders?edit=${id}`}><Pencil className="size-3.5" /> Edit</Link>
+        </Button>
+      )}
+      {order && mayDelete && (
+        <>
+          <Button variant="outline" size="sm" className="text-destructive" onClick={() => setDeleting(true)} data-slot="document-delete">
+            <Trash2 className="size-3.5" /> Delete
+          </Button>
+          <DeleteDocumentDialog kind={kind} id={id} number={number} open={deleting} onOpenChange={setDeleting}
+            onDeleted={() => router.push('/purchases/purchase-orders')} />
+        </>
+      )}
       {a.canShare && (
         <DropdownMenu onOpenChange={(open) => { if (open) a.checkMail(); }}>
           <DropdownMenuTrigger className="inline-flex h-8 items-center gap-1.5 rounded-[3px] border px-3 text-sm transition-colors hover:bg-accent" disabled={a.busy} data-slot="document-send">
