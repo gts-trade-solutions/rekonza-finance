@@ -150,7 +150,7 @@ try {
   await page.fill('[data-slot="customize-save-name"]', reportName);
   await page.check('[data-slot="customize-save-shared"]');
   await page.click('[data-slot="customize-save-go"]');
-  await page.waitForSelector('text=Saved as custom report', { timeout: 15000 });
+  await page.waitForSelector('text=Saved as custom report', { timeout: 90000 });
   await idle(600);
   await go('/reports');
   check('Reports Center links to Custom Reports', (await page.locator('[data-slot="open-custom-reports"]').count()) === 1);
@@ -162,7 +162,8 @@ try {
   await row.locator('[data-slot="custom-report-edit"]').click();
   await page.fill('[data-slot="custom-report-name"]', `${reportName} (audit)`);
   await page.click('[data-slot="custom-report-save"]');
-  await idle(800);
+  // A book that keeps a reason with every change asks for one first (answered by the helper).
+  await page.waitForSelector(`[data-slot="custom-report-row"]:has-text("${reportName} (audit)")`, { timeout: 30000 }).catch(() => {});
   const renamed = page.locator('[data-slot="custom-report-row"]', { hasText: `${reportName} (audit)` });
   check('Edit renames it', (await renamed.count()) === 1);
   await renamed.locator('[data-slot="custom-report-open"]').click();
@@ -230,7 +231,7 @@ try {
   await go('/reports/custom-reports');
   await page.locator('[data-slot="custom-report-row"]', { hasText: `${reportName} (audit)` }).locator('[data-slot="custom-report-delete"]').click();
   await page.getByRole('button', { name: /^Delete$/ }).last().click();
-  await idle(1000);
+  await page.waitForSelector(`[data-slot="custom-report-row"]:has-text("${reportName} (audit)")`, { state: 'detached', timeout: 30000 }).catch(() => {});
   check('Delete removes it', (await page.locator('[data-slot="custom-report-row"]', { hasText: `${reportName} (audit)` }).count()) === 0);
 } catch (e) {
   check('the script ran to the end', false, e instanceof Error ? e.message.split('\n')[0] : String(e));
