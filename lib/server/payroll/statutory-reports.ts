@@ -56,21 +56,22 @@ async function linesIn(ex: Executor, orgId: number, from: string, to: string) {
  * payments, from the ledger itself: credits by payroll entries (net of their
  * reversals), debits by statutory payments, salary TDS challans or salary payments.
  */
-async function ledgerMovement(ex: Executor, orgId: number, code: string, runIds: number[], payTypes: string[], payIds: number[]) {
+async function ledgerMovement(ex: Executor, orgId: number, code: string, runIds: number[], payTypes: string[], payIds: number[], importIds: number[] = []) {
   const acc = await accountIds(ex, orgId);
   const account = acc[code];
   if (!account) return { postedPaise: 0, paidPaise: 0 };
-  const posted = runIds.length
-    ? await ex.selectFrom('journal_lines as l').innerJoin('journal_entries as e', 'e.id', 'l.entry_id')
+  const postedBy = async (sourceType: string, ids: number[]) => (ids.length
+    ? p((await ex.selectFrom('journal_lines as l').innerJoin('journal_entries as e', 'e.id', 'l.entry_id')
       .select(sql<string>`COALESCE(SUM(l.credit - l.debit), 0)`.as('v'))
-      .where('l.account_id', '=', account).where('e.source_type', '=', 'payroll').where('e.source_id', 'in', runIds).executeTakeFirst()
-    : null;
+      .where('l.account_id', '=', account).where('e.source_type', '=', sourceType).where('e.source_id', 'in', ids).executeTakeFirst())?.v ?? '0')
+    : 0);
+  const postedPaise = await postedBy('payroll', runIds) + await postedBy('payroll_import', importIds);
   const paid = payIds.length
     ? await ex.selectFrom('journal_lines as l').innerJoin('journal_entries as e', 'e.id', 'l.entry_id')
       .select(sql<string>`COALESCE(SUM(l.debit - l.credit), 0)`.as('v'))
       .where('l.account_id', '=', account).where('e.source_type', 'in', payTypes).where('e.source_id', 'in', payIds).executeTakeFirst()
     : null;
-  return { postedPaise: p(posted?.v ?? '0'), paidPaise: p(paid?.v ?? '0') };
+  return { postedPaise, paidPaise: p(paid?.v ?? '0') };
 }
 
 async function statutoryPaid(ex: Executor, orgId: number, component: 'pf' | 'esi' | 'pt' | 'lwf', from: string, to: string) {
@@ -79,11 +80,19 @@ async function statutoryPaid(ex: Executor, orgId: number, component: 'pf' | 'esi
   return { ids: rows.map((r) => Number(r.id)), paidPaise: rows.reduce((t, r) => t + p(r.amount), 0) };
 }
 
-export interface Tie { registerPaise: Paise; ledgerPostedPaise: Paise; paidPaise: Paise; ledgerPaidPaise: Paise; ok: boolean }
-const tie = (register: Paise, gl: { postedPaise: Paise; paidPaise: Paise }, paid: Paise): Tie => ({
-  registerPaise: register, ledgerPostedPaise: gl.postedPaise, paidPaise: paid, ledgerPaidPaise: gl.paidPaise,
-  ok: register === gl.postedPaise && paid === gl.paidPaise,
+export interface Tie { registerPaise: Paise; importedPaise: Paise; ledgerPostedPaise: Paise; paidPaise: Paise; ledgerPaidPaise: Paise; ok: boolean }
+/** The register (and any imported registers for the months) against the ledger. */
+const tie = (register: Paise, imported: Paise, gl: { postedPaise: Paise; paidPaise: Paise }, paid: Paise): Tie => ({
+  registerPaise: register + imported, importedPaise: imported, ledgerPostedPaise: gl.postedPaise, paidPaise: paid, ledgerPaidPaise: gl.paidPaise,
+  ok: register + imported === gl.postedPaise && paid === gl.paidPaise,
 });
+
+/** Payroll run elsewhere and imported for these months (payroll-import.ts): its share of a due. */
+async function importedIn(ex: Executor, orgId: number, from: string, to: string, column: 'pf' | 'esi' | 'pt' | 'lwf' | 'tds') {
+  const rows = await ex.selectFrom('payroll_imports').select(['id', column]).where('org_id', '=', orgId).where('status', '=', 'posted')
+    .where('month', '>=', from).where('month', '<=', to).execute();
+  return { ids: rows.map((r) => Number(r.id)), totalPaise: rows.reduce((t, r) => t + p((r as unknown as Record<string, string>)[column]), 0) };
+}
 
 // ── PF ──────────────────────────────────────────────────────────────────────
 
@@ -123,8 +132,9 @@ export async function pfReport(ex: Executor, orgId: number, from: string, to: st
   });
   const total = rows.reduce((t, r) => t + r.totalPaise, 0);
   const paid = await statutoryPaid(ex, orgId, 'pf', from, to);
-  const gl = await ledgerMovement(ex, orgId, CODE.PF_PAYABLE, [...new Set(lines.map((l) => Number(l.run_id)))], ['statutory_payment'], paid.ids);
-  return { rows, ecr, totalPaise: total, tie: tie(total, gl, paid.paidPaise) };
+  const imp = await importedIn(ex, orgId, from, to, 'pf');
+  const gl = await ledgerMovement(ex, orgId, CODE.PF_PAYABLE, [...new Set(lines.map((l) => Number(l.run_id)))], ['statutory_payment'], paid.ids, imp.ids);
+  return { rows, ecr, totalPaise: total, tie: tie(total, imp.totalPaise, gl, paid.paidPaise) };
 }
 
 // ── ESI ─────────────────────────────────────────────────────────────────────
@@ -168,8 +178,9 @@ export async function esiReport(ex: Executor, orgId: number, from: string, to: s
   });
   const total = rows.reduce((t, r) => t + r.eePaise + r.erPaise, 0);
   const paid = await statutoryPaid(ex, orgId, 'esi', from, to);
-  const gl = await ledgerMovement(ex, orgId, CODE.ESI_PAYABLE, [...new Set(all.map((l) => Number(l.run_id)))], ['statutory_payment'], paid.ids);
-  return { rows, uploads, totalPaise: total, tie: tie(total, gl, paid.paidPaise) };
+  const imp = await importedIn(ex, orgId, from, to, 'esi');
+  const gl = await ledgerMovement(ex, orgId, CODE.ESI_PAYABLE, [...new Set(all.map((l) => Number(l.run_id)))], ['statutory_payment'], paid.ids, imp.ids);
+  return { rows, uploads, totalPaise: total, tie: tie(total, imp.totalPaise, gl, paid.paidPaise) };
 }
 
 // ── PT ──────────────────────────────────────────────────────────────────────
@@ -208,8 +219,9 @@ export async function ptReport(ex: Executor, orgId: number, from: string, to: st
   const rows = lines.map((l) => ({ month: l.month, employeeId: String(l.employee_id), code: l.code, name: l.name, state: stateName(l.state), grossPaise: p(l.gross), ptPaise: p(l.pt) }));
   const total = rows.reduce((t, r) => t + r.ptPaise, 0);
   const paid = await statutoryPaid(ex, orgId, 'pt', from, to);
-  const gl = await ledgerMovement(ex, orgId, CODE.PT_PAYABLE, [...new Set(all.map((l) => Number(l.run_id)))], ['statutory_payment'], paid.ids);
-  return { byState, rows, totalPaise: total, tie: tie(total, gl, paid.paidPaise) };
+  const imp = await importedIn(ex, orgId, from, to, 'pt');
+  const gl = await ledgerMovement(ex, orgId, CODE.PT_PAYABLE, [...new Set(all.map((l) => Number(l.run_id)))], ['statutory_payment'], paid.ids, imp.ids);
+  return { byState, rows, totalPaise: total, tie: tie(total, imp.totalPaise, gl, paid.paidPaise) };
 }
 
 // ── LWF ─────────────────────────────────────────────────────────────────────
@@ -232,8 +244,9 @@ export async function lwfReport(ex: Executor, orgId: number, from: string, to: s
   const rows = lines.map((l) => ({ month: l.month, employeeId: String(l.employee_id), code: l.code, name: l.name, state: stateName(l.state), eePaise: p(l.lwf_employee), erPaise: p(l.lwf_employer) }));
   const total = rows.reduce((t, r) => t + r.eePaise + r.erPaise, 0);
   const paid = await statutoryPaid(ex, orgId, 'lwf', from, to);
-  const gl = await ledgerMovement(ex, orgId, CODE.LWF_PAYABLE, [...new Set(all.map((l) => Number(l.run_id)))], ['statutory_payment'], paid.ids);
-  return { periods, rows, totalPaise: total, tie: tie(total, gl, paid.paidPaise) };
+  const imp = await importedIn(ex, orgId, from, to, 'lwf');
+  const gl = await ledgerMovement(ex, orgId, CODE.LWF_PAYABLE, [...new Set(all.map((l) => Number(l.run_id)))], ['statutory_payment'], paid.ids, imp.ids);
+  return { periods, rows, totalPaise: total, tie: tie(total, imp.totalPaise, gl, paid.paidPaise) };
 }
 
 // ── TDS on salary ───────────────────────────────────────────────────────────
@@ -255,6 +268,7 @@ export async function tdsRegister(ex: Executor, orgId: number, from: string, to:
     .where('for_month', '>=', from).where('for_month', '<=', to).execute();
   const deposited = challans.reduce((t, c) => t + p(c.tax) + p(c.surcharge) + p(c.cess), 0);
   const total = rows.reduce((t, r) => t + r.tdsPaise, 0);
-  const gl = await ledgerMovement(ex, orgId, CODE.TDS_PAYABLE, [...new Set(all.map((l) => Number(l.run_id)))], ['salary_tds_challan'], challans.map((c) => Number(c.id)));
-  return { rows, totalPaise: total, tie: tie(total, gl, deposited) };
+  const imp = await importedIn(ex, orgId, from, to, 'tds');
+  const gl = await ledgerMovement(ex, orgId, CODE.TDS_PAYABLE, [...new Set(all.map((l) => Number(l.run_id)))], ['salary_tds_challan'], challans.map((c) => Number(c.id)), imp.ids);
+  return { rows, totalPaise: total, tie: tie(total, imp.totalPaise, gl, deposited) };
 }

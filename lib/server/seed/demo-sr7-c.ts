@@ -15,7 +15,7 @@ import 'server-only';
 //     10  TDS on salary deposited by challan and linked, Q2's 24Q receipt
 //         number, September and October dues paid, one employee's salary
 //         taken back and paid again;
-//     14  June's payroll, run in greytHR before the move, imported and paid
+//     14  May's payroll, run in greytHR before the move, imported and paid
 //         with its dues; and the Inventory account brought into line so the
 //         integration check reads Pass with the book's real figures.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -30,6 +30,7 @@ import { payStatutory, statutoryRegister } from '../payroll/statutory-dues';
 import { paySalaries, reverseSalaryPayment, salaryPayments } from '../payroll/salary-payments';
 import { importPayroll } from '../payroll/payroll-import';
 import { trueUpStock } from '../services/stock-ledger';
+import { postRun, prepareRun } from '../payroll/payroll';
 
 const R = (rupees: number) => Math.round(rupees * 100);
 const pad = (n: number) => String(n).padStart(2, '0');
@@ -54,6 +55,8 @@ export async function seedSr7cBefore(trx: Trx, ids: IdMap) {
   const chennai = ids.branches.br_chennai;
   const blr = ids.branches.br_bengaluru;
   const from = `${MONTHS[0]}-01`;
+  // The four moved to payroll here a month before the rest: June is theirs alone.
+  const june = addMonths(MONTHS[0], -1);
   const STAFF = [
     // Basic above the ₹15,000 PF ceiling (EPS capped at ₹1,250), gross above ESI; works in Mumbai: Maharashtra PT and LWF.
     { code: 'E006', name: 'Rohit Menon', branch: chennai, state: '27', designation: 'Regional sales manager', dept: 'Sales', gender: 'male' as const, basic: 40_000, hra: 16_000, special: 14_000, regime: 'new' as const },
@@ -71,7 +74,15 @@ export async function seedSr7cBefore(trx: Trx, ids: IdMap) {
       esiIpNumber: s.basic + s.hra + s.special <= 21_000 ? `51000842${String(310 + i)}` : null,
       pfMember: true, ptApplicable: true, taxRegime: s.regime, declaredDeductionsPaise: s.regime === 'old' ? R(2_00_000) : 0, metroCity: true,
       bankAccountName: s.name, bankAccountNo: `5010012${String(3401 + i)}88`, bankIfsc: 'HDFC0000123',
-    }, { basic: R(s.basic), da: 0, hra: R(s.hra), special: R(s.special), other: 0, effectiveFrom: from });
+    }, { basic: R(s.basic), da: 0, hra: R(s.hra), special: R(s.special), other: 0, effectiveFrom: `${june}-01` });
+  }
+  // June: Maharashtra and West Bengal collect LWF in June, so the LWF register has a period to show.
+  const run = await prepareRun(trx, org, ids.users.u_priya, june);
+  await postRun(trx, org, ids.users.u_arun, run);
+  await paySalaries(trx, org, ids.users.u_arun, run, { bankAccountId: ids.bankAccounts.ba_hdfc, date: `${MONTHS[0]}-01`, employeeIds: null, reference: 'Salary June' });
+  const { dues } = await statutoryRegister(trx, org, june, june);
+  for (const d of dues) {
+    if (d.balancePaise > 0) await payStatutory(trx, org, ids.users.u_arun, { component: d.component, period: june, amountPaise: d.balancePaise, date: `${MONTHS[0]}-12`, bankAccountId: ids.bankAccounts.ba_hdfc, reference: `${d.component.toUpperCase()} ${june}` });
   }
 
   // Assets the coverage seed's depreciation runs charge, to be disposed of after.
@@ -133,7 +144,7 @@ export async function seedSr7c(trx: Trx, ids: IdMap) {
   }
 
   // ── 10. TDS on salary deposited by challan, the months' dues paid ────────
-  const months = [...MONTHS];
+  const months = [addMonths(MONTHS[0], -1), ...MONTHS];
   let serial = 31;
   for (const m of months) {
     const due = (await salaryTdsMonths(trx, org, [m]))[0];
@@ -169,8 +180,8 @@ export async function seedSr7c(trx: Trx, ids: IdMap) {
     }
   }
 
-  // ── 14. June's payroll from greytHR, before payroll moved in-house ───────
-  const june = addMonths(MONTHS[0], -1);
+  // ── 14. May's payroll from greytHR, before payroll moved in-house ────────
+  const may = addMonths(MONTHS[0], -2);
   const STAFF = [['E001', 'Karthik S', 'Stores', 14_000, 5_600, 5_400], ['E002', 'Lakshmi R', 'Accounts', 11_000, 4_400, 2_600],
     ['E003', 'Suresh M', 'Sales', 9_000, 3_600, 2_400], ['E004', 'Meena P', 'Service', 7_500, 3_000, 1_500], ['E005', 'Anand K', 'Logistics', 6_000, 2_400, 1_600]] as const;
   const rows = STAFF.map(([code, name, department, basic, hra, special]) => {
@@ -186,12 +197,12 @@ export async function seedSr7c(trx: Trx, ids: IdMap) {
     };
   });
   const imp = await importPayroll(trx, org, admin, {
-    month: june, sourceSystem: 'greytHR', fileName: `greytHR-salary-register-${june}.xlsx`, rows, paidFromBankAccountId: hdfc, paidOn: `${MONTHS[0]}-01`,
+    month: may, sourceSystem: 'greytHR', fileName: `greytHR-salary-register-${may}.xlsx`, rows, paidFromBankAccountId: hdfc, paidOn: `${addMonths(may, 1)}-01`,
   }, false);
-  if (!imp.posted) throw new Error(`The June import did not post: ${imp.problems.map((p) => p.message).join('; ')}`);
-  const { dues } = await statutoryRegister(trx, org, june, june);
+  if (!imp.posted) throw new Error(`The May import did not post: ${imp.problems.map((p) => p.message).join('; ')}`);
+  const { dues } = await statutoryRegister(trx, org, may, may);
   for (const d of dues) {
-    if (d.balancePaise > 0) await payStatutory(trx, org, admin, { component: d.component, period: june, amountPaise: d.balancePaise, date: `${MONTHS[0]}-14`, bankAccountId: hdfc, reference: `${d.component.toUpperCase()} ${june}` });
+    if (d.balancePaise > 0) await payStatutory(trx, org, admin, { component: d.component, period: may, amountPaise: d.balancePaise, date: `${addMonths(may, 1)}-14`, bankAccountId: hdfc, reference: `${d.component.toUpperCase()} ${may}` });
   }
 
   // The Inventory account brought into line with the stock valuation today,

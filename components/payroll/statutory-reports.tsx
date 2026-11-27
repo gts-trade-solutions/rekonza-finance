@@ -52,7 +52,7 @@ export function TieBox({ tie, payable, paidLabel = 'Paid' }: { tie: StatTie; pay
         <span />
         <span className="text-[10px] uppercase text-muted-foreground">Register</span>
         <span className="text-[10px] uppercase text-muted-foreground">Ledger</span>
-        <span>Deducted and contributed (posted by the pay runs)</span><Money value={tie.registerPaise} /><Money value={tie.ledgerPostedPaise} />
+        <span>Deducted and contributed (posted by the pay runs{tie.importedPaise ? ' and imported registers' : ''})</span><Money value={tie.registerPaise} /><Money value={tie.ledgerPostedPaise} />
         <span>{paidLabel}</span><Money value={tie.paidPaise} /><Money value={tie.ledgerPaidPaise} />
         <span className="font-medium">Left to pay</span><Money value={tie.registerPaise - tie.paidPaise} className="font-medium" /><Money value={tie.ledgerPostedPaise - tie.ledgerPaidPaise} className="font-medium" />
       </div>

@@ -3330,7 +3330,7 @@ export const assetDisposals = {
 // ── Status review 7, item 10: payroll statutory reports ─────────────────────
 // (app/api/payroll/statutory?view=…, app/api/payroll/salary-tds, app/api/payroll/runs/[id]/payments)
 
-export interface StatTie { registerPaise: number; ledgerPostedPaise: number; paidPaise: number; ledgerPaidPaise: number; ok: boolean }
+export interface StatTie { registerPaise: number; importedPaise: number; ledgerPostedPaise: number; paidPaise: number; ledgerPaidPaise: number; ok: boolean }
 export interface PfReportData {
   rows: { month: string; employeeId: string; code: string; name: string; uan: string | null; grossPaise: number; epfWagesPaise: number; epsWagesPaise: number;
     edliWagesPaise: number; eePaise: number; epsPaise: number; erDiffPaise: number; adminPaise: number; edliPaise: number; ncpDays: number; totalPaise: number }[];
