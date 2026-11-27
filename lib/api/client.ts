@@ -3417,3 +3417,42 @@ export const customReports = {
   update: (id: string, patch: { name?: string; shared?: boolean; spec?: CustomReportSpec }) => api.patch<{ id: string }>('/api/custom-reports', { id, ...patch }),
   remove: (id: string, reason?: string | null) => api.delete<{ deleted: true }>(`/api/custom-reports?id=${id}${reason ? `&reason=${encodeURIComponent(reason)}` : ''}`),
 };
+
+// ── Status review 7, builder A: consolidation ───────────────────────────────
+
+export interface ConsolidatedRowData { code: string; name: string; by: Record<string, number>; elimination: number; total: number; computed?: boolean }
+export interface ConsolidatedSum { by: Record<string, number>; elimination: number; total: number }
+export interface ConsolidatedReport {
+  from: string; to: string; fyStart: string;
+  companies: { orgId: string; name: string; pan: string | null; included: boolean }[];
+  group: { id: string; parentOrgId: string; parentName: string; name: string; members: { orgId: string; name: string; ownershipPct: number; acquiredOn: string | null; investmentAccountId: string | null; investmentAccountName: string | null }[] } | null;
+  interCompany: { fromOrgId: string; fromName: string; toOrgId: string; toName: string; receivablePaise: number; counterpartPayablePaise: number; salesPaise: number; counterpartPurchasesPaise: number; balanceDifferencePaise: number; tradeDifferencePaise: number }[];
+  income: ConsolidatedRowData[]; expenses: ConsolidatedRowData[]; assets: ConsolidatedRowData[]; liabilities: ConsolidatedRowData[]; equity: ConsolidatedRowData[];
+  totalIncome: ConsolidatedSum; totalExpense: ConsolidatedSum; netProfit: ConsolidatedSum; totalAssets: ConsolidatedSum; totalLiabilities: ConsolidatedSum; totalEquity: ConsolidatedSum;
+  profitAttributable: { ownersPaise: number; nciPaise: number };
+  unrealisedProfit: { closing: { sellerOrgId: string; sellerName: string; buyerOrgId: string; buyerName: string; item: string; qtyHeld: number; unitPricePaise: number; sellerUnitCostPaise: number | null; profitPaise: number; basis: 'item' | 'margin'; note: string | null }[]; closingPaise: number; openingPaise: number; yearStartPaise: number; chargePaise: number };
+  investments: { subsidiaryOrgId: string; subsidiary: string; ownershipPct: number; investmentPaise: number; shareCapitalPaise: number; preAcquisitionPaise: number; goodwillPaise: number; capitalReservePaise: number; identified: boolean; note: string | null }[];
+  nci: { orgId: string; name: string; pct: number; profitSharePaise: number; netAssetsSharePaise: number }[];
+  trialBalance: { rows: ConsolidatedRowData[]; debit: ConsolidatedSum; credit: ConsolidatedSum };
+  check: {
+    companies: { orgId: string; name: string; income: number; netProfit: number; assets: number; liabilitiesAndEquity: number; balanced: boolean; tbBalanced: boolean }[];
+    eliminations: { income: number; netProfit: number; assets: number; liabilitiesAndEquity: number };
+    group: { income: number; netProfit: number; assets: number; liabilitiesAndEquity: number; nciPaise: number; balanced: boolean };
+  };
+  notes: string[];
+  unreconciledPaise: number;
+}
+export interface ConsolidationSetup {
+  group: ConsolidatedReport['group'];
+  companies: { orgId: string; name: string; pan: string | null; canEdit: boolean; contacts: { id: string; name: string; kind: string; groupCompanyOrgId: string | null }[]; assetAccounts: { id: string; code: string; name: string }[] }[];
+}
+
+export const consolidation = {
+  report: (from: string, to: string, orgIds?: string[]) => api.get<ConsolidatedReport>('/api/reports/consolidated', { from, to, ...(orgIds?.length ? { orgIds: orgIds.join(',') } : {}) }),
+  setup: (orgIds?: string[]) => api.get<ConsolidationSetup>('/api/reports/consolidated/setup', orgIds?.length ? { orgIds: orgIds.join(',') } : undefined),
+  saveSetup: (input: { parentOrgId: string; name: string; members: { orgId: string; ownershipPct: number; acquiredOn: string | null; investmentAccountId: string | null }[]; links: { orgId: string; contactId: string; counterpartOrgId: string | null }[] }) =>
+    api.put<{ id: string }>('/api/reports/consolidated/setup', input),
+  ledger: (orgId: string, code: string, from: string, to: string) =>
+    api.get<{ company: string; account: { code: string; name: string; type: string } | null; openingPaise: number; closingPaise: number; lines: { entryId: string; entryNo: number; date: string; memo: string | null; description: string | null; sourceType: string; debitPaise: number; creditPaise: number; runningPaise: number; contactName: string | null }[] }>(
+      '/api/reports/consolidated/ledger', { orgId, code, from, to }),
+};
