@@ -3411,3 +3411,32 @@ export const gstr9Annual = {
   saveInputs: (fy: number, inputs: Gstr9AnnualInputs) => api.put<{ fy: number; inputs: Gstr9AnnualInputs }>('/api/gst/annual', { fy, inputs }),
   deleteInputs: (fy: number) => api.delete<{ fy: number; deleted: true }>(`/api/gst/annual?fy=${fy}`),
 };
+
+// ── GST return filing reports (status review 7, item 11) ─────────────────────
+// GSTR-1 table by table with its tie-out, GSTR-3B's checks and its payment,
+// the GSTR-1 vs 3B vs books reconciliation, GSTR-2B claim decisions, and the
+// filed mark of any return (/api/gst/returns, /api/gst/filing, /api/gst/gstr2b).
+
+export type Gstr1ReportView = import('../server/gst/gstr1-report').Gstr1Report;
+export type Gstr1DocRowView = import('../server/gst/gstr1-report').Gstr1DocRow;
+export type Gstr3bChecksView = import('../server/gst/gstr3b-checks').Gstr3bChecks;
+export type ReconciliationView = Awaited<ReturnType<typeof import('../server/gst/gstr3b-checks').reconciliation>>;
+export type Gstr3bPaymentView = import('../server/gst/gstr3b-payment').Gstr3bPaymentView;
+export type Gstr3bSettlementView = Awaited<ReturnType<typeof import('../server/gst/gstr3b-payment').gstr3bSettlement>>;
+export type ClaimShiftView = import('../server/gst/itc-claims').ClaimShift;
+
+const GR = '/api/gst/returns';
+export const gstReturns = {
+  gstr1Report: (period: string) => api.get<Gstr1ReportView>(GR, { view: 'gstr1-report', period }),
+  gstr3bChecks: (ret: string) => api.get<Gstr3bChecksView>(GR, { view: 'gstr3b-checks', ret }),
+  gstr3bPayment: (ret: string) => api.get<{ recorded: Gstr3bPaymentView | null; settlement: Gstr3bSettlementView }>(GR, { view: 'gstr3b-payment', ret }),
+  recordPayment: (b: { period: string; paidOn: string; cpin?: string | null; bankAccountId?: string | null; notes?: string | null }) =>
+    api.post<{ id: number; journalEntryId: number }>(GR, { action: 'gstr3b-payment', ...b }),
+  updatePayment: (id: string, b: { period: string; paidOn: string; cpin?: string | null; bankAccountId?: string | null; notes?: string | null }) =>
+    api.put<{ id: number }>(`${GR}?id=${id}`, b),
+  deletePayment: (id: string, reason?: string | null) => api.delete(`${GR}?id=${id}${reason?.trim() ? `&reason=${encodeURIComponent(reason.trim())}` : ''}`),
+  reconciliation: (fy: number) => api.get<ReconciliationView>(GR, { view: 'reconciliation', fy }),
+  itcClaims: (period: string) => api.get<{ period: string; shifts: ClaimShiftView[]; decisions: { billId: string; number: string; vendorInvoiceNo: string | null; billDate: string; party: string; gstin: string | null; decision: 'accept' | 'defer' | 'claim_later'; claimPeriod: string | null; note: string | null; by: string | null; taxPaise: number }[] }>(GR, { view: 'itc-claims', period }),
+  setClaim: (b: { billIds: string[]; decision: 'accept' | 'defer' | 'claim_later'; claimPeriod?: string | null; note?: string | null }) =>
+    api.post<{ changed: number; bills: string[] }>('/api/gst/gstr2b', { action: 'claim', ...b }),
+};

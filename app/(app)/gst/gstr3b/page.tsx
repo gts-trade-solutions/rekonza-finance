@@ -13,13 +13,12 @@
 // never against each other (lib/server/gst/set-off.ts).
 
 import { Fragment, useMemo, useState } from 'react';
-import { CheckCircle2, ChevronDown, Download, FileJson, FileSpreadsheet, Info, Printer, RotateCcw } from 'lucide-react';
+import { CheckCircle2, ChevronDown, Download, FileJson, FileSpreadsheet, Info, Printer } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -34,7 +33,8 @@ import { usePermission } from '@/lib/store/hooks';
 import { downloadWorkbook, type Sheet } from '@/lib/xlsx';
 import { toRupees } from '@/lib/money';
 import { GSTR3B_ROWS, GSTR3B_TABLES, stateLabel, type Gstr3bHeads, type Gstr3bRowKey } from '@/lib/gst/gstr3b-layout';
-import { RowActions, useConfirmDelete } from '@/components/shared/row-actions';
+import { ReturnFilingBar } from '@/components/gst/return-filing';
+import { Gstr3bChecksPanel, Gstr3bPaymentCard } from '@/components/gst/gstr3b-extras';
 
 type Heads = 'IGST' | 'CGST' | 'SGST' | 'CESS';
 const HEAD_LABEL: Record<Heads, string> = { IGST: 'Integrated Tax', CGST: 'Central Tax', SGST: 'State/UT Tax', CESS: 'Cess' };
@@ -93,9 +93,7 @@ export default function Gstr3bPage() {
   const [quarter, setQuarter] = useState(quarterOf(localMonth()));
   const ret = frequency === 'quarterly' ? quarter : month;
   const state = useApi<Gstr3bFormResponse>(() => gst.gstr3bForm(ret), [ret]);
-  const canFile = usePermission('gst', 'edit');
   const [drill, setDrill] = useState<Drill | null>(null);
-  const [filing, setFiling] = useState(false);
 
   const quarters = useMemo(() => {
     const now = quarterOf(localMonth());
@@ -112,16 +110,6 @@ export default function Gstr3bPage() {
     return out;
   }, []);
 
-  // The filed mark is what was entered here (the return itself is on the portal):
-  // Edit changes its date or ARN, Delete takes the mark off.
-  const confirm = useConfirmDelete();
-  const undoFiling = () => confirm.ask({
-    title: 'Delete the filed mark?',
-    description: 'The return shows as not filed here again. Nothing on the GST portal changes: a return filed there stays filed.',
-    reason: false, confirmLabel: 'Mark as not filed',
-    run: () => api.post('/api/compliance-calendar', { action: 'undo', key: 'gstr3b', period: ret }),
-    done: 'Marked as not filed', onDone: () => state.refetch(),
-  });
 
   const downloadFile = async (d: Gstr3bFormResponse) => {
     try {
@@ -201,10 +189,7 @@ export default function Gstr3bPage() {
                     <span>Filed on <b>{longDay(d.status.filedOn)}</b></span>
                     {d.status.arn && <span>ARN <span className="font-mono">{d.status.arn}</span></span>}
                     {d.status.filedBy && <span className="text-muted-foreground">marked by {d.status.filedBy}</span>}
-                    {canFile && (
-                      <RowActions className="ml-auto print:hidden" onEdit={() => setFiling(true)} editTitle="Change the date filed or the ARN"
-                        onDelete={undoFiling} deleteLabel="Mark as not filed" />
-                    )}
+                    <span className="text-muted-foreground">· Edit or delete the mark in the filing bar below.</span>
                   </div>
                 )}
               </Card>
@@ -238,17 +223,8 @@ export default function Gstr3bPage() {
                 </Card>
               </div>
 
+              <ReturnFilingBar returnType="gstr3b" period={ret} title="GSTR-3B" onChange={() => state.refetch()} />
               <GstnReturnBar returnType="GSTR3B" period={ret} />
-
-              {!d.status.filed && canFile && (
-                <div className="flex flex-wrap items-center gap-2 rounded-md border bg-muted/30 p-3 text-xs print:hidden">
-                  <Info className="size-3.5 shrink-0 text-primary" />
-                  <span className="min-w-0 flex-1">
-                    Filed on the GST portal yourself? Record the ARN here so the period is marked done on the compliance calendar. (Pushing and filing from the app, above, records it on its own.)
-                  </span>
-                  <Button size="sm" onClick={() => setFiling(true)}>Mark as filed</Button>
-                </div>
-              )}
 
               {/* 3.1 */}
               <TableCard title={GSTR3B_TABLES[0].title}>
@@ -353,6 +329,9 @@ export default function Gstr3bPage() {
                 <PaymentTable d={d} />
               </TableCard>
 
+              <Gstr3bPaymentCard ret={ret} />
+              <Gstr3bChecksPanel ret={ret} />
+
               {d.notes.length > 0 && (
                 <Card className="space-y-1.5 p-4">
                   {d.notes.map((n) => (
@@ -366,16 +345,6 @@ export default function Gstr3bPage() {
       </AsyncPage>
 
       {drill && <DrillDialog ret={ret} drill={drill} onClose={() => setDrill(null)} />}
-      {confirm.dialog}
-      {filing && state.data && (
-        <FileDialog
-          ret={ret}
-          dueDate={state.data.status.dueDate}
-          filed={state.data.status.filed ? { on: state.data.status.filedOn, arn: state.data.status.arn } : null}
-          onClose={() => setFiling(false)}
-          onDone={() => { setFiling(false); state.refetch(); }}
-        />
-      )}
     </>
   );
 }
@@ -500,7 +469,7 @@ function PaymentTable({ d }: { d: Gstr3bFormResponse }) {
         </tr>
       </thead>
       <tbody>
-        {([['forward', '(A) Other than reverse charge'], ['rcm', '(B) Reverse charge']] as const).map(([kind, label]) => (
+        {([['forward', '(A) Other than reverse charge'], ['rcm', '(B) Reverse charge and supplies made u/s 9(5)']] as const).map(([kind, label]) => (
           <Fragment key={kind}>
             <tr className="border-b bg-muted/25"><td colSpan={9} className="px-3 py-2 font-medium">{label}</td></tr>
             {group(kind).map((p) => (
@@ -611,52 +580,6 @@ function DrillDialog({ ret, drill, onClose }: { ret: string; drill: Drill; onClo
   );
 }
 
-function FileDialog({ ret, dueDate, filed, onClose, onDone }: {
-  ret: string; dueDate: string; filed?: { on: string | null; arn: string | null } | null; onClose: () => void; onDone: () => void;
-}) {
-  const today = new Date();
-  const [doneOn, setDoneOn] = useState(filed?.on?.slice(0, 10) ?? `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`);
-  const [arn, setArn] = useState(filed?.arn ?? '');
-  const [busy, setBusy] = useState(false);
-  const save = async () => {
-    setBusy(true);
-    try {
-      await api.post('/api/compliance-calendar', { action: 'done', key: 'gstr3b', period: ret, doneOn, reference: arn.trim() || null });
-      toast.success('GSTR-3B marked as filed', { description: 'The compliance calendar shows it done.' });
-      onDone();
-    } catch (e) {
-      toast.error(e instanceof ApiError ? e.message : 'Could not save');
-    } finally {
-      setBusy(false);
-    }
-  };
-  return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-w-md">
-        <DialogHeader>
-          <DialogTitle>Mark GSTR-3B as filed</DialogTitle>
-          <DialogDescription>Record the date it was filed and the ARN the portal gave. Due {longDay(dueDate)}.</DialogDescription>
-        </DialogHeader>
-        <div className="space-y-3">
-          <div className="space-y-1.5">
-            <Label htmlFor="filed-on">Date of filing</Label>
-            <Input id="filed-on" type="date" value={doneOn} onChange={(e) => setDoneOn(e.target.value)} />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="arn">ARN</Label>
-            <Input id="arn" value={arn} onChange={(e) => setArn(e.target.value.toUpperCase())} placeholder="AA3310260123456" maxLength={20} className="font-mono" />
-            <p className="text-xs text-muted-foreground">The acknowledgement reference number shown after filing.</p>
-          </div>
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose}><RotateCcw className="mr-1.5 size-3.5" /> Cancel</Button>
-          <Button onClick={save} disabled={busy || !doneOn}>{busy ? 'Saving…' : 'Mark as filed'}</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
 /** The form as a workbook, laid out table by table like the screen. */
 function exportExcel(d: Gstr3bFormResponse) {
   const rs = (p: number) => toRupees(p);
@@ -699,7 +622,7 @@ function exportExcel(d: Gstr3bFormResponse) {
     [],
     [GSTR3B_TABLES[6].title],
     ['Description', 'Tax payable', 'ITC: Integrated', 'ITC: Central', 'ITC: State/UT', 'ITC: Cess', 'Tax paid in cash', 'Interest paid in cash', 'Late fee paid in cash'],
-    ...d.payment.map((p) => [`${p.kind === 'rcm' ? '(B) Reverse charge' : '(A) Other than reverse charge'} · ${HEAD_LABEL[p.head]}`, rs(p.payablePaise), rs(p.itc.IGST), rs(p.itc.CGST), rs(p.itc.SGST), rs(p.itc.CESS), rs(p.cashPaise), rs(p.interestPaise), rs(p.lateFeePaise)]),
+    ...d.payment.map((p) => [`${p.kind === 'rcm' ? '(B) Reverse charge and supplies made u/s 9(5)' : '(A) Other than reverse charge'} · ${HEAD_LABEL[p.head]}`, rs(p.payablePaise), rs(p.itc.IGST), rs(p.itc.CGST), rs(p.itc.SGST), rs(p.itc.CESS), rs(p.cashPaise), rs(p.interestPaise), rs(p.lateFeePaise)]),
   ];
   const sheet: Sheet = { name: 'GSTR-3B', rows, widths: [70, 18, 16, 16, 16, 14, 16, 16, 16] };
   downloadWorkbook(`GSTR3B_${d.gstin ?? ''}_${d.period.key}`, [sheet]);
