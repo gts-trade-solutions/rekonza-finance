@@ -8,9 +8,12 @@ import 'server-only';
 // and paid, and the statutory rules (lib/payroll/statutory.ts). It stays a
 // draft, recomputed as days and extras are corrected, until it is posted:
 //
-//   Dr Salaries & Wages             gross earnings
+//   Dr Salaries & Wages             gross earnings, a line for each component
+//                                   (basic, DA, HRA, special, other, bonus,
+//                                   arrears) and each cost centre
 //   Dr Staff Reimbursements         reimbursements
-//   Dr Employer PF, ESI and LWF     the employer's own share and PF charges
+//   Dr Employer PF, ESI and LWF     the employer's own share and PF charges,
+//                                   PF, ESI and LWF on lines of their own
 //     Cr PF Payable                 both shares, admin and EDLI
 //     Cr ESI Payable                both shares
 //     Cr Professional Tax Payable
@@ -19,7 +22,8 @@ import 'server-only';
 //     Cr Loans & Advances           advances recovered
 //     Cr Salaries Payable           net pay
 //
-// Paying it clears Salaries Payable from a bank account.
+// Paying it clears Salaries Payable from a bank account, employee by employee
+// (salary-payments.ts).
 //
 // Gross includes arrears from a back-dated revision; reimbursements include
 // approved claims; advances recovered include loan instalments (loans.ts).
@@ -37,7 +41,7 @@ import { accrueLeave, unpaidDays } from './leave';
 import { claimsForRun } from './claims';
 import { allocateRecovery, loansDue } from './loans';
 import { deductionItems } from './declarations';
-import { postEntry, reverseEntry } from '../ledger/posting';
+import { postEntry, reverseEntry, type DraftLine } from '../ledger/posting';
 import { CODE, accountIds, requireAccount } from '../ledger/chart-of-accounts';
 import { monthLabel } from '../../date-range';
 import {
@@ -79,7 +83,9 @@ async function activeEmployees(ex: Executor, orgId: number, month: string) {
   return ex.selectFrom('employees as e').innerJoin('branches as b', 'b.id', 'e.branch_id')
     .select([
       'e.id', 'e.name', 'e.gender', 'e.date_of_joining', 'e.date_of_leaving', 'e.pf_member', 'e.eps_member', 'e.pf_on_actual',
-      'e.pt_applicable', 'e.lwf_applicable', 'e.disabled', 'e.tax_regime', 'e.declared_deductions', 'e.metro_city', 'b.state_code',
+      'e.pt_applicable', 'e.lwf_applicable', 'e.disabled', 'e.tax_regime', 'e.declared_deductions', 'e.metro_city',
+      // Professional Tax and LWF are the state's where the work is done (migration 132).
+      sql<string>`COALESCE(e.work_state_code, b.state_code)`.as('state_code'),
     ])
     .where('e.org_id', '=', orgId)
     .where('e.date_of_joining', '<=', lastDay(month))
@@ -295,20 +301,17 @@ export async function postRun(trx: Trx, orgId: number, userId: number | null, ru
   if (!t.count) throw badRequest('There is nobody on this payroll. Add employees and their salary first.');
   const acc = await accountIds(trx, orgId);
   const a = (code: string) => requireAccount(acc, code);
-  const employer = t.pf_employer_epf + t.pf_employer_eps + t.pf_admin + t.pf_edli + t.esi_employer + t.lwf_employer;
   const branch = await trx.selectFrom('branches').select('id').where('org_id', '=', orgId).orderBy('is_primary', 'desc').executeTakeFirstOrThrow();
-  const lines = [
-    { accountId: a(CODE.SALARIES), debit: t.gross, description: `Salaries for ${monthLabel(run.month)}` },
-    { accountId: a(CODE.STAFF_REIMBURSEMENTS), debit: t.reimbursement },
-    { accountId: a(CODE.EMPLOYER_CONTRIBUTIONS), debit: employer, description: 'Employer PF, ESI and LWF' },
-    { accountId: a(CODE.PF_PAYABLE), credit: t.pf_employee + t.pf_employer_epf + t.pf_employer_eps + t.pf_admin + t.pf_edli },
-    { accountId: a(CODE.ESI_PAYABLE), credit: t.esi_employee + t.esi_employer },
-    { accountId: a(CODE.PT_PAYABLE), credit: t.pt },
-    { accountId: a(CODE.LWF_PAYABLE), credit: t.lwf_employee + t.lwf_employer },
-    { accountId: a(CODE.TDS_PAYABLE), credit: t.tds, description: 'TDS on salary' },
+  const lines: DraftLine[] = [...await expenseLines(trx, runId, a), ...[
+    { accountId: a(CODE.STAFF_REIMBURSEMENTS), debit: t.reimbursement, description: 'Reimbursements and approved claims' },
+    { accountId: a(CODE.PF_PAYABLE), credit: t.pf_employee + t.pf_employer_epf + t.pf_employer_eps + t.pf_admin + t.pf_edli, description: 'PF: employee and employer shares, admin and EDLI' },
+    { accountId: a(CODE.ESI_PAYABLE), credit: t.esi_employee + t.esi_employer, description: 'ESI: employee and employer shares' },
+    { accountId: a(CODE.PT_PAYABLE), credit: t.pt, description: 'Professional Tax deducted' },
+    { accountId: a(CODE.LWF_PAYABLE), credit: t.lwf_employee + t.lwf_employer, description: 'Labour Welfare Fund: both shares' },
+    { accountId: a(CODE.TDS_PAYABLE), credit: t.tds, description: 'TDS on salary (section 192)' },
     { accountId: a(CODE.LOANS_ADVANCES), credit: t.advance_recovery, description: 'Advances recovered from salary' },
     { accountId: a(CODE.SALARIES_PAYABLE), credit: t.net_pay, description: `Net salaries for ${monthLabel(run.month)}` },
-  ].filter((l) => (l.debit ?? 0) !== 0 || (l.credit ?? 0) !== 0);
+  ]].filter((l) => (l.debit ?? 0) !== 0 || (l.credit ?? 0) !== 0);
   const entry = await postEntry(trx, {
     orgId, branchId: branch.id, date: lastDay(run.month), memo: `Payroll for ${monthLabel(run.month)} (${t.count} employee${t.count === 1 ? '' : 's'})`,
     sourceType: 'payroll', sourceId: runId, userId, module: 'accountant', lines,
@@ -317,28 +320,59 @@ export async function postRun(trx: Trx, orgId: number, userId: number | null, ru
   return entry.id;
 }
 
-/** Pay the net salaries from a bank account. */
-export async function payRun(trx: Trx, orgId: number, userId: number | null, runId: number, o: { bankAccountId: number; date: string }): Promise<number> {
-  const run = await trx.selectFrom('payroll_runs').selectAll().where('id', '=', runId).where('org_id', '=', orgId).forUpdate().executeTakeFirst();
-  if (!run) throw notFound('That payroll run does not exist.');
-  if (run.status !== 'posted') throw conflict(run.status === 'paid' ? `Payroll for ${monthLabel(run.month)} is already paid.` : 'Post the payroll before paying it.');
-  if (o.date < `${run.month}-01`) throw badRequest('Salaries cannot be paid before the month they are for.');
-  const bank = await trx.selectFrom('bank_accounts').select(['ledger_account_id', 'name']).where('id', '=', o.bankAccountId).where('org_id', '=', orgId).executeTakeFirst();
-  if (!bank) throw notFound('That bank account does not exist.');
-  const t = await totalsOf(trx, runId);
-  const acc = await accountIds(trx, orgId);
-  const branch = (await trx.selectFrom('branches').select('id').where('org_id', '=', orgId).orderBy('is_primary', 'desc').executeTakeFirstOrThrow()).id;
-  const entry = await postEntry(trx, {
-    orgId, branchId: branch, date: o.date, memo: `Salaries for ${monthLabel(run.month)} paid from ${bank.name}`,
-    sourceType: 'payroll_payment', sourceId: runId, userId, module: 'banking',
-    lines: [
-      { accountId: requireAccount(acc, CODE.SALARIES_PAYABLE), debit: t.net_pay },
-      { accountId: bank.ledger_account_id, credit: t.net_pay },
-    ],
-  });
-  await trx.updateTable('payroll_runs').set({ status: 'paid', paid_on: o.date, paid_from_bank_id: o.bankAccountId, payment_entry_id: entry.id })
-    .where('id', '=', runId).execute();
-  return entry.id;
+/** The salary components, in the order a payslip prints them. */
+export const SALARY_COMPONENTS = [
+  ['basic', 'Basic'], ['da', 'Dearness allowance'], ['hra', 'House rent allowance'], ['special', 'Special allowance'],
+  ['other', 'Other allowances'], ['bonus', 'Bonus'], ['arrears', 'Arrears'],
+] as const;
+
+/**
+ * The expense side of a run's entry: gross salary by component and by cost
+ * centre (the employee's department or division), and the employer's PF, ESI
+ * and LWF, so the profit and loss and the cost-centre reports show what each
+ * part of the business spent on its people, and the ledger reads like the
+ * salary register (AS 15 / Ind AS 19: employee benefits recognised as an
+ * expense when the service is rendered).
+ */
+async function expenseLines(ex: Executor, runId: number, a: (code: string) => number): Promise<DraftLine[]> {
+  const rows = await ex.selectFrom('payroll_lines as l').innerJoin('employees as e', 'e.id', 'l.employee_id')
+    .leftJoin('cost_centres as c', 'c.id', 'e.cost_centre_id')
+    .select(['e.cost_centre_id', 'c.name as cc_name', 'l.basic', 'l.da', 'l.hra', 'l.special', 'l.other', 'l.bonus', 'l.arrears',
+      'l.pf_employer_epf', 'l.pf_employer_eps', 'l.pf_admin', 'l.pf_edli', 'l.esi_employer', 'l.lwf_employer'])
+    .where('l.run_id', '=', runId).execute();
+  const groups = new Map<string, { cc: number | null; name: string | null; sums: Record<string, Paise> }>();
+  for (const r of rows) {
+    const key = String(r.cost_centre_id ?? 'none');
+    const g = groups.get(key) ?? { cc: r.cost_centre_id, name: r.cc_name, sums: {} };
+    const add = (k: string, v: Paise) => { g.sums[k] = (g.sums[k] ?? 0) + v; };
+    for (const [k] of SALARY_COMPONENTS) add(k, p(r[k]));
+    add('pf', p(r.pf_employer_epf) + p(r.pf_employer_eps) + p(r.pf_admin) + p(r.pf_edli));
+    add('esi', p(r.esi_employer));
+    add('lwf', p(r.lwf_employer));
+    groups.set(key, g);
+  }
+  const out: DraftLine[] = [];
+  for (const g of [...groups.values()].sort((x, y) => (x.name ?? '').localeCompare(y.name ?? ''))) {
+    const where = g.name ? ` — ${g.name}` : '';
+    for (const [k, label] of SALARY_COMPONENTS) {
+      if (g.sums[k]) out.push({ accountId: a(CODE.SALARIES), debit: g.sums[k], description: `${label}${where}`, costCentreId: g.cc });
+    }
+    if (g.sums.pf) out.push({ accountId: a(CODE.EMPLOYER_CONTRIBUTIONS), debit: g.sums.pf, description: `Employer PF: EPF, EPS, admin and EDLI${where}`, costCentreId: g.cc });
+    if (g.sums.esi) out.push({ accountId: a(CODE.EMPLOYER_CONTRIBUTIONS), debit: g.sums.esi, description: `Employer ESI${where}`, costCentreId: g.cc });
+    if (g.sums.lwf) out.push({ accountId: a(CODE.EMPLOYER_CONTRIBUTIONS), debit: g.sums.lwf, description: `Employer LWF${where}`, costCentreId: g.cc });
+  }
+  return out;
+}
+
+/**
+ * Pay the net salaries still unpaid, everyone at once, from a bank account:
+ * one bank entry (one line on the statement) with a line for each employee,
+ * and a payment kept for each (salary-payments.ts).
+ */
+export async function payRun(trx: Trx, orgId: number, userId: number | null, runId: number, o: { bankAccountId: number; date: string; reference?: string | null }): Promise<number> {
+  const { paySalaries } = await import('./salary-payments');
+  const r = await paySalaries(trx, orgId, userId, runId, { ...o, employeeIds: null });
+  return r.entryId;
 }
 
 /** Take a posted run back to draft: its entry is reversed, never deleted. */
@@ -347,6 +381,8 @@ export async function reopenRun(trx: Trx, orgId: number, userId: number | null, 
   if (!run) throw notFound('That payroll run does not exist.');
   if (run.status === 'paid') throw conflict('Salaries for this month have been paid. Record a correction in next month’s payroll instead.');
   if (run.status !== 'posted') throw conflict('Only a posted payroll can be reopened.');
+  const paid = await trx.selectFrom('payroll_payments').select('id').where('run_id', '=', runId).where('reversed', '=', 0).executeTakeFirst();
+  if (paid) throw conflict('Some salaries for this month are paid. Undo those payments first (Salary payments), then reopen it.');
   if (reason.trim().length < 4) throw badRequest('Give the reason for reopening it.');
   if (run.journal_entry_id) {
     await reverseEntry(trx, orgId, run.journal_entry_id, { memo: `Payroll for ${monthLabel(run.month)} reopened — ${reason.trim()}`, userId, module: 'accountant' });

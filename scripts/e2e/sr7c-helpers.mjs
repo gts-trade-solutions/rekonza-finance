@@ -95,11 +95,7 @@ export function randomPan(kind = 'C') {
 export async function signIn(t, { business = 'Audit Test', state = '33', stateName = 'Tamil Nadu' } = {}) {
   const { page } = t;
   if (!FRESH) {
-    await page.goto(`${BASE}/login`, { waitUntil: 'domcontentloaded' });
-    await page.locator('#email').fill('arun@raceautospares.in');
-    await page.locator('#password').fill('Rekonza@2026');
-    await page.getByRole('button', { name: /^Sign in$/ }).click();
-    await page.waitForURL('**/dashboard', { timeout: 90_000 });
+    await login(page, 'arun@raceautospares.in', 'Rekonza@2026');
     return { fresh: false };
   }
   const stamp = `${Date.now().toString(36)}${Math.floor(Math.random() * 1e4)}`;
@@ -124,6 +120,36 @@ export async function signIn(t, { business = 'Audit Test', state = '33', stateNa
   await page.locator('button[type="submit"]').click();
   await page.waitForURL('**/dashboard', { timeout: 90_000 });
   return { fresh: true, email, pan };
+}
+
+/**
+ * Sign in on the login screen. The form is filled once the page has hydrated
+ * (a click before that submits the bare HTML form); a first sign-in with a
+ * temporary password goes through the change-password screen.
+ */
+export async function login(page, email, password, newPassword = 'Checker@2026x') {
+  await page.goto(`${BASE}/login`, { waitUntil: 'load' });
+  await page.waitForTimeout(1500);
+  await page.locator('#email').fill(email);
+  await page.locator('#password').fill(password);
+  await page.getByRole('button', { name: /^Sign in$/ }).click();
+  await page.waitForURL(/dashboard|change-password|two-step/, { timeout: 90_000 });
+  if (page.url().includes('change-password')) {
+    await page.locator('#cp-current').fill(password);
+    await page.locator('#cp-next').fill(newPassword);
+    await page.locator('#cp-again').fill(newPassword);
+    await page.locator('button[type="submit"]').click();
+    await page.waitForURL('**/dashboard', { timeout: 90_000 });
+  }
+}
+
+/** Click, and wait for the API call it makes to answer. */
+export async function clickAndWait(page, locator, urlPart, method = 'POST') {
+  const [res] = await Promise.all([
+    page.waitForResponse((r) => r.url().includes(urlPart) && r.request().method() === method, { timeout: 90_000 }),
+    locator.click(),
+  ]);
+  return res;
 }
 
 /** Pick an option in a Select (base-ui) by its trigger's data-slot and the option's text. */

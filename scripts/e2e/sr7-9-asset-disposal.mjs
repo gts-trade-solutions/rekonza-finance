@@ -13,7 +13,7 @@
 //    the Disposals report and the Schedule III note tied to the ledger; the
 //    Income-tax block reduced by the sale.  5. Disposal approval by a second person.
 
-import { BASE, FRESH, combo, field, gstinFor, inr, pick, randomPan, signIn, start, toast } from './sr7c-helpers.mjs';
+import { BASE, FRESH, clickAndWait, combo, field, gstinFor, inr, login, pick, randomPan, signIn, start, toast } from './sr7c-helpers.mjs';
 
 const t = await start('9');
 const { page, check, shot, api } = t;
@@ -142,7 +142,7 @@ try {
   check('Preview: the loss on the lathe', pv.includes(inr(Math.abs(latheGain)).slice(1)) && /Loss/.test(pv), inr(latheGain));
   check('Preview: one disposal entry, Dr accumulated depreciation and clearing, Cr cost, loss', /Accumulated Depreciation[\s\S]*Asset Disposal Clearing[\s\S]*its cost[\s\S]*Loss on Sale/.test(pv));
   await shot('lathe-sale-preview');
-  await p.locator('[data-slot="dispose-submit"]').click();
+  await clickAndWait(page, p.locator('[data-slot="dispose-submit"]'), '/api/fixed-assets');
   await toast(page, /Sold by/);
   await dlg.locator('[data-slot="disposed-summary"]').waitFor();
   const sum = await dlg.locator('[data-slot="disposed-summary"]').innerText();
@@ -174,7 +174,7 @@ try {
   await field(p, 'Amount received').locator('input').fill('650000');
   await p.locator('[data-slot="dispose-preview"]').getByText('Bank').waitFor();
   await shot('van-bank-preview');
-  await p.locator('[data-slot="dispose-submit"]').click();
+  await clickAndWait(page, p.locator('[data-slot="dispose-submit"]'), '/api/fixed-assets');
   await toast(page, /Sold:/);
   const van = ASSETS[1];
   const vanGain = 6_50_000_00 + charged['Delivery van'] - van.cost;
@@ -193,7 +193,7 @@ try {
   const srvLoss = srv.cost - charged['Old server'] - srvCatch;
   await p.locator('[data-slot="dispose-preview"]').getByText(inr(srvLoss).slice(1)).first().waitFor();
   await shot('server-scrap-preview');
-  await p.locator('[data-slot="dispose-submit"]').click();
+  await clickAndWait(page, p.locator('[data-slot="dispose-submit"]'), '/api/fixed-assets');
   await toast(page, /Scrapped/);
   check('Server scrapped: the loss is its written-down value', (await dlg.locator('[data-slot="disposed-summary"]').innerText()).includes(inr(srvLoss).slice(1)), inr(srvLoss));
   await page.keyboard.press('Escape');
@@ -211,7 +211,7 @@ try {
   const partCatch = dep(part, '2026-09-01', '2026-09-20', partBefore);
   await p.locator('[data-slot="dispose-preview"]').getByText('3,00,000.00').first().waitFor();
   await shot('part-disposal-preview');
-  await p.locator('[data-slot="dispose-submit"]').click();
+  await clickAndWait(page, p.locator('[data-slot="dispose-submit"]'), '/api/fixed-assets');
   await toast(page, /Scrapped/);
   await page.keyboard.press('Escape');
   const reg2 = await api('GET', '/api/fixed-assets?view=register');
@@ -254,7 +254,7 @@ try {
   const confirm = page.locator('[role="dialog"], [role="alertdialog"]').filter({ has: page.getByPlaceholder(/^Reason/) }).last();
   await confirm.getByPlaceholder(/^Reason/).fill('Buyer backed out; the lathe is still on the shop floor');
   await shot('undo-reason');
-  await confirm.getByRole('button', { name: 'Undo disposal' }).click();
+  await clickAndWait(page, confirm.getByRole('button', { name: 'Undo disposal' }), '/api/fixed-assets');
   await toast(page, /Disposal undone/);
   await page.waitForTimeout(800);
   const after = await api('GET', `/api/fixed-assets?view=asset&id=${latheId}`);
@@ -303,7 +303,7 @@ try {
   await p.locator('[data-slot="dispose-how-scrap"]').click();
   await p.locator('[data-slot="dispose-date"]').fill('2026-11-05');
   await p.getByText(/will wait for an accountant/).waitFor();
-  await p.locator('[data-slot="dispose-submit"]').click();
+  await clickAndWait(page, p.locator('[data-slot="dispose-submit"]'), '/api/fixed-assets');
   await toast(page, /sent for approval/);
   await page.keyboard.press('Escape');
   const pend = await api('GET', `/api/fixed-assets?view=asset&id=${latheId}`);
@@ -324,20 +324,9 @@ try {
   const ctx2 = await t.browser.newContext({ viewport: { width: 1440, height: 900 } });
   const p2 = await ctx2.newPage();
   p2.on('pageerror', (e) => t.errors.push(`checker pageerror: ${e.message}`));
-  await p2.goto(`${BASE}/login`, { waitUntil: 'domcontentloaded' });
-  await p2.locator('#email').fill(checkerEmail);
-  await p2.locator('#password').fill(checkerPassword);
-  await p2.getByRole('button', { name: /^Sign in$/ }).click();
-  await p2.waitForURL(/dashboard|change-password/, { timeout: 90_000 });
-  if (p2.url().includes('change-password')) {
-    await p2.locator('#cp-current').fill(checkerPassword);
-    await p2.locator('#cp-next').fill('Checker@2026x');
-    await p2.locator('#cp-again').fill('Checker@2026x');
-    await p2.locator('button[type="submit"]').click();
-    await p2.waitForURL('**/dashboard', { timeout: 90_000 });
-  }
+  await login(p2, checkerEmail, checkerPassword);
   await p2.goto(`${BASE}/accountant/fixed-assets?tab=disposals`, { waitUntil: 'domcontentloaded' });
-  await p2.locator('[data-slot="disposal-approve"]').first().click();
+  await clickAndWait(p2, p2.locator('[data-slot="disposal-approve"]').first(), '/api/fixed-assets');
   await p2.locator('[data-sonner-toast]', { hasText: /Approved and posted/ }).first().waitFor();
   await p2.screenshot({ path: `${process.env.SHOTS || 'scripts/e2e/shots'}/9-${String(++t.state.n).padStart(2, '0')}-approved-by-checker${FRESH ? '-fresh' : ''}.png` });
   await ctx2.close();

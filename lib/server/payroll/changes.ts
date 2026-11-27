@@ -35,6 +35,7 @@ import { fnfStatement, postFnf, type FnfInput } from './fnf';
 import { daysBetween, leaveBalances } from './leave';
 import { COMPONENT_LABEL, checkStatutoryPayment, payStatutory, type StatutoryComponent } from './statutory-dues';
 import type { LoanInput } from './loans';
+import { reverseAllSalaryPayments } from './salary-payments';
 
 const p = toPaiseFromSql;
 const MONTH = /^\d{4}-(0[1-9]|1[0-2])$/;
@@ -121,15 +122,10 @@ async function statutoryPaidFor(trx: Trx, orgId: number, month: string) {
  */
 export async function unpayRun(trx: Trx, orgId: number, userId: number | null, runId: number, reason?: string | null) {
   const run = await lockedRun(trx, orgId, runId);
-  if (run.status !== 'paid') throw conflict('Only a paid payroll has a payment to undo.');
-  if (run.payment_entry_id && await bankLineMatched(trx, orgId, 'journal_entry', run.payment_entry_id)) {
-    throw conflict(`The salary payment for ${monthLabel(run.month)} ${BANK_MATCHED}`);
-  }
-  await reverseForChange(trx, orgId, run.payment_entry_id, {
-    memo: `Salary payment for ${monthLabel(run.month)} undone${because(reason)}`, userId, module: 'banking',
-  });
-  await trx.updateTable('payroll_runs').set({ status: 'posted', paid_on: null, paid_from_bank_id: null, payment_entry_id: null })
-    .where('id', '=', runId).execute();
+  const live = await trx.selectFrom('payroll_payments').select('id').where('run_id', '=', runId).where('reversed', '=', 0).executeTakeFirst();
+  if (run.status !== 'paid' && !live) throw conflict('Only a paid payroll has a payment to undo.');
+  // Every employee's payment taken back (salary-payments.ts); refused while one is matched to the statement.
+  await reverseAllSalaryPayments(trx, orgId, userId, runId, reason ?? null);
 }
 
 /**
@@ -148,14 +144,14 @@ export async function deleteRun(trx: Trx, orgId: number, userId: number | null, 
       throw conflict(`${paid.join(', ')} for ${label} has been paid against this payroll. Delete that payment first (Payroll → Statutory), then the payroll.`);
     }
   }
-  if (run.status === 'paid' && run.payment_entry_id && await bankLineMatched(trx, orgId, 'journal_entry', run.payment_entry_id)) {
-    throw conflict(`The salary payment for ${label} ${BANK_MATCHED}`);
-  }
   const lines = await trx.selectFrom('payroll_lines').selectAll().where('run_id', '=', runId).execute();
   const net = lines.reduce((t, l) => t + p(l.net_pay), 0);
-  if (run.status === 'paid') {
-    await reverseForChange(trx, orgId, run.payment_entry_id, { memo: `Salary payment for ${label} deleted${because(reason)}`, userId, module: 'banking' });
+  // Salaries paid, to everyone or some, are taken back first (refused while matched to the statement).
+  const livePay = await trx.selectFrom('payroll_payments').select('id').where('run_id', '=', runId).where('reversed', '=', 0).executeTakeFirst();
+  if (run.status === 'paid' || livePay) {
+    await reverseAllSalaryPayments(trx, orgId, userId, runId, `Payroll for ${label} deleted${because(reason)}`);
   }
+  const payments = await trx.selectFrom('payroll_payments').selectAll().where('run_id', '=', runId).execute();
   const reversal = await reverseForChange(trx, orgId, run.journal_entry_id, { memo: `Payroll for ${label} deleted${because(reason)}`, userId, module: 'accountant' });
   if (run.status !== 'draft') {
     const [arrears, recoveries] = await Promise.all([
@@ -165,7 +161,7 @@ export async function deleteRun(trx: Trx, orgId: number, userId: number | null, 
     await recordDeletion(trx, {
       orgId, userId, docType: 'payroll_run', docId: runId, number: `Payroll ${run.month}`, date: lastDay(run.month), totalPaise: net,
       journalEntryId: run.journal_entry_id, reversalEntryId: reversal, reason,
-      snapshot: { run: plain(run), lines: lines.map(plain), arrears: arrears.map(plain), recoveries: recoveries.map(plain) },
+      snapshot: { run: plain(run), lines: lines.map(plain), arrears: arrears.map(plain), recoveries: recoveries.map(plain), payments: payments.map(plain) },
     });
   }
   await unlinkDocument(trx, orgId, 'payroll_run', runId);
