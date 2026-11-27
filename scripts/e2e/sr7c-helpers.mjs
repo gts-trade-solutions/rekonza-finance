@@ -22,7 +22,9 @@ export async function start(item) {
   const browser = await chromium.launch({ channel: 'chrome', headless: true });
   const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, acceptDownloads: true });
   const page = await ctx.newPage();
-  page.setDefaultTimeout(45_000);
+  // A dev server compiles a page on its first visit, which can take a minute on a busy machine.
+  page.setDefaultTimeout(90_000);
+  page.setDefaultNavigationTimeout(150_000);
   const errors = [];
   // A step that provokes a refusal on purpose names the endpoint; that 4xx is expected.
   const state = { expect: null, pass: 0, fail: 0, n: 0 };
@@ -146,7 +148,7 @@ export async function login(page, email, password, newPassword = 'Checker@2026x'
 /** Click, and wait for the API call it makes to answer. */
 export async function clickAndWait(page, locator, urlPart, method = 'POST') {
   const [res] = await Promise.all([
-    page.waitForResponse((r) => r.url().includes(urlPart) && r.request().method() === method, { timeout: 90_000 }),
+    page.waitForResponse((r) => r.url().includes(urlPart) && r.request().method() === method, { timeout: 150_000 }),
     locator.click(),
   ]);
   return res;

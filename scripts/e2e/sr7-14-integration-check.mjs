@@ -59,7 +59,7 @@ try {
       await page.goto(`${BASE}/payroll/runs`, { waitUntil: 'load' });
       await page.locator('input[type="month"]').first().fill(m);
       await page.getByRole('button', { name: /Prepare payroll/ }).click();
-      await page.waitForURL(/\/payroll\/runs\/\d+/);
+      await page.waitForURL(/\/payroll\/runs\/\d+/, { timeout: 150_000 });
       runIds[m] = page.url().split('/').pop();
       await clickAndWait(page, page.getByRole('button', { name: /^Post$/ }), '/api/payroll/runs/');
       await toast(page, /posted/);
