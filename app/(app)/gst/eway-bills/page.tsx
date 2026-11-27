@@ -19,7 +19,7 @@
 
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { Ban, CalendarClock, Loader2, MoreHorizontal, Truck } from 'lucide-react';
+import { Ban, CalendarClock, Loader2, Truck } from 'lucide-react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -27,9 +27,6 @@ import { Input } from '@/components/ui/input';
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
-import {
-  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
 import { PageHeader } from '@/components/shared/page-header';
 import { DataTable, type Column } from '@/components/shared/data-table';
 import { Money } from '@/components/shared/money';
@@ -235,37 +232,28 @@ export default function EwayBillsPage() {
       cell: (r) => {
         if (!canGenerate) return null;
         if (r.status === 'generated') {
+          // Buttons with their names on, not a ⋯ menu: the client looks for
+          // Edit and Delete by name (2026-11-25). An e-way bill is edited the
+          // way the law allows — its vehicle (Part B) changed, its validity
+          // extended — and its delete is cancellation, within 24 hours.
+          const btn = 'inline-flex h-7 shrink-0 items-center gap-1 whitespace-nowrap rounded-md border bg-background px-2 text-xs font-medium hover:bg-accent disabled:pointer-events-none disabled:opacity-50';
           return (
-            <DropdownMenu>
-              <DropdownMenuTrigger
-                aria-label={`Actions for e-way bill ${r.ewayBillNo}`}
-                className="grid size-7 place-items-center rounded-[3px] border transition-colors hover:bg-accent"
-                data-slot="ewb-actions"
-              >
-                <MoreHorizontal className="size-3.5" />
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-64">
-                <DropdownMenuItem disabled={!r.changeable} onClick={() => setVehicleFor(r)}>
-                  <Truck className="mr-2 size-4" /> Change vehicle
-                </DropdownMenuItem>
-                <DropdownMenuItem disabled={!r.extension?.allowed} onClick={() => setExtendFor(r)}>
-                  <CalendarClock className="mr-2 size-4 shrink-0" />
-                  <span>
-                    Extend validity
-                    {r.extension && !r.extension.allowed && (
-                      <span className="block whitespace-normal text-[10px] leading-snug text-muted-foreground">
-                        {r.extension.reason}
-                      </span>
-                    )}
-                  </span>
-                </DropdownMenuItem>
-                {r.cancelUntil && (
-                  <DropdownMenuItem onClick={() => setCancelFor(r)}>
-                    <Ban className="mr-2 size-4" /> Cancel e-way bill
-                  </DropdownMenuItem>
-                )}
-              </DropdownMenuContent>
-            </DropdownMenu>
+            <div className="flex items-center justify-end gap-1" data-slot="ewb-actions" onClick={(e) => e.stopPropagation()}>
+              <button type="button" className={`${btn} text-link`} disabled={!r.changeable} onClick={() => setVehicleFor(r)} data-slot="ewb-edit-vehicle"
+                title={r.changeable ? 'Change the vehicle or transport document (Part B)' : 'The vehicle can no longer be changed'}>
+                <Truck className="size-3.5" /> Edit vehicle
+              </button>
+              <button type="button" className={btn} disabled={!r.extension?.allowed} onClick={() => setExtendFor(r)} data-slot="ewb-extend"
+                title={r.extension && !r.extension.allowed ? r.extension.reason : 'Extend its validity'}>
+                <CalendarClock className="size-3.5" /> Extend
+              </button>
+              {r.cancelUntil && (
+                <button type="button" className={`${btn} text-destructive`} onClick={() => setCancelFor(r)} data-slot="ewb-cancel"
+                  title="Cancel it on the portal: allowed for 24 hours from generation">
+                  <Ban className="size-3.5" /> Cancel
+                </button>
+              )}
+            </div>
           );
         }
         // Not generated, a failed attempt, or a bill cancelled while the goods

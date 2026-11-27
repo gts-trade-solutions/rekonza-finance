@@ -8,13 +8,14 @@
 // out, so no two documents can ever share one.
 
 import { useState } from 'react';
-import { Check, Loader2, Pencil, X } from 'lucide-react';
+import { Check, Loader2, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { api } from '@/lib/api/client';
+import { EditButton } from '@/components/shared/row-actions';
 
 export interface SeriesRow {
   scope: 'branch' | 'org';
@@ -156,17 +157,16 @@ function BranchRow({ s, canEdit, onChanged }: { s: SeriesRow; canEdit: boolean; 
       <td className="px-2 py-2 text-right">
         {canEdit && (editing ? (
           <div className="flex justify-end gap-1">
-            <Button size="icon" variant="ghost" className="size-7" aria-label="Save" disabled={busy || tooLong || !prefix} onClick={() => void save()}>
-              {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Check className="size-3.5" />}
+            <Button size="xs" className="gap-1" aria-label="Save" disabled={busy || tooLong || !prefix} onClick={() => void save()}>
+              {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Check className="size-3.5" />} Save
             </Button>
-            <Button size="icon" variant="ghost" className="size-7" aria-label="Cancel" onClick={() => { setEditing(false); setPrefix(s.prefix); setPadding(s.padding); }}>
-              <X className="size-3.5" />
+            <Button size="xs" variant="ghost" className="gap-1" aria-label="Cancel" onClick={() => { setEditing(false); setPrefix(s.prefix); setPadding(s.padding); }}>
+              <X className="size-3.5" /> Cancel
             </Button>
           </div>
         ) : (
-          <Button size="icon" variant="ghost" className="size-7" aria-label={`Change the ${s.label} prefix`} onClick={() => setEditing(true)}>
-            <Pencil className="size-3.5" />
-          </Button>
+          // A series is never deleted: every document type numbers in one, and its counter only goes up.
+          <EditButton onClick={() => setEditing(true)} title={`Change the ${s.label} prefix and digits`} />
         ))}
       </td>
     </tr>

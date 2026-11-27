@@ -35,6 +35,8 @@ import {
 import { useApi } from '@/lib/api/use-api';
 import { usePermission } from '@/lib/store/hooks';
 
+import { RowActions, reasonQuery, useConfirmDelete } from '@/components/shared/row-actions';
+import { api } from '@/lib/api/client';
 const th = 'px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground';
 const fmt = (iso: string) => new Date(`${iso}T00:00:00`).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
 const today = () => new Date().toISOString().slice(0, 10);
@@ -63,7 +65,16 @@ export function TdsCertificatesPanel() {
   });
   const state = useApi<TdsCertificatesResponse>(() => tdsCertificates.quarter(fy, quarter), [fy, quarter]);
   const canCreate = usePermission('gst', 'create');
-  const [recording, setRecording] = useState<{ direction: 'issued' | 'received'; row: TdsCertificateRow } | null>(null);
+  const canEdit = usePermission('gst', 'edit');
+  const canDelete = usePermission('gst', 'void');
+  const [recording, setRecording] = useState<{ direction: 'issued' | 'received'; row: TdsCertificateRow; cert?: TdsCertificateRow['certificates'][number] } | null>(null);
+  const del = useConfirmDelete();
+  const removeCert = (c: TdsCertificateRow['certificates'][number]) => del.ask({
+    title: `Delete certificate ${c.certificateNo}?`,
+    description: 'It comes off the list; its PDF stays in Documents, unattached. The party shows as due again until another is recorded.',
+    run: (reason) => api.delete(`/api/tds-certificates?kind=certificate&id=${c.id}${reasonQuery(reason, false)}`),
+    done: 'Certificate deleted', onDone: () => void state.refetch(),
+  });
 
   return (
     <div className="space-y-4">
@@ -103,6 +114,8 @@ export function TdsCertificatesPanel() {
               rows={d.issued}
               canCreate={canCreate}
               onRecord={(row) => setRecording({ direction: 'issued', row })}
+              onEdit={canEdit ? (row, cert) => setRecording({ direction: 'issued', row, cert }) : undefined}
+              onDelete={canDelete ? removeCert : undefined}
             />
             <Section
               title="From customers — what they withheld from you"
@@ -111,6 +124,8 @@ export function TdsCertificatesPanel() {
               rows={d.received}
               canCreate={canCreate}
               onRecord={(row) => setRecording({ direction: 'received', row })}
+              onEdit={canEdit ? (row, cert) => setRecording({ direction: 'received', row, cert }) : undefined}
+              onDelete={canDelete ? removeCert : undefined}
             />
           </>
         )}
@@ -123,13 +138,16 @@ export function TdsCertificatesPanel() {
         onClose={() => setRecording(null)}
         onDone={() => { setRecording(null); void state.refetch(); }}
       />
+      {del.dialog}
     </div>
   );
 }
 
-function Section({ title, hint, empty, rows, canCreate, onRecord }: {
+function Section({ title, hint, empty, rows, canCreate, onRecord, onEdit, onDelete }: {
   title: string; hint?: string; empty: string; rows: TdsCertificateRow[]; canCreate: boolean;
   onRecord: (row: TdsCertificateRow) => void;
+  onEdit?: (row: TdsCertificateRow, c: TdsCertificateRow['certificates'][number]) => void;
+  onDelete?: (c: TdsCertificateRow['certificates'][number]) => void;
 }) {
   const [open, setOpen] = useState<string | null>(null);
   return (
@@ -162,7 +180,7 @@ function Section({ title, hint, empty, rows, canCreate, onRecord }: {
                   <td className="px-3 py-2 text-xs">
                     {r.certificates.length === 0 ? '—' : r.certificates.map((c) => (
                       <button key={c.id} type="button" className="mr-2 font-mono underline-offset-2 hover:underline"
-                        onClick={() => setOpen(open === c.id ? null : c.id)} title="Show the attached certificate">
+                        onClick={() => setOpen(open === c.id ? null : c.id)} title="Open it: the PDF, Edit and Delete">
                         {c.certificateNo}
                       </button>
                     ))}
@@ -181,9 +199,12 @@ function Section({ title, hint, empty, rows, canCreate, onRecord }: {
                 {r.certificates.filter((c) => c.id === open).map((c) => (
                   <tr key={`${c.id}-files`} className="border-b bg-muted/20">
                     <td colSpan={6} className="px-3 py-3">
-                      <p className="mb-2 text-xs text-muted-foreground">
-                        {c.certificateNo} · {fmt(c.issuedOn)} · covers <Money value={c.taxPaise} />
-                      </p>
+                      <div className="mb-2 flex flex-wrap items-center gap-2">
+                        <p className="text-xs text-muted-foreground">
+                          {c.certificateNo} · {fmt(c.issuedOn)} · covers <Money value={c.taxPaise} />
+                        </p>
+                        <RowActions className="ml-auto" onEdit={onEdit && (() => onEdit(r, c))} onDelete={onDelete && (() => onDelete(c))} />
+                      </div>
                       <Attachments targetType="tds_certificate" targetId={c.id} canEdit={canCreate} title="Certificate PDF" />
                     </td>
                   </tr>
@@ -198,19 +219,35 @@ function Section({ title, hint, empty, rows, canCreate, onRecord }: {
 }
 
 function RecordDialog({ open, fy, quarter, onClose, onDone }: {
-  open: { direction: 'issued' | 'received'; row: TdsCertificateRow } | null;
+  open: { direction: 'issued' | 'received'; row: TdsCertificateRow; cert?: TdsCertificateRow['certificates'][number] } | null;
   fy: number; quarter: number; onClose: () => void; onDone: () => void;
 }) {
   const [no, setNo] = useState('');
   const [on, setOn] = useState(today());
   const [tax, setTax] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
+  // An existing certificate opens with its own figures.
+  const [shown, setShown] = useState<string | null>(null);
+  const editing = open?.cert ?? null;
+  if (open && (editing?.id ?? 'new') !== shown) {
+    setShown(editing?.id ?? 'new');
+    setNo(editing?.certificateNo ?? '');
+    setOn(editing?.issuedOn ?? today());
+    setTax(editing ? editing.taxPaise : null);
+  }
   const left = open ? Math.max(0, open.row.taxPaise - open.row.coveredPaise) : 0;
 
   const save = async () => {
     if (!open) return;
     setBusy(true);
     try {
+      if (editing) {
+        await api.put('/api/tds-certificates', { kind: 'certificate', id: editing.id, certificateNo: no, issuedOn: on, taxPaise: tax ?? editing.taxPaise });
+        toast.success(`Certificate ${no.toUpperCase()} saved`);
+        setShown(null);
+        onDone();
+        return;
+      }
       await tdsCertificates.record({
         direction: open.direction, contactId: open.row.contactId, fy, quarter,
         certificateNo: no, issuedOn: on, taxPaise: tax ?? left,
@@ -226,12 +263,12 @@ function RecordDialog({ open, fy, quarter, onClose, onDone }: {
   };
 
   return (
-    <Dialog open={!!open} onOpenChange={(o) => !o && onClose()}>
+    <Dialog open={!!open} onOpenChange={(o) => { if (!o) { setShown(null); onClose(); } }}>
       <DialogContent>
         {open && (
           <>
             <DialogHeader>
-              <DialogTitle>{open.direction === 'issued' ? 'Certificate sent to' : 'Certificate received from'} {open.row.contactName}</DialogTitle>
+              <DialogTitle>{editing ? 'Edit the certificate' : open.direction === 'issued' ? 'Certificate sent to' : 'Certificate received from'} {editing ? `${editing.certificateNo}, ${open.row.contactName}` : open.row.contactName}</DialogTitle>
               <DialogDescription>
                 Q{quarter} of FY {fy}-{String((fy + 1) % 100).padStart(2, '0')} · TDS <Money value={open.row.taxPaise} />
                 {open.row.coveredPaise > 0 && <>, of which <Money value={open.row.coveredPaise} /> is already covered</>}.
@@ -251,7 +288,7 @@ function RecordDialog({ open, fy, quarter, onClose, onDone }: {
             <DialogFooter>
               <Button variant="outline" onClick={onClose}>Cancel</Button>
               <Button onClick={() => void save()} disabled={busy || no.trim().length < 4}>
-                {busy && <Loader2 className="size-4 animate-spin" />} Record
+                {busy && <Loader2 className="size-4 animate-spin" />} {editing ? 'Save' : 'Record'}
               </Button>
             </DialogFooter>
           </>
@@ -266,7 +303,18 @@ function RecordDialog({ open, fy, quarter, onClose, onDone }: {
 export function LowerDeductionPanel() {
   const state = useApi<{ certificates: TdsLowerCertificate[] }>(() => tdsCertificates.lower(), []);
   const canCreate = usePermission('gst', 'create');
+  const canEdit = usePermission('gst', 'edit');
+  const canDelete = usePermission('gst', 'void');
   const [adding, setAdding] = useState(false);
+  const [editing, setEditing] = useState<TdsLowerCertificate | null>(null);
+  const del = useConfirmDelete();
+  const remove = (c: TdsLowerCertificate) => del.ask({
+    title: `Delete certificate ${c.certificateNo}?`,
+    description: 'Only one no bill has been deducted under can be deleted. One that has been used is withdrawn instead: later bills are deducted at the normal rate, and the ones already deducted keep it.',
+    run: (reason) => api.delete(`/api/tds-certificates?kind=lower&id=${c.id}${reasonQuery(reason, false)}`),
+    done: `${c.certificateNo} deleted`, onDone: () => void state.refetch(),
+    instead: c.cancelled ? undefined : { label: 'Withdraw it instead', run: async () => { await tdsCertificates.cancelLower(c.id); toast.success(`${c.certificateNo} withdrawn`); } },
+  });
 
   const withdraw = async (c: TdsLowerCertificate) => {
     if (!window.confirm(`Withdraw certificate ${c.certificateNo}? Bills already deducted under it keep what they were deducted.`)) return;
@@ -301,7 +349,7 @@ export function LowerDeductionPanel() {
                 <th className={`${th} text-left`}>Section · rate</th>
                 <th className={`${th} text-left`}>Valid</th>
                 <th className={`${th} text-right`}>Used / limit</th>
-                <th className="w-24" />
+                <th className="w-56" />
               </tr>
             </thead>
             <tbody>
@@ -317,9 +365,11 @@ export function LowerDeductionPanel() {
                       <Money value={c.usedPaise} /> / {c.limitPaise === null ? 'no limit' : <Money value={c.limitPaise} />}
                     </td>
                     <td className="px-2 py-2 text-right">
-                      {canCreate && !c.cancelled && (
-                        <Button size="xs" variant="ghost" onClick={() => void withdraw(c)}>Withdraw</Button>
-                      )}
+                      <RowActions onEdit={canEdit && !c.cancelled && (() => setEditing(c))} onDelete={canDelete && (() => remove(c))}>
+                        {canCreate && !c.cancelled && (
+                          <Button size="xs" variant="ghost" onClick={() => void withdraw(c)}>Withdraw</Button>
+                        )}
+                      </RowActions>
                     </td>
                   </tr>
                 );
@@ -328,22 +378,41 @@ export function LowerDeductionPanel() {
           </ReportTable>
         )}
       </AsyncPage>
-      <AddLowerDialog open={adding} onClose={() => setAdding(false)} onDone={() => { setAdding(false); void state.refetch(); }} />
+      <AddLowerDialog open={adding || !!editing} editing={editing} onClose={() => { setAdding(false); setEditing(null); }}
+        onDone={() => { setAdding(false); setEditing(null); void state.refetch(); }} />
+      {del.dialog}
     </div>
   );
 }
 
-function AddLowerDialog({ open, onClose, onDone }: { open: boolean; onClose: () => void; onDone: () => void }) {
+function AddLowerDialog({ open, editing, onClose, onDone }: { open: boolean; editing: TdsLowerCertificate | null; onClose: () => void; onDone: () => void }) {
   const blank = { contactId: '', sectionCode: '', certificateNo: '', ratePct: '', validFrom: today(), validTo: '', limit: 0 };
   const [f, setF] = useState(blank);
   const [busy, setBusy] = useState(false);
+  // Editing one fills the form with what is on file.
+  const [shown, setShown] = useState<string | null>(null);
+  if (open && (editing?.id ?? 'new') !== shown) {
+    setShown(editing?.id ?? 'new');
+    setF(editing ? {
+      contactId: editing.contactId, sectionCode: editing.sectionCode, certificateNo: editing.certificateNo, ratePct: String(editing.ratePct),
+      validFrom: editing.validFrom, validTo: editing.validTo, limit: editing.limitPaise ?? 0,
+    } : blank);
+  }
   const save = async () => {
     setBusy(true);
+    const body = {
+      contactId: f.contactId, sectionCode: f.sectionCode.trim(), certificateNo: f.certificateNo, ratePct: Number(f.ratePct),
+      validFrom: f.validFrom, validTo: f.validTo, limitPaise: f.limit > 0 ? f.limit : null,
+    };
     try {
-      await tdsCertificates.addLower({
-        contactId: f.contactId, sectionCode: f.sectionCode.trim(), certificateNo: f.certificateNo, ratePct: Number(f.ratePct),
-        validFrom: f.validFrom, validTo: f.validTo, limitPaise: f.limit > 0 ? f.limit : null,
-      });
+      if (editing) {
+        await api.put('/api/tds-certificates', { kind: 'lower', id: editing.id, ...body, notes: editing.notes });
+        toast.success(`Certificate ${f.certificateNo.toUpperCase()} saved`);
+        setShown(null);
+        onDone();
+        return;
+      }
+      await tdsCertificates.addLower(body);
       toast.success(`Certificate ${f.certificateNo.toUpperCase()} on file`);
       setF(blank);
       onDone();
@@ -354,11 +423,15 @@ function AddLowerDialog({ open, onClose, onDone }: { open: boolean; onClose: () 
     }
   };
   return (
-    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+    <Dialog open={open} onOpenChange={(o) => { if (!o) { setShown(null); onClose(); } }}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Lower-deduction certificate</DialogTitle>
-          <DialogDescription>Copy the details from the certificate the vendor sent, as issued on TRACES.</DialogDescription>
+          <DialogTitle>{editing ? `Edit certificate ${editing.certificateNo}` : 'Lower-deduction certificate'}</DialogTitle>
+          <DialogDescription>
+            {editing && editing.usedPaise > 0
+              ? 'Bills have been deducted under it: its vendor, section and rate stay; the number, dates and limit (not below what was used) can be put right.'
+              : 'Copy the details from the certificate the vendor sent, as issued on TRACES.'}
+          </DialogDescription>
         </DialogHeader>
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="Vendor" required className="sm:col-span-2">
@@ -382,7 +455,7 @@ function AddLowerDialog({ open, onClose, onDone }: { open: boolean; onClose: () 
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>Cancel</Button>
           <Button onClick={() => void save()} disabled={busy || !f.contactId || !f.sectionCode || !f.certificateNo || f.ratePct === '' || !f.validTo}>
-            {busy && <Loader2 className="size-4 animate-spin" />} Add
+            {busy && <Loader2 className="size-4 animate-spin" />} {editing ? 'Save' : 'Add'}
           </Button>
         </DialogFooter>
       </DialogContent>

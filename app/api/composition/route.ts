@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import { db, transaction } from '@/lib/server/db';
 import { route, body, query } from '@/lib/server/http';
+import { changeReason } from '@/lib/server/request-context';
+import { undoCmp08 } from '@/lib/server/gst/changes';
 import { logAudit, auditMeta } from '@/lib/server/audit';
 import { bookCmp08, cmp08, gstr4 } from '@/lib/server/gst/composition';
 import type { Quarter } from '@/lib/server/tax/tds-returns';
@@ -36,4 +38,22 @@ export const POST = route(
     });
   },
   { permission: { module: 'gst', action: 'edit' } },
+);
+
+/** Undo the tax booked for a quarter's CMP-08: its entry reversed, the quarter ready to book again (gst/changes.ts). */
+export const DELETE = route(
+  async ({ orgId, user, req }) => {
+    const q = query(req, z.object({ fy, quarter }));
+    const reason = changeReason();
+    return transaction(async (trx) => {
+      const r = await undoCmp08(trx, orgId, user.userId, q.fy, q.quarter, reason);
+      await logAudit({
+        trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'void',
+        targetType: 'composition', targetId: `${q.fy}-Q${q.quarter}`, targetLabel: r.label, detail: `${r.label} undone; its entry reversed${reason ? `: ${reason}` : ''}`,
+        ...auditMeta(req),
+      });
+      return { ok: true };
+    });
+  },
+  { permission: { module: 'gst', action: 'void' } },
 );

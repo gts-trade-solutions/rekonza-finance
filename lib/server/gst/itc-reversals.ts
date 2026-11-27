@@ -152,15 +152,26 @@ export async function reclaimRule37(trx: Trx, orgId: number, userId: number | nu
   if (!rows.length) throw badRequest('Nothing reversed under Rule 37 has been paid since.');
   const acc = await accountIds(trx, orgId);
   const totals = rows.reduce((t, r) => ({ cgst: t.cgst + r.reclaim.cgst, sgst: t.sgst + r.reclaim.sgst, igst: t.igst + r.reclaim.igst, cess: t.cess + r.reclaim.cess }), zero());
-  await postEntry(trx, {
+  // The reclaim is kept with each bill's share (migration 129), so it can be undone.
+  const reclaimId = Number((await trx.insertInto('itc_reclaims').values({ org_id: orgId, period: month, created_by_user_id: userId }).executeTakeFirstOrThrow()).insertId);
+  const entry = await postEntry(trx, {
     orgId, branchId: await primaryBranch(trx, orgId), date: end, userId, module: 'purchases',
-    memo: `Rule 37: credit taken again on ${rows.length} bill(s) paid since it was reversed`, sourceType: 'itc_reclaim_37', sourceId: null,
+    memo: `Rule 37: credit taken again on ${rows.length} bill(s) paid since it was reversed`, sourceType: 'itc_reclaim_37', sourceId: reclaimId,
     lines: [
       ...ITC_CODES.filter(([k]) => totals[k] > 0).map(([k, code]) => ({ accountId: requireAccount(acc, code), debit: totals[k] })),
       { accountId: requireAccount(acc, CODE.ITC_RECLAIMABLE), credit: sumHeads(totals) },
     ],
   });
+  await trx.updateTable('itc_reclaims').set({ journal_entry_id: entry.id }).where('id', '=', reclaimId).execute();
   for (const r of rows) {
+    const reversal = await trx.selectFrom('itc_reversals').select('id').where('org_id', '=', orgId).where('rule', '=', '37')
+      .where('bill_id', '=', Number(r.billId)).orderBy('id').executeTakeFirst();
+    if (reversal) {
+      await trx.insertInto('itc_reclaim_lines').values({
+        reclaim_id: reclaimId, reversal_id: reversal.id,
+        cgst: toSqlFromPaise(r.reclaim.cgst), sgst: toSqlFromPaise(r.reclaim.sgst), igst: toSqlFromPaise(r.reclaim.igst), cess: toSqlFromPaise(r.reclaim.cess),
+      }).execute();
+    }
     await trx.updateTable('itc_reversals').set((eb) => ({
       reclaimed_cgst: eb('reclaimed_cgst', '+', toSqlFromPaise(r.reclaim.cgst)),
       reclaimed_sgst: eb('reclaimed_sgst', '+', toSqlFromPaise(r.reclaim.sgst)),

@@ -21,6 +21,7 @@ import { api, ApiError } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
 import { usePermission } from '@/lib/store/hooks';
 import { cn } from '@/lib/utils';
+import { DeleteButton, EditButton, reasonQuery, useConfirmDelete } from '@/components/shared/row-actions';
 
 interface Claim {
   id: string; employeeId: string; code: string; name: string; claimDate: string; category: string; description: string | null;
@@ -41,19 +42,43 @@ export default function ClaimsPage() {
   const canCreate = usePermission('payroll', 'create');
   const canEdit = usePermission('payroll', 'edit');
   const canApprove = usePermission('payroll', 'approve');
+  const canDelete = usePermission('payroll', 'void');
   const state = useApi(() => api.get<{ claims: Claim[]; categories: string[] }>('/api/payroll/claims'), []);
   const employees = useApi(() => api.get<{ employees: { id: string; code: string; name: string; dateOfLeaving: string | null }[] }>('/api/payroll/employees'), []);
   const blank = { employeeId: '', claimDate: today(), category: 'Local conveyance', description: '', amount: 0 };
   const [f, setF] = useState(blank);
+  // The claim being corrected, in the same form as a new one.
+  const [editing, setEditing] = useState<Claim | null>(null);
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState<string | null>(null);
+  const del = useConfirmDelete();
+
+  const edit = (c: Claim) => {
+    setEditing(c);
+    setF({ employeeId: c.employeeId, claimDate: c.claimDate, category: c.category, description: c.description ?? '', amount: c.amountPaise });
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+  const stopEditing = () => { setEditing(null); setF({ ...blank, employeeId: f.employeeId }); };
+  const remove = (c: Claim) => del.ask({
+    title: `Delete the ${c.category.toLowerCase()} claim of ${c.name}?`,
+    description: 'It goes, with a line in the audit trail; a draft payroll that was repaying it is worked out again. A claim repaid by a posted payroll stays.',
+    run: (reason) => api.delete(`/api/payroll/claims?id=${c.id}${reasonQuery(reason, false)}`),
+    done: 'Claim deleted', onDone: () => { if (editing?.id === c.id) stopEditing(); void state.refetch(); },
+  });
 
   const save = async () => {
     setBusy(true);
+    const payload = { employeeId: f.employeeId, claimDate: f.claimDate, category: f.category, description: f.description || null, amountPaise: f.amount };
     try {
-      const r = await api.post<{ id: string }>('/api/payroll/claims', {
-        employeeId: f.employeeId, claimDate: f.claimDate, category: f.category, description: f.description || null, amountPaise: f.amount,
-      });
+      if (editing) {
+        await api.put('/api/payroll/claims', { ...payload, id: editing.id });
+        toast.success('Claim saved', editing.status !== 'submitted' ? { description: 'It goes back to be approved.' } : undefined);
+        setEditing(null);
+        setF({ ...blank, employeeId: f.employeeId });
+        await state.refetch();
+        return;
+      }
+      const r = await api.post<{ id: string }>('/api/payroll/claims', payload);
       toast.success('Claim recorded', { description: 'Attach the bills to it below.' });
       setF({ ...blank, employeeId: f.employeeId });
       await state.refetch();
@@ -90,12 +115,12 @@ export default function ClaimsPage() {
           <div className="space-y-4">
             {canCreate && (
               <Card className="space-y-3 p-5">
-                <h3 className="text-sm font-semibold">New claim</h3>
+                <h3 className="text-sm font-semibold">{editing ? `Edit the claim of ${editing.name}` : 'New claim'}</h3>
                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
                   <Field label="Employee" required>
                     <select value={f.employeeId} onChange={(e) => setF({ ...f, employeeId: e.target.value })} className={select}>
                       <option value="">Choose…</option>
-                      {(employees.data?.employees ?? []).filter((e) => !e.dateOfLeaving).map((e) => <option key={e.id} value={e.id}>{e.code} · {e.name}</option>)}
+                      {(employees.data?.employees ?? []).filter((e) => !e.dateOfLeaving || e.id === f.employeeId).map((e) => <option key={e.id} value={e.id}>{e.code} · {e.name}</option>)}
                     </select>
                   </Field>
                   <Field label="Spent on"><Input type="date" value={f.claimDate} onChange={(e) => setF({ ...f, claimDate: e.target.value })} /></Field>
@@ -107,9 +132,12 @@ export default function ClaimsPage() {
                   <Field label="Amount" required><MoneyInput valuePaise={f.amount} onChangePaise={(v) => setF({ ...f, amount: v })} /></Field>
                   <Field label="Details"><Input value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} placeholder="Auto to the client's site" /></Field>
                 </div>
-                <Button size="sm" className="w-fit gap-1.5" disabled={busy || !f.employeeId || !f.amount} onClick={() => void save()}>
-                  {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Plus className="size-3.5" />} Record claim
-                </Button>
+                <div className="flex gap-2">
+                  <Button size="sm" className="w-fit gap-1.5" disabled={busy || !f.employeeId || !f.amount} onClick={() => void save()}>
+                    {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Plus className="size-3.5" />} {editing ? 'Save' : 'Record claim'}
+                  </Button>
+                  {editing && <Button size="sm" variant="outline" onClick={stopEditing}>Cancel</Button>}
+                </div>
               </Card>
             )}
             <Card className="gap-0 overflow-hidden p-0">
@@ -149,8 +177,13 @@ export default function ClaimsPage() {
                               {c.reviewNote && <p className="text-xs text-muted-foreground">{c.reviewNote}</p>}
                             </td>
                             <td className="px-3 py-2 text-right" onClick={(e) => e.stopPropagation()}>
-                              {canApprove && !settled && c.status !== 'approved' && <Button size="xs" onClick={() => void review(c, true)}>Approve</Button>}
-                              {canApprove && !settled && c.status !== 'rejected' && <Button size="xs" variant="ghost" onClick={() => void review(c, false)}>Reject</Button>}
+                              <div className="flex items-center justify-end gap-1">
+                                {canApprove && !settled && c.status !== 'approved' && <Button size="xs" onClick={() => void review(c, true)}>Approve</Button>}
+                                {canApprove && !settled && c.status !== 'rejected' && <Button size="xs" variant="ghost" onClick={() => void review(c, false)}>Reject</Button>}
+                                {/* Repaid by a posted payroll, a claim is part of that month: it stays. */}
+                                {canEdit && !settled && <EditButton onClick={() => edit(c)} />}
+                                {canDelete && !settled && <DeleteButton onClick={() => remove(c)} />}
+                              </div>
                             </td>
                           </tr>
                           {open === c.id && (
@@ -168,6 +201,7 @@ export default function ClaimsPage() {
           </div>
         )}
       </AsyncPage>
+      {del.dialog}
     </>
   );
 }

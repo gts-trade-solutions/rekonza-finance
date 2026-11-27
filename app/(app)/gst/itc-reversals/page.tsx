@@ -23,6 +23,7 @@ import { useApi } from '@/lib/api/use-api';
 import { usePermission } from '@/lib/store/hooks';
 import { today } from '@/lib/selectors';
 import { monthLabel } from '@/lib/date-range';
+import { RowActions, reasonQuery, useConfirmDelete } from '@/components/shared/row-actions';
 
 interface Heads { cgst: number; sgst: number; igst: number; cess: number }
 interface Rule37Row {
@@ -56,9 +57,11 @@ export default function ItcReversalsPage() {
         <TabsList>
           <TabsTrigger value="37">Unpaid after 180 days</TabsTrigger>
           <TabsTrigger value="42">Exempt supplies</TabsTrigger>
+          <TabsTrigger value="posted">Posted</TabsTrigger>
         </TabsList>
         <TabsContent value="37" className="mt-4"><Rule37 /></TabsContent>
         <TabsContent value="42" className="mt-4"><Rule42 /></TabsContent>
+        <TabsContent value="posted" className="mt-4"><Posted /></TabsContent>
       </Tabs>
     </>
   );
@@ -216,5 +219,82 @@ function Rule42() {
         )}
       </AsyncPage>
     </div>
+  );
+}
+
+interface PostedView {
+  rule37: { period: string; bills: number; amountPaise: number; reclaimedPaise: number }[];
+  reclaims37: { period: string; times: number; amountPaise: number }[];
+  common: { period: string; amountPaise: number }[];
+  annual: { fy: number; amountPaise: number }[];
+}
+
+/**
+ * Everything posted here, with Edit and Delete. A reversal is worked out from
+ * the books, so Delete undoes the posting (its entry reversed, never erased)
+ * and Edit undoes it and posts it again on the books as they are now — after a
+ * bill was corrected, say.
+ */
+function Posted() {
+  const canEdit = usePermission('gst', 'edit');
+  const canDelete = usePermission('gst', 'void');
+  const state = useApi<PostedView>(() => api.get('/api/itc-reversals', { view: 'posted' }), []);
+  const confirm = useConfirmDelete();
+  type What = 'rule37' | 'reclaim37' | 'common' | 'annual';
+  const NAME: Record<What, string> = {
+    rule37: 'Rule 37 reversal', reclaim37: 'Rule 37 credit taken back', common: 'Rules 42 and 43 reversal', annual: 'Rule 42(2) true-up',
+  };
+  const POST: Record<What, (k: string) => Record<string, unknown>> = {
+    rule37: (k) => ({ action: 'reverse-37', month: k }), reclaim37: (k) => ({ action: 'reclaim-37', month: k }),
+    common: (k) => ({ action: 'post-42', month: k }), annual: (k) => ({ action: 'post-42-year', fy: Number(k) }),
+  };
+  const label = (what: What, key: string) => (what === 'annual' ? `FY ${key}-${String((Number(key) + 1) % 100).padStart(2, '0')}` : monthLabel(key));
+  const undo = (what: What, key: string, reason: string | null) =>
+    api.delete(`/api/itc-reversals?what=${what}&${what === 'annual' ? 'fy' : 'month'}=${key}${reasonQuery(reason, false)}`);
+  const remove = (what: What, key: string) => confirm.ask({
+    title: `Delete the ${NAME[what]} for ${label(what, key)}?`,
+    description: 'Its entry is reversed in the ledger, never erased, and the figures go back to waiting to be posted. Refused while something later rests on it (credit taken back against a reversal, or a true-up that counts the month).',
+    run: (reason) => undo(what, key, reason), done: `${NAME[what]} for ${label(what, key)} deleted`, onDone: () => void state.refetch(),
+  });
+  const edit = (what: What, key: string) => confirm.ask({
+    title: `Post the ${NAME[what]} for ${label(what, key)} again?`,
+    description: 'The posting is undone (its entry reversed) and worked out and posted again on the books as they are now, as after correcting a bill.',
+    tone: 'default', confirmLabel: 'Undo and post again', failTitle: 'Not posted again',
+    run: async (reason) => { await undo(what, key, reason); await api.post('/api/itc-reversals', POST[what](key)); },
+    done: `${NAME[what]} for ${label(what, key)} posted again`, onDone: () => void state.refetch(),
+  });
+  const table = (what: What, rows: { key: string; amountPaise: number; note?: string }[]) => (
+    <Card className="gap-0 overflow-hidden p-0">
+      <p className="border-b px-4 py-2.5 text-sm font-semibold">{NAME[what]}</p>
+      {rows.length === 0 ? <p className="p-4 text-sm text-muted-foreground">Nothing posted.</p> : (
+        <ReportTable>
+          <tbody className="divide-y">
+            {rows.map((r) => (
+              <tr key={r.key} data-slot={`itc-posted-${what}`}>
+                <td className="px-3 py-2 text-sm">{label(what, r.key)}{r.note && <span className="ml-2 text-xs text-muted-foreground">{r.note}</span>}</td>
+                <td className="px-3 py-2 text-right"><Money value={r.amountPaise} /></td>
+                <td className="w-56 px-2 py-2">
+                  <RowActions onEdit={canEdit && (() => edit(what, r.key))} editLabel="Edit (post again)" onDelete={canDelete && (() => remove(what, r.key))} />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </ReportTable>
+      )}
+    </Card>
+  );
+  return (
+    <AsyncPage state={state} loading={<LoadingRows rows={6} />}>
+      {(d) => (
+        <div className="space-y-4">
+          {table('rule37', d.rule37.map((r) => ({ key: r.period, amountPaise: r.amountPaise, note: `${r.bills} bill(s)${r.reclaimedPaise ? `, ₹${(r.reclaimedPaise / 100).toLocaleString('en-IN')} taken back since` : ''}` })))}
+          {table('reclaim37', d.reclaims37.map((r) => ({ key: r.period, amountPaise: r.amountPaise })))}
+          {table('common', d.common.map((r) => ({ key: r.period, amountPaise: r.amountPaise })))}
+          {table('annual', d.annual.map((r) => ({ key: String(r.fy), amountPaise: r.amountPaise })))}
+          <p className="text-xs text-muted-foreground">Delete the latest first: credit taken back is deleted before the reversal it came from, a true-up before the months it counts.</p>
+          {confirm.dialog}
+        </div>
+      )}
+    </AsyncPage>
   );
 }

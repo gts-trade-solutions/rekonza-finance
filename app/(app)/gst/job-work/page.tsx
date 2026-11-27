@@ -24,11 +24,16 @@ import { useApi } from '@/lib/api/use-api';
 import { usePermission } from '@/lib/store/hooks';
 import { today } from '@/lib/selectors';
 import { downloadWorkbook } from '@/lib/xlsx';
+import { RowActions, reasonQuery, useConfirmDelete } from '@/components/shared/row-actions';
 
 interface Line {
   challanId: string; number: string; date: string; status: string; worker: string; gstin: string | null; stateCode: string | null;
   lineId: string; itemId: string | null; description: string | null; hsnSac: string | null; uqc: string | null;
   sent: number; received: number; waste: number; outstanding: number; valuePaise: number; dueBack: string;
+}
+interface Receipt {
+  id: string; challanId: string; challanNumber: string; date: string; jobWorkerChallanNo: string | null; jobWorkerChallanDate: string | null;
+  natureOfJob: string | null; notes: string | null; lines: { challanLineId: string; qtyReceived: number; qtyWaste: number }[];
 }
 interface Itc04 {
   from: string; to: string; sent: Line[]; overdue: Line[];
@@ -44,8 +49,9 @@ export default function JobWorkPage() {
     <>
       <PageHeader title="Job work" description="Goods with job workers, coming back, and the ITC-04 return. Send goods on a delivery challan of type job work." />
       <Tabs defaultValue="out">
-        <TabsList><TabsTrigger value="out">With job workers</TabsTrigger><TabsTrigger value="itc04">ITC-04</TabsTrigger></TabsList>
+        <TabsList><TabsTrigger value="out">With job workers</TabsTrigger><TabsTrigger value="back">Goods back</TabsTrigger><TabsTrigger value="itc04">ITC-04</TabsTrigger></TabsList>
         <TabsContent value="out" className="mt-4"><Outstanding /></TabsContent>
+        <TabsContent value="back" className="mt-4"><Receipts /></TabsContent>
         <TabsContent value="itc04" className="mt-4"><Return /></TabsContent>
       </Tabs>
     </>
@@ -101,18 +107,85 @@ function Outstanding() {
   );
 }
 
-function ReceiveDialog({ lines, onClose, onDone }: { lines: Line[]; onClose: () => void; onDone: () => void }) {
+/** Every receipt of goods back, with Edit and Delete: a wrong quantity is put right here. */
+function Receipts() {
+  const state = useApi<{ lines: Line[]; receipts: Receipt[] }>(() => api.get('/api/job-work'), []);
+  const canEdit = usePermission('gst', 'edit');
+  const canDelete = usePermission('gst', 'void');
+  const [editing, setEditing] = useState<Receipt | null>(null);
+  const del = useConfirmDelete();
+  const remove = (r: Receipt) => del.ask({
+    title: `Delete the goods back on ${r.challanNumber}, ${fmt(r.date)}?`,
+    description: 'What it brought back counts as still with the job worker again, and the challan is open again if anything is then out.',
+    run: (reason) => api.delete(`/api/job-work?id=${r.id}${reasonQuery(reason, false)}`),
+    done: 'Receipt deleted', onDone: () => void state.refetch(),
+  });
+  return (
+    <AsyncPage state={state} loading={<LoadingRows rows={5} />}>
+      {(d) => (
+        <>
+          {d.receipts.length === 0 ? <Card className="p-6 text-center text-sm text-muted-foreground">Nothing has come back from a job worker yet.</Card> : (
+            <Card className="gap-0 overflow-hidden p-0">
+              <ReportTable>
+                <thead><tr className="border-b">
+                  <th className={`${th} text-left`}>Received</th><th className={`${th} text-left`}>Our challan</th><th className={`${th} text-left`}>Job worker&apos;s challan</th>
+                  <th className={`${th} text-left`}>Goods</th><th className="w-40" />
+                </tr></thead>
+                <tbody className="divide-y">
+                  {d.receipts.map((r) => (
+                    <tr key={r.id} data-slot="job-work-receipt">
+                      <td className="px-3 py-2 text-xs">{fmt(r.date)}</td>
+                      <td className="px-3 py-2 text-sm font-medium">{r.challanNumber}</td>
+                      <td className="px-3 py-2 text-xs">{r.jobWorkerChallanNo ?? '—'}{r.natureOfJob ? <span className="block text-muted-foreground">{r.natureOfJob}</span> : null}</td>
+                      <td className="px-3 py-2 text-xs">
+                        {r.lines.map((x) => {
+                          const l = d.lines.find((y) => y.lineId === x.challanLineId);
+                          return <span key={x.challanLineId} className="block">{l?.description ?? 'Goods'}: {x.qtyReceived} back{x.qtyWaste ? `, ${x.qtyWaste} waste` : ''}</span>;
+                        })}
+                      </td>
+                      <td className="px-2 py-2"><RowActions onEdit={canEdit && (() => setEditing(r))} onDelete={canDelete && (() => remove(r))} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </ReportTable>
+            </Card>
+          )}
+          <ReceiveDialog lines={editing ? d.lines.filter((l) => l.challanId === editing.challanId) : []} receipt={editing}
+            onClose={() => setEditing(null)} onDone={() => { setEditing(null); void state.refetch(); }} />
+          {del.dialog}
+        </>
+      )}
+    </AsyncPage>
+  );
+}
+
+function ReceiveDialog({ lines, receipt, onClose, onDone }: { lines: Line[]; receipt?: Receipt | null; onClose: () => void; onDone: () => void }) {
   const [f, setF] = useState({ date: today(), challanNo: '', challanDate: '', nature: '' });
   const [qty, setQty] = useState<Record<string, { back: string; waste: string }>>({});
   const [busy, setBusy] = useState(false);
+  // A receipt being corrected opens with its own figures.
+  const [shown, setShown] = useState<string | null>(null);
+  if (receipt && receipt.id !== shown) {
+    setShown(receipt.id);
+    setF({ date: receipt.date, challanNo: receipt.jobWorkerChallanNo ?? '', challanDate: receipt.jobWorkerChallanDate ?? '', nature: receipt.natureOfJob ?? '' });
+    setQty(Object.fromEntries(receipt.lines.map((x) => [x.challanLineId, { back: String(x.qtyReceived), waste: x.qtyWaste ? String(x.qtyWaste) : '' }])));
+  }
+  const own = (lineId: string) => receipt?.lines.filter((x) => x.challanLineId === lineId).reduce((t, x) => t + x.qtyReceived + x.qtyWaste, 0) ?? 0;
   const save = async () => {
     setBusy(true);
+    const body = {
+      date: f.date, jobWorkerChallanNo: f.challanNo || null, jobWorkerChallanDate: f.challanDate || null, natureOfJob: f.nature || null,
+      lines: lines.map((l) => ({ challanLineId: l.lineId, qtyReceived: Number(qty[l.lineId]?.back) || 0, qtyWaste: Number(qty[l.lineId]?.waste) || 0 })),
+    };
     try {
-      await api.post('/api/job-work', {
-        challanId: lines[0].challanId, date: f.date, jobWorkerChallanNo: f.challanNo || null, jobWorkerChallanDate: f.challanDate || null,
-        natureOfJob: f.nature || null,
-        lines: lines.map((l) => ({ challanLineId: l.lineId, qtyReceived: Number(qty[l.lineId]?.back) || 0, qtyWaste: Number(qty[l.lineId]?.waste) || 0 })),
-      });
+      if (receipt) {
+        await api.put('/api/job-work', { ...body, id: receipt.id });
+        toast.success('Receipt saved');
+        setShown(null);
+        onDone();
+        return;
+      }
+      await api.post('/api/job-work', { ...body, challanId: lines[0].challanId });
       toast.success('Goods back recorded');
       setQty({});
       onDone();
@@ -123,10 +196,10 @@ function ReceiveDialog({ lines, onClose, onDone }: { lines: Line[]; onClose: () 
     }
   };
   return (
-    <Dialog open={lines.length > 0} onOpenChange={(o) => { if (!o) onClose(); }}>
+    <Dialog open={lines.length > 0} onOpenChange={(o) => { if (!o) { setShown(null); onClose(); } }}>
       <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>Goods back on {lines[0]?.number}</DialogTitle>
+          <DialogTitle>{receipt ? 'Edit the goods back' : 'Goods back'} on {lines[0]?.number}</DialogTitle>
           <DialogDescription>What came back, and what was lost or wasted in the process. Waste leaves stock.</DialogDescription>
         </DialogHeader>
         <div className="grid gap-3 sm:grid-cols-2">
@@ -138,7 +211,7 @@ function ReceiveDialog({ lines, onClose, onDone }: { lines: Line[]; onClose: () 
         <div className="space-y-2">
           {lines.map((l) => (
             <div key={l.lineId} className="flex items-center gap-2 text-sm">
-              <span className="flex-1">{l.description} <span className="text-xs text-muted-foreground">({l.outstanding} out)</span></span>
+              <span className="flex-1">{l.description} <span className="text-xs text-muted-foreground">({l.outstanding + own(l.lineId)} out{receipt ? ' before this receipt' : ''})</span></span>
               <Input type="number" min={0} step="any" placeholder="Back" className="w-24" value={qty[l.lineId]?.back ?? ''} onChange={(e) => setQty({ ...qty, [l.lineId]: { back: e.target.value, waste: qty[l.lineId]?.waste ?? '' } })} />
               <Input type="number" min={0} step="any" placeholder="Waste" className="w-24" value={qty[l.lineId]?.waste ?? ''} onChange={(e) => setQty({ ...qty, [l.lineId]: { back: qty[l.lineId]?.back ?? '', waste: e.target.value } })} />
             </div>

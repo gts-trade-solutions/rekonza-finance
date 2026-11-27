@@ -5,7 +5,7 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { CheckCircle2, Plus, ShieldCheck, Trash2, Undo2 } from 'lucide-react';
+import { CheckCircle2, Plus, ShieldCheck, Undo2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -19,6 +19,7 @@ import { Field, MoneyInput } from '@/components/shared/form-bits';
 import { ReportTable } from '@/components/shared/report-shell';
 import { approvals, type ApprovalDoc, type ApprovalRule, type ApproverRole } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
+import { RowActions, useConfirmDelete } from '@/components/shared/row-actions';
 
 const th = 'px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground';
 const DOC_LABEL: Record<ApprovalDoc, string> = { invoice: 'Invoices', bill: 'Bills', journal: 'Manual journals', payment_batch: 'Payment batches' };
@@ -154,6 +155,18 @@ function Rules({ rules, canEdit, onChanged }: { rules: ApprovalRule[]; canEdit: 
   const [doc, setDoc] = useState<ApprovalDoc>('bill');
   const [threshold, setThreshold] = useState(1_00_000_00);
   const [role, setRole] = useState<ApproverRole>('accountant');
+  // The rule being edited, in the same boxes as adding one.
+  const [editing, setEditing] = useState<ApprovalRule | null>(null);
+  const del = useConfirmDelete();
+  const edit = (r: ApprovalRule) => { setEditing(r); setDoc(r.documentType); setThreshold(r.thresholdPaise); setRole(r.approverRole); };
+  const stopEditing = () => { setEditing(null); setDoc('bill'); setThreshold(1_00_000_00); setRole('accountant'); };
+  const remove = (r: ApprovalRule) => del.ask({
+    title: `Delete the rule for ${DOC_LABEL[r.documentType].toLowerCase()} from ${(r.thresholdPaise / 100).toLocaleString('en-IN')}?`,
+    description: 'New documents no longer wait for it. Documents already waiting for approval stay waiting; approve or reject them as before.',
+    reason: false,
+    run: () => approvals.deleteRule(r.id),
+    done: 'Rule deleted', onDone: () => { if (editing?.id === r.id) stopEditing(); onChanged(); },
+  });
 
   const save = async (rule: Omit<ApprovalRule, 'id'> & { id?: string | null }, done: string) => {
     try {
@@ -183,7 +196,7 @@ function Rules({ rules, canEdit, onChanged }: { rules: ApprovalRule[]; canEdit: 
               <th className={`${th} text-right`}>From</th>
               <th className={`${th} text-left`}>Approved by</th>
               <th className={`${th} text-left`}>On</th>
-              <th className="w-10" />
+              <th className="w-40" />
             </tr>
           </thead>
           <tbody>
@@ -197,12 +210,7 @@ function Rules({ rules, canEdit, onChanged }: { rules: ApprovalRule[]; canEdit: 
                     onCheckedChange={(v) => void save({ ...r, isActive: v }, v ? 'Rule on' : 'Rule off')} />
                 </td>
                 <td className="px-2 py-2">
-                  {canEdit && (
-                    <Button size="icon" variant="ghost" className="size-7" aria-label="Delete rule"
-                      onClick={() => void approvals.deleteRule(r.id).then(() => { toast.success('Rule deleted'); onChanged(); })}>
-                      <Trash2 className="size-3.5" />
-                    </Button>
-                  )}
+                  {canEdit && <RowActions onEdit={() => edit(r)} onDelete={() => remove(r)} />}
                 </td>
               </tr>
             ))}
@@ -225,11 +233,21 @@ function Rules({ rules, canEdit, onChanged }: { rules: ApprovalRule[]; canEdit: 
               {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
             </select>
           </Field>
-          <Button className="gap-1.5" onClick={() => void save({ documentType: doc, thresholdPaise: threshold, approverRole: role, isActive: true }, 'Rule added')}>
-            <Plus className="size-4" /> Add rule
-          </Button>
+          {editing ? (
+            <div className="flex gap-2">
+              <Button onClick={() => void save({ ...editing, documentType: doc, thresholdPaise: threshold, approverRole: role }, 'Rule saved').then(stopEditing)} data-slot="approval-rule-save">
+                Save rule
+              </Button>
+              <Button variant="outline" onClick={stopEditing}>Cancel</Button>
+            </div>
+          ) : (
+            <Button className="gap-1.5" onClick={() => void save({ documentType: doc, thresholdPaise: threshold, approverRole: role, isActive: true }, 'Rule added')}>
+              <Plus className="size-4" /> Add rule
+            </Button>
+          )}
         </div>
       )}
+      {del.dialog}
     </Card>
   );
 }

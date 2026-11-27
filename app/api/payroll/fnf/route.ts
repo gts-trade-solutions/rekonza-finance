@@ -1,9 +1,11 @@
 import { z } from 'zod';
 import { db, transaction } from '@/lib/server/db';
-import { route, body, asId, forbidden } from '@/lib/server/http';
+import { route, body, query, asId, forbidden } from '@/lib/server/http';
+import { changeReason } from '@/lib/server/request-context';
 import { hasPermission } from '@/lib/rbac';
 import { logAudit, auditMeta } from '@/lib/server/audit';
 import { fnfStatement, listFnf, payFnf, postFnf } from '@/lib/server/payroll/fnf';
+import { deleteFnf, updateFnf } from '@/lib/server/payroll/changes';
 
 // Full and final settlements: work one out, post it, pay it.
 
@@ -40,4 +42,39 @@ export const POST = route(
     });
   },
   { permission: { module: 'payroll', action: 'view' } },
+);
+
+/** Correct a posted (unpaid) settlement: reversed, worked out and posted again on the same record (payroll/changes.ts). */
+export const PUT = route(
+  async ({ orgId, user, role, req }) => {
+    if (!hasPermission(role, 'payroll', 'approve')) throw forbidden('Changing a settlement needs payroll approval rights.');
+    const input = await body(req, Statement.extend({ id: Id }));
+    return transaction(async (trx) => {
+      const r = await updateFnf(trx, orgId, user.userId, input.id, input);
+      await logAudit({
+        trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'update', targetType: 'fnf', targetId: input.id,
+        detail: `Full and final settlement changed, net ${(r.netPaise / 100).toFixed(2)}; its entry reversed and posted again`, ...auditMeta(req),
+      });
+      return { id: asId(input.id) };
+    });
+  },
+  { permission: { module: 'payroll', action: 'edit' } },
+);
+
+/** Delete a settlement: its entries reversed, the leave it encashed back, the record kept (payroll/changes.ts). */
+export const DELETE = route(
+  async ({ orgId, user, role, req }) => {
+    if (!hasPermission(role, 'payroll', 'approve')) throw forbidden('Deleting a settlement needs payroll approval rights.');
+    const { id } = query(req, z.object({ id: Id }));
+    const reason = changeReason();
+    return transaction(async (trx) => {
+      const r = await deleteFnf(trx, orgId, user.userId, id, reason);
+      await logAudit({
+        trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'void', targetType: 'fnf', targetId: id, targetLabel: r.name,
+        detail: `Full and final settlement of ${r.name} deleted; its entries reversed${reason ? `: ${reason}` : ''}`, ...auditMeta(req),
+      });
+      return { id: asId(id), deleted: true };
+    });
+  },
+  { permission: { module: 'payroll', action: 'void' } },
 );

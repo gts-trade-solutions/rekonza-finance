@@ -22,7 +22,7 @@
 
 import { useMemo, useState } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, Boxes, History, Pencil, Plus, Search, Trash2, Wrench } from 'lucide-react';
+import { ArrowLeft, Boxes, History, Plus, Search, Wrench } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -42,6 +42,7 @@ import { hsnCodes, type HsnCodeRow } from '@/lib/api/client';
 import { useApi, useApiAction } from '@/lib/api/use-api';
 import { usePermission } from '@/lib/store/hooks';
 import { cn } from '@/lib/utils';
+import { DeleteButton, RowActions, useConfirmDelete } from '@/components/shared/row-actions';
 
 const KIND_OPTIONS = [
   { value: 'hsn', label: 'HSN — goods' },
@@ -97,6 +98,7 @@ function RateHistory({ code, canEdit, onChanged }: { code: HsnCodeRow; canEdit: 
   const [note, setNote] = useState('');
   const add = useApiAction(hsnCodes.addRate);
   const remove = useApiAction(hsnCodes.removeRate);
+  const del = useConfirmDelete();
 
   const save = async () => {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(from)) { toast.error('Pick the date the rate took effect.'); return; }
@@ -112,6 +114,7 @@ function RateHistory({ code, canEdit, onChanged }: { code: HsnCodeRow; canEdit: 
 
   return (
     <div className="space-y-3 rounded-md border p-3">
+      {del.dialog}
       <p className="flex items-center gap-1.5 text-sm font-medium">
         <History className="size-4 text-muted-foreground" /> Rate history
       </p>
@@ -129,16 +132,13 @@ function RateHistory({ code, canEdit, onChanged }: { code: HsnCodeRow; canEdit: 
                 {r.note && <span className="block text-xs text-muted-foreground">{r.note}</span>}
               </span>
               {canEdit && (
-                <button
-                  type="button"
-                  aria-label={`Remove the rate from ${r.effectiveFrom}`}
-                  onClick={async () => {
-                    if (await remove.run(code.id, r.effectiveFrom)) onChanged();
-                  }}
-                  className="grid size-7 place-items-center rounded text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                >
-                  <Trash2 className="size-3.5" />
-                </button>
+                <DeleteButton title={`Delete the rate from ${r.effectiveFrom}`} onClick={() => del.ask({
+                  title: `Delete the ${r.gstRatePct}% rate from ${fmtDate(r.effectiveFrom)}?`,
+                  description: 'Documents dated from then take the rate in force before it. Delete only a rate entered in error, not one that once applied.',
+                  reason: false,
+                  run: async () => { if (!(await remove.run(code.id, r.effectiveFrom))) throw new Error(remove.error ?? 'Not deleted'); },
+                  done: 'Rate deleted', onDone: onChanged,
+                })} />
               )}
             </li>
           ))}
@@ -276,17 +276,15 @@ export default function HsnCodesPage() {
     state.refetch();
   };
 
-  const drop = async (c: HsnCodeRow) => {
-    const done = await remove.run(c.id);
-    if (!done) {
-      toast.error(remove.error ?? `${c.code} is in use`, {
-        description: 'Turn it off instead — deleting would leave those documents without a code.',
-      });
-      return;
-    }
-    toast.info(`${c.code} removed`);
-    state.refetch();
-  };
+  const codeDel = useConfirmDelete();
+  const drop = (c: HsnCodeRow) => codeDel.ask({
+    title: `Delete ${c.code}?`,
+    description: 'Only a code no item or invoice line uses can be deleted. One in use is marked as inactive instead: it leaves the pickers, and filed documents keep the code they were filed under.',
+    reason: false,
+    run: async () => { if (!(await remove.run(c.id))) throw new Error(remove.error ?? `${c.code} is in use`); },
+    done: `${c.code} deleted`, onDone: () => state.refetch(),
+    instead: c.isActive ? { label: 'Mark as inactive instead', run: () => toggleActive(c, false) } : undefined,
+  });
 
   const goods = codes.filter((c) => c.kind === 'hsn').length;
   const services = codes.filter((c) => c.kind === 'sac').length;
@@ -349,6 +347,7 @@ export default function HsnCodesPage() {
             />
           ) : (
             <Card className="overflow-hidden p-0">
+              {codeDel.dialog}
               <ReportTable>
                 <thead>
                   <tr className="border-b bg-muted/50">
@@ -391,27 +390,7 @@ export default function HsnCodesPage() {
                         />
                       </td>
                       <td className="px-4 py-2">
-                        {canEdit && (
-                          <div className="flex items-center justify-end gap-1">
-                            <button
-                              type="button"
-                              aria-label={`Edit ${c.code}`}
-                              onClick={() => startEdit(c)}
-                              className="grid size-7 place-items-center rounded text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                            >
-                              <Pencil className="size-3.5" />
-                            </button>
-                            <button
-                              type="button"
-                              aria-label={`Delete ${c.code}`}
-                              disabled={busy}
-                              onClick={() => void drop(c)}
-                              className="grid size-7 place-items-center rounded text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:opacity-40"
-                            >
-                              <Trash2 className="size-3.5" />
-                            </button>
-                          </div>
-                        )}
+                        {canEdit && <RowActions onEdit={() => startEdit(c)} onDelete={busy ? null : () => drop(c)} />}
                       </td>
                     </tr>
                   ))}

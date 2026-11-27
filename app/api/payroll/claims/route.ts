@@ -1,9 +1,10 @@
 import { z } from 'zod';
 import { db, transaction } from '@/lib/server/db';
-import { route, body, asId, forbidden } from '@/lib/server/http';
+import { route, body, query, asId, forbidden } from '@/lib/server/http';
 import { hasPermission } from '@/lib/rbac';
 import { logAudit, auditMeta } from '@/lib/server/audit';
 import { CLAIM_CATEGORIES, listClaims, reviewClaim, saveClaim } from '@/lib/server/payroll/claims';
+import { deleteClaim, updateClaim } from '@/lib/server/payroll/changes';
 
 // Expense claims, repaid with salary once approved.
 
@@ -14,12 +15,14 @@ export const GET = route(
 
 const Id = z.union([z.string(), z.number()]).transform(Number);
 
+const ClaimInput = z.object({
+  employeeId: Id, claimDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), category: z.string().max(60),
+  description: z.string().max(300).nullish(), amountPaise: z.number().int().positive(),
+});
+
 export const POST = route(
   async ({ orgId, user, req }) => {
-    const input = await body(req, z.object({
-      employeeId: Id, claimDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), category: z.string().max(60),
-      description: z.string().max(300).nullish(), amountPaise: z.number().int().positive(),
-    }));
+    const input = await body(req, ClaimInput);
     return transaction(async (trx) => {
       const id = await saveClaim(trx, orgId, user.userId, input);
       await logAudit({
@@ -47,4 +50,37 @@ export const PATCH = route(
     });
   },
   { permission: { module: 'payroll', action: 'edit' } },
+);
+
+/** Correct a claim not yet repaid by a posted payroll; an approved one goes back to be approved (payroll/changes.ts). */
+export const PUT = route(
+  async ({ orgId, user, req }) => {
+    const input = await body(req, ClaimInput.extend({ id: Id }));
+    return transaction(async (trx) => {
+      const r = await updateClaim(trx, orgId, user.userId, input.id, input);
+      await logAudit({
+        trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'update', targetType: 'reimbursement_claim', targetId: input.id,
+        targetLabel: `${input.category} claim`,
+        detail: `Changed to ₹${(input.amountPaise / 100).toFixed(2)} for ${input.category}${r.reopened ? '; back to be approved' : ''}`, ...auditMeta(req),
+      });
+      return { id: asId(input.id) };
+    });
+  },
+  { permission: { module: 'payroll', action: 'edit' } },
+);
+
+/** Delete a claim not yet repaid by a posted payroll. */
+export const DELETE = route(
+  async ({ orgId, user, req }) => {
+    const { id } = query(req, z.object({ id: Id }));
+    return transaction(async (trx) => {
+      const r = await deleteClaim(trx, orgId, user.userId, id);
+      await logAudit({
+        trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'void', targetType: 'reimbursement_claim', targetId: id,
+        targetLabel: `${r.category} claim`, detail: `Deleted the claim of ₹${(r.amountPaise / 100).toFixed(2)}`, ...auditMeta(req),
+      });
+      return { id: asId(id), deleted: true };
+    });
+  },
+  { permission: { module: 'payroll', action: 'void' } },
 );

@@ -4,7 +4,7 @@
 // and enough of a reference to start.
 
 import { useState } from 'react';
-import { Copy, KeyRound, Loader2, Plus, Send, Trash2, Webhook } from 'lucide-react';
+import { Copy, KeyRound, Loader2, Plus, Send, Webhook } from 'lucide-react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -17,6 +17,7 @@ import { Field } from '@/components/shared/form-bits';
 import { api } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
 import { cn } from '@/lib/utils';
+import { DeleteButton, EditButton, useConfirmDelete } from '@/components/shared/row-actions';
 
 interface ApiKey { id: string; name: string; prefix: string; role: string; customRoleName: string | null; createdBy: string; expiresOn: string | null; lastUsedAt: string | null; revokedAt: string | null }
 interface Hook {
@@ -42,6 +43,7 @@ function Secret({ label, value, onClose }: { label: string; value: string; onClo
 
 function ApiKeys() {
   const state = useApi(() => api.get<{ keys: ApiKey[] }>('/api/api-keys'), []);
+  const keyDel = useConfirmDelete();
   const roles = useApi(() => api.get<{ roles: { id: string; name: string }[] }>('/api/settings/users'), []);
   const [f, setF] = useState({ name: '', roleValue: 'role:viewer', expiresOn: '' });
   const [shown, setShown] = useState<string | null>(null);
@@ -89,6 +91,7 @@ function ApiKeys() {
           {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Plus className="size-3.5" />} Make key
         </Button>
       </div>
+      {keyDel.dialog}
       <AsyncPage state={state} loading={<LoadingRows rows={2} />}>
         {(d) => d.keys.length === 0 ? <p className="text-center text-sm text-muted-foreground">No keys yet.</p> : (
           <ul className="divide-y rounded-md border text-sm">
@@ -101,10 +104,15 @@ function ApiKeys() {
                   by {k.createdBy} · {k.lastUsedAt ? `last used ${new Date(k.lastUsedAt).toLocaleString('en-IN')}` : 'never used'}{k.expiresOn ? ` · expires ${new Date(k.expiresOn).toLocaleDateString('en-IN')}` : ''}
                 </span>
                 {k.revokedAt ? <Badge variant="secondary" className="ml-auto text-[10px]">Revoked</Badge> : (
-                  <Button size="xs" variant="ghost" className="ml-auto" onClick={() => window.confirm(`Revoke ${k.name}? Anything using it stops at once.`) &&
-                    void api.post('/api/api-keys', { action: 'revoke', id: k.id }).then(() => { toast.success('Revoked'); void state.refetch(); }).catch((e) => toast.error('Not revoked', { description: errorText(e) }))}>
-                    Revoke
-                  </Button>
+                  // A key's rights are fixed when it is made, so it has no Edit: make a new one.
+                  <DeleteButton className="ml-auto" label="Delete (revoke)" title="Anything using it stops at once; the record of it stays"
+                    onClick={() => keyDel.ask({
+                      title: `Delete the key ${k.name}?`,
+                      description: 'It is revoked: anything using it stops at once. The record of it, who made it and when it was last used, stays for the audit trail.',
+                      reason: false, confirmLabel: 'Delete (revoke)',
+                      run: () => api.post('/api/api-keys', { action: 'revoke', id: k.id }),
+                      done: `${k.name} revoked`, onDone: () => void state.refetch(),
+                    })} />
                 )}
               </li>
             ))}
@@ -122,6 +130,9 @@ function Webhooks() {
   const [events, setEvents] = useState<string[]>([]);
   const [shown, setShown] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  // The webhook being edited: its address and events.
+  const [editing, setEditing] = useState<{ id: string; url: string; all: boolean; events: string[]; isActive: boolean } | null>(null);
+  const hookDel = useConfirmDelete();
   const post = async <T,>(key: string, payload: Record<string, unknown>, done?: string) => {
     setBusy(key);
     try {
@@ -180,9 +191,38 @@ function Webhooks() {
                     <Button size="xs" variant="outline" className="gap-1" disabled={busy === h.id} onClick={() => void post(h.id, { action: 'test', id: h.id }, 'Test sent')}><Send className="size-3" /> Test</Button>
                     <Button size="xs" variant="ghost" disabled={busy === h.id} onClick={() => void post<{ secret: string }>(h.id, { action: 'secret', id: h.id }).then((r) => r && setShown(r.secret))}>Secret</Button>
                     <Switch checked={h.isActive} aria-label="On" onCheckedChange={(v) => void post(h.id, { action: 'save', id: h.id, url: h.url, events: h.events, isActive: v }, v ? 'On' : 'Off')} />
-                    <Button size="icon-sm" variant="ghost" aria-label="Delete webhook" onClick={() => window.confirm('Delete this webhook?') && void post(h.id, { action: 'delete', id: h.id }, 'Deleted')}><Trash2 className="size-3.5" /></Button>
+                    <EditButton onClick={() => setEditing({ id: h.id, url: h.url, all: h.events.includes('*'), events: h.events.filter((e) => e !== '*'), isActive: h.isActive })} />
+                    <DeleteButton onClick={() => hookDel.ask({
+                      title: 'Delete this webhook?',
+                      description: `Nothing more is sent to ${h.url}, and the record of its deliveries goes with it.`,
+                      reason: false,
+                      run: () => api.post('/api/webhooks', { action: 'delete', id: h.id }),
+                      done: 'Webhook deleted', onDone: () => void state.refetch(),
+                    })} />
                   </span>
                 </div>
+                {editing?.id === h.id && (
+                  <div className="space-y-2 rounded-md border bg-muted/20 p-3" data-slot="webhook-edit">
+                    <div className="flex flex-wrap items-end gap-2">
+                      <div className="min-w-64 flex-1"><Field label="Send to"><Input value={editing.url} onChange={(e) => setEditing({ ...editing, url: e.target.value })} /></Field></div>
+                      <label className="flex h-9 items-center gap-2 text-xs"><Checkbox checked={editing.all} onCheckedChange={(v) => setEditing({ ...editing, all: !!v })} /> Every event</label>
+                      <Button size="sm" disabled={busy === h.id || !editing.url.trim() || (!editing.all && !editing.events.length)}
+                        onClick={() => void post(h.id, { action: 'save', id: h.id, url: editing.url, events: editing.all ? ['*'] : editing.events, isActive: editing.isActive }, 'Webhook saved').then((r) => { if (r) setEditing(null); })}>
+                        Save
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={() => setEditing(null)}>Cancel</Button>
+                    </div>
+                    {!editing.all && (
+                      <div className="grid gap-x-4 gap-y-1 text-xs sm:grid-cols-4">
+                        {d.eventTypes.flatMap((t) => VERBS.map((v) => `${t}.${v}`)).map((e) => (
+                          <label key={e} className="flex items-center gap-1.5 font-mono">
+                            <Checkbox checked={editing.events.includes(e)} onCheckedChange={(v) => setEditing({ ...editing, events: v ? [...editing.events, e] : editing.events.filter((x) => x !== e) })} /> {e}
+                          </label>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
                 {h.deliveries.length > 0 && (
                   <ul className="space-y-0.5 text-xs">
                     {h.deliveries.map((x) => (
@@ -202,6 +242,7 @@ function Webhooks() {
           </>
         )}
       </AsyncPage>
+      {hookDel.dialog}
     </Card>
   );
 }

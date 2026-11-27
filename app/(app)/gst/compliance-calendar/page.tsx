@@ -7,7 +7,7 @@
 
 import Link from 'next/link';
 import { useMemo, useState } from 'react';
-import { AlertTriangle, ArrowRight, CheckCircle2, Clock, Loader2, Undo2 } from 'lucide-react';
+import { AlertTriangle, ArrowRight, CheckCircle2, Clock, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -24,6 +24,7 @@ import { api } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
 import { today } from '@/lib/selectors';
 import { cn } from '@/lib/utils';
+import { RowActions, useConfirmDelete } from '@/components/shared/row-actions';
 
 type Area = 'gst' | 'tds' | 'income_tax' | 'roc' | 'msme' | 'payroll';
 interface Row {
@@ -60,15 +61,15 @@ export default function ComplianceCalendarPage() {
   const { from, to } = RANGES[range].range(today());
   const state = useApi<Calendar>(() => api.get('/api/compliance-calendar', { from, to }), [from, to]);
 
-  const undo = async (r: Row) => {
-    try {
-      await api.post('/api/compliance-calendar', { action: 'undo', key: r.key, period: r.period });
-      toast.success(`${r.title} for ${r.periodLabel} unmarked`);
-      void state.refetch();
-    } catch (e) {
-      toast.error('Not changed', { description: e instanceof Error ? e.message : String(e) });
-    }
-  };
+  const confirm = useConfirmDelete();
+  // Deleting the mark puts the item back as owed; the return or payment itself is on the portal, not here.
+  const undo = (r: Row) => confirm.ask({
+    title: `Delete the mark on ${r.title} for ${r.periodLabel}?`,
+    description: 'It shows as owed again, by its due date. What was filed or paid on the portal is not touched.',
+    reason: false,
+    run: () => api.post('/api/compliance-calendar', { action: 'undo', key: r.key, period: r.period }),
+    done: `${r.title} for ${r.periodLabel} unmarked`, onDone: () => void state.refetch(),
+  });
 
   return (
     <div className="space-y-5">
@@ -84,6 +85,7 @@ export default function ComplianceCalendarPage() {
       </AsyncPage>
 
       <MarkDone row={marking} onClose={() => setMarking(null)} onDone={() => { setMarking(null); void state.refetch(); }} />
+      {confirm.dialog}
     </div>
   );
 }
@@ -180,7 +182,7 @@ function Body({ d, range, setRange, area, setArea, canEdit, onMark, onUndo }: {
                 </div>
                 <Badge variant="secondary" className="text-[10px]">{AREA[r.area]}</Badge>
                 {canEdit && (r.done
-                  ? <Button size="sm" variant="ghost" className="gap-1" onClick={() => onUndo(r)}><Undo2 className="size-3.5" /> Undo</Button>
+                  ? <RowActions onEdit={() => onMark(r)} editTitle="Change the date or reference" onDelete={() => onUndo(r)} deleteTitle="Delete the mark: it shows as owed again" />
                   : <Button size="sm" variant="outline" onClick={() => onMark(r)}>Mark done</Button>)}
               </li>
             ))}
@@ -205,13 +207,21 @@ function Status({ r }: { r: Row }) {
 function MarkDone({ row, onClose, onDone }: { row: Row | null; onClose: () => void; onDone: () => void }) {
   const [f, setF] = useState({ doneOn: today(), reference: '' });
   const [busy, setBusy] = useState(false);
+  // Marked already: Edit opens with what was recorded.
+  const [shown, setShown] = useState<string | null>(null);
+  const key = row ? `${row.key}|${row.period}` : null;
+  if (row && key !== shown) {
+    setShown(key);
+    setF({ doneOn: row.done?.on ?? today(), reference: row.done?.reference ?? '' });
+  }
   const save = async () => {
     if (!row) return;
     setBusy(true);
     try {
       await api.post('/api/compliance-calendar', { action: 'done', key: row.key, period: row.period, doneOn: f.doneOn, reference: f.reference || null });
-      toast.success(`${row.title} for ${row.periodLabel} marked done`);
+      toast.success(row.done ? `${row.title} for ${row.periodLabel} saved` : `${row.title} for ${row.periodLabel} marked done`);
       setF({ doneOn: today(), reference: '' });
+      setShown(null);
       onDone();
     } catch (e) {
       toast.error('Not saved', { description: e instanceof Error ? e.message : String(e) });
@@ -220,10 +230,10 @@ function MarkDone({ row, onClose, onDone }: { row: Row | null; onClose: () => vo
     }
   };
   return (
-    <Dialog open={!!row} onOpenChange={(o) => { if (!o) onClose(); }}>
+    <Dialog open={!!row} onOpenChange={(o) => { if (!o) { setShown(null); onClose(); } }}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>{row?.title}: {row?.periodLabel}</DialogTitle>
+          <DialogTitle>{row?.done ? 'Edit: ' : ''}{row?.title}: {row?.periodLabel}</DialogTitle>
           <DialogDescription>When it was filed or paid, and the acknowledgement: the ARN, challan number or SRN.</DialogDescription>
         </DialogHeader>
         <div className="grid gap-3 sm:grid-cols-2">
@@ -233,7 +243,7 @@ function MarkDone({ row, onClose, onDone }: { row: Row | null; onClose: () => vo
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>Cancel</Button>
           <Button onClick={() => void save()} disabled={busy || !f.doneOn} className="gap-1.5">
-            {busy && <Loader2 className="size-3.5 animate-spin" />} Mark done
+            {busy && <Loader2 className="size-3.5 animate-spin" />} {row?.done ? 'Save' : 'Mark done'}
           </Button>
         </DialogFooter>
       </DialogContent>

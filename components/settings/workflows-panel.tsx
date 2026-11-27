@@ -18,6 +18,7 @@ import { Field } from '@/components/shared/form-bits';
 import { AsyncPage } from '@/components/shared/async-state';
 import { api } from '@/lib/api/client';
 import { useApi, useApiAction } from '@/lib/api/use-api';
+import { RowActions, reasonQuery, useConfirmDelete } from '@/components/shared/row-actions';
 
 type Cond = { field: string; op: string; value: string };
 type Act = { type: 'notify'; to: 'admins' | 'accountants' | 'approvers'; message?: string } | { type: 'email'; to: string; subject: string; body: string };
@@ -38,6 +39,13 @@ export function WorkflowsPanel({ canEdit }: { canEdit: boolean }) {
   const state = useApi(() => api.get<Data>('/api/workflows'), []);
   const save = useApiAction((r: Rule) => api.post<{ id: string }>('/api/workflows', { ...r, id: r.id || null }));
   const [f, setF] = useState<Rule | null>(null);
+  const del = useConfirmDelete();
+  const remove = (r: Rule) => del.ask({
+    title: `Delete the rule ${r.name}?`,
+    description: 'It stops at once, and the record of what it ran goes with it. To stop it for now and keep it, switch it off instead.',
+    run: (reason) => api.delete(`/api/workflows?id=${r.id}${reasonQuery(reason, false)}`),
+    done: `${r.name} deleted`, onDone: () => state.refetch(),
+  });
 
   const submit = async () => {
     if (!f) return;
@@ -60,10 +68,13 @@ export function WorkflowsPanel({ canEdit }: { canEdit: boolean }) {
             <div className="grid gap-3 md:grid-cols-2">
               {d.rules.map((r) => (
                 <Card key={r.id} className="space-y-1 p-4 text-sm">
-                  <button type="button" className="flex w-full items-start justify-between text-left" disabled={!canEdit} onClick={() => setF(r)}>
+                  <div className="flex w-full items-start justify-between gap-2">
                     <span className="font-medium"><Workflow className="mr-1.5 inline size-4 text-muted-foreground" />{r.name}</span>
-                    <Badge variant={r.isActive ? 'secondary' : 'outline'} className="text-[10px]">{r.isActive ? 'On' : 'Off'}</Badge>
-                  </button>
+                    <span className="flex items-center gap-1">
+                      <Badge variant={r.isActive ? 'secondary' : 'outline'} className="text-[10px]">{r.isActive ? 'On' : 'Off'}</Badge>
+                      {canEdit && <RowActions onEdit={() => setF(r)} onDelete={() => remove(r)} />}
+                    </span>
+                  </div>
                   <p className="text-xs text-muted-foreground">
                     {eventLabel(r.event)}{r.conditions.length ? `, when ${r.conditions.map((c) => `${c.field} ${OPS.find((o) => o.value === c.op)?.label} ${c.value}`).join(' and ')}` : ''}
                     {' → '}{r.actions.map((a) => (a.type === 'notify' ? `tell ${a.to}` : `email ${a.to === 'party' ? 'the customer or vendor' : a.to}`)).join(', ')}
@@ -85,6 +96,7 @@ export function WorkflowsPanel({ canEdit }: { canEdit: boolean }) {
               </Card>
             )}
 
+            {del.dialog}
             <Dialog open={!!f} onOpenChange={(o) => !o && setF(null)}>
               <DialogContent className="max-w-xl">
                 <DialogHeader>

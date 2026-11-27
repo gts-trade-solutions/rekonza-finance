@@ -20,6 +20,7 @@ import { api } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
 import { useAppStore } from '@/lib/store';
 import { usePermission } from '@/lib/store/hooks';
+import { RowActions, reasonQuery, useConfirmDelete } from '@/components/shared/row-actions';
 
 interface Statement {
   name: string; joined: string; lastDay: string; monthlyBasicDaPaise: number; monthlyGrossPaise: number;
@@ -27,7 +28,7 @@ interface Statement {
   encashDays: number; encashableDays: number; encashmentPaise: number; noticePayPaise: number; noticeRecoveryPaise: number;
   otherEarningsPaise: number; otherRecoveriesPaise: number; tdsPaise: number; netPaise: number;
 }
-interface Settlement { id: string; name: string; code: string; lastDay: string; netPaise: number; status: 'posted' | 'paid' | 'reversed'; paidOn: string | null; statement: Statement }
+interface Settlement { id: string; employeeId: string; name: string; code: string; lastDay: string; netPaise: number; status: 'posted' | 'paid' | 'reversed'; paidOn: string | null; statement: Statement }
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const dmy = (d: string) => new Date(d).toLocaleDateString('en-IN');
@@ -35,13 +36,18 @@ const today = () => new Date().toISOString().slice(0, 10);
 
 export default function FullAndFinalPage() {
   const canApprove = usePermission('payroll', 'approve');
+  const canDelete = usePermission('payroll', 'void');
   const banks = useAppStore((s) => s.bankAccounts).filter((b) => b.kind === 'bank');
   const list = useApi(() => api.get<{ settlements: Settlement[] }>('/api/payroll/fnf'), []);
   const employees = useApi(() => api.get<{ employees: { id: string; code: string; name: string; dateOfLeaving: string | null }[] }>('/api/payroll/employees'), []);
-  const [f, setF] = useState({
+  const blank = {
     employeeId: '', lastDay: today(), waiveFiveYears: false, encashDays: '', encashDivisor: 26 as 26 | 30,
     noticePayDays: '', noticeShortDays: '', otherEarningsPaise: 0, otherRecoveriesPaise: 0, tdsPaise: 0,
-  });
+  };
+  const [f, setF] = useState(blank);
+  // The settlement being corrected: worked out again in the same form, then saved over itself.
+  const [editing, setEditing] = useState<Settlement | null>(null);
+  const del = useConfirmDelete();
   const [preview, setPreview] = useState<Statement | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [pay, setPay] = useState<{ id: string; bankAccountId: string; date: string } | null>(null);
@@ -62,6 +68,45 @@ export default function FullAndFinalPage() {
     }
   };
 
+  // The form again from what was posted: the days are read back from the amounts they gave.
+  const edit = (x: Settlement) => {
+    const st = x.statement;
+    const perDay = st.monthlyGrossPaise / 30;
+    const divisor = st.encashmentPaise > 0 && st.encashDays > 0
+      ? (Math.abs((st.monthlyBasicDaPaise * st.encashDays) / st.encashmentPaise - 30) < Math.abs((st.monthlyBasicDaPaise * st.encashDays) / st.encashmentPaise - 26) ? 30 : 26)
+      : 26;
+    setEditing(x);
+    setPreview(null);
+    setF({
+      employeeId: x.employeeId, lastDay: x.lastDay, waiveFiveYears: st.gratuityEligible && st.years.completed < 5, encashDays: String(st.encashDays),
+      encashDivisor: divisor, noticePayDays: perDay ? String(Math.round(st.noticePayPaise / perDay)) : '', noticeShortDays: perDay ? String(Math.round(st.noticeRecoveryPaise / perDay)) : '',
+      otherEarningsPaise: st.otherEarningsPaise, otherRecoveriesPaise: st.otherRecoveriesPaise, tdsPaise: st.tdsPaise,
+    });
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+  const stopEditing = () => { setEditing(null); setPreview(null); setF(blank); };
+  const saveEdit = async () => {
+    setBusy('post');
+    try {
+      await api.put('/api/payroll/fnf', { id: editing!.id, ...payload() });
+      toast.success('Settlement saved', { description: 'Its entry is reversed and posted again.' });
+      stopEditing();
+      void list.refetch();
+    } catch (e) {
+      toast.error('Not saved', { description: errorText(e) });
+    } finally {
+      setBusy(null);
+    }
+  };
+  const remove = (x: Settlement) => del.ask({
+    title: `Delete the settlement of ${x.name}?`,
+    description: (x.status === 'paid' ? 'Its payment and its entry are both reversed' : 'Its entry is reversed') +
+      ' in the ledger, never erased, and the leave it encashed comes back. Their leaving date stays. Refused while a payment is matched to the bank statement.',
+    reason: true,
+    run: (reason) => api.delete(`/api/payroll/fnf?id=${x.id}${reasonQuery(reason, false)}`),
+    done: 'Settlement deleted', onDone: () => { if (editing?.id === x.id) stopEditing(); void list.refetch(); },
+  });
+
   const row = (label: string, paise: number, hint?: string, minus = false) => (
     <tr className="border-b last:border-0">
       <td className="py-1.5 pr-3">{label}{hint && <span className="block text-xs text-muted-foreground">{hint}</span>}</td>
@@ -75,10 +120,10 @@ export default function FullAndFinalPage() {
       <div className="space-y-4">
         {canApprove && (
           <Card className="space-y-4 p-5">
-            <h3 className="flex items-center gap-2 text-sm font-semibold"><HandCoins className="size-4 text-muted-foreground" /> New settlement</h3>
+            <h3 className="flex items-center gap-2 text-sm font-semibold"><HandCoins className="size-4 text-muted-foreground" /> {editing ? `Edit the settlement of ${editing.name}` : 'New settlement'}</h3>
             <div className="grid gap-3 sm:grid-cols-4">
               <Field label="Employee">
-                <div><select value={f.employeeId} onChange={(e) => { setF({ ...f, employeeId: e.target.value }); setPreview(null); }} className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm">
+                <div><select value={f.employeeId} disabled={!!editing} onChange={(e) => { setF({ ...f, employeeId: e.target.value }); setPreview(null); }} className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm">
                   <option value="">Choose</option>
                   {(employees.data?.employees ?? []).map((e) => <option key={e.id} value={e.id}>{e.code} · {e.name}</option>)}
                 </select></div>
@@ -103,12 +148,18 @@ export default function FullAndFinalPage() {
               <Button size="sm" variant="outline" disabled={!f.employeeId || busy === 'preview'} onClick={() => void run<Statement>('preview', { action: 'preview', ...payload() }, setPreview)}>
                 {busy === 'preview' && <Loader2 className="size-3.5 animate-spin" />} Work it out
               </Button>
-              {preview && (
+              {preview && !editing && (
                 <Button size="sm" disabled={busy === 'post'} onClick={() => window.confirm(`Post ${preview.name}'s settlement and set their last day to ${dmy(preview.lastDay)}?`) &&
                   void run('post', { action: 'post', ...payload() }, () => { toast.success('Settlement posted'); setPreview(null); void list.refetch(); })}>
                   {busy === 'post' && <Loader2 className="size-3.5 animate-spin" />} Post settlement
                 </Button>
               )}
+              {preview && editing && (
+                <Button size="sm" disabled={busy === 'post'} onClick={() => void saveEdit()} data-slot="fnf-save">
+                  {busy === 'post' && <Loader2 className="size-3.5 animate-spin" />} Save settlement
+                </Button>
+              )}
+              {editing && <Button size="sm" variant="ghost" onClick={stopEditing}>Cancel</Button>}
             </div>
             {preview && (
               <div className="max-w-xl rounded-md border p-4">
@@ -154,6 +205,11 @@ export default function FullAndFinalPage() {
                         </span>
                       ) : <Button size="xs" variant="outline" onClick={() => setPay({ id: s.id, bankAccountId: banks[0]?.id ?? '', date: today() })}>Pay</Button>
                     )}
+                    {/* A paid settlement is corrected by deleting it (its payment is reversed too) and working it out again. */}
+                    <RowActions
+                      onEdit={canApprove && s.status === 'posted' && (() => edit(s))}
+                      onDelete={canApprove && canDelete && (() => remove(s))}
+                    />
                   </li>
                 ))}
               </ul>
@@ -161,6 +217,7 @@ export default function FullAndFinalPage() {
           )}
         </AsyncPage>
       </div>
+      {del.dialog}
     </>
   );
 }

@@ -31,6 +31,8 @@ import { usePermission } from '@/lib/store/hooks';
 import { toRupees } from '@/lib/money';
 import { cn } from '@/lib/utils';
 
+import { RowActions, reasonQuery, useConfirmDelete } from '@/components/shared/row-actions';
+import { api } from '@/lib/api/client';
 const currentFy = () => {
   const d = new Date();
   return d.getFullYear() - (d.getMonth() < 3 ? 1 : 0);
@@ -50,12 +52,22 @@ const STATUS = {
   nothing_due: { label: 'Nothing due', tone: 'text-muted-foreground' },
 } as const;
 
+/** A challan as the return's list gives it, with the account it was paid from (for Edit). */
+type Challan = TdsQuarterResponse['challans'][number] & { bankAccountId?: string | null };
+
 export function TdsQuarterReturn() {
   const [fy, setFy] = useState(currentFy());
   const [quarter, setQuarter] = useState(currentQuarter());
   const state = useApi<TdsQuarterResponse>(() => tdsReturns.get(fy, quarter), [fy, quarter]);
   const canCreate = usePermission('gst', 'create');
+  const canEdit = usePermission('gst', 'edit');
+  const canDelete = usePermission('gst', 'void');
   const banks = useAppStore((s) => s.bankAccounts);
+  // The challan being corrected, in the same window as recording one.
+  const [editing, setEditing] = useState<Challan | null>(null);
+  const [editBusy, setEditBusy] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+  const del = useConfirmDelete();
 
   const [open, setOpen] = useState(false);
   const [f, setF] = useState({
@@ -84,12 +96,43 @@ export function TdsQuarterReturn() {
   };
 
   const save = async () => {
+    if (editing) {
+      setEditBusy(true);
+      setEditError(null);
+      try {
+        await api.put('/api/tds-returns', { ...f, id: editing.id });
+        toast.success('Challan saved', { description: 'Its entry is reversed and the deposit posted again.' });
+        setOpen(false);
+        setEditing(null);
+        state.refetch();
+      } catch (e) {
+        setEditError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setEditBusy(false);
+      }
+      return;
+    }
     const done = await record.run({ ...f, bankAccountId: f.bankAccountId });
     if (!done) return;
     toast.success('Challan recorded', { description: 'The payment is posted against the tax held.' });
     setOpen(false);
     state.refetch();
   };
+  const edit = (c: Challan) => {
+    setEditing(c);
+    setEditError(null);
+    setF({
+      kind: c.kind, forMonth: c.forMonth, date: c.date, bsrCode: c.bsrCode, serial: c.serial,
+      taxPaise: c.taxPaise, interestPaise: c.interestPaise, feePaise: c.feePaise, bankAccountId: c.bankAccountId ?? '',
+    });
+    setOpen(true);
+  };
+  const remove = (c: Challan) => del.ask({
+    title: `Delete challan ${c.bsrCode}/${c.serial}?`,
+    description: 'Its entry is reversed in the ledger, never erased, and the challan is kept as deleted; the month shows as not deposited again. Refused while the payment is matched to the bank statement.',
+    run: (reason) => api.delete(`/api/tds-returns?id=${c.id}${reasonQuery(reason, false)}`),
+    done: 'Challan deleted', onDone: () => state.refetch(),
+  });
 
   return (
     <div className="space-y-3">
@@ -113,7 +156,12 @@ export function TdsQuarterReturn() {
           </SelectContent>
         </Select>
         {canCreate && (
-          <Button size="sm" className="ml-auto gap-1.5" onClick={() => { record.reset(); setOpen(true); }}>
+          <Button size="sm" className="ml-auto gap-1.5" onClick={() => {
+            record.reset();
+            if (editing) setF({ kind: 'tds', forMonth: '', date: '', bsrCode: '', serial: '', taxPaise: 0, interestPaise: 0, feePaise: 0, bankAccountId: '' });
+            setEditing(null);
+            setOpen(true);
+          }}>
             <Plus className="size-3.5" /> Record challan
           </Button>
         )}
@@ -175,6 +223,35 @@ export function TdsQuarterReturn() {
               </tbody>
             </ReportTable>
 
+            {d.challans.length > 0 && (
+              <ReportTable>
+                <thead>
+                  <tr className="border-b bg-muted/50">
+                    <th className={`${th} text-left`}>Challan</th>
+                    <th className={`${th} text-left`}>For</th>
+                    <th className={`${th} text-left`}>Paid on</th>
+                    <th className={`${th} text-right`}>Tax</th>
+                    <th className={`${th} text-right`}>Interest · fee</th>
+                    <th className={`${th} text-right`}>Total</th>
+                    <th className="w-40" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {(d.challans as Challan[]).map((c) => (
+                    <tr key={c.id} className="border-b last:border-0" data-slot="tds-challan">
+                      <td className="px-3 py-2 font-mono text-xs">{c.bsrCode}/{c.serial}<span className="ml-2 font-sans text-[10px] uppercase text-muted-foreground">{c.kind}</span></td>
+                      <td className="px-3 py-2 text-xs">{monthName(c.forMonth)}</td>
+                      <td className="px-3 py-2 text-xs">{fmt(c.date)}{c.bankName ? <span className="block text-muted-foreground">{c.bankName}</span> : null}</td>
+                      <td className="px-3 py-2 text-right"><Money value={c.taxPaise} /></td>
+                      <td className="px-3 py-2 text-right"><Money value={c.interestPaise + c.feePaise} showZero={false} /></td>
+                      <td className="px-3 py-2 text-right font-medium"><Money value={c.totalPaise} /></td>
+                      <td className="px-2 py-2"><RowActions onEdit={canEdit && (() => edit(c))} onDelete={canDelete && (() => remove(c))} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </ReportTable>
+            )}
+
             {d.forms.length === 0 && (
               <Card className="flex items-center gap-2 p-4 text-sm text-muted-foreground">
                 <CheckCircle2 className="size-4" /> Nothing was deducted or collected in this quarter, so there is no return to file.
@@ -233,10 +310,10 @@ export function TdsQuarterReturn() {
         )}
       </AsyncPage>
 
-      <Dialog open={open} onOpenChange={setOpen}>
+      <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) setEditing(null); }}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Record a challan</DialogTitle>
+            <DialogTitle>{editing ? `Edit challan ${editing.bsrCode}/${editing.serial}` : 'Record a challan'}</DialogTitle>
             <FoldNav />
             <DialogDescription>
               From the challan receipt (ITNS 281). The BSR code, date and serial number are what the return and TRACES match on.
@@ -283,16 +360,17 @@ export function TdsQuarterReturn() {
             <Field label="Late fee" className="sm:col-span-2">
               <MoneyInput valuePaise={f.feePaise} onChangePaise={(p) => setF({ ...f, feePaise: p })} />
             </Field>
-            {record.error && <p className="text-sm text-destructive sm:col-span-2">{record.error}</p>}
+            {(editing ? editError : record.error) && <p className="text-sm text-destructive sm:col-span-2">{editing ? editError : record.error}</p>}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
-            <Button onClick={save} disabled={record.busy || !f.forMonth || !f.date || !f.bankAccountId}>
-              {record.busy ? 'Saving…' : 'Record challan'}
+            <Button variant="outline" onClick={() => { setOpen(false); setEditing(null); }}>Cancel</Button>
+            <Button onClick={save} disabled={record.busy || editBusy || !f.forMonth || !f.date || !f.bankAccountId} data-slot="tds-challan-save">
+              {record.busy || editBusy ? 'Saving…' : editing ? 'Save' : 'Record challan'}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      {del.dialog}
     </div>
   );
 }

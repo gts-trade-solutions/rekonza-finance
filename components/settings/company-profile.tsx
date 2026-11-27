@@ -27,6 +27,7 @@ import { BUSINESS_NATURES, COMPANY_TYPES, companyTypeFrom } from '@/lib/company-
 import { api } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
 import { usePermission } from '@/lib/store/hooks';
+import { RowActions, reasonQuery, useConfirmDelete } from '@/components/shared/row-actions';
 
 export interface Registration {
   legalName: string; pan: string; address: string;
@@ -109,7 +110,12 @@ interface Centre { id: string; code: string; name: string; category: string | nu
 export function DivisionsCard({ canEdit: settingsEdit }: { canEdit: boolean }) {
   // A division is a cost centre: adding one needs the accountant's right to edit them.
   const mayAddCentres = usePermission('accountant', 'edit');
+  const mayDeleteCentres = usePermission('accountant', 'void');
   const canEdit = settingsEdit && mayAddCentres;
+  const canDelete = settingsEdit && mayDeleteCentres;
+  // The division being renamed, in place.
+  const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(null);
+  const del = useConfirmDelete();
   const state = useApi(() => api.get<{ centres: Centre[] }>('/api/cost-centres'), []);
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
@@ -136,6 +142,28 @@ export function DivisionsCard({ canEdit: settingsEdit }: { canEdit: boolean }) {
     }
   };
 
+  const saveName = async (d: Centre) => {
+    if (!renaming?.name.trim()) return;
+    setBusy(true);
+    try {
+      await api.post('/api/cost-centres', { id: d.id, code: d.code, name: renaming.name.trim(), category: d.category, isActive: d.isActive });
+      toast.success(`${renaming.name.trim()} saved`);
+      setRenaming(null);
+      void state.refetch();
+    } catch (e) {
+      toast.error('Not saved', { description: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setBusy(false);
+    }
+  };
+  const remove = (d: Centre) => del.ask({
+    title: `Delete the division ${d.name}?`,
+    description: 'Only a division nothing has been booked to can be deleted. One with entries is marked as inactive instead: it leaves the pickers, and its figures stay in the profit by division.',
+    run: (reason) => api.delete(`/api/cost-centres?id=${d.id}${reasonQuery(reason, false)}`),
+    done: `${d.name} deleted`, onDone: () => void state.refetch(),
+    instead: d.isActive ? { label: 'Mark as inactive instead', run: () => api.post('/api/cost-centres', { id: d.id, code: d.code, name: d.name, category: d.category, isActive: false }) } : undefined,
+  });
+
   return (
     <Card className="space-y-3 p-5" data-slot="divisions">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -151,14 +179,29 @@ export function DivisionsCard({ canEdit: settingsEdit }: { canEdit: boolean }) {
         </div>
         <Button variant="outline" size="sm" asChild><Link href="/accountant/cost-centres">Profit by division</Link></Button>
       </div>
-      <div className="flex flex-wrap gap-1.5">
-        {divisions.length === 0 && <p className="text-xs text-muted-foreground">No divisions yet.</p>}
-        {divisions.map((d) => (
-          <Badge key={d.id} variant={d.isActive ? 'secondary' : 'outline'} className="gap-1 text-xs" data-slot="division">
-            {d.name}<span className="font-mono text-[10px] text-muted-foreground">{d.code}</span>
-          </Badge>
-        ))}
-      </div>
+      {divisions.length === 0 ? <p className="text-xs text-muted-foreground">No divisions yet.</p> : (
+        <ul className="divide-y rounded-md border text-sm">
+          {divisions.map((d) => (
+            <li key={d.id} className="flex flex-wrap items-center gap-2 px-3 py-1.5" data-slot="division">
+              {renaming?.id === d.id ? (
+                <>
+                  <Input value={renaming.name} onChange={(e) => setRenaming({ ...renaming, name: e.target.value })} className="h-8 max-w-xs" autoFocus
+                    onKeyDown={(e) => { if (e.key === 'Enter') void saveName(d); if (e.key === 'Escape') setRenaming(null); }} aria-label="Division name" />
+                  <Button size="xs" onClick={() => void saveName(d)} disabled={busy || !renaming.name.trim()}>Save</Button>
+                  <Button size="xs" variant="ghost" onClick={() => setRenaming(null)}>Cancel</Button>
+                </>
+              ) : (
+                <>
+                  <span className={d.isActive ? 'font-medium' : 'text-muted-foreground line-through'}>{d.name}</span>
+                  <span className="font-mono text-[10px] text-muted-foreground">{d.code}</span>
+                  {!d.isActive && <Badge variant="outline" className="text-[10px]">Inactive</Badge>}
+                  <RowActions className="ml-auto" onEdit={canEdit && (() => setRenaming({ id: d.id, name: d.name }))} onDelete={canDelete && (() => remove(d))} />
+                </>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
       {canEdit && (
         <div className="flex max-w-md gap-2">
           <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="New division, e.g. Service"
@@ -166,6 +209,7 @@ export function DivisionsCard({ canEdit: settingsEdit }: { canEdit: boolean }) {
           <Button size="sm" className="h-9 gap-1.5" onClick={() => void add()} disabled={busy || !name.trim()}><Plus className="size-3.5" /> Add</Button>
         </div>
       )}
+      {del.dialog}
     </Card>
   );
 }

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { db, transaction } from '@/lib/server/db';
 import { route, body, query, asId } from '@/lib/server/http';
+import { deleteCustomField } from '@/lib/server/services/settings-changes';
 import { logAudit, auditMeta } from '@/lib/server/audit';
 import { CUSTOM_FIELD_ENTITIES, listFields, saveField } from '@/lib/server/services/custom-fields';
 
@@ -38,6 +39,22 @@ export const POST = route(
       return saved;
     });
     return { id: asId(fid) };
+  },
+  { permission: { module: 'settings', action: 'edit' } },
+);
+
+/** Delete a custom field nobody has used; one in use is refused with the way out (services/settings-changes.ts). */
+export const DELETE = route(
+  async ({ orgId, user, req }) => {
+    const { id } = query(req, z.object({ id: z.coerce.number().int().positive() }));
+    return transaction(async (trx) => {
+      const r = await deleteCustomField(trx, orgId, id);
+      await logAudit({
+        trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'void', targetType: 'custom_field', targetId: id,
+        targetLabel: r.label, detail: `Deleted ${r.label}`, ...auditMeta(req),
+      });
+      return { id: String(id), deleted: true };
+    });
   },
   { permission: { module: 'settings', action: 'edit' } },
 );

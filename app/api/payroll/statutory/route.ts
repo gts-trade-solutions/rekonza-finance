@@ -1,9 +1,11 @@
 import { z } from 'zod';
 import { db, transaction } from '@/lib/server/db';
 import { route, body, query, forbidden } from '@/lib/server/http';
+import { changeReason } from '@/lib/server/request-context';
 import { hasPermission } from '@/lib/rbac';
 import { logAudit, auditMeta } from '@/lib/server/audit';
 import { COMPONENT_LABEL, payStatutory, statutoryRegister } from '@/lib/server/payroll/statutory-dues';
+import { deleteStatutoryPayment, updateStatutoryPayment } from '@/lib/server/payroll/changes';
 
 // The payroll statutory registers (PF, ESI, PT, LWF, TDS on salary) and each
 // month's dues against what has been paid; paying a due posts it to the ledger.
@@ -47,4 +49,46 @@ export const POST = route(
     return { id: String(done.id), entryId: String(done.entryId) };
   },
   { permission: { module: 'payroll', action: 'view' } },
+);
+
+const Id = z.union([z.string(), z.number()]).transform(Number);
+
+/** Correct a statutory payment: reversed and paid again on the same record (payroll/changes.ts). */
+export const PUT = route(
+  async ({ orgId, user, role, req }) => {
+    if (!hasPermission(role, 'payroll', 'approve') || !hasPermission(role, 'banking', 'edit')) {
+      throw forbidden('Changing a statutory payment needs payroll approval and banking rights.');
+    }
+    const input = await body(req, PayInput.extend({ id: Id }));
+    return transaction(async (trx) => {
+      await updateStatutoryPayment(trx, orgId, user.userId, input.id, input);
+      await logAudit({
+        trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'update', targetType: 'statutory_payment', targetId: input.id,
+        targetLabel: `${COMPONENT_LABEL[input.component]} ${input.period}`,
+        detail: `Changed to ₹${(input.amountPaise / 100).toLocaleString('en-IN', { minimumFractionDigits: 2 })} paid on ${input.date}; its entry reversed and posted again`,
+        ...auditMeta(req),
+      });
+      return { id: String(input.id) };
+    });
+  },
+  { permission: { module: 'payroll', action: 'edit' } },
+);
+
+/** Delete a statutory payment entered in error: its entry reversed, the record kept (payroll/changes.ts). */
+export const DELETE = route(
+  async ({ orgId, user, role, req }) => {
+    if (!hasPermission(role, 'banking', 'void')) throw forbidden('Deleting a statutory payment needs banking rights to delete.');
+    const { id } = query(req, z.object({ id: Id }));
+    const reason = changeReason();
+    return transaction(async (trx) => {
+      const r = await deleteStatutoryPayment(trx, orgId, user.userId, id, reason);
+      await logAudit({
+        trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'void', targetType: 'statutory_payment', targetId: id,
+        targetLabel: r.label, detail: `${r.label} payment of ₹${(r.amountPaise / 100).toFixed(2)} deleted; its entry reversed${reason ? `: ${reason}` : ''}`,
+        ...auditMeta(req),
+      });
+      return { id: String(id), deleted: true };
+    });
+  },
+  { permission: { module: 'payroll', action: 'void' } },
 );

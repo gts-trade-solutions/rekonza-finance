@@ -6,6 +6,7 @@
 // payslips, come from here.
 
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { use, useState } from 'react';
 import { AlertTriangle, ArrowLeft, Banknote, CheckCircle2, Download, FileText, Loader2, Mail, MessageCircle, Printer, Undo2, Unlink, Upload, Users, Wallet } from 'lucide-react';
 import { whatsappNumber } from '@/components/sales/send-invoice';
@@ -33,6 +34,8 @@ import { formatINRCompact } from '@/lib/money';
 import { downloadWorkbook } from '@/lib/xlsx';
 import { Attachments } from '@/components/shared/attachments';
 import { bankTransfers, ecr, esiContributions } from '@/lib/payroll/files';
+import { DeleteButton, EditButton, useConfirmDelete } from '@/components/shared/row-actions';
+import { RUN_DELETE } from '@/components/payroll/run-delete-text';
 
 export interface RunLine {
   employeeId: string; code: string; name: string; designation: string | null; pan: string | null; uan: string | null;
@@ -65,9 +68,12 @@ const saveText = (name: string, text: string) => {
 export default function PayrollRunPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const state = useApi<Run>(() => api.get(`/api/payroll/runs/${id}`), [id]);
+  const router = useRouter();
   const canEdit = usePermission('payroll', 'edit');
   const canApprove = usePermission('payroll', 'approve');
+  const canDelete = usePermission('payroll', 'void');
   const canShare = usePermission('payroll', 'export');
+  const confirm = useConfirmDelete();
 
   // A payslip to the employee: a link that opens their slip alone, in a
   // WhatsApp message or an email ready to go.
@@ -110,6 +116,38 @@ export default function PayrollRunPage({ params }: { params: Promise<{ id: strin
       setBusy(null);
     }
   };
+
+  // Edit on a month that has gone further than a draft: a posted one is
+  // reopened (its entry reversed); a paid one has its payment undone first.
+  const editRun = (run: Run) => confirm.ask(run.status === 'paid' ? {
+    title: `Edit the payroll for ${monthName(run.month)}?`,
+    description: 'Its salaries are paid. To change it, the payment is undone (its entry reversed in the ledger) and the payroll reopened as a draft; you then correct it, post it and pay it again. Refused while the payment is matched to the bank statement.',
+    reasonRequired: true, tone: 'default', confirmLabel: 'Undo payment and reopen', failTitle: 'Not reopened',
+    run: async (reason) => {
+      await api.post(`/api/payroll/runs/${id}`, { action: 'unpay', reason });
+      await api.post(`/api/payroll/runs/${id}`, { action: 'reopen', reason });
+    },
+    done: 'Reopened as a draft', doneDescription: 'Correct it, then post and pay it again.', onDone: () => void state.refetch(),
+  } : {
+    title: `Edit the payroll for ${monthName(run.month)}?`,
+    description: 'It is posted. Reopening it reverses its entry in the ledger (never erased) and makes it a draft again, to correct and post.',
+    reasonRequired: true, tone: 'default', confirmLabel: 'Reopen to edit', failTitle: 'Not reopened',
+    run: (reason) => api.post(`/api/payroll/runs/${id}`, { action: 'reopen', reason }),
+    done: 'Reopened as a draft', onDone: () => void state.refetch(),
+  });
+  const undoPayment = (run: Run) => confirm.ask({
+    title: `Undo the salary payment for ${monthName(run.month)}?`,
+    description: 'The payment’s entry is reversed in the ledger and the payroll goes back to posted, to pay again. Refused while the payment is matched to the bank statement.',
+    reason: true, tone: 'default', confirmLabel: 'Undo payment', failTitle: 'Not undone',
+    run: (reason) => api.post(`/api/payroll/runs/${id}`, { action: 'unpay', reason }),
+    done: 'Payment undone', onDone: () => void state.refetch(),
+  });
+  const deleteRun = (run: Run) => confirm.ask({
+    title: `Delete the payroll for ${monthName(run.month)}?`,
+    description: RUN_DELETE[run.status],
+    run: (reason) => api.delete(`/api/payroll/runs/${id}${reason ? `?reason=${encodeURIComponent(reason)}` : ''}`),
+    done: `Payroll for ${monthName(run.month)} deleted`, onDone: () => router.push('/payroll/runs'),
+  });
 
   // An attendance sheet: a column of employee codes, and one of unpaid days
   // or of days present. CSV or Excel, headings in the first row.
@@ -182,14 +220,16 @@ export default function PayrollRunPage({ params }: { params: Promise<{ id: strin
                     </Button>
                   )}
                   {run.status === 'posted' && canApprove && (
-                    <>
-                      <Button size="sm" className="gap-1.5" onClick={() => setPaying(true)}><Banknote className="size-3.5" /> Pay salaries</Button>
-                      <Button size="sm" variant="outline" className="gap-1.5" disabled={!!busy} onClick={() => {
-                        const reason = window.prompt('Reopen this payroll? Its entry is reversed. Give the reason.');
-                        if (reason) void act('reopen', { reason }, 'Payroll reopened');
-                      }}><Undo2 className="size-3.5" /> Reopen</Button>
-                    </>
+                    <Button size="sm" className="gap-1.5" onClick={() => setPaying(true)}><Banknote className="size-3.5" /> Pay salaries</Button>
                   )}
+                  {run.status === 'paid' && canApprove && (
+                    <Button size="sm" variant="outline" className="gap-1.5" disabled={!!busy} onClick={() => undoPayment(run)} data-slot="run-unpay">
+                      <Undo2 className="size-3.5" /> Undo payment
+                    </Button>
+                  )}
+                  {/* Edit and Delete by name, as the client looks for them: a draft is edited in the table below. */}
+                  {!draft && canApprove && <EditButton onClick={() => editRun(run)} label={run.status === 'paid' ? 'Edit' : 'Edit (reopen)'} className="h-[30px]" />}
+                  {canDelete && (draft || canApprove) && <DeleteButton onClick={() => deleteRun(run)} className="h-[30px]" />}
                 </div>
               )}
             />
@@ -240,6 +280,7 @@ export default function PayrollRunPage({ params }: { params: Promise<{ id: strin
                   <th className={`${th} text-right`}>PT · LWF</th><th className={`${th} text-right`}>TDS</th><th className={`${th} text-right`}>Other</th>
                   <th className={`${th} text-right`}>Net pay</th>
                   {!draft && canShare && <th className={th} />}
+                  {draft && canEdit && <th className={th} />}
                 </tr></thead>
                 <tbody className="divide-y">
                   {L.map((l) => (
@@ -260,6 +301,9 @@ export default function PayrollRunPage({ params }: { params: Promise<{ id: strin
                         {l.advanceRecovery > 0 && <p title={l.loanRecovery ? 'Loan and advance instalments included' : undefined}>−<Money value={l.advanceRecovery} />{l.loanRecovery > 0 && <span className="text-muted-foreground"> advance</span>}</p>}
                       </td>
                       <td className="px-3 py-2 text-right font-medium"><Money value={l.netPay} /></td>
+                      {draft && canEdit && (
+                        <td className="px-2 py-2 text-right"><EditButton onClick={() => setEditing(l)} title={`Change the days, bonus and extras of ${l.name}`} /></td>
+                      )}
                       {!draft && canShare && (
                         <td className="px-2 py-2 text-right whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
                           <Button size="xs" variant="ghost" title={l.mobile ? `WhatsApp to ${l.mobile}` : 'No mobile number on file'} disabled={!l.mobile}
@@ -280,7 +324,7 @@ export default function PayrollRunPage({ params }: { params: Promise<{ id: strin
                 </tbody>
               </ReportTable>
             </Card>
-            {draft && canEdit && L.length > 0 && <p className="text-xs text-muted-foreground">Click an employee to change their unpaid days, bonus, or other reimbursement and recovery. Arrears, approved claims and advance instalments are worked out by themselves.</p>}
+            {draft && canEdit && L.length > 0 && <p className="text-xs text-muted-foreground">Edit an employee to change their unpaid days, bonus, or other reimbursement and recovery. Arrears, approved claims and advance instalments are worked out by themselves.</p>}
             <Attachments targetType="payroll_run" targetId={run.id} canEdit={canEdit} title="Attendance sheets, bank confirmation and other papers" />
 
             <LineDialog line={editing} onClose={() => setEditing(null)} onSave={async (input) => {
@@ -288,6 +332,7 @@ export default function PayrollRunPage({ params }: { params: Promise<{ id: strin
             }} busy={busy === 'recompute'} />
             <PayDialog open={paying} month={run.month} total={sum(L, 'netPay')} onClose={() => setPaying(false)} busy={busy === 'pay'}
               onPay={async (bankAccountId, date) => { if (await act('pay', { bankAccountId, date }, 'Salaries paid')) setPaying(false); }} />
+            {confirm.dialog}
           </div>
         );
       }}

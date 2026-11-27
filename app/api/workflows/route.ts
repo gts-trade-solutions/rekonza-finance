@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { db, transaction } from '@/lib/server/db';
-import { route, body, asId } from '@/lib/server/http';
+import { route, body, query, asId } from '@/lib/server/http';
+import { deleteWorkflowRule } from '@/lib/server/services/settings-changes';
 import { logAudit, auditMeta } from '@/lib/server/audit';
 import { listRules, recentRuns, saveRule, WORKFLOW_EVENTS, WORKFLOW_FIELDS } from '@/lib/server/services/workflows';
 
@@ -43,6 +44,22 @@ export const POST = route(
       return saved;
     });
     return { id: asId(id) };
+  },
+  { permission: { module: 'settings', action: 'edit' } },
+);
+
+/** Delete a workflow rule nobody has used; one in use is refused with the way out (services/settings-changes.ts). */
+export const DELETE = route(
+  async ({ orgId, user, req }) => {
+    const { id } = query(req, z.object({ id: z.coerce.number().int().positive() }));
+    return transaction(async (trx) => {
+      const r = await deleteWorkflowRule(trx, orgId, id);
+      await logAudit({
+        trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'void', targetType: 'workflow_rule', targetId: id,
+        targetLabel: r.name, detail: `Deleted ${r.name}`, ...auditMeta(req),
+      });
+      return { id: String(id), deleted: true };
+    });
   },
   { permission: { module: 'settings', action: 'edit' } },
 );

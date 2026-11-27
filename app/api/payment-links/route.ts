@@ -4,7 +4,7 @@ import { route, body, forbidden, badRequest } from '@/lib/server/http';
 import { hasPermission } from '@/lib/rbac';
 import { logAudit, auditMeta } from '@/lib/server/audit';
 import { siteUrl } from '@/lib/server/mail/mailer';
-import { createPaymentLink, deletePaymentLink, gatewayStatus, onlinePayments, saveGateway } from '@/lib/server/services/payment-links';
+import { createPaymentLink, deletePaymentLink, gatewayStatus, onlinePayments, removeGateway, saveGateway } from '@/lib/server/services/payment-links';
 
 // Online payments: whether this company's Razorpay is connected, connecting
 // it, and a payment link for an invoice (services/payment-links.ts).
@@ -22,10 +22,20 @@ const Input = z.discriminatedUnion('action', [
     action: z.literal('connect'), keyId: z.string().trim().max(60), keySecret: z.string().trim().max(200),
     webhookSecret: z.string().trim().max(200), depositBankAccountId: z.union([z.string(), z.number()]),
   }),
+  // Settings → Integrations: Delete the stored keys (services/payment-links.ts).
+  z.object({ action: z.literal('disconnect') }),
 ]);
 
 export const POST = route(async ({ orgId, user, role, req }) => {
   const input = await body(req, Input);
+  if (input.action === 'disconnect') {
+    if (!hasPermission(role, 'settings', 'edit')) throw forbidden('Only an admin can disconnect online payments.');
+    await transaction(async (trx) => {
+      await removeGateway(trx, orgId);
+      await logAudit({ trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'void', targetType: 'integration', detail: 'Razorpay disconnected; its stored keys deleted', ...auditMeta(req) });
+    });
+    return gatewayStatus(db, orgId);
+  }
   if (input.action === 'connect') {
     if (!hasPermission(role, 'settings', 'edit')) throw forbidden('Only an admin can connect online payments.');
     await transaction(async (trx) => {

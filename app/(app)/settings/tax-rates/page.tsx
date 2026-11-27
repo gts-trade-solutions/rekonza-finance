@@ -15,7 +15,7 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, BadgeCheck, ExternalLink, Pencil, Plus, ShieldAlert, Trash2 } from 'lucide-react';
+import { ArrowLeft, BadgeCheck, ExternalLink, Plus, ShieldAlert } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -34,6 +34,7 @@ import { useApi, useApiAction } from '@/lib/api/use-api';
 import { usePermission } from '@/lib/store/hooks';
 import { formatINR } from '@/lib/money';
 import { ACT_2025_FROM } from '@/lib/tax/statutory-rates';
+import { RowActions, useConfirmDelete } from '@/components/shared/row-actions';
 
 const fmtDate = (iso: string) =>
   new Date(`${iso}T00:00:00`).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
@@ -140,12 +141,15 @@ export default function TaxRatesPage() {
     } else toast.error(verify.error ?? 'Could not mark it verified');
   };
 
-  const drop = async (kind: 'tds' | 'tcs', code: string, effectiveFrom: string) => {
-    if (await remove.run({ kind, code, effectiveFrom })) {
-      toast.info(`${code} from ${fmtDate(effectiveFrom)} removed`);
-      state.refetch();
-    } else toast.error(remove.error ?? 'Could not remove it');
-  };
+  const del = useConfirmDelete();
+  // Asked first; the server keeps the last rate of a section (change it instead).
+  const drop = (kind: 'tds' | 'tcs', code: string, effectiveFrom: string) => del.ask({
+    title: `Delete the ${code} rate from ${fmtDate(effectiveFrom)}?`,
+    description: 'Bills and invoices dated from then take the rate in force before it. Delete only a row entered in error, not a rate that once applied; a section keeps at least one rate.',
+    reason: false,
+    run: async () => { if (!(await remove.run({ kind, code, effectiveFrom }))) throw new Error(remove.error ?? 'Could not delete it'); },
+    done: `${code} from ${fmtDate(effectiveFrom)} deleted`, onDone: () => state.refetch(),
+  });
 
   const th = 'px-3 py-2.5 text-left text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground';
   const actions = (kind: 'tds' | 'tcs', r: { code: string; effectiveFrom: string; verified: boolean }, edit: () => void) =>
@@ -157,20 +161,13 @@ export default function TaxRatesPage() {
             Mark verified
           </Button>
         )}
-        <button type="button" aria-label={`Edit ${r.code}`} onClick={edit}
-          className="grid size-7 place-items-center rounded text-muted-foreground hover:bg-accent hover:text-foreground">
-          <Pencil className="size-3.5" />
-        </button>
-        <button type="button" aria-label={`Remove ${r.code} from ${r.effectiveFrom}`} disabled={busy}
-          onClick={() => void drop(kind, r.code, r.effectiveFrom)}
-          className="grid size-7 place-items-center rounded text-muted-foreground hover:bg-destructive/10 hover:text-destructive">
-          <Trash2 className="size-3.5" />
-        </button>
+        <RowActions onEdit={edit} onDelete={busy ? null : () => drop(kind, r.code, r.effectiveFrom)} />
       </div>
     );
 
   return (
     <>
+      {del.dialog}
       <PageHeader
         title="TDS & TCS Rates"
         description="The rate for each section by the date it took effect. Bills and invoices use the one in force on their own date."

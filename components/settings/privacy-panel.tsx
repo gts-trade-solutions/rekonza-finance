@@ -19,6 +19,7 @@ import { api } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
 import { cn } from '@/lib/utils';
 import { usePermission } from '@/lib/store/hooks';
+import { RowActions, useConfirmDelete } from '@/components/shared/row-actions';
 
 type Kind = 'access' | 'correction' | 'erasure' | 'grievance' | 'consent_withdrawal';
 interface Request {
@@ -26,7 +27,7 @@ interface Request {
   details: string | null; receivedOn: string; dueOn: string; status: 'open' | 'done' | 'refused'; response: string | null; handledBy: string | null; overdue: boolean;
 }
 interface Breach {
-  id: string; discoveredAt: string; description: string; dataAffected: string | null; peopleAffected: number | null;
+  id: string; discoveredAt: string; description: string; dataAffected: string | null; peopleAffected: number | null; measures?: string | null;
   boardInformedAt: string | null; boardReportAt: string | null; peopleInformedAt: string | null; reportDueBy: string;
 }
 interface Privacy {
@@ -68,6 +69,11 @@ export function PrivacyPanel({ canEdit }: { canEdit: boolean }) {
   const [req, setReq] = useState({ subjectType: 'contact' as Request['subjectType'], party: 'customer' as 'customer' | 'vendor', contactId: '', subjectName: '', kind: 'access' as Kind, details: '', receivedOn: today() });
   const [breach, setBreach] = useState({ discoveredAt: new Date().toISOString().slice(0, 16), description: '', dataAffected: '', peopleAffected: '' });
   const [closing, setClosing] = useState<{ id: string; status: 'done' | 'refused'; response: string } | null>(null);
+  // What is being corrected, in place.
+  const [editReq, setEditReq] = useState<{ id: string; subjectName: string; kind: Kind; details: string; receivedOn: string; contact: boolean } | null>(null);
+  const [editBreach, setEditBreach] = useState<{ id: string; discoveredAt: string; description: string; dataAffected: string; peopleAffected: string; measures: string } | null>(null);
+  const del = useConfirmDelete();
+  const local = (iso: string) => { const d = new Date(iso); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16); };
 
   const post = async <T,>(key: string, payload: Record<string, unknown>, done?: string): Promise<T | null> => {
     setBusy(key);
@@ -88,6 +94,7 @@ export function PrivacyPanel({ canEdit }: { canEdit: boolean }) {
     <AsyncPage state={state} loading={<LoadingRows rows={6} />}>
       {(d) => (
         <div className="space-y-4">
+          {del.dialog}
           <Card className={cn('flex items-start gap-3 p-4', d.encryptionAtRest ? 'border-emerald-500/40 bg-emerald-500/5' : 'border-amber-500/40 bg-amber-500/5')}>
             {d.encryptionAtRest ? <Lock className="mt-0.5 size-4 shrink-0 text-emerald-600" /> : <LockOpen className="mt-0.5 size-4 shrink-0 text-amber-600" />}
             <div className="text-xs leading-relaxed text-muted-foreground">
@@ -202,7 +209,31 @@ export function PrivacyPanel({ canEdit }: { canEdit: boolean }) {
                       {canEdit && r.status === 'open' && (
                         <Button size="xs" variant="ghost" className={r.subjectType === 'contact' ? '' : 'ml-auto'} onClick={() => setClosing({ id: r.id, status: 'done', response: '' })}>Close</Button>
                       )}
+                      {/* A closed request is the record of the answer the person was owed: it stays as it is. */}
+                      {canEdit && r.status === 'open' && (
+                        <RowActions
+                          onEdit={() => setEditReq({ id: r.id, subjectName: r.subjectName, kind: r.kind, details: r.details ?? '', receivedOn: r.receivedOn, contact: r.subjectType === 'contact' })}
+                          onDelete={() => del.ask({
+                            title: `Delete the request from ${r.subjectName}?`,
+                            description: 'Only a request still open, logged in error, can be deleted. A closed one stays: it is the record of what was done or why it was refused.',
+                            reason: false, run: () => api.post('/api/privacy', { action: 'delete-request', id: r.id }),
+                            done: 'Request deleted', onDone: () => void state.refetch(),
+                          })} />
+                      )}
                     </div>
+                    {editReq?.id === r.id && (
+                      <div className="flex flex-wrap items-end gap-2 rounded-md border bg-muted/20 p-2" data-slot="privacy-request-edit">
+                        {!editReq.contact && <Input value={editReq.subjectName} onChange={(e) => setEditReq({ ...editReq, subjectName: e.target.value })} className="h-8 w-48 text-xs" aria-label="Name" />}
+                        <select value={editReq.kind} onChange={(e) => setEditReq({ ...editReq, kind: e.target.value as Kind })} className="h-8 rounded-md border border-input bg-background px-2 text-xs">
+                          {(Object.keys(KIND) as Kind[]).map((k) => <option key={k} value={k}>{KIND[k]}</option>)}
+                        </select>
+                        <Input type="date" value={editReq.receivedOn} onChange={(e) => setEditReq({ ...editReq, receivedOn: e.target.value })} className="h-8 w-40 text-xs" aria-label="Received" />
+                        <Input value={editReq.details} onChange={(e) => setEditReq({ ...editReq, details: e.target.value })} placeholder="Details" className="h-8 min-w-48 flex-1 text-xs" />
+                        <Button size="xs" disabled={busy === r.id || !editReq.subjectName.trim()}
+                          onClick={() => void post(r.id, { action: 'update-request', id: r.id, subjectName: editReq.subjectName, kind: editReq.kind, details: editReq.details || null, receivedOn: editReq.receivedOn }, 'Request saved').then((x) => x && setEditReq(null))}>Save</Button>
+                        <Button size="xs" variant="ghost" onClick={() => setEditReq(null)}>Cancel</Button>
+                      </div>
+                    )}
                     {r.response && <p className="text-xs text-muted-foreground">{r.response}</p>}
                     {closing?.id === r.id && (
                       <div className="flex flex-wrap items-end gap-2">
@@ -251,7 +282,7 @@ export function PrivacyPanel({ canEdit }: { canEdit: boolean }) {
             ) : (
               <ul className="divide-y rounded-md border text-sm">
                 {d.breaches.map((b) => (
-                  <li key={b.id} className="flex flex-wrap items-center gap-2 px-3 py-2">
+                  <li key={b.id} className="flex flex-wrap items-center gap-2 px-3 py-2" data-slot="privacy-breach">
                     <span className="text-xs text-muted-foreground">{new Date(b.discoveredAt).toLocaleString('en-IN')}</span>
                     <span className="font-medium">{b.description}</span>
                     {b.peopleAffected !== null && <span className="text-xs text-muted-foreground">{b.peopleAffected} people</span>}
@@ -261,7 +292,33 @@ export function PrivacyPanel({ canEdit }: { canEdit: boolean }) {
                           : canEdit && <Button key={step} size="xs" variant="outline" disabled={busy === b.id} onClick={() => void post(b.id, { action: 'mark-breach', id: b.id, step }, `${label}`)}>{label}?</Button>
                       ))}
                       {!b.boardReportAt && <Badge variant="outline" className={cn('text-[10px]', new Date(b.reportDueBy) < new Date() && 'border-destructive/40 text-destructive')}>Report due {new Date(b.reportDueBy).toLocaleString('en-IN')}</Badge>}
+                      {canEdit && (
+                        <RowActions
+                          onEdit={() => setEditBreach({ id: b.id, discoveredAt: local(b.discoveredAt), description: b.description, dataAffected: b.dataAffected ?? '', peopleAffected: b.peopleAffected === null ? '' : String(b.peopleAffected), measures: b.measures ?? '' })}
+                          onDelete={!b.boardInformedAt && !b.boardReportAt && !b.peopleInformedAt && (() => del.ask({
+                            title: 'Delete this breach record?',
+                            description: 'Only one logged in error, before the Board or anyone affected was told, can be deleted. Once they have been, the record stays.',
+                            reason: false, run: () => api.post('/api/privacy', { action: 'delete-breach', id: b.id }),
+                            done: 'Breach record deleted', onDone: () => void state.refetch(),
+                          }))} />
+                      )}
                     </span>
+                    {editBreach?.id === b.id && (
+                      <div className="grid w-full basis-full gap-2 rounded-md border bg-muted/20 p-2 sm:grid-cols-[180px_1fr_1fr_90px_auto] sm:items-end" data-slot="privacy-breach-edit">
+                        <Field label="Found"><Input type="datetime-local" value={editBreach.discoveredAt} disabled={!!b.boardInformedAt} onChange={(e) => setEditBreach({ ...editBreach, discoveredAt: e.target.value })} /></Field>
+                        <Field label="What happened"><Input value={editBreach.description} onChange={(e) => setEditBreach({ ...editBreach, description: e.target.value })} /></Field>
+                        <Field label="Data affected"><Input value={editBreach.dataAffected} onChange={(e) => setEditBreach({ ...editBreach, dataAffected: e.target.value })} /></Field>
+                        <Field label="People"><Input type="number" min={0} value={editBreach.peopleAffected} onChange={(e) => setEditBreach({ ...editBreach, peopleAffected: e.target.value })} /></Field>
+                        <div className="flex gap-1">
+                          <Button size="sm" disabled={busy === b.id || !editBreach.description.trim()}
+                            onClick={() => void post(b.id, {
+                              action: 'update-breach', id: b.id, discoveredAt: new Date(editBreach.discoveredAt).toISOString(), description: editBreach.description,
+                              dataAffected: editBreach.dataAffected || null, peopleAffected: editBreach.peopleAffected ? Number(editBreach.peopleAffected) : null, measures: editBreach.measures || null,
+                            }, 'Breach record saved').then((x) => x && setEditBreach(null))}>Save</Button>
+                          <Button size="sm" variant="ghost" onClick={() => setEditBreach(null)}>Cancel</Button>
+                        </div>
+                      </div>
+                    )}
                   </li>
                 ))}
               </ul>

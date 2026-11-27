@@ -14,7 +14,7 @@
 // not something they can act on.
 
 import { useState } from 'react';
-import { CheckCircle2, CircleDashed, KeyRound, Loader2, Plug, PlugZap, ShieldAlert, Trash2 } from 'lucide-react';
+import { CheckCircle2, CircleDashed, KeyRound, Loader2, Plug, PlugZap, ShieldAlert } from 'lucide-react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -29,6 +29,7 @@ import { api } from '@/lib/api/client';
 import { useApi, useApiAction } from '@/lib/api/use-api';
 import { stateName } from '@/lib/tax/gst';
 import { cn } from '@/lib/utils';
+import { DeleteButton, useConfirmDelete } from '@/components/shared/row-actions';
 
 interface Connection {
   id: string | null;
@@ -150,17 +151,18 @@ export function IntegrationsPanel({ canEdit }: { canEdit: boolean }) {
     state.refetch();
   };
 
-  const forget = async (c: Connection) => {
-    const done = await act.run({ action: 'forget', branchId: c.branchId, portal: c.portal });
-    if (!done) {
-      toast.error(act.error ?? 'Nothing was changed');
-      return;
-    }
-    toast.success('Stored credentials deleted', {
-      description: 'Any live session token was dropped with them.',
-    });
-    state.refetch();
-  };
+  const del = useConfirmDelete();
+  // Asked first: the next filing has to sign in to the portal again.
+  const forget = (c: Connection) => del.ask({
+    title: `Delete the stored credentials for ${c.branchName}, ${c.portalLabel}?`,
+    description: 'The username, password and any live session token go. Nothing on the portal changes; the next submission asks for them again.',
+    reason: false,
+    run: async () => {
+      if (!(await act.run({ action: 'forget', branchId: c.branchId, portal: c.portal }))) throw new Error(act.error ?? 'Nothing was changed');
+    },
+    done: 'Stored credentials deleted', doneDescription: 'Any live session token was dropped with them.',
+    onDone: () => state.refetch(),
+  });
 
   return (
     <>
@@ -334,15 +336,11 @@ export function IntegrationsPanel({ canEdit }: { canEdit: boolean }) {
                               {c.hasCredentials ? 'Replace' : 'Add credentials'}
                             </Button>
                             {c.hasCredentials && (
-                              <Button
-                                size="xs"
-                                variant="ghost"
+                              <DeleteButton
                                 disabled={act.busy}
-                                onClick={() => void forget(c)}
-                                aria-label={`Delete stored credentials for ${c.branchName} ${c.portalLabel}`}
-                              >
-                                <Trash2 className="size-3" />
-                              </Button>
+                                onClick={() => forget(c)}
+                                title={`Delete the stored credentials for ${c.branchName} ${c.portalLabel}`}
+                              />
                             )}
                           </div>
                         )}
@@ -356,6 +354,7 @@ export function IntegrationsPanel({ canEdit }: { canEdit: boolean }) {
         }}
       </AsyncPage>
 
+      {del.dialog}
       <Dialog open={!!target} onOpenChange={(v) => !v && setTarget(null)}>
         <DialogContent>
           <DialogHeader>

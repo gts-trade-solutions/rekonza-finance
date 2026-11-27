@@ -16,6 +16,7 @@ import { AsyncPage, LoadingRows } from '@/components/shared/async-state';
 import { Field } from '@/components/shared/form-bits';
 import { api } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
+import { RowActions, reasonQuery, useConfirmDelete } from '@/components/shared/row-actions';
 
 type DocType = 'INV' | 'CN' | 'DC' | 'EST' | 'SO' | 'PO';
 const DOC_LABEL: Record<DocType, string> = { INV: 'Invoice', CN: 'Credit note', DC: 'Delivery challan', EST: 'Quote', SO: 'Sales order', PO: 'Purchase order' };
@@ -28,7 +29,16 @@ export function VoucherTypesPanel({ canEdit }: { canEdit: boolean }) {
   const state = useApi<{ types: VoucherType[] }>(() => api.get('/api/voucher-types'), []);
   const [f, setF] = useState({ docType: 'INV' as DocType, name: '', code: '', prefix: '' });
   const [busy, setBusy] = useState(false);
+  // The type being edited: its name, how it prints, whether it is restricted.
   const [printing, setPrinting] = useState<VoucherType | null>(null);
+  const del = useConfirmDelete();
+  const remove = (t: VoucherType) => del.ask({
+    title: `Delete the voucher type ${t.name}?`,
+    description: 'Only one no document has been numbered in can be deleted. One that has been used keeps its series unbroken: mark it as inactive instead, and it leaves the forms.',
+    run: (reason) => api.delete(`/api/voucher-types?id=${t.id}${reasonQuery(reason, false)}`),
+    done: `${t.name} deleted`, onDone: () => void state.refetch(),
+    instead: t.isActive ? { label: 'Mark as inactive instead', run: () => api.post('/api/voucher-types', { ...t, isActive: false }) } : undefined,
+  });
   const save = async (payload: Record<string, unknown>, done: string) => {
     setBusy(true);
     try {
@@ -66,14 +76,17 @@ export function VoucherTypesPanel({ canEdit }: { canEdit: boolean }) {
                     <label className="flex items-center gap-2 text-xs text-muted-foreground" title="Only admins, and roles given it under Users → Roles, may raise it">
                       Restricted <Switch checked={t.restricted} onCheckedChange={(v) => void save({ ...t, restricted: v }, v ? `${t.name} restricted: give it to roles under Users → Roles` : `${t.name} open to everyone who can raise its kind`)} />
                     </label>
-                    <Button size="xs" variant="ghost" onClick={() => setPrinting(printing?.id === t.id ? null : t)}>Print format</Button>
                     <label className="flex items-center gap-2 text-xs text-muted-foreground">
                       In use <Switch checked={t.isActive} onCheckedChange={(v) => void save({ ...t, isActive: v }, v ? `${t.name} back in use` : `${t.name} retired`)} />
                     </label>
+                    <RowActions onEdit={() => setPrinting(printing?.id === t.id ? null : t)} editTitle="Its name and how it prints" onDelete={() => remove(t)} />
                   </div>
                 )}
                 {printing?.id === t.id && (
                   <div className="grid w-full basis-full gap-3 rounded-md border bg-muted/20 p-3 sm:grid-cols-2">
+                    <Field label="Name" hint="Its code and prefix name the series, so they stay" className="sm:col-span-2">
+                      <Input value={printing.name} onChange={(e) => setPrinting({ ...printing, name: e.target.value })} />
+                    </Field>
                     <Field label="Heading" hint="Printed under the statutory title, which stays as the law has it">
                       <Input value={printing.printHeading ?? ''} onChange={(e) => setPrinting({ ...printing, printHeading: e.target.value })} placeholder="Export invoice" />
                     </Field>
@@ -85,10 +98,13 @@ export function VoucherTypesPanel({ canEdit }: { canEdit: boolean }) {
                       <textarea value={printing.printTerms ?? ''} onChange={(e) => setPrinting({ ...printing, printTerms: e.target.value })} rows={3}
                         className="w-full rounded-md border border-input bg-background px-2 py-1.5 text-sm outline-none focus:border-ring" />
                     </Field>
-                    <Button size="sm" className="w-fit" disabled={busy}
-                      onClick={() => void save({ ...printing }, `${t.name}'s print format saved`).then(() => setPrinting(null))}>
-                      Save print format
-                    </Button>
+                    <div className="flex gap-2">
+                      <Button size="sm" className="w-fit" disabled={busy || !printing.name.trim()}
+                        onClick={() => void save({ ...printing }, `${printing.name} saved`).then(() => setPrinting(null))}>
+                        Save
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={() => setPrinting(null)}>Cancel</Button>
+                    </div>
                   </div>
                 )}
               </li>
@@ -114,6 +130,7 @@ export function VoucherTypesPanel({ canEdit }: { canEdit: boolean }) {
           </Button>
         </div>
       )}
+      {del.dialog}
     </Card>
   );
 }

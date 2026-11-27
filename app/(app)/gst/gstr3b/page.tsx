@@ -13,7 +13,7 @@
 // never against each other (lib/server/gst/set-off.ts).
 
 import { Fragment, useMemo, useState } from 'react';
-import { CheckCircle2, ChevronDown, Download, FileJson, FileSpreadsheet, Info, Printer, RotateCcw, Undo2 } from 'lucide-react';
+import { CheckCircle2, ChevronDown, Download, FileJson, FileSpreadsheet, Info, Printer, RotateCcw } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -34,6 +34,7 @@ import { usePermission } from '@/lib/store/hooks';
 import { downloadWorkbook, type Sheet } from '@/lib/xlsx';
 import { toRupees } from '@/lib/money';
 import { GSTR3B_ROWS, GSTR3B_TABLES, stateLabel, type Gstr3bHeads, type Gstr3bRowKey } from '@/lib/gst/gstr3b-layout';
+import { RowActions, useConfirmDelete } from '@/components/shared/row-actions';
 
 type Heads = 'IGST' | 'CGST' | 'SGST' | 'CESS';
 const HEAD_LABEL: Record<Heads, string> = { IGST: 'Integrated Tax', CGST: 'Central Tax', SGST: 'State/UT Tax', CESS: 'Cess' };
@@ -111,15 +112,16 @@ export default function Gstr3bPage() {
     return out;
   }, []);
 
-  const undoFiling = async () => {
-    try {
-      await api.post('/api/compliance-calendar', { action: 'undo', key: 'gstr3b', period: ret });
-      toast.success('Marked as not filed');
-      state.refetch();
-    } catch (e) {
-      toast.error(e instanceof ApiError ? e.message : 'Could not change the status');
-    }
-  };
+  // The filed mark is what was entered here (the return itself is on the portal):
+  // Edit changes its date or ARN, Delete takes the mark off.
+  const confirm = useConfirmDelete();
+  const undoFiling = () => confirm.ask({
+    title: 'Delete the filed mark?',
+    description: 'The return shows as not filed here again. Nothing on the GST portal changes: a return filed there stays filed.',
+    reason: false, confirmLabel: 'Mark as not filed',
+    run: () => api.post('/api/compliance-calendar', { action: 'undo', key: 'gstr3b', period: ret }),
+    done: 'Marked as not filed', onDone: () => state.refetch(),
+  });
 
   const downloadFile = async (d: Gstr3bFormResponse) => {
     try {
@@ -200,7 +202,8 @@ export default function Gstr3bPage() {
                     {d.status.arn && <span>ARN <span className="font-mono">{d.status.arn}</span></span>}
                     {d.status.filedBy && <span className="text-muted-foreground">marked by {d.status.filedBy}</span>}
                     {canFile && (
-                      <Button variant="ghost" size="sm" className="ml-auto h-7 gap-1 print:hidden" onClick={undoFiling}><Undo2 className="size-3" /> Mark as not filed</Button>
+                      <RowActions className="ml-auto print:hidden" onEdit={() => setFiling(true)} editTitle="Change the date filed or the ARN"
+                        onDelete={undoFiling} deleteLabel="Mark as not filed" />
                     )}
                   </div>
                 )}
@@ -363,10 +366,12 @@ export default function Gstr3bPage() {
       </AsyncPage>
 
       {drill && <DrillDialog ret={ret} drill={drill} onClose={() => setDrill(null)} />}
+      {confirm.dialog}
       {filing && state.data && (
         <FileDialog
           ret={ret}
           dueDate={state.data.status.dueDate}
+          filed={state.data.status.filed ? { on: state.data.status.filedOn, arn: state.data.status.arn } : null}
           onClose={() => setFiling(false)}
           onDone={() => { setFiling(false); state.refetch(); }}
         />
@@ -606,10 +611,12 @@ function DrillDialog({ ret, drill, onClose }: { ret: string; drill: Drill; onClo
   );
 }
 
-function FileDialog({ ret, dueDate, onClose, onDone }: { ret: string; dueDate: string; onClose: () => void; onDone: () => void }) {
+function FileDialog({ ret, dueDate, filed, onClose, onDone }: {
+  ret: string; dueDate: string; filed?: { on: string | null; arn: string | null } | null; onClose: () => void; onDone: () => void;
+}) {
   const today = new Date();
-  const [doneOn, setDoneOn] = useState(`${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`);
-  const [arn, setArn] = useState('');
+  const [doneOn, setDoneOn] = useState(filed?.on?.slice(0, 10) ?? `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`);
+  const [arn, setArn] = useState(filed?.arn ?? '');
   const [busy, setBusy] = useState(false);
   const save = async () => {
     setBusy(true);

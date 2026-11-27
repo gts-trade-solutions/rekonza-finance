@@ -32,6 +32,16 @@ export async function saveGateway(trx: Trx, orgId: number, input: { keyId: strin
   await trx.insertInto('payment_gateways').values({ org_id: orgId, provider: 'razorpay', ...row }).onDuplicateKeyUpdate(row).execute();
 }
 
+/**
+ * Disconnect Razorpay: the stored keys go. Links already sent can still be
+ * paid at Razorpay, but their receipts no longer record themselves (the
+ * webhook cannot be checked without the secret), so they are recorded by hand.
+ */
+export async function removeGateway(trx: Trx, orgId: number) {
+  const r = await trx.deleteFrom('payment_gateways').where('org_id', '=', orgId).where('provider', '=', 'razorpay').executeTakeFirst();
+  if (!Number(r.numDeletedRows ?? 0)) throw notFound('Razorpay is not connected.');
+}
+
 export async function gatewayStatus(ex: Executor, orgId: number) {
   const g = await ex.selectFrom('payment_gateways as g').innerJoin('bank_accounts as b', 'b.id', 'g.deposit_bank_account_id')
     .select(['g.key_id', 'g.is_active', 'b.name as deposit_to']).where('g.org_id', '=', orgId).where('g.provider', '=', 'razorpay').executeTakeFirst();

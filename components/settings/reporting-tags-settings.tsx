@@ -16,6 +16,7 @@ import { Field } from '@/components/shared/form-bits';
 import { AsyncPage } from '@/components/shared/async-state';
 import { api } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
+import { RowActions, reasonQuery, useConfirmDelete } from '@/components/shared/row-actions';
 
 interface Tag { id: string; name: string; isActive: boolean; options: { id: string; value: string; isActive: boolean }[] }
 
@@ -23,6 +24,18 @@ export function ReportingTagsSettings({ canEdit }: { canEdit: boolean }) {
   const state = useApi(() => api.get<{ tags: Tag[] }>('/api/reporting-tags'), []);
   const [f, setF] = useState<{ id: string | null; name: string; values: string; isActive: boolean } | null>(null);
   const [busy, setBusy] = useState(false);
+  const del = useConfirmDelete();
+  const open = (t: Tag) => setF({ id: t.id, name: t.name, values: t.options.filter((o) => o.isActive).map((o) => o.value).join(', '), isActive: t.isActive });
+  const remove = (t: Tag) => del.ask({
+    title: `Delete the reporting tag ${t.name}?`,
+    description: 'Only a tag no document carries can be deleted. One in use is marked as inactive instead: it leaves the forms, and the documents and the profit by tag keep it.',
+    run: (reason) => api.delete(`/api/reporting-tags?id=${t.id}${reasonQuery(reason, false)}`),
+    done: `${t.name} deleted`, onDone: () => state.refetch(),
+    instead: t.isActive ? {
+      label: 'Mark as inactive instead',
+      run: () => api.post('/api/reporting-tags', { action: 'save', id: t.id, name: t.name, values: t.options.filter((o) => o.isActive).map((o) => o.value), isActive: false }),
+    } : undefined,
+  });
 
   const save = async () => {
     if (!f) return;
@@ -50,11 +63,13 @@ export function ReportingTagsSettings({ canEdit }: { canEdit: boolean }) {
           <div className="grid gap-3 md:grid-cols-2">
             {d.tags.map((t) => (
               <Card key={t.id} className="space-y-2 p-4">
-                <button type="button" disabled={!canEdit} className="flex w-full items-center justify-between text-left"
-                  onClick={() => setF({ id: t.id, name: t.name, values: t.options.filter((o) => o.isActive).map((o) => o.value).join(', '), isActive: t.isActive })}>
+                <div className="flex w-full flex-wrap items-center justify-between gap-2" data-slot="reporting-tag">
                   <span className="flex items-center gap-1.5 font-medium"><Tags className="size-4 text-muted-foreground" />{t.name}</span>
-                  {!t.isActive && <Badge variant="outline" className="text-[10px]">Off</Badge>}
-                </button>
+                  <span className="flex items-center gap-1">
+                    {!t.isActive && <Badge variant="outline" className="text-[10px]">Off</Badge>}
+                    {canEdit && <RowActions onEdit={() => open(t)} onDelete={() => remove(t)} />}
+                  </span>
+                </div>
                 <div className="flex flex-wrap gap-1">{t.options.filter((o) => o.isActive).map((o) => <Badge key={o.id} variant="secondary" className="text-[10px]">{o.value}</Badge>)}</div>
               </Card>
             ))}
@@ -62,6 +77,7 @@ export function ReportingTagsSettings({ canEdit }: { canEdit: boolean }) {
           </div>
         )}
       </AsyncPage>
+      {del.dialog}
       <Dialog open={!!f} onOpenChange={(o) => !o && setF(null)}>
         <DialogContent className="max-w-md">
           <DialogHeader><DialogTitle>{f?.id ? 'Edit tag' : 'New reporting tag'}</DialogTitle><DialogDescription>A value removed here is switched off; documents keep it.</DialogDescription></DialogHeader>

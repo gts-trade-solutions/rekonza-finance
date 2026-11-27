@@ -30,6 +30,7 @@ import {
   layoutFor, layoutForInvoice, templateInfo, templatesOf, TEMPLATE_DOC_LABEL, TEMPLATE_DOC_SINGULAR, TEMPLATE_DOCS,
   type InvoiceFormat, type PrintTemplate, type TemplateDoc, type TemplateKey,
 } from '@/lib/print-template';
+import { RowActions, useConfirmDelete } from '@/components/shared/row-actions';
 
 export default function PdfTemplatesPage() {
   return <Suspense fallback={null}><Templates /></Suspense>;
@@ -100,13 +101,21 @@ function Body({ data, doc, format, onSaved }: { data: PdfTemplateSettings; doc: 
     setGallery(false);
     await setDefault(key);
   };
-  const remove = (key: TemplateKey) => save(
+  const removeNow = (key: TemplateKey) => save(
     { ...t, added: { ...t.added, [doc]: (t.added[doc] ?? []).filter((k) => k !== key) } },
     `${templateInfo(key).name} removed from the list`,
   );
+  const del = useConfirmDelete();
+  // Asked first. The default template stays: documents print with it.
+  const remove = (key: TemplateKey) => del.ask({
+    title: `Delete the ${templateInfo(key).name} template?`,
+    description: 'It comes off this list; documents already printed are not touched, and it can be added again from the gallery.',
+    reason: false, run: () => removeNow(key), done: `${templateInfo(key).name} deleted`,
+  });
 
   return (
     <>
+      {del.dialog}
       <nav className="w-[230px] shrink-0 border-r bg-background py-4" data-slot="template-docs">
         <h2 className="px-5 pb-3 text-[20px] font-normal">Templates</h2>
         {TEMPLATE_DOCS.map((d) => (
@@ -172,13 +181,19 @@ function Body({ data, doc, format, onSaved }: { data: PdfTemplateSettings; doc: 
                         <DropdownMenuContent align="end">
                           {!isDefault && <DropdownMenuItem onClick={() => void setDefault(key)}>Set as Default</DropdownMenuItem>}
                           <DropdownMenuItem onClick={() => router.push(previewHref(doc))}>Preview with a real document</DropdownMenuItem>
-                          {!isDefault && <DropdownMenuItem className="text-destructive" onClick={() => void remove(key)}>Delete</DropdownMenuItem>}
+                          {!isDefault && <DropdownMenuItem className="text-destructive" onClick={() => remove(key)}>Delete</DropdownMenuItem>}
                         </DropdownMenuContent>
                       </DropdownMenu>
                     </div>
                   )}
                 </div>
-                <p className="mt-2 text-[14px]">{info.name}</p>
+                <div className="mt-2 flex items-center justify-between gap-2">
+                  <p className="text-[14px]">{info.name}</p>
+                  {canEdit && (
+                    <RowActions onEdit={() => setEditing(key)} onDelete={!isDefault && (() => remove(key))}
+                      deleteTitle="Take it off the list" editTitle="Edit this template" />
+                  )}
+                </div>
               </div>
             );
           })}
