@@ -21,6 +21,7 @@ import { turnOnDemoControls } from '../lib/server/seed/demo-controls';
 import { seedDemoSr7B } from '../lib/server/seed/demo-sr7-b';
 import { seedSr7c, seedSr7cBefore } from '../lib/server/seed/demo-sr7-c';
 import { seedDemoSr7d } from '../lib/server/seed/demo-sr7-d';
+import { seedDemoFxB } from '../lib/server/seed/demo-fx-b';
 import { wipeOrganizations } from '../lib/server/seed/wipe';
 import { verifyLedgerBalances } from '../lib/server/ledger/posting';
 
@@ -78,6 +79,7 @@ async function main() {
     if (!masters) await seedSr7c(trx, created); // status review 7, items 9/10/14: disposals, deposits, an import, the stock true-up
     // And the reminders and audit trail the book would carry by its date.
     if (!masters) await seedDemoHistory(trx, created);
+    if (!masters) await seedDemoFxB(trx, created); // fixes after the auditor check: audit-trail edits with old → new and the IP
     return { ids: created, book: history, docs: around };
   });
 
