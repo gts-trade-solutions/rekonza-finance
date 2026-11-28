@@ -94,7 +94,7 @@ export async function controlsOverview(ex: Executor, orgId: number): Promise<Con
   add({
     key: 'validation', area: 'Data validation',
     status: masterData ? 'attention' : 'in_place',
-    evidence: 'GSTINs are checked for format, check digit, state and PAN; the same GSTIN twice is refused and a repeated PAN or name is flagged; a vendor\'s invoice number cannot be entered twice; credit limits, negative stock and cash limits are enforced as set.',
+    evidence: `GSTINs are checked for format, check digit, state and PAN; the same GSTIN twice is refused and a repeated PAN or name is flagged; a vendor's invoice number cannot be entered twice. Stock going below zero (on a sale, a write-off or a transfer) ${p.negativeStock === 'block' ? 'is refused' : p.negativeStock === 'warn' ? 'is warned about, naming the item and the shortfall' : 'is not checked'}; cash in hand going below nil (on a payment, an expense or a transfer) ${p.negativeCash === 'block' ? 'is refused' : p.negativeCash === 'warn' ? 'is warned about, naming the account and the shortfall' : 'is not checked'}; credit limits ${p.creditLimit === 'off' ? 'are not checked' : p.creditLimit === 'block' ? 'block' : 'warn'} and the section 269ST / 40A(3) cash limits ${p.cashLimits === 'off' ? 'are not checked' : p.cashLimits === 'block' ? 'block' : 'warn'} (Settings → Policies).`,
     gap: masterData ? `${masterData} party record${masterData === 1 ? '' : 's'} entered before these checks need correcting.` : null,
     href: '/exceptions?kind=master_data',
   });

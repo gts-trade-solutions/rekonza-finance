@@ -31,6 +31,7 @@ const Input = z.object({
   creditLimit: Enforcement.optional(),
   negativeStock: Enforcement.optional(),
   cashLimits: Enforcement.optional(),
+  negativeCash: Enforcement.optional(),
   sessionIdleMinutes: z.number().int().min(0).max(1440).optional(),
   msmeBankRatePct: z.number().gt(0).lt(20).optional(),
   overdueInterestPct: z.number().min(0).max(60).optional(),

@@ -14,7 +14,7 @@ import { useApi } from '@/lib/api/use-api';
 type Enforcement = 'off' | 'warn' | 'block';
 interface Policies {
   features: { inventory: boolean; fixedAssets: boolean; tdsTcs: boolean; ewayBills: boolean; approvals: boolean; tally: boolean; analytics: boolean; payroll: boolean; gst: boolean; multiCurrency: boolean; costCentres: boolean };
-  creditLimit: Enforcement; negativeStock: Enforcement; cashLimits: Enforcement; sessionIdleMinutes: number;
+  creditLimit: Enforcement; negativeStock: Enforcement; cashLimits: Enforcement; negativeCash: Enforcement; sessionIdleMinutes: number;
   requireMfa: 'off' | 'admins' | 'everyone';
   stockValuation: 'average' | 'fifo';
   signIn: { allowedIps: string[]; adminsAnywhere: boolean; maxSessions: number; alertNewDevice: boolean };
@@ -35,10 +35,11 @@ const FEATURES: { key: keyof Policies['features']; label: string; hint: string }
   { key: 'costCentres', label: 'Cost centres', hint: 'Income and expense by department, project, site or vehicle.' },
 ];
 
-const RULES: { key: 'creditLimit' | 'negativeStock' | 'cashLimits'; label: string; hint: string }[] = [
+const RULES: { key: 'creditLimit' | 'negativeStock' | 'cashLimits' | 'negativeCash'; label: string; hint: string }[] = [
   { key: 'creditLimit', label: 'Credit limits', hint: 'An invoice that takes a customer past the limit on their account.' },
-  { key: 'negativeStock', label: 'Negative stock', hint: 'Selling more of an item than there is in stock at the branch.' },
+  { key: 'negativeStock', label: 'Negative stock', hint: 'Selling, writing off or moving more of an item than there is in stock at the branch, on the day or since.' },
   { key: 'cashLimits', label: 'Cash limits', hint: 'Cash of ₹2 lakh or more from one person in a day (section 269ST); cash expenses above ₹10,000 to one person in a day (40A(3)).' },
+  { key: 'negativeCash', label: 'Negative cash', hint: 'A payment, expense or transfer out of Cash in Hand (or any cash account) that is more than the cash there, on the day or since.' },
 ];
 
 export function PoliciesPanel({ canEdit }: { canEdit: boolean }) {
@@ -69,7 +70,7 @@ export function PoliciesPanel({ canEdit }: { canEdit: boolean }) {
                 </div>
                 <div className="flex rounded-md border p-0.5 text-xs">
                   {(['off', 'warn', 'block'] as const).map((v) => (
-                    <button key={v} type="button" disabled={!canEdit} onClick={() => void save({ [r.key]: v })}
+                    <button key={v} type="button" disabled={!canEdit} onClick={() => void save({ [r.key]: v })} data-slot={`policy-${r.key}-${v}`}
                       className={`rounded px-2.5 py-1 capitalize ${p[r.key] === v ? 'bg-primary text-primary-foreground' : 'text-muted-foreground'}`}>
                       {v}
                     </button>

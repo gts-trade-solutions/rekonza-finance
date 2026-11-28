@@ -67,7 +67,7 @@ export const POST = route(
       ...auditMeta(req),
     });
 
-    return { id: asId(created.id), journalEntryId: asId(created.journalEntryId) };
+    return { id: asId(created.id), journalEntryId: asId(created.journalEntryId), warnings: created.warnings };
   },
   { permission: { module: 'banking', action: 'create' } },
 );

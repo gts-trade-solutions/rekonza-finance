@@ -27,6 +27,7 @@ import { CODE, accountIds, requireAccount } from '../ledger/chart-of-accounts';
 import { ApiError, badRequest, notFound } from '../http';
 import { PAYMENT_RECORD_AS, ruleCatches, ruleShapeOf } from '../../bank-rules';
 import type { BankCategoryKey } from '../../bank-categories';
+import { checkCashBalance } from './guards';
 import { receivePayment } from './payments';
 import { undoLinks } from './bank-match';
 import { bankingPreferences } from './banking-preferences';
@@ -630,13 +631,16 @@ export async function createTransfer(
   orgId: number,
   userId: number | null,
   input: { fromBankAccountId: number; toBankAccountId: number; date: string; amountPaise: Paise; reference?: string | null },
-): Promise<{ id: number; journalEntryId: number }> {
+): Promise<{ id: number; journalEntryId: number; warnings: string[] }> {
   if (input.fromBankAccountId === input.toBankAccountId) {
     throw badRequest('Choose two different accounts.');
   }
   if (input.amountPaise <= 0) throw badRequest('Enter an amount above zero.');
 
   await transferSides(trx, orgId, input);
+  // Cash moved out of Cash in Hand that is not there (guards.ts): warned about or refused, per the book's rule.
+  const warnings: string[] = [];
+  await checkCashBalance(trx, orgId, input.fromBankAccountId, input.date, input.amountPaise, warnings);
 
   // The transfer first, so its entry names it (source id): the ledger's rows
   // then reach the transfer itself, to view, edit or delete it.
@@ -657,7 +661,7 @@ export async function createTransfer(
   const entry = await postTransferEntry(trx, orgId, userId, id, input);
   await trx.updateTable('bank_transfers').set({ journal_entry_id: entry.id }).where('id', '=', id).execute();
 
-  return { id, journalEntryId: entry.id };
+  return { id, journalEntryId: entry.id, warnings };
 }
 
 /**

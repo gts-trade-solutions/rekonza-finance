@@ -102,7 +102,9 @@ test('negative stock: goods not on hand are flagged or refused; services are nev
   await withFixture(async (f) => {
     await policy(f, { creditLimit: 'off' });
     const warned = await sell(f, f.itemId);
-    assert.deepEqual(warned.warnings, ['Not enough stock — Disc: 0 in stock, 1 going out.']);
+    // The shortfall is named too, and what it would do to the statements (fx-c, 2026-11-28).
+    assert.equal(warned.warnings.length, 1);
+    assert.match(warned.warnings[0], /^Not enough stock — Disc: 0 in stock, 1 going out, short by 1 nos\. Stock below zero would show as a negative closing stock/);
     assert.deepEqual((await sell(f, f.serviceId)).warnings, []);
 
     await policy(f, { negativeStock: 'block' });
@@ -130,6 +132,8 @@ test('section 40A(3): cash paid above ₹10,000 a day, ₹35,000 to a transporte
     const pay = (contactId: number, amountPaise: number) => makePayment(f.trx, f.orgId, null, {
       branchId: f.branchId, contactId, date: '2026-08-05', mode: 'cash', amountPaise, bankAccountId: f.cashId,
     });
+    // The till here starts empty: the negative-cash rule (fx-c-fixes.test.ts) is not what this tests.
+    await policy(f, { negativeCash: 'off' });
     assert.deepEqual((await pay(f.vendor, 10_000_00)).warnings, [], '₹10,000 itself is allowed');
     assert.match((await pay(f.vendor, 1_00)).warnings![0], /₹10,001 paid in cash .* 40A\(3\)/);
 

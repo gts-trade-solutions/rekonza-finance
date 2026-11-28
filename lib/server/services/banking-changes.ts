@@ -26,6 +26,7 @@ import type { Paise } from '../../types';
 import { ApiError, badRequest, conflict, notFound } from '../http';
 import { toPaiseFromSql, toSqlFromPaise } from '../money-sql';
 import { postEntry } from '../ledger/posting';
+import { checkCashBalance } from './guards';
 import { bankLineMatched, plain, recordDeletion, reverseForChange, unlinkDocument } from './doc-delete';
 
 // ── Transfers ───────────────────────────────────────────────────────────────
@@ -73,13 +74,16 @@ export async function postTransferEntry(trx: Trx, orgId: number, userId: number 
 export async function editTransfer(trx: Trx, orgId: number, userId: number | null, id: number, input: TransferInput) {
   const t = await transferForChange(trx, orgId, id);
   await transferSides(trx, orgId, input);
+  // Cash in hand going below nil, measured without the transfer as it was (guards.ts).
+  const warnings: string[] = [];
+  await checkCashBalance(trx, orgId, input.fromBankAccountId, input.date, input.amountPaise, warnings, { sourceTypes: ['transfer'], sourceId: id });
   await reverseForChange(trx, orgId, t.journal_entry_id, { memo: `Transfer edited: the entry as it was, reversed`, userId, module: 'banking' });
   const entry = await postTransferEntry(trx, orgId, userId, id, input);
   await trx.updateTable('bank_transfers').set({
     from_bank_account_id: input.fromBankAccountId, to_bank_account_id: input.toBankAccountId, transfer_date: input.date,
     amount: toSqlFromPaise(input.amountPaise), reference: input.reference?.trim() || null, journal_entry_id: entry.id,
   }).where('id', '=', id).execute();
-  return { entryNo: entry.entryNo, before: plain(t) };
+  return { entryNo: entry.entryNo, before: plain(t), warnings };
 }
 
 /** Delete a transfer: its entry reversed on its own date, the record kept. */
