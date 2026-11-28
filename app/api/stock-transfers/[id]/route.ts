@@ -30,7 +30,7 @@ export const PUT = route(
       const done = await updateTransfer(trx, orgId, id, input);
       await logAudit({
         trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'update', targetType: 'stock_transfer', targetId: id,
-        targetLabel: done.number, detail: `Edited stock transfer ${done.number}`, payload: { before: done.before }, ...auditMeta(req),
+        targetLabel: done.number, detail: `Edited stock transfer ${done.number}`, payload: { before: done.before, after: done.after }, ...auditMeta(req),
       });
       return { id: asId(id), number: done.number, warnings: done.warnings };
     });

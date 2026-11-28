@@ -245,7 +245,11 @@ export async function updateBatch(trx: Trx, orgId: number, id: number, input: Om
     bank_account_id: bank.id, pay_date: input.payDate, notes: input.notes ?? null, total_amount: toSqlFromPaise(total),
     status: 'draft', rejection_reason: null,
   }).where('id', '=', id).execute();
-  return { id, number: b.number, totalPaise: total, before };
+  const after = {
+    ...(await trx.selectFrom('payment_batches').selectAll().where('id', '=', id).executeTakeFirstOrThrow()),
+    lines: await trx.selectFrom('payment_batch_lines').selectAll().where('batch_id', '=', id).execute(),
+  };
+  return { id, number: b.number, totalPaise: total, before, after };
 }
 
 /** Delete a batch that has not been released or paid; its bills are free for another. The record is kept. */

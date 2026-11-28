@@ -21,6 +21,7 @@ import type { Executor, Trx } from '../db';
 import type { Paise } from '../../types';
 import { toPaiseFromSql, toSqlFromPaise } from '../money-sql';
 import { badRequest, notFound } from '../http';
+import { refuseFutureDate } from './paid-dates';
 import { postEntry } from '../ledger/posting';
 import { accountIds, CODE, requireAccount } from '../ledger/chart-of-accounts';
 import { unseal } from '../crypto/fields';
@@ -137,6 +138,7 @@ export async function checkStatutoryPayment(trx: Trx, orgId: number, input: Stat
   if (!/^\d{4}-\d{2}$/.test(input.period)) throw badRequest('Give the month the dues are for.');
   if (!(input.amountPaise > 0)) throw badRequest('Give the amount paid.');
   if (input.date < `${input.period}-01`) throw badRequest('Dues for a month cannot be paid before that month begins.');
+  refuseFutureDate(input.date, 'This payment');
   const { dues } = await statutoryRegister(trx, orgId, input.period, input.period);
   const due = dues.find((d) => d.component === input.component);
   if (!due || due.duePaise <= 0) throw badRequest(`No ${COMPONENT_LABEL[input.component]} is due for ${input.period}: post that month's payroll first.`);

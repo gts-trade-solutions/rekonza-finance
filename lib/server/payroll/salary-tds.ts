@@ -39,6 +39,7 @@ import { bankLineMatched, plain, recordDeletion } from '../services/doc-delete';
 import { unseal } from '../crypto/fields';
 import { monthLabel } from '../../date-range';
 import { form16, form16Employees } from './form16';
+import { refuseFutureDate } from './paid-dates';
 
 const p = toPaiseFromSql;
 const pad = (n: number) => String(n).padStart(2, '0');
@@ -75,12 +76,16 @@ async function deductions(ex: Executor, orgId: number, months: string[]) {
   if (!months.length) return [];
   const rows = await ex.selectFrom('payroll_lines as l').innerJoin('payroll_runs as r', 'r.id', 'l.run_id')
     .innerJoin('employees as e', 'e.id', 'l.employee_id')
-    .select(['r.month', 'r.paid_on', 'l.employee_id', 'e.code', 'e.name', 'e.pan', 'l.gross', 'l.tds'])
+    .select(['r.month', 'r.paid_on', 'l.employee_id', 'e.code', 'e.name', 'e.pan', 'l.gross', 'l.tds',
+      // The day this employee's salary was really paid (salary-payments.ts), the last payment if in parts.
+      sql<string | null>`(SELECT MAX(pp.paid_on) FROM payroll_payments pp WHERE pp.run_id = r.id AND pp.employee_id = l.employee_id AND pp.reversed = 0)`.as('employee_paid_on')])
     .where('r.org_id', '=', orgId).where('r.status', 'in', ['posted', 'paid']).where('r.month', 'in', months)
     .orderBy('r.month').orderBy('e.code').execute();
   return rows.map((r) => ({
     month: r.month, employeeId: Number(r.employee_id), code: r.code, name: r.name, pan: unseal(r.pan),
-    grossPaise: p(r.gross), tdsPaise: p(r.tds), paidOn: r.paid_on ? ymd(r.paid_on) : null,
+    grossPaise: p(r.gross), tdsPaise: p(r.tds),
+    // Section 192 deducts tax when salary is paid: the real payment date, never the month's end in its place.
+    paidOn: r.employee_paid_on ? ymd(r.employee_paid_on) : r.paid_on ? ymd(r.paid_on) : null,
   }));
 }
 
@@ -122,6 +127,7 @@ async function checkChallan(trx: Trx, orgId: number, input: SalaryChallanInput, 
   if (!/^\d{7}$/.test(input.bsrCode)) throw badRequest('A BSR code is the bank branch’s 7 digits, printed on the challan.');
   if (!/^\d{1,5}$/.test(input.serial)) throw badRequest('The challan serial number is up to 5 digits.');
   if (input.date < `${input.forMonth}-01`) throw badRequest('Tax for a month cannot be deposited before that month begins.');
+  refuseFutureDate(input.date, 'This challan');
   const tax = input.taxPaise + (input.surchargePaise ?? 0) + (input.cessPaise ?? 0);
   if (!(tax > 0)) throw badRequest('Give the tax the challan paid.');
   // A challan is one deposit: the same one entered twice, here or with the other TDS, is refused.
@@ -262,7 +268,7 @@ export interface Form24Q {
   receipt: { receiptNo: string; filedOn: string | null } | null;
   deductor: { name: string; tan: string | null; pan: string | null; address: string | null; type: string | null;
     responsible: { name: string | null; designation: string | null; pan: string | null; mobile: string | null; email: string | null } };
-  challans: (ChallanRow & { deductees: { employeeId: string; code: string; name: string; pan: string | null; month: string; paymentDate: string; amountPaidPaise: Paise; tdsPaise: Paise; depositedPaise: Paise; deductedOn: string }[] })[];
+  challans: (ChallanRow & { deductees: { employeeId: string; code: string; name: string; pan: string | null; month: string; paymentDate: string | null; amountPaidPaise: Paise; tdsPaise: Paise; depositedPaise: Paise; deductedOn: string | null }[] })[];
   unlinked: { employeeId: string; code: string; name: string; pan: string | null; month: string; tdsPaise: Paise; linkedPaise: Paise }[];
   totals: { paidPaise: Paise; deductedPaise: Paise; depositedPaise: Paise; linkedPaise: Paise };
   annexureII: Awaited<ReturnType<typeof form16>>[] | null;
@@ -287,9 +293,11 @@ export async function form24Q(ex: Executor, orgId: number, fy: number, quarter: 
       const d = byKey.get(`${k.employee_id}|${k.month}`);
       return {
         employeeId: String(k.employee_id), code: d?.code ?? '', name: d?.name ?? '', pan: d?.pan ?? null, month: k.month,
-        // Salary is credited at the month's end, and the tax deducted then (section 192: at the time of payment).
-        paymentDate: d?.paidOn ?? lastDay(k.month), amountPaidPaise: d?.grossPaise ?? 0, tdsPaise: d?.tdsPaise ?? 0,
-        depositedPaise: p(k.amount), deductedOn: lastDay(k.month),
+        // Section 192 deducts tax at the time of payment: the day the salary was paid, from
+        // the salary payments. Not paid yet, there is no payment date to report, and the
+        // return is not ready for this employee (an issue below says so).
+        paymentDate: d?.paidOn ?? null, amountPaidPaise: d?.grossPaise ?? 0, tdsPaise: d?.tdsPaise ?? 0,
+        depositedPaise: p(k.amount), deductedOn: d?.paidOn ?? null,
       };
     }),
   }));
@@ -307,8 +315,12 @@ export async function form24Q(ex: Executor, orgId: number, fy: number, quarter: 
     annexureII = await Promise.all(people.map((e) => form16(ex, orgId, Number(e.employeeId), fy)));
   }
   const issues: Form24Q['issues'] = [];
-  if (!org.tan) issues.push({ level: 'error', message: 'The book has no TAN: every challan and return is filed under it. Add it in Settings → Statutory.' });
-  if (!(org.tds_rp_name && org.tds_rp_pan)) issues.push({ level: 'error', message: 'The person responsible for deduction (name, designation, PAN) is not filled in. Settings → Statutory.' });
+  if (!org.tan) issues.push({ level: 'error', message: 'The book has no TAN: every challan and return is filed under it. Add it in Settings → Profile (the TAN field under Organisation details).' });
+  if (!(org.tds_rp_name && org.tds_rp_pan)) issues.push({ level: 'error', message: 'The person responsible for deduction (name, designation, PAN) is not filled in. Add them in Settings → Statutory details → TDS deductor.' });
+  const unpaid = ded.filter((d) => d.tdsPaise > 0 && !d.paidOn);
+  if (unpaid.length) {
+    issues.push({ level: 'warning', message: `${unpaid.length} employee-month(s) with tax deducted have no salary payment recorded yet (${[...new Set(unpaid.map((d) => d.month))].join(', ')}): the return reports the date salary was paid, so record the payment (Payroll → the month → Pay salaries) before filing.` });
+  }
   const noPan = ded.filter((d) => d.tdsPaise > 0 && !d.pan);
   if (noPan.length) issues.push({ level: 'warning', message: `${noPan.length} deduction(s) are for employees with no PAN: tax at 20% or more applies (section 206AA), and the return needs PANNOTAVBL.` });
   for (const u of unlinked) {

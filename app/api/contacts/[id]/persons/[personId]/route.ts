@@ -43,7 +43,7 @@ export const PATCH = route(async ({ orgId, user, role, params, req }) => {
     await logAudit({
       trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'update', targetType: 'contact', targetId: contactId,
       targetLabel: label, detail: `Contact person ${done.name} changed${input.isPrimary ? ' (now the primary contact)' : ''}`,
-      payload: { before: done.before }, ...auditMeta(req),
+      payload: { before: done.before, after: done.after }, ...auditMeta(req),
     });
     return done;
   });

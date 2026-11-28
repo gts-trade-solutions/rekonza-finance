@@ -29,7 +29,9 @@ export async function updateRecurringPurchase(trx: Trx, orgId: number, id: numbe
   const ran = !!p.last_generated_at;
   const next = !ran || input.startDate > ymd(p.next_run) ? input.startDate : ymd(p.next_run);
   await trx.updateTable('recurring_purchases').set({ ...values, next_run: next, last_error: null }).where('id', '=', id).execute();
-  return { name: input.name, nextRun: next, before: { ...p, template: typeof p.template === 'string' ? JSON.parse(p.template) : p.template } };
+  const q = await trx.selectFrom('recurring_purchases').selectAll().where('id', '=', id).executeTakeFirstOrThrow();
+  const shape = (r: typeof p) => ({ ...r, template: typeof r.template === 'string' ? JSON.parse(r.template) : r.template });
+  return { name: input.name, nextRun: next, before: shape(p), after: shape(q) };
 }
 
 /** Delete a profile: it stops; the bills and expenses it raised stay, unlinked from it. */

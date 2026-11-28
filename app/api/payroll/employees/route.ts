@@ -35,6 +35,7 @@ const Employee = z.object({
   esiIpNumber: z.string().trim().max(17).nullish(),
   pfMember: z.boolean().optional(),
   epsMember: z.boolean().optional(),
+  epsBeforeSep2014: z.boolean().optional(),
   pfOnActual: z.boolean().optional(),
   ptApplicable: z.boolean().optional(),
   lwfApplicable: z.boolean().optional(),

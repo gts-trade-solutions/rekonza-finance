@@ -36,7 +36,7 @@ export const PUT = route(
       await logAudit({
         trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'update',
         targetType: kind, targetId: id, targetLabel: made.number, detail: `Edited ${made.number}`,
-        payload: { before: made.before }, ...auditMeta(req),
+        payload: { before: made.before, after: made.after }, ...auditMeta(req),
       });
       return made;
     });

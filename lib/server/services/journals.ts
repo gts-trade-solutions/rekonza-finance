@@ -230,7 +230,10 @@ export async function editJournal(trx: Trx, orgId: number, userId: number | null
   const before = { entry: plain(e), ...(await journalSnapshot(trx, entryId)) };
   await reverseJournal(trx, orgId, userId, entryId, { memo: `Journal #${e.entry_no} edited: the entry as it was, reversed` });
   const entry = await postManualJournal(trx, orgId, userId, { ...input, sourceType: e.source_type });
-  return { entry, before, replacedEntryNo: e.entry_no };
+  // The record as it now stands, beside the one before: the audit trail writes the field-by-field edit log from the two.
+  const now = await trx.selectFrom('journal_entries').selectAll().where('id', '=', entry.id).executeTakeFirstOrThrow();
+  const after = { entry: plain(now), ...(await journalSnapshot(trx, entry.id)) };
+  return { entry, before, after, replacedEntryNo: e.entry_no };
 }
 
 /** Delete a manual journal: reversed on its own date; the record of it kept. */

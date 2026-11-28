@@ -17,7 +17,7 @@ export const PUT = route(
       await logAudit({
         trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'update', targetType: 'bill_of_entry', targetId: id,
         targetLabel: input.boeNo, detail: `Edited bill of entry ${input.boeNo}: ₹${(made.totalPaise / 100).toFixed(2)} paid at customs`,
-        payload: { before: made.before }, ...auditMeta(req),
+        payload: { before: made.before, after: made.after }, ...auditMeta(req),
       });
       return made;
     });

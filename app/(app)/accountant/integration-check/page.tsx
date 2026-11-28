@@ -34,7 +34,9 @@ const th = 'px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.08em] text
 const td = 'px-3 py-1.5';
 const r2 = (p: number) => (p / 100).toFixed(2);
 const fmt = (iso: string | null) => (iso ? new Date(iso.length > 10 ? iso : `${iso}T00:00:00`).toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', ...(iso.length > 10 ? { hour: '2-digit', minute: '2-digit' } : {}) }) : 'Never');
-const fyStart = () => { const d = new Date(); return `${d.getMonth() < 3 ? d.getFullYear() - 1 : d.getFullYear()}-04-01`; };
+/** Today in India, whatever the browser's clock zone: the check is as at the end of an Indian day. */
+const indiaToday = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date());
+const fyStart = () => { const t = indiaToday(); const y = Number(t.slice(0, 4)); return `${Number(t.slice(5, 7)) < 4 ? y - 1 : y}-04-01`; };
 const SOURCE: Record<string, string> = {
   bill: 'Bills (stock bought)', invoice: 'Invoices (cost of goods sold)', credit_note: 'Credit notes (goods back)', vendor_credit: 'Vendor credits', stock_valuation: 'Month-end true-up',
   stock_opening: 'Stock taken into the ledger', manual_journal: 'Manual journals', journal: 'Journals', stock_adjustment: 'Stock adjustments', production: 'Production',
@@ -52,7 +54,9 @@ function exportAll(d: IntegrationCheckData) {
   const liabilities = [['Liability', 'Posted by payroll', 'Paid / deposited', 'Owed per payroll', 'Ledger balance', 'Full & final', 'Other entries', 'Difference', 'Result'],
     ...d.payroll.liabilities.map((l) => [l.label, r2(l.postedPaise), r2(l.settledPaise), r2(l.subledgerPaise), r2(l.ledgerPaise), r2(l.settlementsPaise), r2(l.otherPaise), r2(l.differencePaise), l.ok ? 'Pass' : 'Difference']),
     [], ['Other entries in payroll liabilities'], ['Liability', 'Entry', 'Date', 'Source', 'Memo', 'Amount'],
-    ...d.payroll.liabilities.flatMap((l) => l.other.map((o) => [l.label, o.entryNo, o.date, o.source, o.memo ?? '', r2(o.amountPaise)]))];
+    ...d.payroll.liabilities.flatMap((l) => l.other.map((o) => [l.label, o.entryNo, o.date, o.source, o.memo ?? '', r2(o.amountPaise)])),
+    [], [`Dated after ${d.to}: on neither side (timing, not a difference)`], ['Document', 'Dated', 'Amount'],
+    ...d.payroll.timing.map((t) => [t.label, t.date, r2(t.amountPaise)])];
   const inv = d.inventory;
   const inventory = [['As at', inv.asOf], ['Method', inv.method], ['Stock valuation (documents)', r2(inv.stockValuePaise)], ['Inventory account (ledger)', r2(inv.ledgerPaise)],
     ['Difference', r2(inv.differencePaise)], ['Result', inv.status === 'difference' ? 'Difference' : 'Pass'], ['Last true-up', inv.lastTrueUp ?? ''], [],
@@ -63,7 +67,9 @@ function exportAll(d: IntegrationCheckData) {
 
 export default function IntegrationCheckPage() {
   const [from, setFrom] = useState(fyStart());
-  const [to, setTo] = useState(new Date().toISOString().slice(0, 10));
+  // As at today: both sides read what is posted up to this date (services/integration-check.ts),
+  // so a run dated at its month's end is left out of both until then, and listed under timing.
+  const [to, setTo] = useState(indiaToday());
   const state = useApi(() => integration.check(from, to), [from, to]);
   const [journal, setJournal] = useState<{ id: string; label: string } | null>(null);
   const [open, setOpen] = useState<string | null>(null);
@@ -143,7 +149,7 @@ export default function IntegrationCheckPage() {
 
               <Card className="overflow-hidden p-0" data-slot="ic-liabilities">
                 <div className="border-b px-4 py-2.5"><p className="text-sm font-semibold">Payroll liabilities at {fmt(to)}: what payroll says is owed against the ledger</p>
-                  <p className="text-xs text-muted-foreground">Posted by pay runs and imports, less dues paid, challans deposited and salaries paid — against the account&apos;s balance. Entries from anywhere else are listed under it.</p></div>
+                  <p className="text-xs text-muted-foreground">Posted by pay runs and imports, less dues paid, challans deposited and salaries paid — against the account&apos;s balance. Both sides count only what is dated on or before {fmt(to)}: a pay run posts on its month&apos;s last day, so runs up to {fmt(d.payroll.postedThrough)} are in. Entries from anywhere else are listed under it.</p></div>
                 <table className="w-full text-xs">
                   <thead><tr className="border-b bg-muted/50"><th className={`${th} text-left`}>Liability</th><th className={`${th} text-right`}>Posted by payroll</th><th className={`${th} text-right`}>Paid</th><th className={`${th} text-right`}>Owed per payroll</th><th className={`${th} text-right`}>Ledger balance</th><th className={`${th} text-right`}>F&amp;F / other entries</th><th className={`${th} text-right`}>Difference</th><th className={th}>Result</th></tr></thead>
                   <tbody>
@@ -166,6 +172,31 @@ export default function IntegrationCheckPage() {
                   </tbody>
                 </table>
               </Card>
+
+              {d.payroll.timing.length > 0 && (
+                <Card className="overflow-hidden p-0" data-slot="ic-timing">
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-b px-4 py-2.5">
+                    <div>
+                      <p className="text-sm font-semibold">Dated after {fmt(to)}: timing, not a difference</p>
+                      <p className="text-xs text-muted-foreground">These are on neither side of the check above, because the ledger as at {fmt(to)} does not hold them yet. They count once the To date reaches their date.</p>
+                    </div>
+                    <Button size="sm" variant="outline" onClick={() => setTo(d.payroll.timing[d.payroll.timing.length - 1].date)} data-slot="ic-timing-check">
+                      Check as at {fmt(d.payroll.timing[d.payroll.timing.length - 1].date)}
+                    </Button>
+                  </div>
+                  <table className="w-full text-xs">
+                    <thead><tr className="border-b bg-muted/50"><th className={`${th} text-left`}>Document</th><th className={`${th} text-left`}>Dated</th><th className={`${th} text-right`}>Amount</th><th className={th} /></tr></thead>
+                    <tbody>
+                      {d.payroll.timing.map((t, i) => (
+                        <tr key={`${t.kind}-${t.date}-${i}`} className="border-b last:border-0" data-slot="ic-timing-item">
+                          <td className={td}>{t.label}</td><td className={td}>{fmt(t.date)}</td><td className={`${td} text-right`}><Money value={t.amountPaise} /></td>
+                          <td className={`${td} text-right`}>{t.href && <Link className="text-primary hover:underline" href={t.href}>Open</Link>}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </Card>
+              )}
 
               {/* ── Inventory ── */}
               <Card className="space-y-3 p-4" data-slot="ic-inventory">

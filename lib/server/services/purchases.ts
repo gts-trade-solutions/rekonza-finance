@@ -817,7 +817,8 @@ export async function updateExpense(trx: Trx, orgId: number, userId: number | nu
   const before = plain(await trx.selectFrom('expenses').selectAll().where('id', '=', expenseId).executeTakeFirstOrThrow());
   await reverseForChange(trx, orgId, e.journal_entry_id, { memo: `Expense ${e.number} edited: the entry as it was, reversed`, userId, module: 'purchases' });
   const made = await createExpense(trx, orgId, userId, input, { replace: { id: expenseId, number: e.number } });
-  return { ...made, before };
+  // The record as it now stands, beside the one before: the audit trail writes the field-by-field edit log from the two.
+  return { ...made, before, after: plain(await trx.selectFrom('expenses').selectAll().where('id', '=', expenseId).executeTakeFirstOrThrow()) };
 }
 
 /** Delete an expense, as Zoho Books' Delete: its entry is reversed and the record of it kept (migration 118). */

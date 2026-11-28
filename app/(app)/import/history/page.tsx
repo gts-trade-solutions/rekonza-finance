@@ -115,7 +115,7 @@ function HistoryPage() {
                     <td className="px-3 py-2 whitespace-nowrap"><button type="button" className="text-link hover:underline" onClick={() => setViewing(b.id)} data-slot="import-history-view">{when(b.at)}</button></td>
                     <td className="px-3 py-2">{b.by ?? ''}</td>
                     <td className="px-3 py-2">{importModule(b.module)?.title ?? b.module}</td>
-                    <td className="px-3 py-2">{b.fileName}{b.fileFormat && <span className="ml-1 text-[11px] uppercase text-muted-foreground">{b.fileFormat}</span>}</td>
+                    <td className="px-3 py-2" data-slot="import-file">{b.fileName}{b.fileFormat && !(b.fileName ?? '').toLowerCase().endsWith(`.${b.fileFormat.toLowerCase()}`) && <span className="ml-1 text-[11px] uppercase text-muted-foreground"> ({b.fileFormat})</span>}</td>
                     <td className="px-3 py-2 tabular">{b.rowsTotal}</td>
                     <td className="px-3 py-2 tabular font-medium text-[#1e7a46]">{b.imported}</td>
                     <td className="px-3 py-2 tabular">{b.skipped}</td>

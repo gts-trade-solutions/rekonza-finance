@@ -247,12 +247,12 @@ export async function quarterReturn(ex: Executor, orgId: number, fy: number, q: 
   const tcsDeposits = deposits('tcs', collectees);
 
   const issues: QuarterReturn['issues'] = [];
-  if (!org?.tan) issues.push({ level: 'error', message: 'The book has no TAN. Every TDS return and challan is filed under it — add it in Settings.' });
+  if (!org?.tan) issues.push({ level: 'error', message: 'The book has no TAN. Every TDS return and challan is filed under it — add it in Settings → Profile (the TAN field under Organisation details).' });
   if (forms.length && !(org?.tds_rp_name && org?.tds_rp_pan && org?.tds_rp_designation)) {
-    issues.push({ level: 'error', message: 'The person responsible for deduction is not filled in: name, designation and PAN are part of every return. Add them in Settings → Statutory.' });
+    issues.push({ level: 'error', message: 'The person responsible for deduction is not filled in: name, designation and PAN are part of every return. Add them in Settings → Statutory details → TDS deductor.' });
   }
   if (forms.length && !org?.deductor_type) {
-    issues.push({ level: 'warning', message: 'The deductor type (company, firm, individual…) is not set; the return asks for it. Settings → Statutory.' });
+    issues.push({ level: 'warning', message: 'The deductor type (company, firm, individual…) is not set; the return asks for it. Settings → Statutory details → TDS deductor.' });
   }
   const noPan = [...deductees, ...collectees].filter((r) => !r.pan);
   if (noPan.length) {

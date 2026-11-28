@@ -879,7 +879,7 @@ async function changeBlocker(trx: Trx, orgId: number, inv: { id: number; number:
  */
 export async function updateInvoice(
   trx: Trx, orgId: number, userId: number | null, invoiceId: number, input: CreateInvoiceInput,
-): Promise<CreatedInvoice & { before: unknown }> {
+): Promise<CreatedInvoice & { before: unknown; after: unknown }> {
   const inv = await trx.selectFrom('invoices')
     .select(['id', 'number', 'status', 'doc_kind', 'against_invoice_id', 'journal_entry_id', 'amount_paid', 'source_doc_type', 'source_doc_id'])
     .where('id', '=', invoiceId).where('org_id', '=', orgId).forUpdate().executeTakeFirst();
@@ -937,7 +937,8 @@ export async function updateInvoice(
       .set({ status: paid <= 0 ? was : paid >= made.totalPaise ? 'paid' : 'partially_paid' })
       .where('id', '=', invoiceId).execute();
   }
-  return { ...made, before };
+  // The record as it now stands, beside the one before: the audit trail writes the field-by-field edit log from the two.
+  return { ...made, before, after: await invoiceSnapshot(trx, orgId, invoiceId) };
 }
 
 /**

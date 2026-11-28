@@ -52,6 +52,8 @@ export interface Run {
   id: string; month: string; status: 'draft' | 'posted' | 'paid'; paidOn: string | null; journalEntryId: string | null;
   org: { name: string; pfCode: string | null; esiCode: string | null; tan: string | null };
   lines: RunLine[];
+  /** On the books for the month with a salary, but not on this draft: joined after it was prepared. */
+  missingEmployees?: { employeeId: string; code: string; name: string; dateOfJoining: string }[];
 }
 
 const monthName = (m: string) => new Date(`${m}-01T00:00:00`).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
@@ -133,7 +135,11 @@ export default function PayrollRunPage({ params }: { params: Promise<{ id: strin
     title: `Edit the payroll for ${monthName(run.month)}?`,
     description: 'It is posted. Reopening it reverses its entry in the ledger (never erased) and makes it a draft again, to correct and post.',
     reasonRequired: true, tone: 'default', confirmLabel: 'Reopen to edit', failTitle: 'Not reopened',
-    run: (reason) => api.post(`/api/payroll/runs/${id}`, { action: 'reopen', reason }),
+    run: async (reason) => {
+      const r = await api.post<{ added?: string[] }>(`/api/payroll/runs/${id}`, { action: 'reopen', reason });
+      // Reopening works the draft out again, so someone who joined since is on it now.
+      if (r.added?.length) toast.success(`Added to the payroll: ${r.added.join(', ')}`);
+    },
     done: 'Reopened as a draft', onDone: () => void state.refetch(),
   });
   const undoPayment = (run: Run) => confirm.ask({
@@ -241,6 +247,21 @@ export default function PayrollRunPage({ params }: { params: Promise<{ id: strin
               <StatTile label="Employer cost" value={formatINRCompact(sum(L, 'gross') + sum(L, 'reimbursement') + employer)} sub={`${formatINRCompact(employer)} PF, ESI and LWF on top`} icon={Wallet} />
               <StatTile label="Net pay" value={formatINRCompact(sum(L, 'netPay'))} sub={run.status === 'paid' ? `Paid ${run.paidOn}` : 'To the employees’ accounts'} icon={Banknote} tone={run.status === 'paid' ? 'positive' : 'default'} />
             </div>
+
+            {draft && (run.missingEmployees?.length ?? 0) > 0 && (
+              <Card className="flex flex-wrap items-start gap-3 border-primary/40 bg-primary/5 p-4 text-sm" data-slot="run-missing-employees">
+                <Users className="mt-0.5 size-4 shrink-0 text-primary" />
+                <div className="min-w-0 flex-1">
+                  <p className="font-medium">{run.missingEmployees!.length} employee{run.missingEmployees!.length === 1 ? ' is' : 's are'} on the books for {monthName(run.month)} but not on this payroll</p>
+                  <p className="mt-1 text-xs text-muted-foreground">{run.missingEmployees!.map((e) => `${e.name} (${e.code}), joined ${e.dateOfJoining}`).join(' · ')}</p>
+                </div>
+                {canEdit && (
+                  <Button size="sm" className="gap-1.5" disabled={!!busy} onClick={() => void act('recompute', { inputs: {} }, 'New employees added to the payroll')} data-slot="run-add-employees">
+                    {busy === 'recompute' ? <Loader2 className="size-3.5 animate-spin" /> : <Users className="size-3.5" />} Add new employees
+                  </Button>
+                )}
+              </Card>
+            )}
 
             {missing.length > 0 && (
               <Card className="flex items-start gap-3 border-amber-500/40 bg-amber-500/5 p-4 text-sm">

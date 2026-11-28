@@ -283,7 +283,7 @@ export async function updateAdjustment(trx: Trx, orgId: number, userId: number |
 
     const warnings: string[] = [];
     await guard.check(warnings);
-    return { id, itemName: item.name, before, warnings };
+    return { id, itemName: item.name, before, after: await adjustmentForEdit(trx, orgId, id), warnings };
   });
 }
 
@@ -363,7 +363,7 @@ export async function updateTransfer(trx: Trx, orgId: number, id: number, input:
 
     const warnings: string[] = [];
     await guard.check(warnings);
-    return { id, number: t.number, before, warnings };
+    return { id, number: t.number, before, after: await transferForEdit(trx, orgId, id), warnings };
   });
 }
 
@@ -426,7 +426,7 @@ export async function updateProduction(trx: Trx, orgId: number, userId: number |
     const made = await recordProduction(trx, orgId, userId, input, { replace: { id, number: p.number, bomId: p.bom_id } });
     if (ymd(p.produced_on) < input.date) await afterStockMoved(trx, orgId, userId, ymd(p.produced_on), `production ${p.number} edited`);
     await guard.check(made.warnings);
-    return { ...made, before };
+    return { ...made, before, after: await productionForEdit(trx, orgId, id) };
   });
 }
 
@@ -499,7 +499,7 @@ export async function updateBatch(trx: Trx, orgId: number, id: number, input: Ba
     .where('batch_no', '=', batchNo).where('id', '<>', id).executeTakeFirst();
   if (clash) throw conflict(`This item already has a batch ${batchNo}.`);
   await trx.updateTable('batches').set({ batch_no: batchNo, mfg_date: input.mfgDate || null, expiry_date: input.expiryDate || null }).where('id', '=', id).execute();
-  return { before: plain(b), batchNo };
+  return { before: plain(b), after: plain(await trx.selectFrom('batches').selectAll().where('id', '=', id).executeTakeFirstOrThrow()), batchNo };
 }
 
 /** Delete a batch no document names: one left over after its documents were changed. */
@@ -572,7 +572,7 @@ export async function updateWarehouse(trx: Trx, orgId: number, id: number, input
     name: name.slice(0, 150), code: input.code?.trim() || null, address: input.address?.trim() || null, branch_id: branchId,
     is_primary: isPrimary ? 1 : 0, is_active: isActive ? 1 : 0,
   }).where('id', '=', id).execute();
-  return { before: plain(w), name };
+  return { before: plain(w), after: plain(await trx.selectFrom('warehouses').selectAll().where('id', '=', id).executeTakeFirstOrThrow()), name };
 }
 
 /** Delete a godown no document names; one in use is marked inactive instead, as Zoho offers. */

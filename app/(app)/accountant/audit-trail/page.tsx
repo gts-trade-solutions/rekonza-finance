@@ -196,12 +196,22 @@ export default function AuditTrailPage() {
               <Badge
                 variant="outline"
                 className="border-amber-500/40 text-[10px] text-amber-700 dark:text-amber-300"
-                title="The app never edits these rows, but the database does not yet refuse a direct edit. Run npm run db:protect."
+                title="The hash chain still detects any direct change. The server's administrator installs the lock with root access to MySQL."
+                data-slot="audit-db-lock"
               >
-                Database lock not installed
+                Database lock not yet installed
               </Badge>
             ))}
           </div>
+          {state.data && !state.data.databaseProtected && (
+            <p className="mt-2 text-xs leading-relaxed text-muted-foreground" data-slot="audit-db-lock-note">
+              <span className="font-medium text-foreground">About the database lock.</span> Rekonza itself never edits or deletes an audit row,
+              and the hash chain below (Verify integrity) detects any row changed or removed directly in the database, naming the row.
+              The lock goes one step further: MySQL itself refuses such a change. It is a set of database triggers
+              (db/protect/tamper_proof_trail.sql, run with npm run db:protect) that only the server&apos;s administrator can install,
+              because it needs root access to MySQL on the server. Until it is installed, rely on Verify integrity and note the chain head in your working papers.
+            </p>
+          )}
         </div>
       </Card>
 

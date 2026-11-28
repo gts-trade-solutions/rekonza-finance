@@ -10,6 +10,18 @@ import 'server-only';
 // exemption, the standard deduction, professional tax, chapter VI-A
 // deductions from the proofs accepted, and the tax — set against what was
 // deducted, quarter by quarter.
+//
+// Before the year ends, Part B is provisional. Section 192 has the employer
+// deduct on the estimated salary of the whole year, spread over its months;
+// working the tax on the salary paid so far instead (two months of a year,
+// say) gives a tax far below what was rightly deducted, and would call the
+// difference "refundable" when it is not. So mid-year the salary still to be
+// paid is projected at the structure in force, exactly as the monthly TDS
+// computation does (payroll.ts computeLine), the statement is marked
+// provisional for the year to date, and the balance is what is still to be
+// deducted in the months left (or, if more was deducted, what later months
+// deduct less by under section 192(3)), never a refund. Once the year is over,
+// or the employee has left, it is the final statement on the salary paid.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { Executor } from '../db';
@@ -19,11 +31,15 @@ import { unseal } from '../crypto/fields';
 import { notFound } from '../http';
 import { oldRegimeDeductions, taxComputation, type DeductionSection } from '../../payroll/statutory';
 import { deductionItems } from './declarations';
+import { salaryOn, structureGross } from './payroll';
+
+const indiaDay = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date());
+const endOfMonth = (ym: string) => { const [y, m] = ym.split('-').map(Number); return `${ym}-${String(new Date(y, m, 0).getDate()).padStart(2, '0')}`; };
 
 const p = toPaiseFromSql;
 const pad = (n: number) => String(n).padStart(2, '0');
 
-export async function form16(ex: Executor, orgId: number, employeeId: number, fyStart: number) {
+export async function form16(ex: Executor, orgId: number, employeeId: number, fyStart: number, asOf: string = indiaDay()) {
   const e = await ex.selectFrom('employees')
     .select(['id', 'code', 'name', 'pan', 'designation', 'date_of_joining', 'date_of_leaving', 'tax_regime', 'metro_city', 'declared_deductions'])
     .where('id', '=', employeeId).where('org_id', '=', orgId).executeTakeFirst();
@@ -36,19 +52,42 @@ export async function form16(ex: Executor, orgId: number, employeeId: number, fy
     .where('r.org_id', '=', orgId).where('l.employee_id', '=', e.id).where('r.status', 'in', ['posted', 'paid'])
     .where('r.month', 'in', months).orderBy('r.month').execute();
   const sum = (k: 'gross' | 'hra' | 'pt' | 'tds' | 'arrears') => lines.reduce((t, l) => t + p(l[k]), 0);
-  const gross = sum('gross');
-  const hraReceived = sum('hra');
-  const basicDa = lines.reduce((t, l) => t + p(l.basic) + p(l.da), 0);
+  const paidToDate = sum('gross');
   const old = e.tax_regime === 'old';
+  const doj = String(e.date_of_joining).slice(0, 10);
+  const dol = e.date_of_leaving ? String(e.date_of_leaving).slice(0, 10) : null;
 
-  // The year is over: only accepted proofs count, as they do from January.
-  const items = await deductionItems(ex, orgId, e.id, fyStart, `${fyStart + 1}-03`);
+  // Final once the year is over, March is paid, or the employee has left; provisional before.
+  const lastMonth = lines.length ? lines[lines.length - 1].month : null;
+  const left = !!dol && dol <= `${fyStart + 1}-03-31` && dol <= asOf;
+  const provisional = !!lastMonth && asOf <= `${fyStart + 1}-03-31` && lastMonth !== months[11] && !left;
+  // The months still to be paid, at the structure in force at the last month paid (computeLine's projection).
+  let monthsAhead = 0;
+  let monthlyGross = 0;
+  let structure: Awaited<ReturnType<typeof salaryOn>> = null;
+  if (provisional && lastMonth) {
+    const lastIdx = months.indexOf(lastMonth);
+    const stopIdx = dol && dol <= `${fyStart + 1}-03-31` ? months.indexOf(dol.slice(0, 7)) : 11;
+    monthsAhead = Math.max(0, stopIdx - lastIdx);
+    structure = await salaryOn(ex, e.id, endOfMonth(lastMonth));
+    monthlyGross = structure ? structureGross(structure) : 0;
+    if (!structure) monthsAhead = 0;
+  }
+  const lastPt = lines.length ? p(lines[lines.length - 1].pt) : 0;
+  const gross = paidToDate + monthsAhead * monthlyGross;
+  const hraReceived = sum('hra') + monthsAhead * (structure?.hra ?? 0);
+  const basicDa = lines.reduce((t, l) => t + p(l.basic) + p(l.da), 0) + monthsAhead * ((structure?.basic ?? 0) + (structure?.da ?? 0));
+  const ptYear = sum('pt') + monthsAhead * lastPt;
+
+  // The year over: only accepted proofs count, as they do from January. Mid-year:
+  // what the employee has declared, as the monthly deduction uses.
+  const items = await deductionItems(ex, orgId, e.id, fyStart, provisional && lastMonth ? lastMonth : `${fyStart + 1}-03`);
   const ded = items
     ? oldRegimeDeductions(items, { hraReceived, basicDa, metro: !!e.metro_city })
     : { bySection: {} as Partial<Record<DeductionSection, Paise>>, hra: 0, total: p(e.declared_deductions) };
   const hraExempt = old ? ded.hra : 0;
   const chapterVIA = old ? ded.total - ded.hra : 0;
-  const tax = taxComputation({ regime: e.tax_regime, grossSalary: gross, deductions: hraExempt + chapterVIA, professionalTax: sum('pt') });
+  const tax = taxComputation({ regime: e.tax_regime, grossSalary: gross, deductions: hraExempt + chapterVIA, professionalTax: ptYear });
   const deducted = sum('tds');
 
   const quarters = [0, 1, 2, 3].map((q) => {
@@ -56,8 +95,6 @@ export async function form16(ex: Executor, orgId: number, employeeId: number, fy
     const these = lines.filter((l) => qm.includes(l.month));
     return { quarter: q + 1, months: qm, paidPaise: these.reduce((t, l) => t + p(l.gross), 0), tdsPaise: these.reduce((t, l) => t + p(l.tds), 0) };
   });
-  const doj = String(e.date_of_joining).slice(0, 10);
-  const dol = e.date_of_leaving ? String(e.date_of_leaving).slice(0, 10) : null;
   return {
     form: fyStart >= 2026 ? 'Form 130' : 'Form 16',
     fyStart, assessmentYear: `${fyStart + 1}-${String(fyStart + 2).slice(2)}`,
@@ -68,6 +105,13 @@ export async function form16(ex: Executor, orgId: number, employeeId: number, fy
       to: dol && dol < `${fyStart + 1}-03-31` ? dol : `${fyStart + 1}-03-31`,
     },
     monthsPaid: lines.length,
+    /** Before the year ends: worked on the year's estimated salary, for the year to date. */
+    provisional,
+    asOf,
+    lastMonthPaid: lastMonth,
+    salaryToDatePaise: paidToDate,
+    /** The months still to be paid in the year, at the structure in force, and the salary they will carry. */
+    monthsAhead, monthlyGrossPaise: monthlyGross, projectedRestPaise: monthsAhead * monthlyGross,
     grossPaise: gross, arrearsPaise: sum('arrears'),
     hraExemptPaise: hraExempt,
     standardDeductionPaise: tax.standardDeduction,
@@ -78,7 +122,8 @@ export async function form16(ex: Executor, orgId: number, employeeId: number, fy
     taxablePaise: tax.taxable,
     slabTaxPaise: tax.slabTax, rebatePaise: tax.rebate, surchargePaise: tax.surcharge, cessPaise: tax.cess, taxPaise: tax.tax,
     deductedPaise: deducted,
-    // More deducted than due is refunded on the employee's return; less is theirs to pay.
+    // Final: more deducted than due is refunded on the employee's return; less is theirs to pay.
+    // Provisional: what the months left still deduct (less, if more was deducted, s.192(3)).
     balancePaise: tax.tax - deducted,
     quarters,
   };

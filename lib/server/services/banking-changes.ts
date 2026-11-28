@@ -79,7 +79,7 @@ export async function editTransfer(trx: Trx, orgId: number, userId: number | nul
     from_bank_account_id: input.fromBankAccountId, to_bank_account_id: input.toBankAccountId, transfer_date: input.date,
     amount: toSqlFromPaise(input.amountPaise), reference: input.reference?.trim() || null, journal_entry_id: entry.id,
   }).where('id', '=', id).execute();
-  return { entryNo: entry.entryNo, before: plain(t) };
+  return { entryNo: entry.entryNo, before: plain(t), after: plain(await trx.selectFrom('bank_transfers').selectAll().where('id', '=', id).executeTakeFirstOrThrow()) };
 }
 
 /** Delete a transfer: its entry reversed on its own date, the record kept. */
@@ -119,7 +119,7 @@ export async function editCheque(trx: Trx, orgId: number, id: number, input: Che
     amount: toSqlFromPaise(input.amountPaise), maturity_date: input.maturityDate, is_pdc: input.maturityDate > today ? 1 : 0,
     notes: input.notes?.trim() || null,
   }).where('id', '=', id).execute();
-  return { chequeNo: input.chequeNo.trim(), before: plain(c) };
+  return { chequeNo: input.chequeNo.trim(), before: plain(c), after: plain(await trx.selectFrom('cheques').selectAll().where('id', '=', id).executeTakeFirstOrThrow()) };
 }
 
 /**
@@ -164,7 +164,7 @@ export async function editStatementLine(trx: Trx, orgId: number, id: number, inp
     txn_date: input.date, narration: input.narration.trim().slice(0, 500), reference: input.reference?.trim() || null,
     deposit: toSqlFromPaise(dep), withdrawal: toSqlFromPaise(wd),
   }).where('id', '=', id).execute();
-  return { before: plain(l) };
+  return { before: plain(l), after: plain(await trx.selectFrom('bank_transactions').selectAll().where('id', '=', id).executeTakeFirstOrThrow()) };
 }
 
 /** Delete one uncategorised or excluded line (imported by mistake). */

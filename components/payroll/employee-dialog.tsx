@@ -20,7 +20,7 @@ import { Money } from '@/components/shared/money';
 import { useSession } from '@/components/layout/session-provider';
 import { api } from '@/lib/api/client';
 import { today } from '@/lib/selectors';
-import { esi, pf, professionalTax, annualTax, LWF_RULES, PT_RULES } from '@/lib/payroll/statutory';
+import { esi, pf, professionalTax, annualTax, epsEligible, LWF_RULES, PT_RULES } from '@/lib/payroll/statutory';
 import { useApi } from '@/lib/api/use-api';
 
 export interface EmployeeRow {
@@ -28,7 +28,7 @@ export interface EmployeeRow {
   gender: 'male' | 'female' | 'other' | null; dateOfBirth: string | null; dateOfJoining: string; dateOfLeaving: string | null;
   designation: string | null; department: string | null; email: string | null; mobile: string | null;
   pan: string | null; uan: string | null; esiIpNumber: string | null;
-  pfMember: boolean; epsMember: boolean; pfOnActual: boolean; ptApplicable: boolean; lwfApplicable: boolean; disabled: boolean;
+  pfMember: boolean; epsMember: boolean; epsBeforeSep2014?: boolean; pfOnActual: boolean; ptApplicable: boolean; lwfApplicable: boolean; disabled: boolean;
   taxRegime: 'new' | 'old'; declaredDeductionsPaise: number; metroCity: boolean;
   bankAccountName: string | null; bankAccountNo: string | null; bankIfsc: string | null;
   aadhaarMasked?: string | null;
@@ -42,7 +42,7 @@ interface Structure { basic: number; da: number; hra: number; special: number; o
 const blank = (branchId: string) => ({
   branchId, code: '', name: '', gender: '' as '' | 'male' | 'female' | 'other', dateOfBirth: '', dateOfJoining: today(), dateOfLeaving: '',
   designation: '', department: '', email: '', mobile: '', pan: '', uan: '', esiIpNumber: '',
-  pfMember: true, epsMember: true, pfOnActual: false, ptApplicable: true, lwfApplicable: true, disabled: false,
+  pfMember: true, epsMember: true, epsBeforeSep2014: false, pfOnActual: false, ptApplicable: true, lwfApplicable: true, disabled: false,
   taxRegime: 'new' as 'new' | 'old', declaredDeductionsPaise: 0, metroCity: false, bankAccountName: '', bankAccountNo: '', bankIfsc: '',
   /** Typed only to set or change it; it is never sent back from the server. */
   aadhaarNo: '',
@@ -83,15 +83,22 @@ export function EmployeeDialog({ open, employee, onClose, onSaved }: {
   const gross = salary.basic + salary.da + salary.hra + salary.special + salary.other;
   const stateCode = f.workStateCode || (branches.find((b) => b.id === f.branchId)?.stateCode ?? '');
   const costCentres = useApi<{ centres: { id: string; code: string; name: string; isActive: boolean }[] }>(() => (open ? api.get('/api/cost-centres') : Promise.resolve({ centres: [] })), [open]);
+  // EPS para 6A: joined on or after 1 September 2014 on PF wages above ₹15,000 at joining,
+  // and not a member before, means no pension scheme; the server applies the same rule.
+  const joining = employee
+    ? [...employee.salaryHistory].sort((a, b) => a.effectiveFrom.localeCompare(b.effectiveFrom)).find((h) => h.effectiveFrom <= f.dateOfJoining)
+      ?? [...employee.salaryHistory].sort((a, b) => a.effectiveFrom.localeCompare(b.effectiveFrom))[0] ?? salary
+    : salary;
+  const epsOk = epsEligible({ dateOfJoining: f.dateOfJoining, pfWageAtJoining: joining.basic + joining.da, memberBeforeSep2014: f.epsBeforeSep2014 });
   // What the structure means each month, worked out as a payroll run would.
   const preview = useMemo(() => {
-    const pfr = pf({ pfWage: salary.basic + salary.da, member: f.pfMember, epsMember: f.epsMember, onActual: f.pfOnActual });
+    const pfr = pf({ pfWage: salary.basic + salary.da, member: f.pfMember, epsMember: f.epsMember && epsOk, onActual: f.pfOnActual });
     const esir = esi({ esiWage: gross, rateWage: gross, paidDays: 30, disabled: f.disabled, coveredThisPeriod: false });
     const pt = f.ptApplicable ? professionalTax({ stateCode, month: today().slice(0, 7), gross, gender: f.gender || null }) : 0;
     const tax = annualTax({ regime: f.taxRegime, grossSalary: gross * 12, deductions: f.declaredDeductionsPaise, professionalTax: pt * 12 }).tax;
     const tds = Math.round(tax / 12 / 100) * 100;
     return { pfr, esir, pt, tds, net: gross - pfr.employee - esir.employee - pt - tds, cost: gross + pfr.employerEpf + pfr.employerEps + pfr.admin + pfr.edli + esir.employer };
-  }, [salary, gross, f, stateCode]);
+  }, [salary, gross, f, stateCode, epsOk]);
 
   const changedSalary = !!employee && JSON.stringify({ ...employee.salary }) !== JSON.stringify({ basic: salary.basic, da: salary.da, hra: salary.hra, special: salary.special, other: salary.other });
   const save = async () => {
@@ -114,7 +121,7 @@ export function EmployeeDialog({ open, employee, onClose, onSaved }: {
     }
   };
   const set = <K extends keyof typeof f>(k: K, v: (typeof f)[K]) => setF((x) => ({ ...x, [k]: v }));
-  const toggle = (k: 'pfMember' | 'epsMember' | 'pfOnActual' | 'ptApplicable' | 'lwfApplicable' | 'disabled', label: string, hint: string) => (
+  const toggle = (k: 'pfMember' | 'epsMember' | 'epsBeforeSep2014' | 'pfOnActual' | 'ptApplicable' | 'lwfApplicable' | 'disabled', label: string, hint: string) => (
     <div className="flex items-center justify-between gap-3 border-t pt-2.5">
       <div><p className="text-sm">{label}</p><p className="text-xs text-muted-foreground">{hint}</p></div>
       <Switch checked={f[k]} onCheckedChange={(v) => set(k, v)} />
@@ -235,7 +242,18 @@ export function EmployeeDialog({ open, employee, onClose, onSaved }: {
               )}
             </div>
             {toggle('pfMember', 'Provident fund', 'Contributions at 12% each from employee and employer')}
-            {f.pfMember && toggle('epsMember', 'Pension scheme (EPS)', 'Off for someone who joined after September 2014 on more than ₹15,000')}
+            {f.pfMember && (epsOk
+              ? toggle('epsMember', 'Pension scheme (EPS)', '8.33% of the employer\'s share, on wages up to ₹15,000, goes to the pension scheme')
+              : (
+                <div className="flex items-center justify-between gap-3 border-t pt-2.5" data-slot="emp-eps-not-eligible">
+                  <div>
+                    <p className="text-sm">Pension scheme (EPS): not eligible</p>
+                    <p className="text-xs text-muted-foreground">Joined on or after 1 September 2014 on PF wages above ₹15,000 (EPS 1995, para 6A): the employer&apos;s whole 12% goes to EPF, and the ECR shows no EPS.</p>
+                  </div>
+                  <Switch checked={false} disabled />
+                </div>
+              ))}
+            {f.pfMember && toggle('epsBeforeSep2014', 'Already an EPS member before 1 September 2014', 'Here or with an earlier employer (check the UAN\'s service history): stays in the pension scheme above ₹15,000')}
             {f.pfMember && toggle('pfOnActual', 'PF on the whole wage', 'Off contributes on the ₹15,000 ceiling')}
             {toggle('ptApplicable', 'Professional tax', 'At the rates of the state they work in')}
             {toggle('lwfApplicable', 'Labour welfare fund', 'Where the state levies it')}

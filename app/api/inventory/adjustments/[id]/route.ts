@@ -25,7 +25,7 @@ export const PUT = route(
         trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'update',
         targetType: 'stock_adjustment', targetId: id, targetLabel: done.itemName,
         detail: `Edited stock adjustment: ${input.qtyDelta > 0 ? '+' : ''}${input.qtyDelta} ${done.itemName} (${input.reason}) on ${input.date}`,
-        payload: { before: done.before }, ...auditMeta(req),
+        payload: { before: done.before, after: done.after }, ...auditMeta(req),
       });
       return { id: asId(id), warnings: done.warnings };
     });

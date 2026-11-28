@@ -89,7 +89,7 @@ export const POST = route(
         await logAudit({
           trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'update', targetType: 'payment_batch', targetId: id,
           targetLabel: made.number, detail: `Batch ${made.number} edited: ${input.lines.length} bill(s) for ${(made.totalPaise / 100).toFixed(2)}, paying ${input.payDate}`,
-          payload: { before: made.before }, ...meta,
+          payload: { before: made.before, after: made.after }, ...meta,
         });
         return { id: asId(id), number: made.number, status: 'draft' as const };
       }

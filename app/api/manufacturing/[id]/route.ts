@@ -26,7 +26,7 @@ export const PUT = route(
       const r = await updateProduction(trx, orgId, user.userId, id, input);
       await logAudit({
         trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'update', targetType: 'production', targetId: id, targetLabel: r.number,
-        detail: `Edited ${r.number}: ${input.qty} made at ₹${(r.costPaise / 100).toLocaleString('en-IN')}`, payload: { before: r.before }, ...auditMeta(req),
+        detail: `Edited ${r.number}: ${input.qty} made at ₹${(r.costPaise / 100).toLocaleString('en-IN')}`, payload: { before: r.before, after: r.after }, ...auditMeta(req),
       });
       return { id: asId(id), number: r.number, costPaise: r.costPaise, unitCostPaise: r.unitCostPaise, warnings: r.warnings };
     });

@@ -26,7 +26,7 @@ export const PUT = route(
       await logAudit({
         trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'update', targetType: 'bank_transfer', targetId: id,
         detail: `Transfer edited: ${(input.amountPaise / 100).toFixed(2)} on ${input.date} (now entry #${r.entryNo}; the old one reversed)`,
-        payload: { before: r.before }, ...auditMeta(req),
+        payload: { before: r.before, after: r.after }, ...auditMeta(req),
       });
       return r;
     });

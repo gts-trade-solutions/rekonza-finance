@@ -128,7 +128,7 @@ export function SalaryPaymentsCard({ runId, onChanged }: { runId: string; onChan
                 <SelectContent>{banks.map((b) => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}</SelectContent>
               </Select>
             </Field>
-            <Field label="Paid on" required><Input type="date" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} data-slot="salary-pay-date" /></Field>
+            <Field label="Paid on" required><Input type="date" max={new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(new Date())} value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} data-slot="salary-pay-date" /></Field>
             <Field label="Bank reference (UTR / batch)" className="sm:col-span-2"><Input value={f.reference} onChange={(e) => setF({ ...f, reference: e.target.value })} maxLength={60} /></Field>
           </div>
           <p className="text-sm">Amount: <Money value={(paying ? d.rows.filter((r) => paying.includes(r.employeeId)) : unpaid).reduce((t, r) => t + r.unpaidPaise, 0)} className="font-semibold" /></p>

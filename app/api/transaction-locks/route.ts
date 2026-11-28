@@ -90,7 +90,7 @@ export const PUT = route(
 
     const existing = await db
       .selectFrom('transaction_locks')
-      .select(['id', 'locked_upto'])
+      .select(['id', 'locked_upto', 'reason'])
       .where('org_id', '=', orgId)
       .where('module', '=', input.module)
       .executeTakeFirst();
@@ -115,6 +115,11 @@ export const PUT = route(
       targetType: 'transaction_lock',
       targetId: input.module,
       targetLabel: input.module,
+      // The lock date and its reason, old → new, for the edit log.
+      payload: {
+        before: { lockedUpto: existing?.locked_upto ? String(existing.locked_upto).slice(0, 10) : null, reason: existing?.reason ?? null },
+        after: { lockedUpto: input.lockedUpto, reason: values.reason },
+      },
       detail: input.lockedUpto
         ? `Locked ${input.module} up to ${input.lockedUpto} — ${values.reason}`
         : `Removed the ${input.module} lock (was ${existing?.locked_upto ? String(existing.locked_upto).slice(0, 10) : 'unset'})`,

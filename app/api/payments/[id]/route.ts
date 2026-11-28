@@ -121,7 +121,7 @@ export const PUT = route(async ({ orgId, user, role, req, params }) => {
     await logAudit({
       trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'update',
       targetType: kind === 'received' ? 'payment_received' : 'payment_made', targetId: id, targetLabel: made.number,
-      detail: `Edited ${made.number}`, payload: { before: made.before }, ...auditMeta(req),
+      detail: `Edited ${made.number}`, payload: { before: made.before, after: made.after }, ...auditMeta(req),
     });
     return made;
   });

@@ -9,16 +9,33 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 export type OutputAction = 'print' | 'export';
-type Guard = (action: OutputAction, what: string) => boolean;
+/** `recorded`: the server has already written this copy into the audit trail, so the gate only checks the right. */
+type Guard = (action: OutputAction, what: string, recorded?: boolean) => boolean;
 
 let guard: Guard = () => true;
+let recordedByServer = false;
 
 export function setOutputGuard(g: Guard) {
   guard = g;
 }
 
 export function allowOutput(action: OutputAction, what: string): boolean {
-  return guard(action, what);
+  return guard(action, what, recordedByServer);
+}
+
+/**
+ * Hand over a file the server has already recorded in the audit trail (the
+ * audit trail's own export, GET /api/audit/export, records the format, the
+ * filters and the row count). The gate still checks the right to export, but
+ * does not write a second line for the same copy.
+ */
+export function outputRecorded<T>(fn: () => T): T {
+  recordedByServer = true;
+  try {
+    return fn();
+  } finally {
+    recordedByServer = false;
+  }
 }
 
 /** Print the page, if the user may. */

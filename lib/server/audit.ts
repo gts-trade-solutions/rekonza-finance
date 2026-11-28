@@ -17,8 +17,9 @@ import 'server-only';
 
 import { sql } from 'kysely';
 import { db, type Executor } from './db';
-import { changeReason } from './request-context';
-import { clientIp } from './client-ip';
+import { changeReason, requestOrigin } from './request-context';
+import { auditIp } from './client-ip';
+import { normalizeAuditPayload } from '../audit-changes';
 
 export type AuditAction =
   | 'create' | 'update' | 'delete' | 'void' | 'approve' | 'send' | 'match' | 'login' | 'export' | 'import' | 'comment'
@@ -47,6 +48,12 @@ export interface AuditInput {
 
 export async function logAudit(input: AuditInput): Promise<void> {
   const ex = input.trx ?? db;
+  // Where the request came from, when the caller did not say: route() keeps it
+  // for the request (request-context.ts), so no route can leave the IP blank.
+  const origin = requestOrigin();
+  // Before and after snapshots become the field-by-field edit log here, once,
+  // for every caller (lib/audit-changes.ts).
+  const payload = input.payload === undefined ? undefined : normalizeAuditPayload(input.payload);
   try {
     await ex
       .insertInto('audit_log')
@@ -60,9 +67,9 @@ export async function logAudit(input: AuditInput): Promise<void> {
         target_label: input.targetLabel ?? null,
         detail: input.detail ?? null,
         reason: (input.reason ?? changeReason())?.slice(0, 500) ?? null,
-        payload: input.payload === undefined ? null : JSON.stringify(input.payload),
-        ip: input.ip ?? null,
-        user_agent: input.userAgent?.slice(0, 500) ?? null,
+        payload: payload === undefined ? null : JSON.stringify(payload),
+        ip: (input.ip ?? origin?.ip ?? null)?.slice(0, 64) ?? null,
+        user_agent: (input.userAgent ?? origin?.userAgent ?? null)?.slice(0, 500) ?? null,
       })
       .execute();
     await queueWebhook(ex, input);
@@ -104,7 +111,8 @@ async function queueWebhook(ex: Executor, input: AuditInput) {
 // one value to another, when, and by whom. A master edit therefore snapshots
 // the columns it is about to change, and the audit row carries both sides.
 
-export type Changes = Record<string, { from: unknown; to: unknown }>;
+export type { Changes } from '../audit-changes';
+import type { Changes } from '../audit-changes';
 
 /** Tables whose rows are edited in place, and so need an edit log. */
 type Edited = 'contacts' | 'items' | 'accounts' | 'hsn_codes' | 'organizations' | 'branches' | 'bank_accounts' | 'fixed_assets';
@@ -148,7 +156,7 @@ export function describeChanges(changes: Changes): string {
 /** Request metadata worth recording alongside an action. */
 export function auditMeta(req: Request): { ip: string | null; userAgent: string | null } {
   return {
-    ip: clientIp(req),
+    ip: auditIp(req),
     userAgent: req.headers.get('user-agent'),
   };
 }

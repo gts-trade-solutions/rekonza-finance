@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { db, transaction } from '@/lib/server/db';
 import { route, body } from '@/lib/server/http';
 import { logAudit, auditMeta } from '@/lib/server/audit';
-import { EMAIL_KINDS, EMAIL_SPECS, listTemplates, resetTemplate, saveTemplate, type EmailKind } from '@/lib/server/mail/templates';
+import { EMAIL_KINDS, EMAIL_SPECS, getTemplate, listTemplates, resetTemplate, saveTemplate, type EmailKind } from '@/lib/server/mail/templates';
 
 // The wording of the emails the books send (lib/server/mail/templates.ts).
 
@@ -22,11 +22,14 @@ export const POST = route(
     const input = await body(req, Input);
     const label = EMAIL_SPECS[input.kind].label;
     await transaction(async (trx) => {
+      const was = await getTemplate(trx, orgId, input.kind);
       if (input.action === 'reset') await resetTemplate(trx, orgId, input.kind);
       else await saveTemplate(trx, orgId, user.userId, input.kind, { subject: input.subject, body: input.body });
+      const now = await getTemplate(trx, orgId, input.kind);
       await logAudit({
         trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'update', targetType: 'email_template', targetId: null, targetLabel: label,
-        detail: input.action === 'reset' ? `${label} email put back to the built-in wording` : `${label} email wording changed`, ...auditMeta(req),
+        detail: input.action === 'reset' ? `${label} email put back to the built-in wording` : `${label} email wording changed`,
+        payload: { before: { subject: was.subject, body: was.body }, after: { subject: now.subject, body: now.body } }, ...auditMeta(req),
       });
     });
     return { templates: await listTemplates(db, orgId) };

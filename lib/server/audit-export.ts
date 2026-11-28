@@ -13,7 +13,7 @@ import 'server-only';
 
 import { sql } from 'kysely';
 import type { Executor } from './db';
-import { auditRows, changeText, changesIn, istStamp, type AuditFilterInput } from './audit-query';
+import { auditRows, changeText, changesIn, istStamp, typeKey, type AuditFilterInput } from './audit-query';
 import { toPaiseFromSql } from './money-sql';
 
 export const AUDIT_EXPORT_MAX = 200_000;
@@ -61,7 +61,8 @@ export async function auditExportRows(ex: Executor, orgId: number, q: AuditFilte
     for (const r of batch) {
       const at = r.created_at instanceof Date ? r.created_at : new Date(String(r.created_at));
       const type = r.target_type ?? 'other';
-      const deleted = r.action === 'delete' ? gone.get(`${DELETED_TYPE[type] ?? type}:${r.target_id}`) ?? '' : '';
+      // "credit-note" in the trail is "credit_note" in deleted_documents.
+      const deleted = r.action === 'delete' ? gone.get(`${DELETED_TYPE[typeKey(type)] ?? typeKey(type)}:${r.target_id}`) ?? gone.get(`${type}:${r.target_id}`) ?? '' : '';
       instants.push(at.toISOString());
       rows.push([
         istStamp(at), r.actor_name ?? 'System', r.action, type.replace(/[_-]/g, ' '), r.target_id ?? '',

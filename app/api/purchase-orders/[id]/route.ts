@@ -51,7 +51,7 @@ export const PUT = route(
         trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'update',
         targetType: 'purchase-order', targetId: id, targetLabel: made.number,
         detail: `Edited purchase order ${made.number}: ₹${(made.totalPaise / 100).toFixed(2)}`,
-        payload: { before: made.before }, ...auditMeta(req),
+        payload: { before: made.before, after: made.after }, ...auditMeta(req),
       });
       return made;
     });

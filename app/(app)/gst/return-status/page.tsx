@@ -43,7 +43,16 @@ type Status = 'done' | 'late' | 'overdue' | 'due_soon' | 'upcoming';
 interface Row {
   key: string; period: string; periodLabel: string; title: string; area: string; dueDate: string; href?: string;
   status: 'done' | 'overdue' | 'due_soon' | 'upcoming'; daysLeft: number; done: { on: string; reference: string | null; by: string | null } | null;
+  /** Payroll dues: paid through Payroll → Statutory Reports (compliance-calendar.ts reads those payments). */
+  paid?: { duePaise: number; paidPaise: number; payments: { on: string; reference: string | null; amountPaise: number }[] } | null;
 }
+
+/** Marked done by Payroll's own records, not by hand: corrected there, not here. */
+const PAYROLL_BY = 'Payroll → Statutory Reports';
+const fromPayroll = (r: Row) => r.done?.by === PAYROLL_BY;
+/** A payment is paid, a return is filed. */
+const doneLabel = (r: Row, st: Status) => (fromPayroll(r) && r.key !== 'salary-tds-return' ? (st === 'late' ? 'Paid late' : 'Paid') : LOOK[st].label);
+const rupees = (p: number) => `₹${(p / 100).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
 
 const AREAS: [string, string][] = [['gst', 'GST'], ['tds', 'TDS / TCS'], ['payroll', 'Payroll (PF, ESI, PT)'], ['income_tax', 'Income tax'], ['roc', 'ROC'], ['msme', 'MSME']];
 const MON = ['Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec', 'Jan', 'Feb', 'Mar'];
@@ -113,7 +122,19 @@ function OtherDialog({ row, onClose, onDone }: { row: Row; onClose: () => void; 
           <DialogTitle>{row.title} · {row.periodLabel}</DialogTitle>
           <DialogDescription>Due {longDate(row.dueDate)}.{row.done ? ` Done on ${longDate(row.done.on)}${row.done.reference ? ` · ${row.done.reference}` : ''}${row.done.by ? ` · marked by ${row.done.by}` : ''}.` : ' Not done yet.'}</DialogDescription>
         </DialogHeader>
-        {editing && canEdit ? (
+        {(row.paid?.payments.length ?? 0) > 0 && (
+          <div className="rounded-md border bg-muted/30 px-3 py-2 text-[12px]" data-slot="return-cell-payments">
+            <p className="font-medium">Paid through Payroll → Statutory Reports → Dues &amp; Payments: {rupees(row.paid!.paidPaise)} of {rupees(row.paid!.duePaise)}</p>
+            <ul className="mt-1 list-disc pl-4 text-muted-foreground">
+              {row.paid!.payments.map((x, i) => <li key={i}>{longDate(x.on)} · {rupees(x.amountPaise)}{x.reference ? ` · ${x.reference}` : ''}</li>)}
+            </ul>
+          </div>
+        )}
+        {row.done && fromPayroll(row) ? (
+          <p className="text-[12px] text-muted-foreground" data-slot="return-cell-from-payroll">
+            Marked from Payroll&apos;s own record. To correct it, edit or delete the payment (or the 24Q receipt) in Payroll → Statutory Reports.
+          </p>
+        ) : editing && canEdit ? (
           <div className="space-y-3">
             <div className="space-y-1.5"><Label htmlFor="other-on">Done on</Label><Input id="other-on" type="date" value={doneOn} max={localDay()} onChange={(e) => setDoneOn(e.target.value)} /></div>
             <div className="space-y-1.5"><Label htmlFor="other-ref">Reference (ARN, challan, TRRN, SRN)</Label><Input id="other-ref" value={reference} onChange={(e) => setReference(e.target.value)} maxLength={100} /></div>
@@ -189,7 +210,7 @@ export default function ReturnStatusPage() {
 
   const exportIt = () => downloadCsv(`return-status-${start}-${String((start + 1) % 100).padStart(2, '0')}.csv`, [
     ['Return', 'Period', 'Due date', 'Status', 'Filed on', 'Reference / ARN', 'Marked by'],
-    ...all.map((c) => [c.title, c.periodLabel, c.dueDate, LOOK[statusOf(c)].label, c.done?.on ?? '', c.done?.reference ?? '', c.done?.by ?? '']),
+    ...all.map((c) => [c.title, c.periodLabel, c.dueDate, doneLabel(c, statusOf(c)), c.done?.on ?? '', c.done?.reference ?? '', c.done?.by ?? '']),
   ]);
   const profile = state.data?.profile;
 
@@ -258,7 +279,7 @@ export default function ReturnStatusPage() {
                               title={`${c.title} · ${c.periodLabel} · due ${c.dueDate}${c.done ? ` · filed ${c.done.on}${c.done.reference ? ` · ${c.done.reference}` : ''}` : ''}`}
                               className={cn('inline-flex min-w-[64px] flex-col items-center rounded-[3px] border px-1 py-0.5 leading-tight hover:ring-1 hover:ring-primary/40', LOOK[st].cls)}
                               data-slot="return-cell" data-status={st} data-key={c.key} data-period={c.period}>
-                              <span className="flex items-center gap-0.5 font-medium">{(st === 'done' || st === 'late') && <CheckCircle2 className="size-3" />}{LOOK[st].label}</span>
+                              <span className="flex items-center gap-0.5 font-medium">{(st === 'done' || st === 'late') && <CheckCircle2 className="size-3" />}{doneLabel(c, st)}</span>
                               <span className="text-[10px] opacity-80">{c.done ? shortDate(c.done.on) : `due ${shortDate(c.dueDate)}`}</span>
                               {c.done?.reference && <span className="max-w-[80px] truncate text-[9px] opacity-70">{c.done.reference}</span>}
                             </button>

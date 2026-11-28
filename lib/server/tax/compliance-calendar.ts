@@ -29,12 +29,24 @@ import 'server-only';
 //     DPT-3 30 June; AOC-4 30 days after the AGM; MGT-7 60 days after it
 //   MSMED Act: MSME-1, 30 April and 31 October, for companies owing MSMEs
 //   GST LUT for exports without tax: renewed before the year it covers
+//   Payroll (EPF Scheme para 38, ESI (Central) Regulations 31, the state PT Acts)
+//     PF and ESI  15th of the next month
+//     PT          the state's date (below); the commonest are listed
+//     TDS on salary deposited like other TDS; Form 24Q (138) on the TDS return dates
+//
+// Payroll obligations mark themselves done from what Payroll already records:
+// a month's PF, ESI, PT or LWF paid in full through Payroll → Statutory
+// Reports → Dues & Payments, salary TDS deposited by challan, and a 24Q whose
+// receipt number is recorded. Nobody has to tick the same payment twice, and
+// the calendar shows the date it was really paid.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { sql } from 'kysely';
 import type { Executor } from '../db';
 import { depositDueDate, returnDueDate, type Quarter } from './tds-returns';
 import { certificateDueDate } from './tds-certificates';
+import { statutoryRegister, type StatutoryComponent } from '../payroll/statutory-dues';
+import { salaryTdsMonths } from '../payroll/salary-tds';
 
 export type Area = 'gst' | 'tds' | 'income_tax' | 'roc' | 'msme' | 'payroll';
 
@@ -176,7 +188,7 @@ export function obligations(p: CalendarProfile, fy: number): Obligation[] {
   if (p.payroll) {
     for (const m of monthsOf(fy)) {
       out.push({ key: 'pf', period: m, periodLabel: monthLabel(m), title: 'PF challan and ECR', area: 'payroll', dueDate: nextMonthOn(m, 15),
-        detail: 'Both shares of provident fund, with admin and EDLI charges, by the ECR on the EPFO portal.', href: '/payroll/runs' });
+        detail: 'Both shares of provident fund, with admin and EDLI charges, by the ECR on the EPFO portal.', href: '/payroll/statutory' });
       out.push({ key: 'esi', period: m, periodLabel: monthLabel(m), title: 'ESI contribution', area: 'payroll', dueDate: nextMonthOn(m, 15),
         detail: 'Both shares of ESI for covered employees, on the ESIC portal.', href: '/payroll/runs' });
     }
@@ -220,6 +232,87 @@ export interface CalendarRow extends Obligation {
   status: 'done' | 'overdue' | 'due_soon' | 'upcoming';
   daysLeft: number;
   done: { on: string; reference: string | null; by: string | null } | null;
+  /** Payroll dues: what the month owes and what has been paid against it, from Payroll's own records. */
+  paid?: { duePaise: number; paidPaise: number; payments: { on: string; reference: string | null; amountPaise: number }[] } | null;
+}
+
+/**
+ * Professional Tax falls due on the state's own date. The commonest states'
+ * dates for a monthly payer are here; elsewhere the last day of the next
+ * month stands in, and the row says to confirm the state's date.
+ */
+const PT_DUE: Record<string, { day: number | 'month_end'; sameMonth?: boolean }> = {
+  '29': { day: 20 }, // Karnataka: 20th of the next month
+  '19': { day: 21 }, // West Bengal: 21st of the next month
+  '36': { day: 10 }, '37': { day: 10 }, // Telangana, Andhra Pradesh: 10th of the next month
+  '24': { day: 15 }, // Gujarat: 15th of the next month
+  '27': { day: 'month_end', sameMonth: true }, // Maharashtra, monthly payer: the month's last day
+  '18': { day: 28, sameMonth: true }, // Assam: 28th of the month
+};
+const endOf = (ym: string) => { const [y, m] = ym.split('-').map(Number); return `${ym}-${pad(new Date(y, m, 0).getDate())}`; };
+const nextYm = (ym: string) => { const [y, m] = ym.split('-').map(Number); return m === 12 ? `${y + 1}-01` : `${y}-${pad(m + 1)}`; };
+const ymBefore = (ym: string, n: number) => { const [y, m] = ym.split('-').map(Number); const d = new Date(Date.UTC(y, m - 1 - n, 1)); return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}`; };
+export function ptDueDate(stateCode: string | null, month: string): { date: string; known: boolean } {
+  const r = stateCode ? PT_DUE[stateCode] : undefined;
+  if (!r) return { date: endOf(nextYm(month)), known: false };
+  const ym = r.sameMonth ? month : nextYm(month);
+  return { date: r.day === 'month_end' ? endOf(ym) : `${ym}-${pad(r.day)}`, known: true };
+}
+
+const COMPONENT_KEY: Record<StatutoryComponent, string> = { pf: 'pf', esi: 'esi', pt: 'pt', lwf: 'lwf' };
+type AutoDone = { on: string; reference: string | null; by: string; paid: CalendarRow['paid'] };
+const inr = (paise: number) => `₹${(paise / 100).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+
+/**
+ * What Payroll has recorded as paid or filed, by calendar key and period, and
+ * the payroll obligations that only the data can name (PT and LWF in the
+ * months something was deducted, salary TDS deposits).
+ */
+async function payrollRecords(ex: Executor, orgId: number, profile: CalendarProfile, fromMonth: string, toMonth: string) {
+  const auto = new Map<string, AutoDone>();
+  const extra: Obligation[] = [];
+  const BY = 'Payroll → Statutory Reports';
+  const { dues } = await statutoryRegister(ex, orgId, fromMonth, toMonth);
+  for (const d of dues) {
+    const key = COMPONENT_KEY[d.component];
+    if (d.component === 'pt' && d.duePaise > 0) {
+      const due = ptDueDate(profile.stateCode, d.month);
+      extra.push({ key, period: d.month, periodLabel: monthLabel(d.month), title: 'Professional Tax', area: 'payroll', dueDate: due.date,
+        detail: `Professional Tax deducted from salaries, paid to the state.${due.known ? '' : ' The date shown is the last day of the next month: confirm your state\'s date.'}`, href: '/payroll/statutory' });
+    }
+    if (d.component === 'lwf' && d.duePaise > 0) {
+      extra.push({ key, period: d.month, periodLabel: monthLabel(d.month), title: 'Labour Welfare Fund', area: 'payroll', dueDate: endOf(nextYm(d.month)),
+        detail: 'Both shares of the Labour Welfare Fund, paid to the state board. The date shown is the last day of the next month: confirm your state\'s date.', href: '/payroll/statutory' });
+    }
+    const paid = { duePaise: d.duePaise, paidPaise: d.paidPaise, payments: d.payments.map((x) => ({ on: x.paidOn, reference: x.reference, amountPaise: x.amountPaise })) };
+    if (d.duePaise > 0 && d.balancePaise <= 0 && d.payments.length) {
+      const last = d.payments[d.payments.length - 1];
+      auto.set(`${key}|${d.month}`, { on: last.paidOn, reference: d.payments.map((x) => x.reference).filter(Boolean).join(', ') || null, by: BY, paid });
+    } else if (d.payments.length) {
+      auto.set(`${key}|${d.month}|partial`, { on: d.payments[d.payments.length - 1].paidOn, reference: null, by: BY, paid });
+    }
+  }
+  const months: string[] = [];
+  for (let m = fromMonth; m <= toMonth; m = nextYm(m)) months.push(m);
+  for (const t of await salaryTdsMonths(ex, orgId, months)) {
+    if (t.deductedPaise <= 0) continue;
+    extra.push({ key: 'salary-tds-deposit', period: t.month, periodLabel: monthLabel(t.month), title: 'TDS on salary deposit', area: 'payroll', dueDate: depositDueDate(t.month),
+      detail: 'Tax deducted from salaries in the month (section 192), paid by challan ITNS 281.', href: '/payroll/statutory' });
+    const paid = { duePaise: t.deductedPaise, paidPaise: t.depositedPaise, payments: t.challans.map((c) => ({ on: c.date, reference: `${c.bsrCode}/${c.serial}`, amountPaise: c.taxPaise + c.surchargePaise + c.cessPaise })) };
+    if (t.status === 'deposited' && t.challans.length) {
+      const last = t.challans[t.challans.length - 1];
+      auto.set(`salary-tds-deposit|${t.month}`, { on: last.date, reference: t.challans.map((c) => `${c.bsrCode}/${c.serial}`).join(', '), by: BY, paid });
+    } else if (t.challans.length) {
+      auto.set(`salary-tds-deposit|${t.month}|partial`, { on: t.challans[t.challans.length - 1].date, reference: null, by: BY, paid });
+    }
+  }
+  // Form 24Q (138): filed when its token (receipt) number is recorded.
+  const filed = await ex.selectFrom('salary_tds_returns').select(['fy_start', 'quarter', 'receipt_no', 'filed_on']).where('org_id', '=', orgId).execute();
+  for (const r of filed) {
+    if (!r.receipt_no) continue;
+    auto.set(`salary-tds-return|${r.fy_start}-Q${r.quarter}`, { on: r.filed_on ? String(r.filed_on).slice(0, 10) : '', reference: r.receipt_no, by: BY, paid: null });
+  }
+  return { auto, extra };
 }
 
 const COMPANY_NAME = /\b(private|pvt\.?)\s*(limited|ltd\.?)|\b(limited|ltd\.?)\s*$/i;
@@ -260,6 +353,9 @@ export async function complianceCalendar(ex: Executor, orgId: number, from: stri
   const items: Obligation[] = [];
   // An annual return falls due well into the next year, so the year before is generated too.
   for (let fy = fyOf(from) - 1; fy <= fyOf(to); fy++) items.push(...obligations(profile, fy));
+  // Payroll's own records: payments made through Payroll mark the rows done.
+  const payroll = profile.payroll ? await payrollRecords(ex, orgId, profile, ymBefore(from.slice(0, 7), 3), to.slice(0, 7)) : null;
+  if (payroll) items.push(...payroll.extra);
   const inRange = items.filter((i) => i.dueDate >= from && i.dueDate <= to);
 
   const filed = await ex.selectFrom('compliance_filings as f').leftJoin('users as u', 'u.id', 'f.created_by_user_id')
@@ -269,12 +365,18 @@ export async function complianceCalendar(ex: Executor, orgId: number, from: stri
 
   const rows = inRange.map((i): CalendarRow => {
     const d = doneOf.get(`${i.key}|${i.period}`);
+    const auto = payroll?.auto.get(`${i.key}|${i.period}`);
+    const partial = payroll?.auto.get(`${i.key}|${i.period}|partial`);
     const daysLeft = daysBetween(today, i.dueDate);
+    const done = d ? { on: String(d.done_on).slice(0, 10), reference: d.reference, by: d.name } : auto ? { on: auto.on, reference: auto.reference, by: auto.by } : null;
+    const paid = auto?.paid ?? partial?.paid ?? null;
     return {
       ...i,
+      detail: partial?.paid && !done ? `${i.detail} Paid so far: ${inr(partial.paid.paidPaise)} of ${inr(partial.paid.duePaise)}.` : i.detail,
       daysLeft,
-      done: d ? { on: String(d.done_on).slice(0, 10), reference: d.reference, by: d.name } : null,
-      status: d ? 'done' : daysLeft < 0 ? 'overdue' : daysLeft <= 7 ? 'due_soon' : 'upcoming',
+      done,
+      paid,
+      status: done ? 'done' : daysLeft < 0 ? 'overdue' : daysLeft <= 7 ? 'due_soon' : 'upcoming',
     };
   }).sort((a, b) => a.dueDate.localeCompare(b.dueDate) || a.title.localeCompare(b.title));
   return { profile, rows };

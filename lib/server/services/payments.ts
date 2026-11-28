@@ -784,7 +784,8 @@ export async function updatePayment(
   await unpostPayment(trx, orgId, userId, p, `${p.number} edited: the entry as it was, reversed`);
   const as = typeof input === 'function' ? await input() : input;
   const made = await recordPayment(trx, orgId, userId, as, p.kind as 'received' | 'made', { replace: { id: paymentId, number: p.number } });
-  return { ...made, before };
+  // The record as it now stands, beside the one before: the audit trail writes the field-by-field edit log from the two.
+  return { ...made, before, after: await paymentSnapshot(trx, orgId, paymentId) };
 }
 
 /** Delete a payment, as Zoho Books' Delete: the documents it paid are owed again. */

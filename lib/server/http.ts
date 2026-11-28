@@ -12,7 +12,8 @@ import 'server-only';
 
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { claimKey, releaseKey, settleKey } from './idempotency';
-import { withChangeReason } from './request-context';
+import { withChangeReason, withRequestOrigin } from './request-context';
+import { auditIp } from './client-ip';
 import { NextResponse } from 'next/server';
 import { ZodError, type ZodType } from 'zod';
 import type { RoleName } from '../types';
@@ -175,16 +176,18 @@ export function route(handler: Handler, options: RouteOptions = {}) {
         if (prior) return new NextResponse(prior.body, { status: prior.status, headers: { 'Content-Type': 'application/json', 'Idempotent-Replay': 'true' } });
       }
 
+      // Where the request came from, for every audit row it writes (request-context.ts).
+      const origin = { ip: auditIp(req), userAgent: req.headers.get('user-agent') };
       let result: unknown;
       try {
-        result = await requestRole.run((user?.role ?? 'viewer') as RoleName, () => requestPermissions.run(user?.permissions ?? null, () => withChangeReason(reason, () => handler({
+        result = await requestRole.run((user?.role ?? 'viewer') as RoleName, () => requestPermissions.run(user?.permissions ?? null, () => withChangeReason(reason, () => withRequestOrigin(origin, () => handler({
           user: user as SessionUser,
           orgId: user?.orgId ?? 0,
           branchId: user?.activeBranchId ?? user?.homeBranchId ?? 0,
           role: (user?.role ?? 'viewer') as RoleName,
           req,
           params,
-        }))));
+        })))));
       } catch (err) {
         if (user && idem) await releaseKey(user.orgId, user.userId, idem);
         throw err;

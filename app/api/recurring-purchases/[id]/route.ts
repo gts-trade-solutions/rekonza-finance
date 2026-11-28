@@ -16,7 +16,7 @@ export const PUT = route(
       await logAudit({
         trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'update',
         targetType: 'recurring_purchase', targetId: id, targetLabel: r.name,
-        detail: `Recurring ${input.kind} edited: ${input.frequency}, next run ${r.nextRun}`, payload: { before: r.before }, ...auditMeta(req),
+        detail: `Recurring ${input.kind} edited: ${input.frequency}, next run ${r.nextRun}`, payload: { before: r.before, after: r.after }, ...auditMeta(req),
       });
       return { id: asId(id), name: r.name, nextRun: r.nextRun };
     });
