@@ -34,7 +34,7 @@ import { Input } from '@/components/ui/input';
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
-import { ApiError } from '@/lib/api/client';
+import { ApiError, sentForApproval } from '@/lib/api/client';
 import { cn } from '@/lib/utils';
 
 const btn = 'inline-flex h-7 shrink-0 items-center gap-1 whitespace-nowrap rounded-md border bg-background px-2 text-xs font-medium hover:bg-accent disabled:pointer-events-none disabled:opacity-50';
@@ -169,6 +169,7 @@ export function ConfirmDelete({
       setReason('');
       onClose();
     } catch (e) {
+      if (sentForApproval(e)) { setReason(''); onClose(); return; }
       const msg = errText(e);
       setRefused(msg);
       toast.error('Not deleted', { description: msg });
@@ -300,6 +301,7 @@ export function DeleteConfirmDialog({
       close();
       onDone?.();
     } catch (e) {
+      if (sentForApproval(e)) { close(); return; }
       const message = e instanceof Error ? e.message : String(e);
       const code = e instanceof ApiError ? e.code : 'error';
       setError({ message, code });
@@ -402,6 +404,7 @@ export function useConfirmDelete(): { ask: (a: DeleteAsk) => void; dialog: React
       close();
       after?.();
     } catch (e) {
+      if (sentForApproval(e)) { close(); return; }
       const text = message(e);
       // Cancelled at the reason prompt: nothing to report.
       if (!/a reason is needed/.test(text)) {

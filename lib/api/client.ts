@@ -61,6 +61,8 @@ let onApprovalSent: ((a: ApprovalSent) => void) | null = null;
 export function setApprovalSentNotice(fn: ((a: ApprovalSent) => void) | null) {
   onApprovalSent = fn;
 }
+/** The request went to an admin for approval (the notice has said so): a window can simply close. */
+export const sentForApproval = (e: unknown): boolean => e instanceof ApiError && e.code === 'sent_for_approval';
 
 interface Options extends Omit<RequestInit, 'body'> {
   body?: unknown;

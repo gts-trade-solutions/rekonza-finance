@@ -34,7 +34,7 @@ import { CostCentreSelect, useCostCentres } from '@/components/forms/cost-centre
 import { ContactPicker } from '@/components/forms/quick-create';
 import {
   accounts as accountsApi, api, ApiError, bills as billApi, heldJournals, invoices as invoiceApi, journal, voucherReversals,
-  type AccountRow, type HeldJournalRow, type HeldJournalWithReversal, type JournalEntryRow, type JournalResponse, type JournalTemplateRow,
+  type AccountRow, type HeldJournalRow, type HeldJournalWithReversal, type JournalEntryRow, type JournalResponse, type JournalTemplateRow, sentForApproval,
 } from '@/lib/api/client';
 import { useApi, useApiAction } from '@/lib/api/use-api';
 import { usePermission } from '@/lib/store/hooks';
@@ -275,6 +275,8 @@ export default function JournalsPage() {
       state.refetch();
       held.refetch();
     } catch (e) {
+      // Sent to an admin for approval: the notice says so; the window closes.
+      if (sentForApproval(e)) { setReversing(null); return; }
       const firstOpenDate = e instanceof ApiError && e.code === 'period_locked' ? e.details?.firstOpenDate : undefined;
       setReverseError({ message: e instanceof Error ? e.message : String(e), firstOpenDate });
     } finally {

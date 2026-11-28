@@ -140,10 +140,15 @@ export async function requireAdminApproval(req: Request, path: string, user: Ses
     .executeTakeFirst();
   let id = waiting ? Number(waiting.id) : 0;
   if (!waiting) {
-    const reasonRaw = req.headers.get('x-change-reason');
-    let reason: string | null = null;
-    if (reasonRaw) { try { reason = decodeURIComponent(reasonRaw); } catch { reason = reasonRaw; } }
+    // The reason typed: in the reverse or void window it travels in the body, on a delete in ?reason=,
+    // and a book that asks a reason of every change sends it as X-Change-Reason.
     const url = new URL(req.url);
+    let bodyReason: string | null = null;
+    if (a.body) { try { const r = (JSON.parse(a.body) as { reason?: unknown }).reason; bodyReason = typeof r === 'string' && r.trim() ? r.trim() : null; } catch { /* not JSON */ } }
+    const reasonRaw = req.headers.get('x-change-reason');
+    let headerReason: string | null = null;
+    if (reasonRaw) { try { headerReason = decodeURIComponent(reasonRaw); } catch { headerReason = reasonRaw; } }
+    const reason = bodyReason ?? url.searchParams.get('reason')?.trim() ?? headerReason;
     const r = await db.insertInto('admin_requests').values({
       org_id: user.orgId, requested_by_user_id: user.userId, kind: a.kind, label: a.label.slice(0, 200),
       method: req.method, path: `${path}${url.search}`.slice(0, 500), body: a.body, change_reason: reason?.slice(0, 500) ?? null, scope: a.scope,

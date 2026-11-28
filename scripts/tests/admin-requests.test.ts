@@ -68,7 +68,8 @@ test('a reversal by someone who is not an admin is kept and sent to the admins; 
   const n = await latestNotice(admin.userId);
   assert.equal(n.kind, 'admin_request');
   assert.match(n.title, /Kumar Clerk asks to reverse journal entry/);
-  assert.match(n.body ?? '', /Posted to the wrong account/);
+  // The reason typed in the reverse window (the body's) is the one shown.
+  assert.match(n.body ?? '', /Reason: wrong account/);
   assert.match(n.href ?? '', new RegExp(`request=${e!.details!.requestId}$`));
   const again = await ask(clerk, 'PATCH', '/api/journal', { entryId: 41, date: '2026-11-28', reason: 'wrong account' });
   assert.equal(again?.details?.requestId, e!.details!.requestId, 'the same request waiting is not asked twice');
