@@ -45,6 +45,7 @@ import { recordSerials } from './serials';
 import { checkGodown } from './godowns';
 import { itemSaleAccounts } from './item-accounts';
 import { plain, recordDeletion, reverseForChange, unlinkDocument } from './doc-delete';
+import { getPolicies } from './org-settings';
 
 // ── Shared preamble ──────────────────────────────────────────────────────────
 
@@ -594,6 +595,42 @@ export async function section34Deadline(ex: Executor, orgId: number, invoiceDate
 }
 
 /**
+ * A credit note line with no HSN or SAC (auditor check, 2026-11-28).
+ *
+ * GSTR-1 table 12 reports credit notes by HSN, net of the sales, and the
+ * portal refuses a row without a code; "Before you file" on GSTR-1 lists such
+ * a line as an error. So the note is caught when it is made, not at filing.
+ *
+ * Where the business must print the code (CGST Rules, rule 46(g), as
+ * Notification 78/2020-CT sets the digits): six digits on every document above
+ * ₹5 crore turnover, which is also what choosing 6 or 8 digits in Settings →
+ * Items declares. Such a book cannot open a credit note with a line missing
+ * its code. Any other GST-registered book is warned, and the note is saved: a
+ * draft is only warned in either case, since it is not in the return yet.
+ * A book not registered for GST (supplyType nil_or_exempt for every line, no
+ * GSTR-1) is not asked. A line of zero value (a free note line) is not asked either.
+ */
+async function creditNoteHsnRule(
+  trx: Trx, orgId: number,
+  lines: { hsnSac: string | null; taxable: number; description: string | null }[],
+  supplyType: SupplyType, draft: boolean,
+): Promise<string | null> {
+  const missing = lines.map((l, i) => ({ l, n: i + 1 })).filter(({ l }) => !l.hsnSac?.trim() && l.taxable !== 0);
+  if (!missing.length) return null;
+  const org = await trx.selectFrom('organizations').select(['gst_registration_type', 'aato_above_5cr']).where('id', '=', orgId).executeTakeFirst();
+  if (org?.gst_registration_type !== 'regular' || supplyType === 'nil_or_exempt') return null;
+  const digits = (await getPolicies(trx, orgId)).hsn.digits;
+  const required = !!org?.aato_above_5cr || digits >= 6;
+  const which = missing.map(({ l, n }) => `line ${n}${l.description ? ` (${l.description.slice(0, 40)})` : ''}`).join(', ');
+  const what = `${which.charAt(0).toUpperCase()}${which.slice(1)} ${missing.length === 1 ? 'has' : 'have'} no HSN or SAC code. ` +
+    'GSTR-1 table 12 needs one on every line (a price cut on goods takes the goods\' HSN, on a service its SAC)';
+  if (required && !draft) {
+    throw badRequest(`${what}, and Settings → Items asks for at least ${digits} digits on every document (rule 46(g), Notification 78/2020-CT). Give each line its code.`);
+  }
+  return `${what}: GSTR-1 will list it under "Before you file" until it has one.`;
+}
+
+/**
  * Create a credit note, and post it.
  *
  * The entry is the invoice's, reversed for the part being credited:
@@ -644,6 +681,8 @@ export async function createCreditNote(
 
   let invoice: { id: number; number: string; total: string; amount_paid: string; invoice_date: string } | undefined;
   const warnings: string[] = [];
+  const noCode = await creditNoteHsnRule(trx, orgId, costed.lines, ctx.supplyType, draft);
+  if (noCode) warnings.push(noCode);
   if (input.againstInvoiceId) {
     invoice = await trx
       .selectFrom('invoices')
@@ -815,7 +854,7 @@ export async function createCreditNote(
     return { id, number, totalPaise: rounded, journalEntryId: null, heldForApproval: true, warnings };
   }
   // A draft stops here: nothing is posted, returned to stock or applied until it is open.
-  if (draft) return { id, number, totalPaise: rounded, journalEntryId: null };
+  if (draft) return { id, number, totalPaise: rounded, journalEntryId: null, warnings };
 
   // Numbered pieces coming back: each has to have gone out.
   const cnLineIds = (await trx.selectFrom('credit_note_lines').select('id').where('credit_note_id', '=', id).orderBy('line_no').execute()).map((r) => r.id);

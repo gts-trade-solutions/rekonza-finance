@@ -42,6 +42,8 @@ import {
   GST_STATES, STATE_ALPHA, computeLineTax, placeOfSupplyFor, resolveSupplyType, stateTaxLabel, sumTax, totalTaxPaise,
 } from '@/lib/tax/gst';
 import { formatINR, roundToRupee } from '@/lib/money';
+import { toastWarnings } from '@/lib/api/warnings';
+import { isHsnDigits } from '@/lib/tax/hsn';
 import { REVERSE_CHARGE_NOTE } from '@/lib/tax/reverse-charge';
 import type { Contact, ContactAddress } from '@/lib/types';
 import { ATTACH_TARGET, CHALLAN_TYPES, CREDIT_REASONS, SALES_DOC, type SalesDocKindZ } from './sales-docs';
@@ -320,14 +322,35 @@ export function SalesDocumentForm({ kind, editing }: {
     [s.accounts],
   );
 
+  // A credit note line with no HSN or SAC lands in GSTR-1 table 12 without a
+  // code, which the portal refuses and "Before you file" lists as an error
+  // (auditor check, 2026-11-28). It is shown on the form as the line is typed.
+  // Where the book must print the code on every document (above ₹5 crore
+  // turnover, or 6 or 8 digits chosen in Settings → Items: rule 46(g),
+  // Notification 78/2020-CT) the note cannot be saved as open without it; the
+  // server holds the same rule (services/sales-documents.ts creditNoteHsnRule).
+  const hsnPolicy = useApi(() => (isCredit
+    ? api.get<{ hsn?: { digits?: number } }>('/api/settings/policies').catch(() => ({ hsn: { digits: 4 } }))
+    : Promise.resolve({ hsn: { digits: 4 } })), [isCredit]);
+  const policyDigits = hsnPolicy.data?.hsn?.digits;
+  const hsnDigits = isHsnDigits(policyDigits) ? policyDigits : 4;
+  const gstBook = s.org?.gstRegistrationType === 'regular';
+  const hsnRequired = gstBook && (!!s.org?.aatoAbove5Cr || hsnDigits >= 6);
+  const linesWithoutCode = isCredit && gstBook
+    ? lines.map((l, i) => ({ l, n: i + 1 })).filter(({ l }) => l.qty > 0 && (l.itemId || l.description.trim()) && l.ratePaise > 0 && !l.hsnSac.trim())
+    : [];
+
   /** Zoho's own messages, in the pink box at the top. */
-  const problems = (): string[] => {
+  const problems = (draftSave = false): string[] => {
     const out: string[] = [];
     if (!customerId) out.push('Select a customer.');
     if (!lines.some((l) => l.qty > 0 && (l.itemId || l.description.trim()))) out.push('Enter the valid item name or description.');
     if ((isQuote || isOrder) && customerId && !pos) out.push('Please select a place of supply');
     if (isChallan && !challanType) out.push('Please choose an appropriate Challan type.');
     if (isCredit && !reason) out.push('Please select a reason for issuing the credit note.');
+    if (linesWithoutCode.length && hsnRequired && !draftSave) {
+      out.push(`Give ${linesWithoutCode.map(({ n }) => `line ${n}`).join(', ')} an HSN or SAC code: Settings → Items asks for at least ${hsnDigits} digits on every document.`);
+    }
     if (isQuote && expiryDate && expiryDate < date) out.push('The expiry date cannot be earlier than the quote date.');
     if (isQuote && retainerOn && !(Number(retainerPct) > 0 && Number(retainerPct) <= 100)) out.push('Enter the retainer as a per cent of the quote, above 0 and up to 100.');
     if (rcm && customer && !customer.gstin) out.push('Reverse charge applies only to a registered customer: add their GSTIN.');
@@ -336,7 +359,7 @@ export function SalesDocumentForm({ kind, editing }: {
 
   // `print`: a sales order's Save and Send ▾ → Save and Print (Zoho's): saved, then its print copy.
   const save = async (mode: 'draft' | 'send' | 'save' | 'open', print = false) => {
-    const found = problems();
+    const found = problems(isCredit && (mode === 'draft' || (ed?.status === 'draft' && mode === 'save')));
     setErrors(found);
     if (found.length) { window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
     setSaving(mode);
@@ -373,6 +396,7 @@ export function SalesDocumentForm({ kind, editing }: {
         await salesDocuments.setStatus(kind, done.id, isQuote ? 'sent' : 'open').catch(() => toast.warning('Saved, but its status did not change.'));
       }
       const creditDraft = isCredit && (mode === 'draft' || (ed?.status === 'draft' && mode === 'save'));
+      toastWarnings(done);
       if (isCredit && (done as { heldForApproval?: boolean }).heldForApproval) {
         toast.info(`${info.noun} ${done.number} is waiting for approval`, { description: 'An approval rule covers credit notes of this amount: it posts when someone else approves it (Approvals).' });
         router.push(`${info.base}/${done.id}`);
@@ -572,6 +596,13 @@ export function SalesDocumentForm({ kind, editing }: {
         <LineItemsEditor docDate={date} lines={lines} onChange={setLines} priceFor={priceFor} supplyType={supplyType}
           {...(isCredit ? { accountOptions: incomeAccounts, accountValues: lineAccounts, onAccountChange: (k: string, v: string) => setLineAccounts((m) => ({ ...m, [k]: v })) } : {})} />
         {isChallan && <p className="text-xs text-muted-foreground">A delivery challan moves goods without selling them: it carries their value, and no GST.</p>}
+        {linesWithoutCode.length > 0 && (
+          <p className={hsnRequired ? 'rounded-md border border-destructive/40 bg-destructive/5 p-2.5 text-[12px] text-destructive' : 'rounded-md border border-amber-500/40 bg-amber-50 p-2.5 text-[12px] text-amber-800 dark:bg-amber-950/30 dark:text-amber-200'} data-slot="cn-hsn-warning">
+            {linesWithoutCode.map(({ n }) => `Line ${n}`).join(', ')} {linesWithoutCode.length === 1 ? 'has' : 'have'} no HSN or SAC code.
+            GSTR-1 table 12 needs one on every credit note line (a price cut on goods takes the goods&apos; HSN, on a service its SAC), or the return shows it under &quot;Before you file&quot;.
+            {hsnRequired ? ` This book prints at least ${hsnDigits} digits on every document, so the note cannot be saved as open without it.` : ' Pick the code in the HSN/SAC column.'}
+          </p>
+        )}
       </div>
 
       <div className="grid gap-6 lg:grid-cols-2">

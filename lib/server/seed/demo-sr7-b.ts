@@ -101,25 +101,25 @@ export async function seedDemoSr7B(trx: Trx, ids: IdMap) {
   await saveRule(trx, org, { documentType: 'credit_note', thresholdPaise: 50_000_00, approverRole: 'accountant', isActive: true });
   const bigSale = await createInvoice(trx, org, admin, {
     branchId: branch, customerId: apex, date: day(12), dueDate: day(-18), status: 'approved',
-    lines: [{ description: 'Fleet service package — 20 vehicles', qty: 20, ratePaise: 4_500_00, gstRatePct: 18 }],
+    lines: [{ description: 'Fleet service package — 20 vehicles', hsnSac: '998714', qty: 20, ratePaise: 4_500_00, gstRatePct: 18 }],
   });
   await createCreditNote(trx, org, admin, {
     branchId: branch, customerId: apex, date: day(3), reason: 'Rate reduction agreed after delivery', againstInvoiceId: bigSale.id,
-    lines: [{ description: 'Fleet service package — rate cut on 20 vehicles', qty: 20, ratePaise: 3_000_00, gstRatePct: 18 }],
+    lines: [{ description: 'Fleet service package — rate cut on 20 vehicles', hsnSac: '998714', qty: 20, ratePaise: 3_000_00, gstRatePct: 18 }],
   });
   const paidSale = await createInvoice(trx, org, admin, {
     branchId: branch, customerId: sharma, date: day(15), dueDate: day(0), status: 'approved',
-    lines: [{ description: 'Wheel alignment and balancing', qty: 4, ratePaise: 1_200_00, gstRatePct: 18 }],
+    lines: [{ description: 'Wheel alignment and balancing', hsnSac: '998714', qty: 4, ratePaise: 1_200_00, gstRatePct: 18 }],
   });
   const settled = await trx.selectFrom('invoices').select('total').where('id', '=', paidSale.id).executeTakeFirstOrThrow();
   await trx.updateTable('invoices').set({ amount_paid: settled.total, status: 'paid' }).where('id', '=', paidSale.id).execute();
   const late = await createCreditNote(trx, org, admin, {
     branchId: branch, customerId: sharma, date: day(4), reason: 'Service not done on one vehicle', againstInvoiceId: paidSale.id,
-    lines: [{ description: 'Wheel alignment — one vehicle not done', qty: 1, ratePaise: 1_200_00, gstRatePct: 18 }],
+    lines: [{ description: 'Wheel alignment — one vehicle not done', hsnSac: '998714', qty: 1, ratePaise: 1_200_00, gstRatePct: 18 }],
   });
   const open = await createInvoice(trx, org, admin, {
     branchId: branch, customerId: sharma, date: day(3), dueDate: day(-27), status: 'approved',
-    lines: [{ description: 'Brake bleeding service', qty: 1, ratePaise: 800_00, gstRatePct: 18 }],
+    lines: [{ description: 'Brake bleeding service', hsnSac: '998714', qty: 1, ratePaise: 800_00, gstRatePct: 18 }],
   });
   await applyCreditNote(trx, org, admin, late.id, { date: day(2), allocations: [{ invoiceId: open.id, amountPaise: 500_00 }] });
   await refundCreditNote(trx, org, admin, late.id, { bankAccountId: hdfc, date: day(1), reference: 'NEFT refund to Sharma Traders' });
