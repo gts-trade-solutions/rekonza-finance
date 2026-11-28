@@ -357,7 +357,7 @@ function FormRow({ k, v, onOpen }: { k: Gstr3bRowKey; v: Gstr3bHeads; onOpen: ()
   const shows = (h: Heads) => cols === 'all' || (cols === 'igst' && (h === 'IGST' || h === 'CESS'));
   const val = (h: Heads) => (h === 'IGST' ? v.igstPaise : h === 'CGST' ? v.cgstPaise : h === 'SGST' ? v.sgstPaise : v.cessPaise);
   return (
-    <tr className="border-b last:border-0">
+    <tr className="border-b last:border-0" data-slot={`gstr3b-row-${k}`}>
       <td className="px-3 py-2">{GSTR3B_ROWS[k].label}</td>
       <td className={td}><Figure value={v.taxablePaise} onOpen={onOpen} /></td>
       {HEADS.map((h) => <td key={h} className={td}><Figure value={val(h)} onOpen={onOpen} muted={!shows(h)} /></td>)}

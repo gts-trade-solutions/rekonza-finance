@@ -240,9 +240,13 @@ try {
     await page.locator('[data-slot="filing-dialog"]').waitFor();
     await page.fill('[data-slot="filing-date"]', `${CUR}-11`);
     await page.fill('[data-slot="filing-arn"]', `AA33${mmyyyy(PREV).slice(0, 2)}${PREV.slice(2, 4)}0001234`);
-    // Not locked yet: the invoice is corrected below, as a late correction would be.
+    // Not locked: the invoice is corrected below, as a late correction would be.
+    // The lock is off unless ticked (auditor check, 2026-11-28), and says what it does.
     const lockBox = page.locator('[data-slot="filing-lock-sales"]');
-    if (await lockBox.count()) await lockBox.click();
+    if (await lockBox.count()) {
+      check('The lock after filing is offered, unticked', (await lockBox.getAttribute('data-checked')) === null && (await lockBox.getAttribute('aria-checked')) !== 'true');
+      check('Under it, what locking does and that corrections go to a later return (s.37(3))', /can be added, edited, voided or deleted[\s\S]*section 37\(3\)/.test(await page.locator('[data-slot="filing-lock-help"]').innerText()));
+    }
     await shot(page, '11-03-gstr1-mark-filed-dialog');
     await page.locator('[data-slot="filing-save"]').click();
     await page.locator('[data-slot="filing-filed"]').waitFor({ timeout: 60_000 });
@@ -450,6 +454,9 @@ try {
     await page.fill('[data-slot="filing-date"]', TODAY);
     await page.fill('[data-slot="filing-arn"]', `AB33${mmyyyy(PREV).slice(0, 2)}${PREV.slice(2, 4)}0004321`);
     check('The lock after filing is offered for sales and purchases', await page.locator('[data-slot="filing-lock-sales"]').count() === 1 && await page.locator('[data-slot="filing-lock-purchases"]').count() === 1);
+    // Ticked on purpose here: the lock is optional and off by default.
+    await page.locator('[data-slot="filing-lock-sales"]').click();
+    await page.locator('[data-slot="filing-lock-purchases"]').click();
     await page.locator('[data-slot="filing-save"]').click();
     await page.waitForTimeout(2500);
     const status = (await api('GET', `/api/gst/filing?returnType=gstr3b&period=${PREV}`)).json;

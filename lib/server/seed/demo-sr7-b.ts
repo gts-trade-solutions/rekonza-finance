@@ -163,8 +163,8 @@ export async function seedDemoSr7B(trx: Trx, ids: IdMap) {
   const out = await runImport(trx, ctx, 'contacts', rows);
   await recordImportBatch(trx, org, priya, { module: 'customers', kind: 'contacts', fileName: 'customers-november.xlsx', fileFormat: 'xlsx', mode: 'valid_only', outcome: out });
   const items = await runImport(trx, ctx, 'items', [
-    { name: 'Wheel Bearing – Swift Front', description: 'Front wheel bearing for Maruti Swift', kind: 'goods', hsn_sac: '8482', unit: 'NOS', gst_rate: '18', purchase_price: '650', sale_price: '980', __line: '2' },
-    { name: 'Brake Fluid DOT4 500ml', description: 'DOT4 brake fluid, 500 ml bottle', kind: 'goods', hsn_sac: '3819', unit: 'BTL', gst_rate: '18', purchase_price: '180', sale_price: '260', __line: '3' },
+    { name: 'Wheel Bearing – Swift Front', description: 'Front wheel bearing for Maruti Swift', kind: 'goods', hsn_sac: '848210', unit: 'NOS', gst_rate: '18', purchase_price: '650', sale_price: '980', __line: '2' },
+    { name: 'Brake Fluid DOT4 500ml', description: 'DOT4 brake fluid, 500 ml bottle', kind: 'goods', hsn_sac: '381900', unit: 'BTL', gst_rate: '18', purchase_price: '180', sale_price: '260', __line: '3' },
   ]);
   await recordImportBatch(trx, org, priya, { module: 'items', kind: 'items', fileName: 'new-items.csv', fileFormat: 'csv', mode: 'all', outcome: items });
 }
