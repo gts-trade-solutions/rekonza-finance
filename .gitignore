@@ -48,6 +48,7 @@ build.log
 
 # local screenshots
 /scripts/shots/
+/scripts/e2e/shots/
 dev.log
 /.next-verify/
 

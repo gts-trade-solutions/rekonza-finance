@@ -7,9 +7,7 @@ import {
   ScanBarcode, BellRing, Download, Upload, ArrowLeftRight, FileUp, FileDown, AlertOctagon, Radar, FilePlus2, Timer, FolderKanban, Ship, PhoneCall, ListChecks, LayoutTemplate, Shuffle, Globe,
   House, ShoppingBasket, ShoppingBag, Clock, UserRoundCog, ChartNoAxesColumn, Folder,
 } from 'lucide-react';
-// Status review 7, builder A.
-import { History } from 'lucide-react';
-// Status review 7, builder B.
+// Status review 7 (builders A and B).
 import { Copy, History } from 'lucide-react';
 
 export interface NavItem {

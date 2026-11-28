@@ -38,7 +38,7 @@ const currentFy = () => {
   const y = Number(d.slice(0, 4)) - (Number(d.slice(5, 7)) < 4 ? 1 : 0);
   return `${y}-${String((y + 1) % 100).padStart(2, '0')}`;
 };
-export const scopeOf = (p: Pick<BudgetPlanSummary, 'branchName' | 'costCentreName' | 'projectName'>) =>
+const scopeOf = (p: Pick<BudgetPlanSummary, 'branchName' | 'costCentreName' | 'projectName'>) =>
   p.costCentreName ? `Cost centre: ${p.costCentreName}` : p.projectName ? `Project: ${p.projectName}` : p.branchName ? `Branch: ${p.branchName}` : 'Whole business';
 
 export default function BudgetsPage() {
