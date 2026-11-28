@@ -215,7 +215,7 @@ test('overselling, writing off and moving stock that is not there: warned by def
   await withFixture(async (f) => {
     await buy(f, '2026-11-01', 10, 10_000, 'S1');
     const inv = await sell(f, '2026-11-02', 15);
-    assert.ok(inv.warnings.some((w) => /FIFO Widget: 10 in stock, 15 going out, short by 5/.test(w)), inv.warnings.join(' | '));
+    assert.ok((inv.warnings ?? []).some((w) => /FIFO Widget: 10 in stock, 15 going out, short by 5/.test(w)), (inv.warnings ?? []).join(' | '));
     const adj = await createAdjustment(f.trx, f.orgId, null, { itemId: f.itemId, date: '2026-11-03', qtyDelta: -2, reason: 'damage' });
     assert.ok(adj.warnings.some((w) => /FIFO Widget would be at -7/.test(w)), adj.warnings.join(' | '));
     // The statements say so.
@@ -241,7 +241,7 @@ test('a sale dated before a later sale that already used the stock is caught on 
     await buy(f, '2026-04-01', 10, 10_000, 'T1');
     await sell(f, '2026-04-10', 8);
     const back = await sell(f, '2026-04-05', 5); // 10 on hand on 5 April, but 2 by today
-    assert.ok(back.warnings.some((w) => /short by 3/.test(w)), back.warnings.join(' | '));
+    assert.ok((back.warnings ?? []).some((w) => /short by 3/.test(w)), (back.warnings ?? []).join(' | '));
   });
 });
 

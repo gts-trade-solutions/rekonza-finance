@@ -103,8 +103,8 @@ test('negative stock: goods not on hand are flagged or refused; services are nev
     await policy(f, { creditLimit: 'off' });
     const warned = await sell(f, f.itemId);
     // The shortfall is named too, and what it would do to the statements (fx-c, 2026-11-28).
-    assert.equal(warned.warnings.length, 1);
-    assert.match(warned.warnings[0], /^Not enough stock — Disc: 0 in stock, 1 going out, short by 1 nos\. Stock below zero would show as a negative closing stock/);
+    assert.equal((warned.warnings ?? []).length, 1);
+    assert.match((warned.warnings ?? [])[0], /^Not enough stock — Disc: 0 in stock, 1 going out, short by 1 nos\. Stock below zero would show as a negative closing stock/);
     assert.deepEqual((await sell(f, f.serviceId)).warnings, []);
 
     await policy(f, { negativeStock: 'block' });
