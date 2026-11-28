@@ -88,8 +88,8 @@ await open('/sales/invoices');
 check("Top bar is Zoho's navy #21263c", (await css('[data-slot=topbar]', 'backgroundColor')) === 'rgb(33, 38, 60)');
 check('Top bar is 48px tall', Math.round((await box('[data-slot=topbar]'))?.height ?? 0) === 48);
 check("Sidebar is Zoho's lavender #f7f7fe", (await css('[data-slot=sidebar]', 'backgroundColor')) === 'rgb(247, 247, 254)');
-// Every page opens with the sidebar folded to the rail (the client, 2026-11-25); the top bar's ☰ opens it.
-check('A page opens with the sidebar folded to the 72px rail', Math.round((await box('aside'))?.width ?? 0) === 72);
+// The app opens with the sidebar showing, and choosing a page from it folds it (the client, 2026-11-28).
+check('The app opens with the 220px menu showing', Math.round((await box('aside'))?.width ?? 0) === 220);
 const font = await page.evaluate(() => ({ family: getComputedStyle(document.body).fontFamily, size: getComputedStyle(document.body).fontSize }));
 check('Body text is Inter at 13px', /Inter/i.test(font.family) && font.size === '13px', `${font.family.slice(0, 40)} ${font.size}`);
 check("Buttons are Zoho's blue #408dfb", (await css('[data-slot=page-actions] a[href="/sales/invoices/new"]', 'backgroundColor')) === 'rgb(64, 141, 251)');
@@ -99,7 +99,10 @@ check("Table headings are 11px uppercase grey", await page.locator('thead th').n
 
 await page.locator('[data-slot=topbar-nav-fold]').click();
 await page.waitForTimeout(400);
-check("The top bar's ☰ opens the 220px menu", Math.round((await box('aside'))?.width ?? 0) === 220);
+check("The top bar's ☰ folds it to the 72px rail", Math.round((await box('aside'))?.width ?? 0) === 72);
+await page.locator('[data-slot=topbar-nav-fold]').click();
+await page.waitForTimeout(400);
+check("…and opens the 220px menu again", Math.round((await box('aside'))?.width ?? 0) === 220);
 const zohoRows = await page.evaluate(() => {
   const nav = document.querySelector('[data-slot=sidebar] nav');
   const extras = nav.querySelector('[data-slot=sidebar-extras]');
@@ -134,8 +137,10 @@ check('The menu folds to the 72px rail', Math.round((await box('aside'))?.width 
 await page.getByRole('button', { name: 'Expand the menu' }).click();
 await page.waitForTimeout(400);
 check('…and opens again on the same page', Math.round((await box('aside'))?.width ?? 0) === 220);
-await open('/sales/invoices');
-check('Opening a page folds it again', Math.round((await box('aside'))?.width ?? 0) === 72);
+await page.locator('[data-slot=sidebar] a[href="/sales/invoices"]').first().click();
+await page.waitForURL('**/sales/invoices');
+await page.waitForTimeout(400);
+check('Choosing a page from the menu folds it', Math.round((await box('aside'))?.width ?? 0) === 72);
 await page.locator('[data-slot=sidebar] button', { hasText: 'Purchases' }).hover();
 await page.waitForTimeout(600);
 const flyout = page.locator('[data-slot=popover-content] a[href="/purchases/bills"]');
@@ -230,7 +235,7 @@ for (const [list, re, label] of [
   await page.waitForSelector(`:is(${ROW})[data-active="1"]`, { timeout: 30000 }).catch(() => {});
   await page.waitForTimeout(800);
   check(`${label}: a record opens beside the list`, (await page.locator('[data-slot=split-list]').isVisible()) && (await page.locator(`:is(${ROW})[data-active="1"]`).count()) === 1);
-  // Every page, a record included, opens with the sidebar folded (the client, 2026-11-25).
+  // Moving on from the first page folds the sidebar (the client, 2026-11-28).
   check(`${label}: the sidebar is folded to the rail while it is open`, Math.round((await box('aside'))?.width ?? 0) === 72);
   if (label === 'Customers' || label === 'Vendors') {
     // Zoho's customer page has no grey bar: the name, Edit, the paperclip and More sit on white.
@@ -252,7 +257,7 @@ for (const [list, re, label] of [
   await page.getByRole('link', { name: `Close and go back to ${label}` }).click();
   await page.waitForURL((u) => u.pathname === list, { timeout: 30000 });
   await page.waitForTimeout(500);
-  check(`${label}: X goes back to the list, the sidebar folded as on every page`, Math.round((await box('aside'))?.width ?? 0) === 72);
+  check(`${label}: X goes back to the list, the sidebar still folded`, Math.round((await box('aside'))?.width ?? 0) === 72);
 }
 const inv1 = openInv.invoices[0]?.id ?? (await api('/api/invoices?limit=1')).invoices[0].id;
 await open(`/sales/invoices/${inv1}/print`);
@@ -681,7 +686,7 @@ check('A link to ?tab=checklist opens the board', (await page.locator('[data-slo
 
 // ── G. Reports Center ──────────────────────────────────────────────────────
 await open('/reports');
-check('Reports Center folds the sidebar, as Zoho does', Math.round((await box('aside'))?.width ?? 0) === 72);
+check('Reports Center opened from its address is the first page: the menu shows', Math.round((await box('aside'))?.width ?? 0) === 220);
 check("Reports Center lists Zoho's categories", (await page.locator('[data-slot=report-category]').count()) >= 11);
 const allReports = await page.locator('[data-slot=report-row]').count();
 await page.locator('[data-slot=report-category]', { hasText: /^Receivables$/ }).click();
@@ -714,11 +719,10 @@ await page.locator('[data-slot=banking-more]').click();
 await page.waitForTimeout(300);
 check("More holds Rekonza's banking tools", (await page.locator('[data-slot=dropdown-menu-content] a').count()) >= 6);
 await page.keyboard.press('Escape');
-check('Banking Overview opens with the sidebar folded, as every page', (await page.locator('aside [data-slot=sidebar]').getAttribute('data-folded')) === '1');
+check('Banking Overview opened from its address shows the menu (the first page)', (await page.locator('aside [data-slot=sidebar]').getAttribute('data-folded')) === null);
 if (banks.accounts[0]) {
   await open(`/banking/transactions?account_id=${banks.accounts[0].id}`);
-  check("An account's page folds the sidebar and has Zoho's tabs", (await page.locator('aside [data-slot=sidebar]').getAttribute('data-folded')) === '1'
-    && (await page.locator('[data-slot=account-tab]').count()) >= 3 && (await page.locator('[data-slot=add-transaction]').count()) <= 1);
+  check("An account's page has Zoho's tabs", (await page.locator('[data-slot=account-tab]').count()) >= 3 && (await page.locator('[data-slot=add-transaction]').count()) <= 1);
 }
 
 // ── I. Settings mode ───────────────────────────────────────────────────────

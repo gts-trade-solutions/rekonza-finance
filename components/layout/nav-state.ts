@@ -2,11 +2,13 @@
 
 // Whether the sidebar is folded down to the icon rail.
 //
-// Every page opens with it folded (the client, 2026-11-25: "when I entered the
-// page the sidebar should close for all the pages"), so the page gets the
-// room. The top bar's menu button, or the rail's expand button, opens it; it
-// stays open on that page and folds again when the next page opens. Before
-// this the choice was remembered in the browser, as Zoho remembers it.
+// It is open when the app first opens, and folds as soon as a page is chosen
+// from it (the client, 2026-11-28: "initially the sidebar should be open; when
+// I click something inside of it, at that time it should hide"); before that,
+// from 2026-11-25, every page opened with it folded. So: open on the first page
+// the app loads, folded on every page after, the page getting the room. The top
+// bar's menu button, or the rail's expand button, opens it again; it stays open
+// on that page and folds when a page is chosen from it or the next page opens.
 //
 // A screen can also hold it folded while it is on screen (a record open in
 // the split view, an entry window): a "force" taken by that screen and
@@ -16,8 +18,14 @@
 import { useEffect, useSyncExternalStore } from 'react';
 import { usePathname } from 'next/navigation';
 
-/** The page the person opened the sidebar on; it folds again on any other. */
-let openedOn: string | null = null;
+/** Until the first page of the app has shown: open, whatever that page is. */
+const OPEN_FIRST = '*';
+/**
+ * The page the sidebar is open on; it is folded on any other. To begin with,
+ * the first page the app shows (taken once it has shown: signing in moves to
+ * the dashboard without reloading, so the address at load can still be /login).
+ */
+let openedOn: string | null = OPEN_FIRST;
 let forced = 0;
 /** The person opened the menu over a screen that folds it; cleared when the last such screen closes. */
 let overridden = false;
@@ -35,11 +43,18 @@ function subscribe(l: () => void) {
 // One string, so a change to any part re-renders (useSyncExternalStore compares snapshots).
 const snapshot = () => `${forced > 0 && !overridden ? '1' : '0'}${openedOn ?? ''}`;
 
-/** The sidebar is folded: on every page until the person opens it there, and while a screen holds it. */
+/** The sidebar is folded: on every page but the one it is open on, and while a screen holds it. */
 export function useNavCollapsed(): boolean {
   const pathname = usePathname();
-  const s = useSyncExternalStore(subscribe, snapshot, () => '0');
-  return s[0] === '1' || s.slice(1) !== pathname;
+  const s = useSyncExternalStore(subscribe, snapshot, () => `0${OPEN_FIRST}`);
+  // The first page shown keeps it open; leaving the page it is open on folds it for good (coming
+  // back to that page, by X on a record or Back, does not open it again: only ☰ or » does).
+  useEffect(() => {
+    if (!pathname) return;
+    if (openedOn === OPEN_FIRST) { openedOn = pathname; emit(); } else if (openedOn !== null && openedOn !== pathname) { openedOn = null; emit(); }
+  }, [pathname]);
+  const openOn = s.slice(1);
+  return s[0] === '1' || (openOn !== OPEN_FIRST && openOn !== pathname);
 }
 
 /** Open (false) or fold (true) the sidebar on the page that is open. */

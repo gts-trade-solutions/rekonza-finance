@@ -26,7 +26,7 @@ import { BOTTOM_LEVEL, NAV_GROUPS, TOP_LEVEL, type FeatureKey, type NavGroup, ty
 import { api } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
 import { useSession } from './session-provider';
-import { toggleNav, useNavCollapsed } from './nav-state';
+import { setNavCollapsed, toggleNav, useNavCollapsed } from './nav-state';
 
 /** Where the "+" on a nav row goes, when that screen has a create form. */
 const CREATE_HREF: Record<string, string> = {
@@ -247,7 +247,12 @@ export function Sidebar({ onNavigate, forceExpanded = false }: { onNavigate?: ()
   return (
     <div
       className="flex h-full flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground"
-      onClick={onNavigate}
+      onClick={(e) => {
+        // Choosing a page from it folds it (a link, here or in a rail group's menu; a group's own
+        // heading only opens its list). The phone drawer closes by onNavigate instead.
+        if (!forceExpanded && (e.target as HTMLElement).closest('a[href]')) setNavCollapsed(true);
+        onNavigate?.();
+      }}
       data-slot="sidebar"
       data-folded={folded ? '1' : undefined}
     >
