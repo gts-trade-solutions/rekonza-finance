@@ -1,20 +1,20 @@
 'use client';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Payroll → Statutory Registers: the registers an auditor or a labour
-// inspector asks for, over any months, and each month's dues against what
-// has been paid, with a way to pay them.
+// Payroll → Statutory Reports: the reports an auditor or a labour inspector
+// asks for, over any months, each with its government file and its tie to the
+// pay runs and the ledger (components/payroll/statutory-reports.tsx).
 //
 //   Dues & Payments  PF, ESI, PT and LWF per month: due, paid, left, due date;
 //                    Pay posts Dr the payable, Cr the bank, with the challan.
-//   PF Register      UAN, PF and EPS wages, employee 12%, employer EPF and
-//                    EPS, EDLI, admin charges.
-//   ESI Register     IP number, ESI wages, employee and employer.
-//   PT Register      Professional Tax by employee and month.
-//   LWF Register     Labour Welfare Fund, employee and employer.
-//   TDS on Salary    the tax deducted; deposited through the TDS challans.
+//   PF               the register by employee and the ECR 2.0 upload.
+//   ESI              the register and the ESIC monthly contribution upload.
+//   PT               by state: the monthly return by slab, and the year.
+//   LWF              by state and period.
+//   TDS on Salary    deposits by challan (ITNS 281), each deduction linked.
+//   Form 24Q         Annexure I by challan, Annexure II in the fourth quarter.
 //
-// Every register exports to Excel or CSV as it shows.
+// Every report exports to Excel or CSV as it shows.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useMemo, useState } from 'react';
@@ -34,6 +34,7 @@ import { downloadCsv } from '@/components/shared/report-shell';
 import { api } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
 import { usePermission } from '@/lib/store/hooks';
+import { EsiTab, Form24QTab, LwfTab, PfTab, PtTab, TdsTab } from '@/components/payroll/statutory-reports';
 
 type Component = 'pf' | 'esi' | 'pt' | 'lwf';
 interface Line {
@@ -174,8 +175,8 @@ export default function StatutoryRegistersPage() {
   return (
     <>
       <PageHeader
-        title="Statutory Registers"
-        description="PF, ESI, Professional Tax, LWF and TDS on salary, employee by employee and month by month, with each month's dues against what has been paid."
+        title="Statutory Reports"
+        description="PF with the ECR upload, ESI with the monthly upload, Professional Tax by state, LWF, TDS on salary with its challans, Form 24Q and Form 16 — each tied to the pay runs and the ledger."
         actions={
           <div className="flex items-end gap-2">
             <label className="space-y-0.5 text-[11px] text-muted-foreground"><span className="block">From</span>
@@ -192,11 +193,13 @@ export default function StatutoryRegistersPage() {
           <Tabs defaultValue="dues">
             <TabsList className="max-w-full flex-wrap group-data-[orientation=horizontal]/tabs:h-auto">
               <TabsTrigger value="dues">Dues &amp; Payments</TabsTrigger>
-              <TabsTrigger value="pf">PF Register</TabsTrigger>
-              <TabsTrigger value="esi">ESI Register</TabsTrigger>
-              <TabsTrigger value="pt">PT Register</TabsTrigger>
-              <TabsTrigger value="lwf">LWF Register</TabsTrigger>
-              <TabsTrigger value="tds">TDS on Salary</TabsTrigger>
+              <TabsTrigger value="pf" data-slot="tab-pf">PF &amp; ECR</TabsTrigger>
+              <TabsTrigger value="esi" data-slot="tab-esi">ESI</TabsTrigger>
+              <TabsTrigger value="pt" data-slot="tab-pt">Professional Tax</TabsTrigger>
+              <TabsTrigger value="lwf" data-slot="tab-lwf">LWF</TabsTrigger>
+              <TabsTrigger value="tds" data-slot="tab-tds">TDS on Salary</TabsTrigger>
+              <TabsTrigger value="24q" data-slot="tab-24q">Form 24Q</TabsTrigger>
+              <TabsTrigger value="registers">Registers (all)</TabsTrigger>
             </TabsList>
 
             <TabsContent value="dues" className="mt-4">
@@ -255,30 +258,29 @@ export default function StatutoryRegistersPage() {
               )}
             </TabsContent>
 
-            <TabsContent value="pf" className="mt-4">
+            <TabsContent value="pf" className="mt-4"><PfTab from={from} to={to} /></TabsContent>
+            <TabsContent value="esi" className="mt-4"><EsiTab from={from} to={to} /></TabsContent>
+            <TabsContent value="pt" className="mt-4"><PtTab from={from} to={to} /></TabsContent>
+            <TabsContent value="lwf" className="mt-4"><LwfTab from={from} to={to} /></TabsContent>
+            <TabsContent value="tds" className="mt-4"><TdsTab from={from} to={to} /></TabsContent>
+            <TabsContent value="24q" className="mt-4"><Form24QTab /></TabsContent>
+
+            <TabsContent value="registers" className="mt-4 space-y-4">
               <Register name="Provident Fund register" file="pf-register.csv" lines={d.lines.filter((l) => l.pfEmployeePaise || l.pfWagePaise)}
                 cols={[{ label: 'UAN', value: (l) => l.uan ?? '' }, money('Gross', (l) => l.grossPaise), money('PF wages', (l) => l.pfWagePaise),
                   money('EPS wages', (l) => l.epsWagePaise), money('Employee 12%', (l) => l.pfEmployeePaise), money('Employer EPF', (l) => l.epfEmployerPaise),
                   money('Employer EPS', (l) => l.epsEmployerPaise), money('EDLI', (l) => l.edliPaise), money('Admin', (l) => l.pfAdminPaise),
                   money('Total', (l) => l.pfEmployeePaise + l.epfEmployerPaise + l.epsEmployerPaise + l.edliPaise + l.pfAdminPaise)]} />
-            </TabsContent>
-            <TabsContent value="esi" className="mt-4">
               <Register name="ESI register" file="esi-register.csv" lines={d.lines.filter((l) => l.esiEmployeePaise || l.esiEmployerPaise)}
                 cols={[{ label: 'IP number', value: (l) => l.esiIp ?? '' }, money('Gross', (l) => l.grossPaise), money('ESI wages', (l) => l.esiWagePaise),
                   money('Employee 0.75%', (l) => l.esiEmployeePaise), money('Employer 3.25%', (l) => l.esiEmployerPaise), money('Total', (l) => l.esiEmployeePaise + l.esiEmployerPaise)]} />
-            </TabsContent>
-            <TabsContent value="pt" className="mt-4">
               <Register name="Professional Tax register" file="pt-register.csv" lines={d.lines.filter((l) => l.ptPaise)}
                 cols={[{ label: 'PAN', value: (l) => l.pan ?? '' }, money('Gross', (l) => l.grossPaise), money('Professional Tax', (l) => l.ptPaise)]} />
-            </TabsContent>
-            <TabsContent value="lwf" className="mt-4">
               <Register name="Labour Welfare Fund register" file="lwf-register.csv" lines={d.lines.filter((l) => l.lwfEmployeePaise || l.lwfEmployerPaise)}
                 cols={[money('Gross', (l) => l.grossPaise), money('Employee', (l) => l.lwfEmployeePaise), money('Employer', (l) => l.lwfEmployerPaise), money('Total', (l) => l.lwfEmployeePaise + l.lwfEmployerPaise)]} />
-            </TabsContent>
-            <TabsContent value="tds" className="mt-4">
               <Register name="TDS on salary (section 192)" file="tds-salary-register.csv" lines={d.lines.filter((l) => l.tdsPaise)}
                 cols={[{ label: 'PAN', value: (l) => l.pan ?? '' }, money('Gross', (l) => l.grossPaise), money('TDS', (l) => l.tdsPaise)]} />
-              <p className="mt-2 text-xs text-muted-foreground">TDS on salary is deposited with a TDS challan (GST &amp; Taxes → TDS &amp; TCS) and returned on Form 24Q from Payroll.</p>
+              <p className="mt-2 text-xs text-muted-foreground">TDS on salary is deposited by challan and linked under TDS on Salary; it is returned on Form 24Q (the Form 24Q tab).</p>
             </TabsContent>
           </Tabs>
         )}

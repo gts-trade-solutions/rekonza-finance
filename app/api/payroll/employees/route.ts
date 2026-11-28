@@ -16,6 +16,9 @@ const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const paise = z.number().int().min(0);
 const Employee = z.object({
   branchId: z.coerce.number().int().positive(),
+  // The state worked in, for Professional Tax and LWF (blank: the branch's), and the cost centre salary is charged to.
+  workStateCode: z.string().regex(/^\d{2}$/).nullish().or(z.literal('').transform(() => null)),
+  costCentreId: z.union([z.string(), z.number()]).nullish().transform((v) => (v === null || v === undefined || v === '' ? v === undefined ? undefined : null : Number(v))),
   code: z.string().trim().min(1).max(20),
   name: z.string().trim().min(1).max(150),
   gender: z.enum(['male', 'female', 'other']).nullish(),

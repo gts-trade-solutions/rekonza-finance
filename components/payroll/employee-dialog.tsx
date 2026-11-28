@@ -20,7 +20,8 @@ import { Money } from '@/components/shared/money';
 import { useSession } from '@/components/layout/session-provider';
 import { api } from '@/lib/api/client';
 import { today } from '@/lib/selectors';
-import { esi, pf, professionalTax, annualTax } from '@/lib/payroll/statutory';
+import { esi, pf, professionalTax, annualTax, LWF_RULES, PT_RULES } from '@/lib/payroll/statutory';
+import { useApi } from '@/lib/api/use-api';
 
 export interface EmployeeRow {
   id: string; branchId: string; branchName: string; stateCode: string; code: string; name: string;
@@ -31,6 +32,8 @@ export interface EmployeeRow {
   taxRegime: 'new' | 'old'; declaredDeductionsPaise: number; metroCity: boolean;
   bankAccountName: string | null; bankAccountNo: string | null; bankIfsc: string | null;
   aadhaarMasked?: string | null;
+  /** The state worked in where it is not the branch's (PT and LWF), and the cost centre salary is charged to. */
+  workStateCode?: string | null; costCentreId?: string | null;
   salary: Structure | null; monthlyGrossPaise: number;
   salaryHistory: (Structure & { effectiveFrom: string })[];
 }
@@ -43,7 +46,12 @@ const blank = (branchId: string) => ({
   taxRegime: 'new' as 'new' | 'old', declaredDeductionsPaise: 0, metroCity: false, bankAccountName: '', bankAccountNo: '', bankIfsc: '',
   /** Typed only to set or change it; it is never sent back from the server. */
   aadhaarNo: '',
+  workStateCode: '', costCentreId: '',
 });
+
+/** States with Professional Tax or LWF slabs on file, for "works in". */
+const WORK_STATES: [string, string][] = Object.entries({ ...Object.fromEntries(Object.entries(PT_RULES).map(([k, v]) => [k, v.state])), ...Object.fromEntries(Object.entries(LWF_RULES).map(([k, v]) => [k, v.state])) })
+  .sort((a, b) => a[1].localeCompare(b[1]));
 
 export function EmployeeDialog({ open, employee, onClose, onSaved }: {
   open: boolean; employee: EmployeeRow | null; onClose: () => void; onSaved: () => void;
@@ -62,7 +70,7 @@ export function EmployeeDialog({ open, employee, onClose, onSaved }: {
         dateOfLeaving: employee.dateOfLeaving ?? '', designation: employee.designation ?? '', department: employee.department ?? '',
         email: employee.email ?? '', mobile: employee.mobile ?? '', pan: employee.pan ?? '', uan: employee.uan ?? '',
         esiIpNumber: employee.esiIpNumber ?? '', bankAccountName: employee.bankAccountName ?? '', bankAccountNo: employee.bankAccountNo ?? '',
-        bankIfsc: employee.bankIfsc ?? '',
+        bankIfsc: employee.bankIfsc ?? '', workStateCode: employee.workStateCode ?? '', costCentreId: employee.costCentreId ?? '',
       });
       setSalary({ ...(employee.salary ?? { basic: 0, da: 0, hra: 0, special: 0, other: 0 }), effectiveFrom: today() });
     } else {
@@ -73,7 +81,8 @@ export function EmployeeDialog({ open, employee, onClose, onSaved }: {
   }, [open, employee]);
 
   const gross = salary.basic + salary.da + salary.hra + salary.special + salary.other;
-  const stateCode = branches.find((b) => b.id === f.branchId)?.stateCode ?? '';
+  const stateCode = f.workStateCode || (branches.find((b) => b.id === f.branchId)?.stateCode ?? '');
+  const costCentres = useApi<{ centres: { id: string; code: string; name: string; isActive: boolean }[] }>(() => (open ? api.get('/api/cost-centres') : Promise.resolve({ centres: [] })), [open]);
   // What the structure means each month, worked out as a payroll run would.
   const preview = useMemo(() => {
     const pfr = pf({ pfWage: salary.basic + salary.da, member: f.pfMember, epsMember: f.epsMember, onActual: f.pfOnActual });
@@ -88,7 +97,7 @@ export function EmployeeDialog({ open, employee, onClose, onSaved }: {
   const save = async () => {
     setBusy(true);
     try {
-      const body = { ...f, gender: f.gender || null, aadhaarNo: f.aadhaarNo.trim() ? f.aadhaarNo : undefined };
+      const body = { ...f, gender: f.gender || null, aadhaarNo: f.aadhaarNo.trim() ? f.aadhaarNo : undefined, workStateCode: f.workStateCode || null, costCentreId: f.costCentreId || null };
       if (employee) {
         await api.post('/api/payroll/employees', { action: 'update', id: employee.id, employee: body });
         if (changedSalary) await api.post('/api/payroll/employees', { action: 'salary', id: employee.id, salary });
@@ -136,6 +145,24 @@ export function EmployeeDialog({ open, employee, onClose, onSaved }: {
             </Field>
             <Field label="Designation"><Input value={f.designation} onChange={(e) => set('designation', e.target.value)} /></Field>
             <Field label="Department"><Input value={f.department} onChange={(e) => set('department', e.target.value)} /></Field>
+            <Field label="Works in (state)" hint="For professional tax and LWF; as the branch if blank">
+              <div><Select value={f.workStateCode || 'branch'} onValueChange={(v) => set('workStateCode', v === 'branch' ? '' : String(v))}>
+                <SelectTrigger data-slot="employee-work-state"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="branch">The branch&apos;s state</SelectItem>
+                  {WORK_STATES.map(([code, name]) => <SelectItem key={code} value={code}>{name}</SelectItem>)}
+                </SelectContent>
+              </Select></div>
+            </Field>
+            <Field label="Cost centre" hint="Salary expense is charged to it">
+              <div><Select value={f.costCentreId || 'none'} onValueChange={(v) => set('costCentreId', v === 'none' ? '' : String(v))}>
+                <SelectTrigger data-slot="employee-cost-centre"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">None</SelectItem>
+                  {(costCentres.data?.centres ?? []).filter((c) => c.isActive !== false).map((c) => <SelectItem key={c.id} value={c.id}>{c.code} {c.name}</SelectItem>)}
+                </SelectContent>
+              </Select></div>
+            </Field>
             <Field label="Joined on" required><Input type="date" value={f.dateOfJoining} onChange={(e) => set('dateOfJoining', e.target.value)} /></Field>
             <Field label="Left on" hint="Pay stops after this day"><Input type="date" value={f.dateOfLeaving} onChange={(e) => set('dateOfLeaving', e.target.value)} /></Field>
             <Field label="Date of birth"><Input type="date" value={f.dateOfBirth} onChange={(e) => set('dateOfBirth', e.target.value)} /></Field>

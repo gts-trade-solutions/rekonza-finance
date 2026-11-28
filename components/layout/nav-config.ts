@@ -158,6 +158,8 @@ export const NAV_GROUPS: NavGroup[] = [
       { label: 'Audit Trail', href: '/accountant/audit-trail', icon: ShieldCheck, module: 'accountant' },
       // Status review 7 (builder A): every reversal pair with its reason and who did it.
       { label: 'Reversed Vouchers', href: '/accountant/reversed-vouchers', icon: History, module: 'accountant' },
+      // Status review 7, item 14: payroll and inventory against the general ledger.
+      { label: 'Integration Check', href: '/accountant/integration-check', icon: Scale, module: 'accountant' },
     ],
   },
   { label: 'Reports', icon: ChartNoAxesColumn, module: 'reports', href: '/reports', items: [] },
@@ -198,9 +200,11 @@ export const NAV_GROUPS: NavGroup[] = [
       { label: 'Advances & Loans', href: '/payroll/advances', icon: Banknote, module: 'payroll' },
       { label: 'Expense Claims', href: '/payroll/claims', icon: Receipt, module: 'payroll' },
       { label: 'Declarations', href: '/payroll/declarations', icon: FileCheck2, module: 'payroll' },
-      { label: 'Statutory Registers', href: '/payroll/statutory', icon: FileSpreadsheet, module: 'payroll' },
+      { label: 'Statutory Reports', href: '/payroll/statutory', icon: FileSpreadsheet, module: 'payroll' },
       { label: 'Form 16 / 130', href: '/payroll/form-16', icon: FileText, module: 'payroll' },
       { label: 'Full & Final', href: '/payroll/full-and-final', icon: HandCoins, module: 'payroll' },
+      // Status review 7, item 14: a month's payroll run in another system, imported.
+      { label: 'Import Salary Register', href: '/payroll/import', icon: FileUp, module: 'payroll' },
     ],
   },
   {

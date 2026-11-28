@@ -20,9 +20,9 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Money } from '@/components/shared/money';
 import { Field, MoneyInput } from '@/components/shared/form-bits';
-import { ContactPicker } from '@/components/forms/quick-create';
 import { ConfirmDelete, DeleteButton, EditButton, withReason } from '@/components/shared/row-actions';
-import { accounts as accountApi, api, bills as billApi, fixedAssets, type AssetClassRow, type AssetDetail } from '@/lib/api/client';
+import { accounts as accountApi, api, assetDisposals, bills as billApi, fixedAssets, type AssetClassRow, type AssetDetailFull } from '@/lib/api/client';
+import { DisposePanel, DisposalHistory, DisposedSummary, SplitPanel } from '@/components/assets/asset-disposal';
 import { useApi } from '@/lib/api/use-api';
 import { useAppStore } from '@/lib/store';
 import { usePermission } from '@/lib/store/hooks';
@@ -51,6 +51,7 @@ export function AddAssetDialog({ open, classes, onClose, onDone }: {
   const blank = {
     name: '', classId: '', branchId: activeBranch, source: 'paid' as 'paid' | 'bill' | 'opening', acquiredOn: today(),
     inUse: true, putToUseOn: today(), cost: 0, fromAccountId: '', billId: '', accumulated: 0, tagNo: '',
+    method: '' as '' | 'slm' | 'wdv', life: '', residual: null as number | null,
     location: '', custodian: '', serialNo: '', hsnSac: '', insurancePolicyNo: '', insuranceExpiry: '', amcVendor: '', amcExpiry: '',
   };
   const [f, setF] = useState(blank);
@@ -70,6 +71,7 @@ export function AddAssetDialog({ open, classes, onClose, onDone }: {
       const r = await fixedAssets.act<{ id: string; tagNo: string }>({
         action: 'add', branchId: f.branchId, classId: f.classId, name: f.name, acquiredOn: f.acquiredOn,
         putToUseOn: f.inUse ? f.putToUseOn : null, costPaise: f.cost, source, tagNo: nul(f.tagNo),
+        method: f.method || null, usefulLifeYears: f.life ? Number(f.life) : null, residualValuePaise: f.residual,
         location: nul(f.location), custodian: nul(f.custodian), serialNo: nul(f.serialNo), hsnSac: nul(f.hsnSac),
         insurancePolicyNo: nul(f.insurancePolicyNo), insuranceExpiry: f.insuranceExpiry || null,
         amcVendor: nul(f.amcVendor), amcExpiry: f.amcExpiry || null,
@@ -136,6 +138,7 @@ export function AddAssetDialog({ open, classes, onClose, onDone }: {
               Already put to use — leave unticked while it is being built or installed (capital work in progress)
             </label>
             {f.inUse && <Field label="Put to use on" required><Input type="date" value={f.putToUseOn} onChange={(e) => setF({ ...f, putToUseOn: e.target.value })} /></Field>}
+            <DepreciationBasis f={f} cls={classes.find((c) => c.id === f.classId)} onChange={(x) => setF({ ...f, ...x })} />
             <Field label="Tag number" hint="Left blank, the next FA- number"><Input value={f.tagNo} onChange={(e) => setF({ ...f, tagNo: e.target.value })} className="font-mono" /></Field>
             <Field label="Location"><Input value={f.location} onChange={(e) => setF({ ...f, location: e.target.value })} /></Field>
             <Field label="Custodian"><Input value={f.custodian} onChange={(e) => setF({ ...f, custodian: e.target.value })} /></Field>
@@ -169,7 +172,7 @@ export function AssetDialog({ id, canEdit, onClose, onChanged, startTab }: { id:
 }
 
 function AssetBody({ id, canEdit, onChanged, onClose, startTab }: { id: string; canEdit: boolean; onChanged: () => void; onClose: () => void; startTab?: 'history' | 'details' }) {
-  const state = useApi<AssetDetail>(() => fixedAssets.get(id), [id]);
+  const state = useApi<AssetDetailFull>(() => assetDisposals.asset(id), [id]);
   const canDelete = usePermission('accountant', 'void');
   // Edit opens the Details tab, where everything about it but its cost can change.
   const [tab, setTab] = useState<string>(startTab ?? 'history');
@@ -186,7 +189,8 @@ function AssetBody({ id, canEdit, onChanged, onClose, startTab }: { id: string; 
       <DialogHeader>
         <DialogTitle className="flex items-center gap-2">
           <span className="font-mono text-sm text-muted-foreground">{a.tagNo}</span> {a.name}
-          <Badge variant="outline" className="text-[10px]">{a.status === 'cwip' ? 'CWIP' : a.status === 'in_use' ? 'In use' : `${a.disposalKind === 'sold' ? 'Sold' : 'Scrapped'} ${fmt(a.disposedOn)}`}</Badge>
+          <Badge variant="outline" className="text-[10px]" data-slot="asset-status">{a.status === 'cwip' ? 'CWIP' : a.status === 'in_use' ? 'In use' : `Disposed · ${a.disposalKind === 'sold' ? 'sold' : 'scrapped'} ${fmt(a.disposedOn)}`}</Badge>
+          {d.disposals.some((x) => x.status === 'pending') && <Badge variant="outline" className="border-amber-500/40 text-[10px] text-amber-700">Disposal waiting for approval</Badge>}
         </DialogTitle>
         {a.status !== 'disposed' && (canEdit || canDelete) && (
           <div className="flex items-center gap-1 pt-1" data-slot="asset-actions">
@@ -205,6 +209,7 @@ function AssetBody({ id, canEdit, onChanged, onClose, startTab }: { id: string; 
         <div className="rounded-md border p-3"><p className="text-xs text-muted-foreground">Depreciation</p><Money value={charged} className="font-semibold" /></div>
         <div className="rounded-md border p-3"><p className="text-xs text-muted-foreground">Net</p><Money value={a.status === 'disposed' ? 0 : cost - charged} className="font-semibold" /></div>
       </div>
+      <DisposedSummary d={d} onChanged={refresh} />
       <Tabs value={tab} onValueChange={(v) => setTab(String(v))}>
         <TabsList>
           <TabsTrigger value="history">History</TabsTrigger>
@@ -234,11 +239,12 @@ function AssetBody({ id, canEdit, onChanged, onClose, startTab }: { id: string; 
             ))}
           </ul>
           {a.invoiceNo && <p className="text-xs text-muted-foreground">Sold by invoice {a.invoiceNo} for <Money value={a.disposalValuePaise ?? 0} /> before GST.</p>}
+          <DisposalHistory disposals={d.disposals} />
         </TabsContent>
         <TabsContent value="details" className="mt-3"><Details d={d} canEdit={canEdit && a.status !== 'disposed'} onSaved={refresh} /></TabsContent>
         {canEdit && a.status !== 'disposed' && (
           <TabsContent value="actions" className="mt-3">
-            {a.status === 'cwip' ? <CwipActions id={id} onDone={refresh} /> : <InUseActions d={d} onDone={() => { refresh(); }} onClose={onClose} />}
+            {a.status === 'cwip' ? <CwipActions id={id} onDone={refresh} /> : <InUseActions d={d} onDone={() => { refresh(); }} />}
           </TabsContent>
         )}
       </Tabs>
@@ -256,7 +262,7 @@ function AssetBody({ id, canEdit, onChanged, onClose, startTab }: { id: string; 
   );
 }
 
-function Details({ d, canEdit, onSaved }: { d: AssetDetail; canEdit: boolean; onSaved: () => void }) {
+function Details({ d, canEdit, onSaved }: { d: AssetDetailFull; canEdit: boolean; onSaved: () => void }) {
   const a = d.asset;
   const [f, setF] = useState({
     name: a.name, description: a.description ?? '', hsnSac: a.hsnSac ?? '',
@@ -350,12 +356,10 @@ function CwipActions({ id, onDone }: { id: string; onDone: () => void }) {
   );
 }
 
-function InUseActions({ d, onDone, onClose }: { d: AssetDetail; onDone: () => void; onClose: () => void }) {
+function InUseActions({ d, onDone }: { d: AssetDetailFull; onDone: () => void }) {
   const a = d.asset;
   const [v, setV] = useState({ date: today(), found: true, condition: 'good', location: a.location ?? '', notes: '' });
-  const [s, setS] = useState({ kind: 'sold' as 'sold' | 'scrapped', date: today(), customerId: '', sale: 0, rate: 18 });
-  const advice = useApi(() => fixedAssets.saleAdvice(a.id, s.date), [a.id, s.date]);
-  const [busy, setBusy] = useState(false);
+  const pending = d.disposals.some((x) => x.status === 'pending');
 
   const verify = async () => {
     try {
@@ -366,33 +370,9 @@ function InUseActions({ d, onDone, onClose }: { d: AssetDetail; onDone: () => vo
       toast.error('Not recorded', { description: err(e) });
     }
   };
-  const tax = Math.round((s.sale * s.rate) / 100);
-  const minimum = advice.data?.minimumTaxPaise ?? 0;
-  const dispose = async () => {
-    const msg = s.kind === 'sold'
-      ? `Sell ${a.name}? An invoice is raised to the buyer, depreciation is charged to the day before, and the gain or loss is posted.`
-      : `Scrap ${a.name}? Depreciation is charged to the day before, and what is left of its cost is written off.`;
-    if (!window.confirm(msg)) return;
-    setBusy(true);
-    try {
-      const r = await fixedAssets.act<{ invoiceNumber: string | null; gainPaise: number; shortTaxPaise: number }>({
-        action: 'dispose', id: a.id, date: s.date, kind: s.kind,
-        customerId: s.kind === 'sold' ? s.customerId : null, salePaise: s.kind === 'sold' ? s.sale : null, gstRatePct: s.kind === 'sold' ? s.rate : null,
-      });
-      toast.success(`${s.kind === 'sold' ? `Sold${r.invoiceNumber ? ` by ${r.invoiceNumber}` : ''}` : 'Scrapped'}: ${r.gainPaise >= 0 ? 'gain' : 'loss'} ₹${(Math.abs(r.gainPaise) / 100).toLocaleString('en-IN')}`, {
-        description: r.shortTaxPaise > 0 ? `GST on the invoice is ₹${(r.shortTaxPaise / 100).toLocaleString('en-IN')} below the minimum under section 18(6); pay the difference in GSTR-3B.` : undefined,
-      });
-      onDone();
-      onClose();
-    } catch (e) {
-      toast.error('Not done', { description: err(e) });
-    } finally {
-      setBusy(false);
-    }
-  };
 
   return (
-    <div className="space-y-4">
+    <div className="max-h-[55vh] space-y-4 overflow-y-auto pr-1 thin-scroll">
       <div className="space-y-2 rounded-md border p-3">
         <p className="text-sm font-medium">Physical verification</p>
         <div className="grid gap-2 sm:grid-cols-3">
@@ -417,37 +397,48 @@ function InUseActions({ d, onDone, onClose }: { d: AssetDetail; onDone: () => vo
         <div className="flex justify-end"><Button size="sm" variant="outline" onClick={() => void verify()}>Record check</Button></div>
       </div>
 
-      <div className="space-y-2 rounded-md border border-destructive/30 p-3">
-        <p className="text-sm font-medium">Sell or scrap</p>
-        <div className="flex rounded-md border p-0.5 text-xs">
-          {(['sold', 'scrapped'] as const).map((k) => (
-            <button key={k} type="button" onClick={() => setS({ ...s, kind: k })}
-              className={`flex-1 rounded px-2.5 py-1 ${s.kind === k ? 'bg-primary text-primary-foreground' : 'text-muted-foreground'}`}>{k === 'sold' ? 'Sold' : 'Scrapped, nothing received'}</button>
-          ))}
-        </div>
-        <div className="grid gap-2 sm:grid-cols-2">
-          <Field label="Date"><Input type="date" value={s.date} onChange={(e) => setS({ ...s, date: e.target.value })} /></Field>
-          {s.kind === 'sold' && (
-            <>
-              <Field label="Buyer"><ContactPicker kind="customer" value={s.customerId} onChange={(x) => setS({ ...s, customerId: x })} /></Field>
-              <Field label="Sale value before GST"><MoneyInput valuePaise={s.sale} onChangePaise={(p) => setS({ ...s, sale: p })} /></Field>
-              <Field label="GST rate %"><Input type="number" min={0} max={40} value={s.rate} onChange={(e) => setS({ ...s, rate: Number(e.target.value) })} /></Field>
-            </>
-          )}
-        </div>
-        {s.kind === 'sold' && minimum > 0 && (
-          <p className={`text-xs ${tax < minimum ? 'text-destructive' : 'text-muted-foreground'}`}>
-            Credit of <Money value={advice.data?.itcClaimedPaise ?? 0} /> was taken on it. GST on its sale must be at least <Money value={minimum} /> —
-            the credit less five percentage points a quarter (section 18(6)). At {s.rate}% this sale carries <Money value={tax} />.
-          </p>
-        )}
-        {s.kind === 'sold' && !a.hsnSac && <p className="text-xs text-destructive">Add the asset&apos;s HSN code first: the invoice needs it.</p>}
-        <div className="flex justify-end">
-          <Button size="sm" variant="destructive" onClick={() => void dispose()} disabled={busy || (s.kind === 'sold' && (!s.customerId || !s.sale))}>
-            {busy && <Loader2 className="size-4 animate-spin" />} {s.kind === 'sold' ? 'Sell' : 'Scrap'}
-          </Button>
-        </div>
-      </div>
+      {pending
+        ? <p className="rounded-md border border-amber-500/40 p-3 text-sm text-amber-800 dark:text-amber-200">A disposal of this asset is waiting for approval (Fixed Assets → Disposals). Nothing is posted until it is approved; it can be sent back there.</p>
+        : <DisposePanel d={d} onDone={() => onDone()} />}
+      {!pending && <SplitPanel d={d} onDone={onDone} />}
+    </div>
+  );
+}
+
+/** Method, life and residual value: the class's, unless this asset has its own (Schedule II allows both). */
+function DepreciationBasis({ f, cls, onChange }: {
+  f: { method: '' | 'slm' | 'wdv'; life: string; residual: number | null; cost: number };
+  cls: AssetClassRow | undefined;
+  onChange: (x: Partial<{ method: '' | 'slm' | 'wdv'; life: string; residual: number | null }>) => void;
+}) {
+  const method = f.method || cls?.method || 'slm';
+  const life = Number(f.life || cls?.usefulLifeYears || 0);
+  const residual = f.residual ?? Math.round((f.cost * (cls?.residualPct ?? 5)) / 100);
+  const rate = method === 'wdv' && f.cost > 0 && life > 0 ? (1 - Math.pow(Math.max(residual, 1) / f.cost, 1 / life)) * 100
+    : life > 0 ? ((f.cost - residual) / Math.max(f.cost, 1) / life) * 100 : 0;
+  return (
+    <div className="grid gap-3 rounded-md border border-dashed p-3 sm:col-span-2 sm:grid-cols-3" data-slot="asset-basis">
+      <Field label="Method" hint={cls ? `Class: ${cls.method.toUpperCase()}` : 'Pick a class first'}>
+        <Select value={f.method || 'class'} onValueChange={(v) => onChange({ method: v === 'class' ? '' : (v as 'slm' | 'wdv') })}>
+          <SelectTrigger data-slot="asset-method"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="class">As its class</SelectItem>
+            <SelectItem value="slm">Straight line (SLM)</SelectItem>
+            <SelectItem value="wdv">Written-down value (WDV)</SelectItem>
+          </SelectContent>
+        </Select>
+      </Field>
+      <Field label="Useful life, years" hint={cls ? `Class: ${cls.usefulLifeYears} (Schedule II)` : undefined}>
+        <Input type="number" min={0.1} step="0.5" value={f.life} placeholder={cls ? String(cls.usefulLifeYears) : ''} onChange={(e) => onChange({ life: e.target.value })} data-slot="asset-life" />
+      </Field>
+      <Field label="Residual value" hint={cls ? `Class: ${cls.residualPct}% of cost` : undefined}>
+        <MoneyInput valuePaise={residual} onChangePaise={(p) => onChange({ residual: p })} />
+      </Field>
+      {f.cost > 0 && life > 0 && (
+        <p className="text-xs text-muted-foreground sm:col-span-3" data-slot="asset-rate">
+          {method === 'wdv' ? 'WDV' : 'SLM'} rate {rate.toFixed(2)}% a year{method === 'wdv' ? ' on what is left' : ' of cost'}, so that {life} years bring it down to the residual value; charged day by day from the day it is put to use.
+        </p>
+      )}
     </div>
   );
 }

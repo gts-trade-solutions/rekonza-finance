@@ -13,6 +13,14 @@ import { salaryOn, structureGross, type Structure } from './payroll';
 
 export interface EmployeeInput {
   branchId: number;
+  /**
+   * The state the employee works in, for Professional Tax and LWF, where it is
+   * not the branch's (a salesman in Pune on a Chennai registration). Left out,
+   * it stays as it was; null means the branch's state.
+   */
+  workStateCode?: string | null;
+  /** The cost centre (department or division) their salary is charged to. Left out, it stays as it was. */
+  costCentreId?: number | null;
   code: string;
   name: string;
   gender?: 'male' | 'female' | 'other' | null;
@@ -45,6 +53,8 @@ export interface EmployeeInput {
 
 const row = (i: EmployeeInput) => ({
   branch_id: i.branchId, code: i.code.trim(), name: i.name.trim(), gender: i.gender ?? null,
+  ...(i.workStateCode !== undefined ? { work_state_code: i.workStateCode || null } : {}),
+  ...(i.costCentreId !== undefined ? { cost_centre_id: i.costCentreId || null } : {}),
   date_of_birth: i.dateOfBirth || null, date_of_joining: i.dateOfJoining, date_of_leaving: i.dateOfLeaving || null,
   designation: i.designation || null, department: i.department || null, email: i.email || null, mobile: i.mobile || null,
   pan: seal(i.pan?.toUpperCase() || null), uan: i.uan || null, esi_ip_number: i.esiIpNumber || null,
@@ -60,6 +70,14 @@ function check(i: EmployeeInput) {
   if (i.pan && !/^[A-Z]{5}\d{4}[A-Z]$/i.test(i.pan)) throw badRequest('A PAN is five letters, four digits, a letter.');
   if (i.uan && !/^\d{12}$/.test(i.uan)) throw badRequest('A UAN is twelve digits.');
   if (i.bankIfsc && !/^[A-Z]{4}0[A-Z0-9]{6}$/i.test(i.bankIfsc)) throw badRequest('An IFSC is four letters, a zero, and six letters or digits.');
+  if (i.workStateCode && !/^\d{2}$/.test(i.workStateCode)) throw badRequest('Pick the state the employee works in.');
+}
+
+async function checkCostCentre(trx: Trx, orgId: number, id: number | null | undefined) {
+  if (!id) return;
+  const cc = await trx.selectFrom('cost_centres').select(['id', 'is_active']).where('id', '=', id).where('org_id', '=', orgId).executeTakeFirst();
+  if (!cc) throw notFound('That cost centre is not in this book.');
+  if (!cc.is_active) throw badRequest('That cost centre is no longer in use.');
 }
 
 export async function createEmployee(trx: Trx, orgId: number, i: EmployeeInput, salary?: Structure & { effectiveFrom?: string }): Promise<number> {
@@ -68,6 +86,7 @@ export async function createEmployee(trx: Trx, orgId: number, i: EmployeeInput, 
   if (!branch) throw notFound('That branch is not in this book.');
   const dup = await trx.selectFrom('employees').select('id').where('org_id', '=', orgId).where('code', '=', i.code.trim()).executeTakeFirst();
   if (dup) throw conflict(`Employee code ${i.code} is already used.`);
+  await checkCostCentre(trx, orgId, i.costCentreId);
   const id = Number((await trx.insertInto('employees').values({ org_id: orgId, ...row(i) }).executeTakeFirstOrThrow()).insertId);
   if (salary) await setSalary(trx, orgId, id, { ...salary, effectiveFrom: salary.effectiveFrom ?? i.dateOfJoining });
   return id;
@@ -79,6 +98,7 @@ export async function updateEmployee(trx: Trx, orgId: number, id: number, i: Emp
   if (!found) throw notFound('That employee does not exist.');
   const dup = await trx.selectFrom('employees').select('id').where('org_id', '=', orgId).where('code', '=', i.code.trim()).where('id', '<>', id).executeTakeFirst();
   if (dup) throw conflict(`Employee code ${i.code} is already used.`);
+  await checkCostCentre(trx, orgId, i.costCentreId);
   await trx.updateTable('employees').set(row(i)).where('id', '=', id).execute();
 }
 
@@ -115,7 +135,8 @@ export async function listEmployees(ex: Executor, orgId: number, asOf: string) {
     const history = await ex.selectFrom('employee_salaries').select(['effective_from', 'basic', 'da', 'hra', 'special', 'other'])
       .where('employee_id', '=', e.id).orderBy('effective_from', 'desc').execute();
     return {
-      id: String(e.id), branchId: String(e.branch_id), branchName: e.branch_name, stateCode: e.state_code,
+      id: String(e.id), branchId: String(e.branch_id), branchName: e.branch_name, stateCode: e.work_state_code ?? e.state_code,
+      workStateCode: e.work_state_code, costCentreId: e.cost_centre_id ? String(e.cost_centre_id) : null,
       code: e.code, name: e.name, gender: e.gender, dateOfBirth: e.date_of_birth ? String(e.date_of_birth).slice(0, 10) : null,
       dateOfJoining: String(e.date_of_joining).slice(0, 10), dateOfLeaving: e.date_of_leaving ? String(e.date_of_leaving).slice(0, 10) : null,
       designation: e.designation, department: e.department, email: e.email, mobile: e.mobile, pan: unseal(e.pan), uan: e.uan,
