@@ -39,6 +39,7 @@ import { useApi } from '@/lib/api/use-api';
 import { useSession } from '@/components/layout/session-provider';
 import { cn } from '@/lib/utils';
 import type { PaymentMode } from '@/lib/types';
+import { advanceGstField, advanceProblem, advanceQuestionApplies, advanceTaxPaise, defaultAdvanceFor, type AdvanceFor } from '@/lib/gst/advance-for';
 
 const MODES: { value: PaymentMode; label: string }[] = [
   { value: 'cash', label: 'Cash' }, { value: 'neft', label: 'Bank Transfer (NEFT)' }, { value: 'upi', label: 'UPI' },
@@ -67,7 +68,15 @@ function NewPaymentInner() {
   const [amountPaise, setAmountPaise] = useState(0);
   const [amountTyped, setAmountTyped] = useState(false);
   const [selected, setSelected] = useState<Record<string, number>>({});
-  const [advanceForServices, setAdvanceForServices] = useState(false);
+  // What an excess (an advance) is for. GST on an advance for services is due
+  // when the money arrives (CGST Act s.13(2)); on goods it is not, since
+  // Notification 66/2017-CT. The old tick box was off unless someone ticked
+  // it, so an advance for services went untaxed and GSTR-1 table 11A and
+  // GSTR-3B 3.1(a) left it out (auditor check, 2026-11-28). Now the question is
+  // asked outright, answered in advance for a book that sells only one kind,
+  // and a GST-registered book cannot save an advance without an answer.
+  const [advanceFor, setAdvanceFor] = useState<AdvanceFor | null>(null);
+  const advanceForServices = advanceFor === 'services';
   const [advanceRate, setAdvanceRate] = useState(18);
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [errors, setErrors] = useState<string[]>([]);
@@ -110,7 +119,8 @@ function NewPaymentInner() {
     }
     setAmountTyped(true);
     if (!applied && editing.unappliedPaise > 0) setTab('advance');
-    if (editing.advanceGst) { setAdvanceForServices(true); setAdvanceRate(editing.advanceGst.ratePct); }
+    if (editing.advanceGst) { setAdvanceFor('services'); setAdvanceRate(editing.advanceGst.ratePct); }
+    else if (editing.unappliedPaise > 0) setAdvanceFor('goods');
   }, [editing]);
 
   const mastersState = useApi<{ bankAccounts: { id: string; name: string; kind: string }[] }>(() => api.get('/api/masters'), []);
@@ -163,6 +173,13 @@ function NewPaymentInner() {
     preselected.current = true;
   }, [params, openInvs]);
 
+  const supplies = s.org?.trade?.supplies ?? 'both';
+  useEffect(() => {
+    if (editId || advanceFor) return;
+    const d = defaultAdvanceFor(supplies);
+    if (d) setAdvanceFor(d);
+  }, [supplies, editId, advanceFor]);
+
   const advanceTab = tab === 'advance';
   const allocated = advanceTab ? 0 : Object.values(selected).reduce((t, v) => t + v, 0);
   const tds = tdsOn && !fxCurrency ? tdsPaise : 0;
@@ -172,7 +189,9 @@ function NewPaymentInner() {
   const excess = settles - allocated;
   const cashReceived = fxCurrency ? rupeesCredited : received - chargesPaise;
   const impliedRate = fxCurrency && settles > 0 ? rupeesCredited / settles : 0;
-  const advanceTax = advanceForServices && excess > 0 ? Math.round((excess * advanceRate) / (100 + advanceRate)) : 0;
+  const advanceCtx = { excessPaise: excess, foreign: !!fxCurrency, gstRegistration: s.org?.gstRegistrationType, advanceFor, ratePct: advanceRate };
+  const askAdvance = advanceQuestionApplies(advanceCtx);
+  const advanceTax = advanceForServices && excess > 0 ? advanceTaxPaise(excess, advanceRate) : 0;
 
   const setPayment = (id: string, p: number, bal: number) => setSelected((sel) => {
     const next = { ...sel };
@@ -189,6 +208,8 @@ function NewPaymentInner() {
     if (!bankAccountId) problems.push('Select the account the money was deposited to.');
     if (received > 0 && cashReceived <= 0) problems.push('Bank charges come to more than the amount received.');
     if (fxCurrency && rupeesCredited <= 0) problems.push('Enter the rupees the bank credited.');
+    const advanceIssue = advanceProblem(advanceCtx);
+    if (advanceIssue) problems.push(advanceIssue);
     setErrors(problems);
     if (problems.length) return;
 
@@ -212,7 +233,7 @@ function NewPaymentInner() {
         ...(fxCurrency ? { amountPaise: 0, foreignAmountPaise: amt } : { amountPaise: amt }),
       })),
       fx: fxCurrency ? { currency: fxCurrency, rate: Number(impliedRate.toFixed(6)), foreignAmountPaise: settles } : undefined,
-      advanceGst: advanceForServices && excess > 0 ? { ratePct: advanceRate } : undefined,
+      advanceGst: advanceGstField(advanceCtx),
     };
     const created = await (editId
       ? paymentsApi.update(editId, { ...payload, branchId: editing?.branchId ?? payload.branchId })
@@ -376,19 +397,28 @@ function NewPaymentInner() {
         <div className={cn('flex justify-between border-t pt-2 font-medium', excess < 0 && 'text-destructive')}>
           <span>Amount in Excess:</span><span className="tabular">{fxCurrency ? fxMoney(excess, fxCurrency) : <Money value={excess} />}</span>
         </div>
-        {excess > 0 && !fxCurrency && (
-          <div className="space-y-2 border-t pt-2">
-            <label className="flex items-start gap-2"><Checkbox checked={advanceForServices} onCheckedChange={(v) => setAdvanceForServices(v === true)} className="mt-0.5" />
-              <span>The excess is an advance for services, so GST is due on it now</span></label>
+        {askAdvance && (
+          <div className="space-y-2 border-t pt-2" data-slot="advance-for">
+            <p className="font-medium">The <Money value={excess} /> left over is an advance for</p>
+            <label className="flex items-start gap-2">
+              <input type="radio" name="advance-for" className="mt-1 accent-primary" checked={advanceFor === 'services'} onChange={() => setAdvanceFor('services')} data-slot="advance-for-services" />
+              <span>Services: GST is due on it now <span className="text-muted-foreground">(CGST Act s.13(2))</span></span>
+            </label>
+            <label className="flex items-start gap-2">
+              <input type="radio" name="advance-for" className="mt-1 accent-primary" checked={advanceFor === 'goods'} onChange={() => setAdvanceFor('goods')} data-slot="advance-for-goods" />
+              <span>Goods: no GST until the invoice <span className="text-muted-foreground">(Notification 66/2017-CT)</span></span>
+            </label>
             {advanceForServices && (
-              <p className="text-[11px] leading-relaxed text-muted-foreground">
+              <p className="text-[11px] leading-relaxed text-muted-foreground" data-slot="advance-gst">
                 GST rate{' '}
-                <select className="h-7 rounded border bg-background px-1" value={advanceRate} onChange={(e) => setAdvanceRate(Number(e.target.value))}>
+                <select className="h-7 rounded border bg-background px-1" value={advanceRate} onChange={(e) => setAdvanceRate(Number(e.target.value))} aria-label="GST rate of the services" data-slot="advance-rate">
                   {[5, 12, 18, 28, 40].map((r) => <option key={r} value={r}>{r}%</option>)}
                 </select>
-                {' '}· <Money value={advanceTax} /> of it is GST, paid with this month&apos;s return and taken back when the advance is applied.
+                {' '}· <Money value={advanceTax} /> of it is GST. It is posted now, reported in GSTR-1 table 11A and GSTR-3B 3.1(a) for this month,
+                and taken back (table 11B) in the month the advance is applied to an invoice that charges it, so it is not paid twice.
               </p>
             )}
+            {advanceFor === null && <p className="text-[11px] text-amber-700" data-slot="advance-for-missing">Choose one: it decides whether GST is due on this receipt.</p>}
           </div>
         )}
       </div>
