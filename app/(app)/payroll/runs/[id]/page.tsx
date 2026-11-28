@@ -142,7 +142,7 @@ export default function PayrollRunPage({ params }: { params: Promise<{ id: strin
     },
     done: 'Reopened as a draft', onDone: () => void state.refetch(),
   });
-  const undoPayment = (run: Run) => confirm.ask({
+  const undoPayment = (run: Run) => confirm.ask({ reasonRequired: true,
     title: `Undo the salary payment for ${monthName(run.month)}?`,
     description: 'The payment’s entry is reversed in the ledger and the payroll goes back to posted, to pay again. Refused while the payment is matched to the bank statement.',
     reason: true, tone: 'default', confirmLabel: 'Undo payment', failTitle: 'Not undone',

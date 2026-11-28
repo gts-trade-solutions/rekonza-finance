@@ -81,7 +81,7 @@ export default function AdvancesPage() {
   const stopEditing = () => { setEditing(null); setF({ ...blank, bankAccountId: f.bankAccountId }); };
 
   // Delete reverses the payment out; once payroll has recovered any of it, it stays.
-  const remove = (l: Loan) => del.ask({
+  const remove = (l: Loan) => del.ask({ reasonRequired: true,
     title: `Delete the ${l.kind} to ${l.name}?`,
     description: 'The payment out is reversed in the ledger (never erased) and the advance is kept as deleted. Refused once a posted payroll has recovered any of it, or while its payment is matched to the bank statement.',
     reason: true,

@@ -56,7 +56,9 @@ export async function shot(t, what) {
 }
 
 /** The app's own API as the signed-in person (cookies shared with the page). */
-export async function api(t, method, url, body) {
+export async function api(t, method, url, body, opts = {}) {
+  // As a browser does: a change goes with a reason (its own prompt asks for one). opts.noReason
+  // sends none, for the steps that check a change without one is refused.
   // The document forms send the branch they are raised in; so do these steps.
   if (method === 'POST' && body && !body.branchId && /^\/api\/(invoices|bills|sales-documents|expenses)(\?|$)/.test(url)) {
     if (!t.branchId) t.branchId = String(((await api(t, 'GET', '/api/settings')).json?.branches ?? [])[0]?.id ?? '');
@@ -65,7 +67,7 @@ export async function api(t, method, url, body) {
   let r;
   for (let attempt = 0; ; attempt++) {
     try {
-      r = await t.page.request.fetch(`${BASE}${url}`, { method, data: body, headers: { 'content-type': 'application/json', 'X-Change-Reason': encodeURIComponent('End-to-end test') }, failOnStatusCode: false, timeout: 240_000 });
+      r = await t.page.request.fetch(`${BASE}${url}`, { method, data: body, headers: { 'content-type': 'application/json', ...(opts.noReason ? {} : { 'X-Change-Reason': encodeURIComponent('End-to-end test') }) }, failOnStatusCode: false, timeout: 240_000 });
       break;
     } catch (e) {
       // Only a request the server never received is sent again, so nothing is posted twice.

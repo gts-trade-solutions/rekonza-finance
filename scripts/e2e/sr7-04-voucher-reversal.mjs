@@ -59,8 +59,9 @@ try {
   };
   await pick(0, '6100', /Rent/);
   await pick(1, '1210', /Bank/);
-  await dlg.locator('tbody tr').nth(0).getByPlaceholder('0.00').first().fill('50000');
-  await dlg.locator('tbody tr').nth(1).getByPlaceholder('0.00').nth(1).fill('50000');
+  // Rs 45,000: under the demo book's own Rs 50,000 admin rule for journals, so the accountant checker decides it.
+  await dlg.locator('tbody tr').nth(0).getByPlaceholder('0.00').first().fill('45000');
+  await dlg.locator('tbody tr').nth(1).getByPlaceholder('0.00').nth(1).fill('45000');
   await page.keyboard.press('Tab');
   await shot('jv-form');
   await dlg.getByRole('button', { name: /Post journal/ }).click();

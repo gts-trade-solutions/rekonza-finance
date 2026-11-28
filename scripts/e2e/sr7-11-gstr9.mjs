@@ -303,6 +303,8 @@ try {
     await page.waitForTimeout(2000);
     check('15A edited to ₹1,500', (await cell('15A', 'cgstPaise')) === 1500);
     await page.locator('[data-slot="gstr9-inputs-delete"]').click();
+    // A delete that reverses a posted entry asks why, in its own window.
+    if (await page.locator('[data-slot="confirm-delete-reason"]').count()) await page.fill('[data-slot="confirm-delete-reason"]', 'Entered in error (e2e)');
     await page.locator('[data-slot="confirm-delete-go"]').click();
     await page.waitForTimeout(2000);
     check('Deleted: 15A back to nil', (await cell('15A', 'cgstPaise')) === 0);

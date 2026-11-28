@@ -126,7 +126,7 @@ export function PaymentCard({ returnType, month, label, payable, paid, balance, 
               {(payment.interestPaise + payment.lateFeePaise) > 0 && <span className="text-muted-foreground"> · incl. interest and late fee <Money value={payment.interestPaise + payment.lateFeePaise} /></span>}
             </span>
             {!filed && (
-              <RowActions className="ml-auto" onEdit={() => setOpen('edit')} onDelete={() => del.ask({
+              <RowActions className="ml-auto" onEdit={() => setOpen('edit')} onDelete={() => del.ask({ reasonRequired: true,
                 title: `Delete the ${label} payment?`,
                 description: 'Its entry is reversed, so the tax shows as owed again. Nothing changes on the GST portal.',
                 run: (reason) => withholding.deletePayment(payment.id, reason), done: 'Payment deleted', onDone,

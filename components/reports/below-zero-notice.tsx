@@ -55,7 +55,7 @@ export function BelowZeroNotice({ data }: { data?: BelowZeroData | null }) {
               <ul className="mt-1 space-y-0.5 text-xs">
                 {data.cash.map((c) => (
                   <li key={c.bankAccountId} className="flex flex-wrap gap-x-2">
-                    <Link href={`/banking/${c.bankAccountId}`} className="font-medium text-link hover:underline">{c.name}</Link>
+                    <Link href={`/banking/transactions?account_id=${c.bankAccountId}`} className="font-medium text-link hover:underline">{c.name}</Link>
                     <Money value={c.balancePaise} className="text-destructive" />
                   </li>
                 ))}

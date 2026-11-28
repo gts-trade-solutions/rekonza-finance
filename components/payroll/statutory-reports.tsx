@@ -309,7 +309,7 @@ export function TdsTab({ from, to }: { from: string; to: string }) {
                         <button type="button" className="inline-flex items-center gap-0.5 text-primary hover:underline" onClick={() => void relink(c.id)}><Link2 className="size-3" /> link again</button>
                         <RowActions
                           onEdit={canPay && (() => setEditing({ month: m.month, challan: c, amount: c.taxPaise }))}
-                          onDelete={canDelete && (() => del.ask({
+                          onDelete={canDelete && (() => del.ask({ reasonRequired: true,
                             title: `Delete challan ${c.bsrCode}/${c.serial}?`, description: 'Its entry is reversed in the ledger (never erased) and the deductions it paid are unlinked: they show as not deposited in Form 24Q.',
                             reason: true, run: (reason) => api.delete(`/api/payroll/salary-tds?id=${c.id}${reasonQuery(reason, false)}`), done: 'Challan deleted', onDone: () => void state.refetch(),
                           }))}

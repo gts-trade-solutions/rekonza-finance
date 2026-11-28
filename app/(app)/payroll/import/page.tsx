@@ -198,7 +198,7 @@ export default function PayrollImportPage() {
                     <td className="px-3 py-1.5">{i.status === 'posted' ? 'Posted' : `Reversed${i.reverseReason ? `: ${i.reverseReason}` : ''}`}</td>
                     <td className="whitespace-nowrap px-3 py-1.5 text-right">
                       {i.entryId && <button type="button" className="mr-2 text-primary hover:underline" onClick={() => setJournal(i.entryId)}>Entry</button>}
-                      {i.status === 'posted' && canPost && <DeleteButton onClick={() => del.ask({
+                      {i.status === 'posted' && canPost && <DeleteButton onClick={() => del.ask({ reasonRequired: true,
                         title: `Reverse the salary register for ${i.month}?`, description: 'Its salary journal (and payment) are reversed in the ledger, never erased; the import stays on record, marked reversed. Refused while dues for the month are paid against it.',
                         reason: true, run: (reason) => api.delete(`/api/payroll/imports?id=${i.id}${reasonQuery(reason, false)}`), done: 'Reversed', onDone: () => void list.refetch(),
                       })} label="Reverse" />}

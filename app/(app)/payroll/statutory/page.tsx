@@ -139,7 +139,7 @@ export default function StatutoryRegistersPage() {
 
   const openPay = (d: Due) => { setEditing(null); setPaying(d); setAmount(d.balancePaise); setReference(''); setDate(new Date().toISOString().slice(0, 10)); setBankId(banks.data?.accounts[0]?.id ?? ''); };
   const openEdit = (d: Due, x: Payment) => { setEditing(x); setPaying(d); setAmount(x.amountPaise); setReference(x.reference ?? ''); setDate(x.paidOn); setBankId(x.bankAccountId); };
-  const remove = (d: Due, x: Payment) => del.ask({
+  const remove = (d: Due, x: Payment) => del.ask({ reasonRequired: true,
     title: `Delete the ${LABEL[d.component]} payment for ${monthName(d.month)}?`,
     description: 'Its entry is reversed in the ledger, never erased, and the due is open again. Refused while it is matched to the bank statement.',
     reason: true,

@@ -59,7 +59,7 @@ export default function ClaimsPage() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
   const stopEditing = () => { setEditing(null); setF({ ...blank, employeeId: f.employeeId }); };
-  const remove = (c: Claim) => del.ask({
+  const remove = (c: Claim) => del.ask({ reasonRequired: true,
     title: `Delete the ${c.category.toLowerCase()} claim of ${c.name}?`,
     description: 'It goes, with a line in the audit trail; a draft payroll that was repaying it is worked out again. A claim repaid by a posted payroll stays.',
     run: (reason) => api.delete(`/api/payroll/claims?id=${c.id}${reasonQuery(reason, false)}`),

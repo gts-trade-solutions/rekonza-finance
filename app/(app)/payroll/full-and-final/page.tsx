@@ -98,7 +98,7 @@ export default function FullAndFinalPage() {
       setBusy(null);
     }
   };
-  const remove = (x: Settlement) => del.ask({
+  const remove = (x: Settlement) => del.ask({ reasonRequired: true,
     title: `Delete the settlement of ${x.name}?`,
     description: (x.status === 'paid' ? 'Its payment and its entry are both reversed' : 'Its entry is reversed') +
       ' in the ledger, never erased, and the leave it encashed comes back. Their leaving date stays. Refused while a payment is matched to the bank statement.',

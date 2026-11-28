@@ -204,7 +204,7 @@ export default function Gstr9Page() {
     }
   };
 
-  const removeInputs = () => del.ask({
+  const removeInputs = () => del.ask({ reasonRequired: true,
     title: `Delete the GSTR-9 entries for FY ${fyLabel(fy)}?`,
     description: 'Transition credit, other credit and reversals, table 15 and the late fee paid go back to nil. The rest of the return is worked out from the documents and does not change.',
     run: () => gstr9Annual.deleteInputs(fy),

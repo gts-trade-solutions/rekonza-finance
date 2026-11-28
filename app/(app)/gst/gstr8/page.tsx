@@ -149,7 +149,7 @@ export default function Gstr8Page() {
                         ) : (
                           <RowActions
                             onEdit={canEdit ? () => setSupply({ edit: s }) : null}
-                            onDelete={canDelete ? () => del.ask({
+                            onDelete={canDelete ? () => del.ask({ reasonRequired: true,
                               title: 'Delete this record of supplies?', description: 'Its entry is reversed. The record is kept in the deleted documents.',
                               run: (reason) => withholding.deleteSupply(s.id, reason), done: 'Record deleted', onDone: () => state.refetch(),
                             }) : null} />
@@ -206,7 +206,7 @@ export default function Gstr8Page() {
                       <td className="px-3 py-2">{!d.filing && (
                         <RowActions
                           onEdit={canEdit ? () => setAmend({ row: null, amendment: a }) : null}
-                          onDelete={canDelete ? () => del.ask({
+                          onDelete={canDelete ? () => del.ask({ reasonRequired: true,
                             title: 'Undo this amendment?', description: 'Its entries are reversed and the record goes back to the figures filed.',
                             confirmLabel: 'Undo amendment', run: (reason) => withholding.undoSupplyAmendment(a.supplyId, month, reason), done: 'Amendment undone', onDone: () => state.refetch(),
                           }) : null} />

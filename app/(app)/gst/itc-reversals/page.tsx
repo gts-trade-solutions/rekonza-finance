@@ -251,12 +251,12 @@ function Posted() {
   const label = (what: What, key: string) => (what === 'annual' ? `FY ${key}-${String((Number(key) + 1) % 100).padStart(2, '0')}` : monthLabel(key));
   const undo = (what: What, key: string, reason: string | null) =>
     api.delete(`/api/itc-reversals?what=${what}&${what === 'annual' ? 'fy' : 'month'}=${key}${reasonQuery(reason, false)}`);
-  const remove = (what: What, key: string) => confirm.ask({
+  const remove = (what: What, key: string) => confirm.ask({ reasonRequired: true,
     title: `Delete the ${NAME[what]} for ${label(what, key)}?`,
     description: 'Its entry is reversed in the ledger, never erased, and the figures go back to waiting to be posted. Refused while something later rests on it (credit taken back against a reversal, or a true-up that counts the month).',
     run: (reason) => undo(what, key, reason), done: `${NAME[what]} for ${label(what, key)} deleted`, onDone: () => void state.refetch(),
   });
-  const edit = (what: What, key: string) => confirm.ask({
+  const edit = (what: What, key: string) => confirm.ask({ reasonRequired: true,
     title: `Post the ${NAME[what]} for ${label(what, key)} again?`,
     description: 'The posting is undone (its entry reversed) and worked out and posted again on the books as they are now, as after correcting a bill.',
     tone: 'default', confirmLabel: 'Undo and post again', failTitle: 'Not posted again',

@@ -46,7 +46,7 @@ export default function LeavePage() {
   const [addingType, setAddingType] = useState(false);
   const del = useConfirmDelete();
   const KIND: Record<string, string> = { taken: 'leave', opening: 'opening balance', adjustment: 'adjustment' };
-  const removeEntry = (r: RegisterRow) => del.ask({
+  const removeEntry = (r: RegisterRow) => del.ask({ reasonRequired: true,
     title: `Delete this ${KIND[r.kind] ?? 'leave'} of ${r.employeeName}?`,
     description: r.kind === 'taken'
       ? 'The days go back to the balance; the record stays, marked cancelled. Unpaid leave in a month whose payroll is posted stays until that payroll is reopened.'

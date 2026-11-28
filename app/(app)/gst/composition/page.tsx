@@ -96,14 +96,14 @@ function Quarters({ fy, composition }: { fy: number; composition: boolean }) {
   const confirm = useConfirmDelete();
   const undo = (q: Cmp08, reason: string | null) => api.delete(`/api/composition?fy=${fy}&quarter=${q.quarter}${reasonQuery(reason, false)}`);
   // The tax is worked out from the quarter's invoices: Edit books it again on them as they are now.
-  const rebook = (q: Cmp08) => confirm.ask({
+  const rebook = (q: Cmp08) => confirm.ask({ reasonRequired: true,
     title: `Book ${QLABEL[q.quarter]} again?`,
     description: 'What was booked is undone (its entry reversed, never erased) and the tax on turnover worked out and booked again on the quarter as it stands, as after an invoice was corrected.',
     tone: 'default', confirmLabel: 'Undo and book again', failTitle: 'Not booked again',
     run: async (reason) => { await undo(q, reason); await api.post('/api/composition', { action: 'book', fy, quarter: q.quarter }); },
     done: `${QLABEL[q.quarter]} booked again`, onDone: () => void state.refetch(),
   });
-  const remove = (q: Cmp08) => confirm.ask({
+  const remove = (q: Cmp08) => confirm.ask({ reasonRequired: true,
     title: `Delete the tax booked for ${QLABEL[q.quarter]}?`,
     description: 'Its entry is reversed in the ledger, never erased, and the quarter is ready to book again.',
     run: (reason) => undo(q, reason), done: `${QLABEL[q.quarter]} no longer booked`, onDone: () => void state.refetch(),

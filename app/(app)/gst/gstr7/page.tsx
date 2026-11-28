@@ -210,7 +210,7 @@ export default function Gstr7Page() {
                         ) : (
                           <RowActions
                             onEdit={canEdit ? () => setDeduct({ edit: x }) : null}
-                            onDelete={canDelete ? () => del.ask({
+                            onDelete={canDelete ? () => del.ask({ reasonRequired: true,
                               title: 'Delete this deduction?',
                               description: `Its entry is reversed and ${x.billNo ? `bill ${x.billNo} is owed in full again` : 'the supplier is owed the amount again'}. The record is kept in the deleted documents.`,
                               run: (reason) => withholding.deleteDeduction(x.id, reason), done: 'Deduction deleted', onDone: () => state.refetch(),
@@ -244,7 +244,7 @@ export default function Gstr7Page() {
                       <td className="px-3 py-2">{!d.filing && (
                         <RowActions
                           onEdit={canEdit ? () => setAmend({ row: null, amendment: a }) : null}
-                          onDelete={canDelete ? () => del.ask({
+                          onDelete={canDelete ? () => del.ask({ reasonRequired: true,
                             title: 'Undo this amendment?', description: 'Its entries are reversed and the deduction goes back to the figures filed.',
                             confirmLabel: 'Undo amendment', run: (reason) => withholding.undoDeductionAmendment(a.deductionId, month, reason), done: 'Amendment undone', onDone: () => state.refetch(),
                           }) : null} />

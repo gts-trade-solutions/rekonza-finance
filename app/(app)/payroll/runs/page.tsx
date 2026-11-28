@@ -44,7 +44,7 @@ export default function PayrollRunsPage() {
   const canApprove = usePermission('payroll', 'approve');
   const state = useApi<{ runs: RunRow[] }>(() => api.get('/api/payroll/runs'), []);
   const del = useConfirmDelete();
-  const remove = (r: RunRow) => del.ask({
+  const remove = (r: RunRow) => del.ask({ reasonRequired: true,
     title: `Delete the payroll for ${monthName(r.month)}?`,
     description: RUN_DELETE[r.status],
     run: (reason) => api.delete(`/api/payroll/runs/${r.id}${reasonQuery(reason)}`),

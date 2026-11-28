@@ -121,7 +121,7 @@ async function fresh() {
   check(t, 'setup: a bank account and Cash in Hand', bankAcc.status === 200 && !!hdfc && !!cash, JSON.stringify(bankAcc.json).slice(0, 80));
   const branchId = String(((await api(t, 'GET', '/api/settings')).json?.branches ?? [])[0]?.id ?? '');
   const pay = await api(t, 'POST', '/api/payments', { kind: 'made', branchId, contactId: vendor, date: day(3), mode: 'neft', amountPaise: 354_00, bankAccountId: hdfc.id, reference: 'UTR-TARA-01' });
-  const noReason = await api(t, 'DELETE', `/api/payments/${pay.json?.id}`);
+  const noReason = await api(t, 'DELETE', `/api/payments/${pay.json?.id}`, undefined, { noReason: true });
   check(t, '2: deleting a posted payment with no reason is answered 428 (the browser then asks)', noReason.status === 428 && noReason.json?.code === 'reason_required', `${noReason.status} ${noReason.json?.code}`);
   await goto(t, '/purchases/payments');
   const prow = page.locator('tr', { hasText: 'UTR-TARA-01' }).first();

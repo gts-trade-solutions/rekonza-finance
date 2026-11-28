@@ -127,7 +127,7 @@ export function TdsQuarterReturn() {
     });
     setOpen(true);
   };
-  const remove = (c: Challan) => del.ask({
+  const remove = (c: Challan) => del.ask({ reasonRequired: true,
     title: `Delete challan ${c.bsrCode}/${c.serial}?`,
     description: 'Its entry is reversed in the ledger, never erased, and the challan is kept as deleted; the month shows as not deposited again. Refused while the payment is matched to the bank statement.',
     run: (reason) => api.delete(`/api/tds-returns?id=${c.id}${reasonQuery(reason, false)}`),

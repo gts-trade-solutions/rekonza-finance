@@ -143,7 +143,7 @@ export function Gstr3bPaymentCard({ ret }: { ret: string }) {
         {r && canEdit && (
           <span className="flex gap-1.5">
             <EditButton onClick={() => setOpen(true)} slot="gstr3b-pay-edit" title="Change the date, challan or bank, or post it again as the return now stands" />
-            <DeleteButton slot="gstr3b-pay-delete" onClick={() => del.ask({
+            <DeleteButton slot="gstr3b-pay-delete" onClick={() => del.ask({ reasonRequired: true,
               title: `Delete the GSTR-3B payment for ${d.settlement.label}?`,
               description: 'Its entry is reversed: the output tax and the credit set off show as open again. Nothing on the GST portal changes.',
               run: (reason) => gstReturns.deletePayment(r.id, reason), done: 'Payment deleted', onDone: () => void state.refetch(),

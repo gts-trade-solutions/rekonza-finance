@@ -383,6 +383,8 @@ try {
     await page.waitForTimeout(2000);
     check('The payment edited (Edit): the CPIN corrected', /88888/.test(await page.locator('[data-slot="gstr3b-payment-recorded"]').innerText()));
     await page.locator('[data-slot="gstr3b-pay-delete"]').click();
+    // A delete that reverses a posted entry asks why, in its own window.
+    if (await page.locator('[data-slot="confirm-delete-reason"]').count()) await page.fill('[data-slot="confirm-delete-reason"]', 'Entered in error (e2e)');
     await page.locator('[data-slot="confirm-delete-go"]').click();
     await page.locator('[data-slot="gstr3b-pay"]').waitFor({ timeout: 60_000 });
     check('The payment deleted (Delete): its entry reversed', (await api('GET', `/api/gst/returns?view=gstr3b-payment&ret=${CUR}`)).json.recorded === null);
@@ -427,6 +429,8 @@ try {
     await page.locator('[data-slot="itc-held-back"]').scrollIntoViewIfNeeded();
     await shot(page, '11-12-itc-held-back');
     await page.locator('[data-slot="itc-held-delete"]').first().click();
+    // A delete that reverses a posted entry asks why, in its own window.
+    if (await page.locator('[data-slot="confirm-delete-reason"]').count()) await page.fill('[data-slot="confirm-delete-reason"]', 'Entered in error (e2e)');
     await page.locator('[data-slot="confirm-delete-go"]').click();
     await page.waitForTimeout(1500);
     check('The decision deleted (Delete): claimed in its own month again', (await api('GET', `/api/gst/returns?view=itc-claims&period=${CUR}`)).json.decisions.length === 0);
