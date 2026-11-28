@@ -88,14 +88,21 @@ if (process.env.FRESH === '1') {
   await page.locator('#password').fill(acct.json.temporaryPassword);
   await page.getByRole('button', { name: /^Sign in$/ }).click();
   await page.waitForURL(/change-password|dashboard/, { timeout: 120_000 });
-  if (page.url().includes('change-password')) {
+  // A temporary password is changed first. The app may send the person to that page only after the
+  // dashboard has opened, so look again once the inbox is asked for.
+  const changeIfAsked = async () => {
+    await page.waitForTimeout(1500);
+    if (!page.url().includes('change-password')) return false;
     await page.locator('#cp-current').fill(acct.json.temporaryPassword);
     await page.locator('#cp-next').fill('Approver@2026x');
     await page.locator('#cp-again').fill('Approver@2026x');
     await page.locator('form button[type="submit"]').click();
     await page.waitForURL(/dashboard/, { timeout: 120_000 });
-  }
+    return true;
+  };
+  await changeIfAsked();
   await goto(t, '/approvals');
+  if (await changeIfAsked()) await goto(t, '/approvals');
   const pendingRow = page.locator('tr, li, div', { hasText: /CN-|CN\// }).filter({ has: page.getByRole('button', { name: /^Approve/ }) }).last();
   await shot(t, 'approvals-inbox');
   await pendingRow.getByRole('button', { name: /^Approve/ }).first().click();

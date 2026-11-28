@@ -110,8 +110,12 @@ export function ClaimActions({ billId, billNo, billMonth, claim, onDone }: {
 }
 
 /** Every bill whose credit is held back or moved, whatever its month: Edit and Delete each decision. */
-export function HeldBackCard({ period, onChange }: { period: string; onChange: () => void }) {
-  const state = useApi(() => gstReturns.itcClaims(period), [period]);
+export function HeldBackCard({ period, onChange, version = 0 }: {
+  period: string; onChange: () => void;
+  /** Bumped by the page when a bill's decision changes on a row above, so this card reads it again. */
+  version?: number;
+}) {
+  const state = useApi(() => gstReturns.itcClaims(period), [period, version]);
   const del = useConfirmDelete();
   const [editing, setEditing] = useState<{ billId: string; number: string; billDate: string; claim: ClaimOnRow } | null>(null);
   const d = state.data;

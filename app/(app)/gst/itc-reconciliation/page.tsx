@@ -166,6 +166,8 @@ function MatchTable({
 
 export default function ItcReconciliationPage() {
   const [period, setPeriod] = useState(thisMonth());
+  // Bumped when a bill's decision changes on a row, so the held-back card below reads it again.
+  const [claimTick, setClaimTick] = useState(0);
   const state = useApi(() => gst.itc(period), [period]);
   const canEdit = usePermission('gst', 'edit');
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -338,12 +340,12 @@ export default function ItcReconciliationPage() {
                       </Badge>
                       <p className="text-xs text-muted-foreground">{BUCKETS[b].blurb}</p>
                     </div>
-                    <MatchTable rows={byBucket(b)} selected={selected} onToggle={toggle} canEdit={canEdit} onClaim={() => state.refetch()} />
+                    <MatchTable rows={byBucket(b)} selected={selected} onToggle={toggle} canEdit={canEdit} onClaim={() => { state.refetch(); setClaimTick((n) => n + 1); }} />
                   </TabsContent>
                 ))}
               </Tabs>
 
-              <HeldBackCard period={period} onChange={() => state.refetch()} />
+              <HeldBackCard period={period} version={claimTick} onChange={() => state.refetch()} />
 
               <Card className="flex items-start gap-3 p-4">
                 <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-muted-foreground" />

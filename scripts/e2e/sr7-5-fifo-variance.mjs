@@ -44,7 +44,7 @@ async function scenario(perpetual) {
   check(t, `${label}: a FIFO item with no opening stock`, it.status === 200, JSON.stringify(it.json).slice(0, 100));
   const itemId = it.json.id;
   // 1. Two bills (setup through the app's API, as the Bills form posts them).
-  const bill = (no, date, ratePaise) => api(t, 'POST', '/api/bills', { vendorId: vendor, vendorInvoiceNo: no, date, dueDate: date, lines: [{ itemId, qty: 10, ratePaise }] });
+  const bill = (no, date, ratePaise, qty = 10) => api(t, 'POST', '/api/bills', { vendorId: vendor, vendorInvoiceNo: no, date, dueDate: date, lines: [{ itemId, qty, ratePaise }] });
   const b1 = await bill(`${label}-A1`, day(6), 10_000);
   const b2 = await bill(`${label}-A2`, day(5), 12_000);
   check(t, `${label}: bills 10 @ ₹100 and 10 @ ₹120`, b1.status === 200 && b2.status === 200, `${b1.status}/${b2.status} ${JSON.stringify(b2.json).slice(0, 80)}`);
@@ -104,7 +104,9 @@ async function scenario(perpetual) {
 
   if (perpetual) {
     // 7. A back-dated bill (5 @ ₹80, before the sale): posted as a visible cost variance naming it.
-    const back = await bill(`${label}-A0`, day(7), 8_000);
+    // 5 @ ₹80 before the sale: the sale now takes 5 @ ₹80 + 10 @ ₹100 = ₹1,400; the return comes back,
+    // and the damaged unit goes, at ₹100 each, so cost of goods sold ends at ₹1,400.
+    const back = await bill(`${label}-A0`, day(7), 8_000, 5);
     check(t, 'perpetual 7: a bill dated before the sale', back.status === 200);
     f = await figures(itemId, d0);
     check(t, 'perpetual 7: still in line after it: valuation = Inventory account, variance ₹0.00; COGS now ₹1,400', f.variance === 0 && f.ledgerItem === f.valuation && f.cogs === 140_000, `${money(f.valuation)} / ${money(f.ledgerItem)} COGS ${money(f.cogs)}`);

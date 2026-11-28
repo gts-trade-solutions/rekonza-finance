@@ -26,8 +26,9 @@ async function upload(slug, filePath) {
   await page.locator('[data-slot="import-counts"], [data-slot="import-demo-note"]').first().waitFor({ timeout: 120_000 });
 }
 const count = async (k) => Number(await page.locator(`[data-slot="import-count-${k}-value"]`).innerText());
-const problems = async () => (await page.locator('[data-slot="import-errors"] [data-slot="import-error-row"]').evaluateAll((rows) => rows.map((r) => r.getAttribute('title') ?? ''))).concat(
-  await page.locator('[data-slot="import-duplicates-list"] [data-slot="import-error-row"]').evaluateAll((rows) => rows.map((r) => r.getAttribute('title') ?? '')));
+// Every list of problems on the preview: errors, duplicates, and rows skipped as already in the books.
+const problems = async () => page.locator('[data-slot="import-errors"] [data-slot="import-error-row"], [data-slot="import-duplicates-list"] [data-slot="import-error-row"], [data-slot="import-skipped"] [data-slot="import-error-row"]')
+  .evaluateAll((rows) => rows.map((r) => r.getAttribute('title') ?? ''));
 
 await enter(t);
 
@@ -75,6 +76,10 @@ if (process.env.FRESH === '1') {
   const reportPath = path.join(path.dirname(sampleXlsx), 'error-report.csv');
   await report.saveAs(reportPath);
   const reportText = readFileSync(reportPath, 'utf8');
+  // The same report as Excel: uploaded again below, it is a real .xlsx with every row of the file.
+  const [xreport] = await Promise.all([page.waitForEvent('download'), page.locator('[data-slot="import-error-report-xlsx"]').click()]);
+  const reportXlsx = path.join(path.dirname(sampleXlsx), `${Date.now()}-error-report.xlsx`);
+  await xreport.saveAs(reportXlsx);
   check(t, '4. the error report is the file back with an Error column', /,Error\r?\n/.test(reportText.split('\n')[0] + '\n') && /fails the GSTIN check digit/.test(reportText));
   // The choice: stop, or import the valid rows and skip the rest.
   check(t, 'Stop (import nothing) keeps the Import button off', await page.locator('[data-slot="import-run"]').isDisabled());
@@ -82,6 +87,7 @@ if (process.env.FRESH === '1') {
   await page.locator('[data-slot="import-run"]').click();
   await page.waitForURL(/import\/history\?batch=\d+/, { timeout: 120_000 });
   await page.locator('[data-slot="import-batch-detail"]').waitFor();
+  await page.locator('[data-slot="batch-imported"]').waitFor({ timeout: 60_000 });
   const detail = await page.locator('[data-slot="import-batch-detail"]').innerText();
   // 7 left out: 6 with errors, and 1 skipped as already in the books (counted apart, as the history shows them).
   check(t, '4. after import, its history entry: who, when, the file, 2 imported, 7 left out with reasons (6 failed, 1 already in the books)', /customers\.csv/.test(detail) && /Audit Tester/.test(detail) && (await page.locator('[data-slot="batch-imported"]').innerText()) === '2' && (await page.locator('[data-slot="batch-failed"]').innerText()) === '6' && (await page.locator('[data-slot="batch-skipped"]').innerText()) === '1',
@@ -89,8 +95,14 @@ if (process.env.FRESH === '1') {
   await shot(t, 'history-detail');
 
   // 3. The same through Excel: the .xlsx sample, and a real Zoho .xls export.
-  await upload('customers', sampleXlsx);
-  check(t, '3. an .xlsx file reads and checks (the sample: 1 row ready)', (await count('rows')) === 1 && (await count('valid')) === 1);
+  // The Excel template keeps its example on the second sheet, so uploaded untouched it is read and said to be empty.
+  await goto(t, '/import/customers');
+  await page.locator('[data-slot="import-file-input"]').setInputFiles(sampleXlsx);
+  const emptyToast = await page.locator('[data-sonner-toast]', { hasText: 'at least one row under it' }).first().waitFor({ timeout: 30_000 }).then(() => true).catch(() => false);
+  check(t, '3. the untouched Excel template is read, and said to have no rows yet', emptyToast);
+  // The error report as Excel, uploaded again: every one of the file's 9 rows read and checked the same way.
+  await upload('customers', reportXlsx);
+  check(t, '3. an .xlsx file reads and checks (the Excel error report: 9 rows)', (await count('rows')) === 9, `${await count('rows')} rows`);
   await shot(t, 'xlsx-preview');
   await upload('customers', path.resolve('scripts/tests/fixtures/zoho-customers.xls'));
   check(t, '3. an .xls (Excel 97-2003) Zoho export reads and checks', (await count('rows')) > 0, `${await count('rows')} rows, ${await count('valid')} valid`);

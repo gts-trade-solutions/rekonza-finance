@@ -25,8 +25,7 @@ test('a brand-new company: fourteen items, each with where to go and how to test
       assert.ok(i.evidence.length > 0, `${i.n} says what the books show`);
     }
     assert.ok(items.filter((i) => i.status === 'ready').length >= 12, 'an empty company is ready to test, not in use');
-    await trx.rollback?.();
-    throw new Error('rollback');
+    throw new Error('rollback'); // nothing of this company is kept
   }).catch((e) => { if (String(e?.message) !== 'rollback') throw e; });
 });
 
