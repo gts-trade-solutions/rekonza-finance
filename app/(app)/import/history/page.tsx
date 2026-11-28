@@ -39,7 +39,7 @@ function Detail({ id, onClose }: { id: string; onClose: () => void }) {
               <div>
                 <p className="font-semibold">{importModule(b.module)?.title ?? b.module} · {b.fileName ?? 'no file name'}</p>
                 <p className="text-muted-foreground">{when(b.at)} by {b.by ?? 'someone'} · {b.mode === 'valid_only' ? 'valid rows imported, the rest skipped' : 'every row or none'}</p>
-                <p className="mt-1">Rows in the file <b>{b.rowsTotal}</b> · imported <b data-slot="batch-imported">{b.imported}</b> · skipped as already in the books <b>{b.skipped}</b> · failed <b data-slot="batch-failed">{b.failed}</b>
+                <p className="mt-1">Rows in the file <b>{b.rowsTotal}</b> · imported <b data-slot="batch-imported">{b.imported}</b> · skipped as already in the books <b data-slot="batch-skipped">{b.skipped}</b> · failed <b data-slot="batch-failed">{b.failed}</b>
                   {Object.keys(b.createdCounts).length > 0 && <> · made {Object.entries(b.createdCounts).map(([t, n]) => `${n} ${t}`).join(', ')}</>}</p>
               </div>
               <button type="button" aria-label="Close" onClick={onClose}><X className="size-4" /></button>

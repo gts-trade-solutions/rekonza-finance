@@ -308,15 +308,49 @@ export const PUT = route(
       ...auditMeta(req),
     });
 
+    // A GSTIN given to a company that signed up without one. Whether invoices
+    // charge GST and bills' input tax is claimed follows the company's
+    // registration type (services/statutory.ts registrationOn), not the
+    // branch's GSTIN; so a company that types its GSTIN in later would go on
+    // issuing invoices with no GST and capitalising every bill's tax into
+    // cost. With nothing yet issued or entered there is no history to respect,
+    // so the company becomes a regular registered business from the start,
+    // exactly as if the GSTIN had been given at sign-up. Once documents exist
+    // the type changes only through Settings → Statutory, from the date the
+    // registration began (documents already issued were issued unregistered,
+    // CGST Act s.25 and s.31), and the reply says so.
+    let registration: string | null = null;
+    if (input.gstin) {
+      const org = await db.selectFrom('organizations').select('gst_registration_type').where('id', '=', orgId).executeTakeFirstOrThrow();
+      if (org.gst_registration_type === 'unregistered') {
+        const used = await sql<{ n: number }>`
+          SELECT (SELECT COUNT(*) FROM invoices WHERE org_id = ${orgId}) + (SELECT COUNT(*) FROM bills WHERE org_id = ${orgId})
+               + (SELECT COUNT(*) FROM credit_notes WHERE org_id = ${orgId}) + (SELECT COUNT(*) FROM expenses WHERE org_id = ${orgId}) AS n`.execute(db);
+        if (Number(used.rows[0]?.n ?? 0) === 0) {
+          await db.updateTable('organizations').set({ gst_registration_type: 'regular' }).where('id', '=', orgId).execute();
+          await logAudit({
+            orgId, actorUserId: user.userId, actorName: user.name, action: 'update', targetType: 'organization', targetId: orgId,
+            targetLabel: 'GST registration', detail: `Registered for GST (regular) with GSTIN ${input.gstin}: no documents existed yet`, ...auditMeta(req),
+          });
+          registration = 'This company is now registered for GST (regular): invoices charge GST and the input tax on bills can be claimed.';
+        } else {
+          registration = 'This company is still set as not registered for GST, so its invoices charge no GST. Change it in Settings → Statutory → GST registration, from the date the registration began.';
+        }
+      }
+    }
+
     return {
       id: asId(branchId),
       gstinChanged,
+      registration,
       // Said back to the caller so the UI can warn rather than let somebody
       // discover it on their next submission.
-      note: gstinChanged
-        ? 'Any portal credentials stored for this registration were issued for the old GSTIN and will ' +
-          'have to be entered again.'
-        : null,
+      note: [
+        gstinChanged && existing.gstin
+          ? 'Any portal credentials stored for this registration were issued for the old GSTIN and will have to be entered again.'
+          : null,
+        registration,
+      ].filter(Boolean).join(' ') || null,
     };
   },
   { permission: { module: 'settings', action: 'edit' } },

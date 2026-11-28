@@ -89,7 +89,7 @@ function Wizard({ m }: { m: ImportModule }) {
       return;
     }
     try {
-      const { grid } = await readGrid(file, m.kind, 'auto', enc);
+      const { grid } = await readGrid(file, m.kind, 'auto', enc, { keepEmptyLines: true });
       // Tally's own reports list groups and their ledgers together: they are read on the Tally screen.
       const tallyLaid = grid.slice(0, 20).some((r) => r.some((c) => /^particulars$/i.test(cellText(c).trim())));
       const tally = tallyLaid ? readTallyReportGrid(grid.map((r) => r.map((c) => ({ v: typeof c === 'number' ? c : cellText(c) }))), 'Excel') : null;

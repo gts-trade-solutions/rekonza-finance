@@ -30,7 +30,16 @@ async function xlsxGrid(file: File): Promise<unknown[][]> {
  * The file as rows of cells, its headings first. `delimiter` is a text file's
  * separator, or 'auto' to find it; the one used comes back (null for Excel or JSON).
  */
-export async function readGrid(file: File, kind: ImportKind, delimiter = 'auto', encoding = 'utf-8'): Promise<{ grid: unknown[][]; delimiter: string | null }> {
+export async function readGrid(
+  file: File, kind: ImportKind, delimiter = 'auto', encoding = 'utf-8',
+  /**
+   * Keep a text file's blank lines as empty rows, so a row's place in the grid is its line in the
+   * file. The import wizard names problems by that line ("Row 6, Customer: …"); dropping a blank
+   * line above a bank's headings would make every row number after it one short of what the person
+   * sees when they open the file to fix it.
+   */
+  opts: { keepEmptyLines?: boolean } = {},
+): Promise<{ grid: unknown[][]; delimiter: string | null }> {
   if (isXlsx(file)) return { grid: await xlsxGrid(file), delimiter: null };
   // Excel 97–2003, or a bank's HTML or text saved as .xls (lib/imports/xls.ts).
   let text: string | null = null;
@@ -45,7 +54,7 @@ export async function readGrid(file: File, kind: ImportKind, delimiter = 'auto',
   // in the character encoding chosen (Zoho's list), or found from the file's own mark.
   text ??= encoding && encoding !== 'utf-8' ? new TextDecoder(encoding).decode(await file.arrayBuffer()).replace(/^\uFEFF/, '') : await readTextFile(file);
   const used = delimiter === 'auto' || !delimiter ? guessDelimiter(text) : delimiter;
-  return { grid: Papa.parse<string[]>(text, { delimiter: used, skipEmptyLines: 'greedy' }).data, delimiter: used };
+  return { grid: Papa.parse<string[]>(text, { delimiter: used, skipEmptyLines: opts.keepEmptyLines ? false : 'greedy' }).data, delimiter: used };
 }
 
 /** The import a spreadsheet, CSV or JSON file is for, from its headings; null if none takes it whole. */

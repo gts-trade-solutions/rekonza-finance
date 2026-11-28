@@ -57,7 +57,11 @@ export async function claimShifts(ex: Executor, orgId: number, months: string[],
   const first = months[0];
   const last = months[months.length - 1];
   const from = `${first}-01`;
-  const to = `${last}-31`;
+  // The month's real last day: "2026-11-31" is no date, and MySQL compares a DATE
+  // against it as nothing at all, so a deferral in a 30-day month (or February)
+  // silently moved no credit.
+  const [ly, lm] = last.split('-').map(Number);
+  const to = new Date(Date.UTC(ly, lm, 0)).toISOString().slice(0, 10);
   const { rows } = await sql<{
     bill_id: number; number: string; vendor_invoice_no: string | null; bill_date: string; party: string; gstin: string | null;
     decision: ClaimDecision; claim_period: string | null; igst: string; cgst: string; sgst: string; cess: string;

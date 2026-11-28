@@ -236,6 +236,17 @@ test('GSTR-2B decisions move credit between months, in the form and the summary 
   });
 });
 
+test('a deferral in a 30-day month moves the credit too (no "2026-11-31")', async () => {
+  // Found by the merged e2e run on 2026-11-28: the month's range ended on the
+  // "31st", which November does not have, so the deferral matched nothing.
+  await withFixture(async (f) => {
+    const a = await buy(f, f.vendor, 'N/1', '2026-11-05', 10_000);
+    assert.equal((await gstr3bForm(f.trx, f.orgId, '2026-11', { today: TODAY })).itcNet.cgstPaise, 900_00);
+    await setClaimDecision(f.trx, f.orgId, null, { billIds: [a.id], decision: 'defer' });
+    assert.equal((await gstr3bForm(f.trx, f.orgId, '2026-11', { today: TODAY })).itcNet.cgstPaise, 0, 'held back from November');
+  });
+});
+
 test('table 6.1 posted as set-off and cash clears the GST ledgers; Delete reverses it', async () => {
   await withFixture(async (f) => {
     await sell(f, f.buyer, '2026-08-10', [line(20_000)]);
