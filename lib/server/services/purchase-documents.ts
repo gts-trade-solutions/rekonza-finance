@@ -485,7 +485,8 @@ async function vendorCreditLines(
       rate ??= toPaiseFromSql(bl.rate);
       gst ??= Number(bl.gst_rate_pct);
       hsn ??= bl.hsn_sac;
-      description ??= bl.description;
+      // A bill line entered by item keeps an empty description (""): the item's name then stands for it, below.
+      description ??= bl.description?.trim() || null;
       const back = await trx.selectFrom('vendor_credit_lines as vcl').innerJoin('vendor_credits as vc', 'vc.id', 'vcl.vendor_credit_id')
         .select((eb) => eb.fn.sum<string>('vcl.qty').as('q'))
         .where('vcl.bill_line_id', '=', l.billLineId).where('vc.status', '<>', 'void')

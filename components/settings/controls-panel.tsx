@@ -148,9 +148,16 @@ export function ControlsPanel({ canEdit }: { canEdit: boolean }) {
                     </div>
                     <p className="text-sm text-muted-foreground">{x.evidence}</p>
                     {x.gap && <p className="text-sm"><span className="font-medium">To complete: </span>{x.gap}</p>}
-                    <Link href={x.href} className="inline-flex items-center gap-1 text-xs text-primary hover:underline">
-                      Open <ArrowRight className="size-3" />
-                    </Link>
+                    {x.href.startsWith('/settings?tab=controls#') ? (
+                      <button type="button" className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                        onClick={() => document.getElementById(x.href.split('#')[1])?.scrollIntoView({ behavior: 'smooth', block: 'start' })}>
+                        Go to the setting <ArrowRight className="size-3" />
+                      </button>
+                    ) : (
+                      <Link href={x.href} className="inline-flex items-center gap-1 text-xs text-primary hover:underline">
+                        Open <ArrowRight className="size-3" />
+                      </Link>
+                    )}
                   </Card>
                 );
               })}
@@ -219,6 +226,7 @@ export function ControlsPanel({ canEdit }: { canEdit: boolean }) {
                     ))}
                   </div>
                 </Row>
+                <div id="control-stock" className="scroll-mt-20" />
                 <Row title="Stock in the ledger" hint={stock.method === 'perpetual'
                   ? `Perpetual from ${stock.from}: every sale posts its cost, stock purchases go to Inventory, and month end brings Inventory into line.`
                   : 'Periodic, as in Tally: cost of goods sold is worked out for the statements. Perpetual posts each sale\'s cost and keeps Inventory in the ledger.'}>

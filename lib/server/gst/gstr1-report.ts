@@ -306,7 +306,16 @@ export async function gstr1Report(ex: Executor, orgId: number, month: string): P
   })).sort((a, b) => Number(b.inReturn) - Number(a.inReturn));
 
   const issues = [...base.issues];
-  const short = [...hsnB2b, ...hsnB2c].filter((h) => h.short && h.code);
+  // A line with no HSN or SAC (a free-text line on an invoice or credit note: a price cut, a charge)
+  // lands in table 12 without a code, which the portal refuses: the return is not ready until it has one.
+  const noCode = [...hsnB2b, ...hsnB2c].filter((h) => !h.code || h.code === 'UNCLASSIFIED');
+  if (noCode.length && !issues.some((x) => /no HSN/i.test(x.message))) {
+    issues.push({
+      level: 'error',
+      message: `${noCode.length} line group(s) in table 12 have no HSN or SAC code (₹${(noCode.reduce((t, h) => t + h.taxablePaise, 0) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2 })} taxable): a free-text line on an invoice or credit note. Give those lines the HSN of the goods or the SAC of the service (a price cut on goods takes the goods' HSN); the portal refuses a summary row without one.`,
+    });
+  }
+  const short = [...hsnB2b, ...hsnB2c].filter((h) => h.short && h.code && h.code !== 'UNCLASSIFIED');
   if (short.length) {
     issues.push({
       level: 'error',

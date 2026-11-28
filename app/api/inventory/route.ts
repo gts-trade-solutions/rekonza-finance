@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { sql } from 'kysely';
+import { CODE } from '@/lib/server/ledger/chart-of-accounts';
 import { createAdjustment } from '@/lib/server/services/stock-changes';
 import { AdjustInput, toAdjustment } from '@/lib/server/adjustment-input';
 import { db, transaction } from '@/lib/server/db';
@@ -79,6 +81,9 @@ export const GET = route(
           'a.journal_entry_id', 'a.item_id',
           'i.name as item_name', 'i.sku', 'i.uqc', 'i.purchase_price',
           'w.name as warehouse_name', 'u.name as user_name',
+          // What the adjustment moved in the Inventory account, when it posted (a perpetual book posts on the day).
+          sql<string | null>`(SELECT SUM(jl.debit - jl.credit) FROM journal_lines jl JOIN accounts ac ON ac.id = jl.account_id
+            WHERE jl.entry_id = a.journal_entry_id AND ac.code = ${CODE.INVENTORY})`.as('posted_value'),
         ])
         .where('a.org_id', '=', orgId)
         .$if(!!q.itemId, (qb) => qb.where('a.item_id', '=', Number(q.itemId)))
@@ -101,7 +106,9 @@ export const GET = route(
           notes: a.notes,
           warehouseName: a.warehouse_name,
           userName: a.user_name,
-          valuePaise: Math.round(Number(a.qty_delta) * toPaiseFromSql(a.purchase_price)),
+          // The value posted (the FIFO or average cost that left stock); with nothing posted, the catalogue price.
+          valuePaise: a.posted_value !== null && a.posted_value !== undefined ? toPaiseFromSql(a.posted_value) : Math.round(Number(a.qty_delta) * toPaiseFromSql(a.purchase_price)),
+          valuePosted: a.posted_value !== null && a.posted_value !== undefined,
           journalEntryId: a.journal_entry_id === null ? null : asId(a.journal_entry_id),
         })),
       };
@@ -128,6 +135,8 @@ export const GET = route(
         soldQty: l.outwardQty,
         returnedQty: l.returnedQty,
         adjustedQty: l.adjustedQty,
+        // Goods sent back to suppliers on vendor credits with item lines; and how the item is valued.
+        sentBackQty: l.returnedToVendorQty ?? 0,
         qty: l.qty,
         reorderLevel: m?.reorder_level == null ? 0 : Number(m.reorder_level),
         minLevel: m?.min_level == null ? 0 : Number(m.min_level),
@@ -181,9 +190,19 @@ export const POST = route(
     const input = await body(req, AdjustInput);
     return transaction(async (trx) => {
       const made = await createAdjustment(trx, orgId, user.userId, toAdjustment(input));
-      // Shown for information: the value at the catalogue price.
-      const item = await trx.selectFrom('items').select('purchase_price').where('id', '=', Number(input.itemId)).executeTakeFirstOrThrow();
-      const valuePaise = Math.round(Math.abs(input.qtyDelta) * toPaiseFromSql(item.purchase_price));
+      // The value it posted, on a book that posts stock as it moves (perpetual); otherwise, for
+      // information, the value at the catalogue price (the statements value the stock at period end).
+      const row = await trx.selectFrom('stock_adjustments').select('journal_entry_id').where('id', '=', Number(made.id)).executeTakeFirst();
+      const journalEntryId = row?.journal_entry_id ?? null;
+      let valuePaise: number;
+      if (journalEntryId) {
+        const posted = await sql<{ v: string | null }>`SELECT SUM(jl.debit - jl.credit) AS v FROM journal_lines jl JOIN accounts ac ON ac.id = jl.account_id
+          WHERE jl.entry_id = ${journalEntryId} AND ac.code = ${CODE.INVENTORY}`.execute(trx);
+        valuePaise = Math.abs(toPaiseFromSql(posted.rows[0]?.v ?? '0'));
+      } else {
+        const item = await trx.selectFrom('items').select('purchase_price').where('id', '=', Number(input.itemId)).executeTakeFirstOrThrow();
+        valuePaise = Math.round(Math.abs(input.qtyDelta) * toPaiseFromSql(item.purchase_price));
+      }
       await logAudit({
         trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'create',
         targetType: 'stock_adjustment', targetId: made.id, targetLabel: made.itemName,
@@ -191,7 +210,7 @@ export const POST = route(
           `value ${(valuePaise / 100).toFixed(2)}`,
         ...auditMeta(req),
       });
-      return { id: asId(made.id), valuePaise, journalEntryId: null };
+      return { id: asId(made.id), valuePaise, journalEntryId: journalEntryId ? asId(journalEntryId) : null };
     });
   },
   { permission: { module: 'inventory', action: 'edit' } },

@@ -139,6 +139,8 @@ function SheetImport({ incoming, onWaiting, onPdf, onPdfLater }: {
   const [headings, setHeadings] = useState<{ heading: string; key: string | null }[]>([]);
   const [fileName, setFileName] = useState('');
   const [onDuplicate, setOnDuplicate] = useState<'skip' | 'error'>('skip');
+  // Keep every row or none, or import the rows that passed and leave the rest (as the import wizard offers).
+  const [mode, setMode] = useState<'all' | 'valid_only'>('all');
   const [result, setResult] = useState<ImportResponse | null>(null);
   const [busy, setBusy] = useState<false | 'check' | 'import'>(false);
   const input = useRef<HTMLInputElement>(null);
@@ -157,7 +159,7 @@ function SheetImport({ incoming, onWaiting, onPdf, onPdfLater }: {
     [t, headings],
   );
 
-  const reset = (k: ImportKind) => { setKind(k); setRows([]); setHeadings([]); setFileName(''); setResult(null); setOpenFile(null); };
+  const reset = (k: ImportKind) => { setKind(k); setRows([]); setHeadings([]); setFileName(''); setResult(null); setOpenFile(null); setMode('all'); };
 
   /**
    * Read a file under an import. `findKind`: when that import misses a column
@@ -218,7 +220,7 @@ function SheetImport({ incoming, onWaiting, onPdf, onPdfLater }: {
   const run = async (dryRun: boolean) => {
     setBusy(dryRun ? 'check' : 'import');
     try {
-      const r = await imports.rows(kind, rows, { dryRun, onDuplicate });
+      const r = await imports.rows(kind, rows, { dryRun, onDuplicate, mode, module: t.title, fileName: fileName || undefined, fileFormat: fileName.split('.').pop()?.toLowerCase() || undefined });
       setResult(r);
       if (r.committed) {
         toast.success(`${t.title} imported`);
@@ -231,7 +233,20 @@ function SheetImport({ incoming, onWaiting, onPdf, onPdfLater }: {
     }
   };
 
-  const checked = result && !result.committed && result.outcomes.every((o) => o.errors.length === 0);
+  const problems = result && !result.committed ? result.outcomes.flatMap((o) => o.errors) : [];
+  const validRows = result && !result.committed ? result.outcomes.reduce((n, o) => n + (o.valid ?? 0), 0) : 0;
+  const checked = result && !result.committed && (problems.length === 0 || (mode === 'valid_only' && validRows > 0));
+  // The file back, row by row, with what is wrong with each: to fix it and import it again.
+  const errorReport = (as: 'csv' | 'xlsx') => {
+    const byRow = new Map<number, string[]>();
+    for (const e of problems) byRow.set(e.row, [...(byRow.get(e.row) ?? []), `${e.field ? `${e.field}: ` : ''}${e.message}`]);
+    const cols = t.columns.filter((c) => headings.some((h) => h.key === c.key));
+    const head = ['Row', ...cols.map((c) => c.label), 'Error'];
+    const body = rows.map((r, i) => [String(i + 2), ...cols.map((c) => String(r[c.key] ?? '')), (byRow.get(i + 2) ?? []).join(' | ')]);
+    const name = `${kind}-import-errors`;
+    if (as === 'csv') downloadCsv(`${name}.csv`, [head, ...body]);
+    else downloadWorkbook(`${name}.xlsx`, [{ name: 'Errors', rows: [head, ...body] }]);
+  };
 
   return (
     <div className="grid gap-4 lg:grid-cols-[16rem_1fr]">
@@ -374,12 +389,23 @@ function SheetImport({ incoming, onWaiting, onPdf, onPdfLater }: {
               </table>
             </div>
             {rows.length > 20 && <p className="text-xs text-muted-foreground">Showing the first 20 of {rows.length}.</p>}
+            {problems.length > 0 && (
+              <div className="space-y-2 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm dark:border-amber-800 dark:bg-amber-950/30" data-slot="sheet-problems">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span>{problems.length} problem{problems.length === 1 ? '' : 's'} in the file; {validRows} row{validRows === 1 ? '' : 's'} ready. Download the file back with an Error column, fix it and import it again:</span>
+                  <Button size="xs" variant="outline" className="gap-1" onClick={() => errorReport('csv')} data-slot="sheet-error-csv"><Download className="size-3" /> Error report (CSV)</Button>
+                  <Button size="xs" variant="outline" className="gap-1" onClick={() => errorReport('xlsx')} data-slot="sheet-error-xlsx"><Download className="size-3" /> Error report (Excel)</Button>
+                </div>
+                <label className="flex items-center gap-2"><input type="radio" name="sheet-mode" checked={mode === 'valid_only'} onChange={() => setMode('valid_only')} data-slot="sheet-mode-valid" /> Import the {validRows} valid row{validRows === 1 ? '' : 's'}, skip the rest (they stay in the import history, with why)</label>
+                <label className="flex items-center gap-2"><input type="radio" name="sheet-mode" checked={mode === 'all'} onChange={() => setMode('all')} /> Stop: import nothing until every row is right</label>
+              </div>
+            )}
             <div className="flex justify-end gap-2">
               <Button variant="outline" onClick={() => void run(true)} disabled={!!busy || missing.length > 0} className="gap-1.5">
                 {busy === 'check' && <Loader2 className="size-4 animate-spin" />} Check
               </Button>
               <Button onClick={() => void run(false)} disabled={!!busy || !checked} className="gap-1.5">
-                {busy === 'import' && <Loader2 className="size-4 animate-spin" />} Import {rows.length} row(s)
+                {busy === 'import' && <Loader2 className="size-4 animate-spin" />} Import {problems.length && mode === 'valid_only' ? `${validRows} valid` : rows.length} row(s)
               </Button>
             </div>
           </Card>

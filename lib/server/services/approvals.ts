@@ -260,11 +260,17 @@ export async function recentDecisions(ex: Executor, orgId: number, limit = 25): 
     .leftJoin('bills as b', (j) => j.onRef('b.id', '=', 'a.document_id').on('a.document_type', '=', 'bill'))
     .leftJoin('invoices as i', (j) => j.onRef('i.id', '=', 'a.document_id').on('a.document_type', '=', 'invoice'))
     .leftJoin('payment_batches as p', (j) => j.onRef('p.id', '=', 'a.document_id').on('a.document_type', '=', 'payment_batch'))
-    .select(['a.document_type', 'a.document_id', 'a.action', 'a.note', 'a.created_at', 'u.name', 'b.internal_no', 'i.number as invoice_no', 'p.number as batch_no'])
+    // A credit note by its own number; a journal waiting for approval by its H- number, and once posted by its entry number.
+    .leftJoin('credit_notes as cn', (j) => j.onRef('cn.id', '=', 'a.document_id').on('a.document_type', '=', 'credit_note'))
+    .leftJoin('held_journals as hj', (j) => j.onRef('hj.id', '=', 'a.document_id').on('a.document_type', '=', 'journal'))
+    .leftJoin('journal_entries as je', 'je.id', 'hj.entry_id')
+    .select(['a.document_type', 'a.document_id', 'a.action', 'a.note', 'a.created_at', 'u.name', 'b.internal_no', 'i.number as invoice_no', 'p.number as batch_no',
+      'cn.number as credit_note_no', 'je.entry_no as journal_no'])
     .where('a.org_id', '=', orgId).orderBy('a.created_at', 'desc').orderBy('a.id', 'desc').limit(limit).execute();
   return rows.map((r) => ({
     documentType: r.document_type as RuleDoc, id: String(r.document_id),
-    number: r.internal_no ?? r.invoice_no ?? r.batch_no ?? `Journal ${r.document_id}`,
+    number: r.internal_no ?? r.invoice_no ?? r.batch_no ?? r.credit_note_no
+      ?? (r.document_type === 'journal' ? (r.journal_no ? `Journal #${r.journal_no}` : `Journal H-${r.document_id}`) : `${String(r.document_type).replace(/_/g, ' ')} ${r.document_id}`),
     action: r.action, note: r.note, by: r.name, at: new Date(r.created_at).toISOString(),
   }));
 }

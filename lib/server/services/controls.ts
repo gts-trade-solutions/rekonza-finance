@@ -105,8 +105,9 @@ export async function controlsOverview(ex: Executor, orgId: number): Promise<Con
     evidence: perpetual
       ? `Perpetual inventory from ${p.stockAccounting.from}: every sale posts its cost to Cost of Goods Sold and out of Inventory, every stock purchase goes to Inventory, and month end brings Inventory into line with the stock valuation.${perpetualEntries ? '' : ' Nothing has been sold since.'}`
       : 'Periodic (as in Tally): cost of goods sold is worked out for the statements from opening stock, purchases and closing stock, valued from the documents.',
-    gap: stockMoves && !perpetual ? 'Switch to perpetual inventory so each sale posts its cost in the ledger.' : null,
-    href: '/settings?tab=controls',
+    gap: stockMoves && !perpetual ? 'Switch to perpetual inventory so each sale posts its cost in the ledger: "Stock in the ledger", below.' : null,
+    // The switch is further down this same page: straight to it, not a reload of the page.
+    href: '/settings?tab=controls#control-stock',
   });
   add({
     key: 'einvoice', area: 'GST e-invoice automation',

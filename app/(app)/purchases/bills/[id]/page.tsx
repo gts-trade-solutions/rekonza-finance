@@ -264,7 +264,7 @@ export default function BillDetailPage() {
                       {bill.lines.map((l) => (
                         <tr key={l.id} className="border-b last:border-0">
                           <td className="px-4 py-2.5">
-                            {l.description ?? '—'}
+                            {l.description?.trim() || l.itemName || '—'}
                             {l.accountName && (
                               <span className="ml-2 text-xs text-muted-foreground">{l.accountName}</span>
                             )}

@@ -49,8 +49,8 @@ export function BulkPayments({ side }: { side: 'received' | 'made' }) {
   const [picked, setPicked] = useState<Record<string, { amount: number; tds: number }>>({});
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const word = side === 'received' ? { doc: 'Invoice', docs: 'invoices', party: 'Customer', pay: 'Payment received', title: 'Record Bulk Receipts', list: '/sales/payments', paidInto: 'Deposit to' }
-    : { doc: 'Bill', docs: 'bills', party: 'Vendor', pay: 'Payment made', title: 'Record Bulk Payments', list: '/purchases/payments', paidInto: 'Paid through' };
+  const word = side === 'received' ? { doc: 'Invoice', docs: 'invoices', party: 'Customer', pay: 'Payment received', pays: 'Payments Received', title: 'Record Bulk Receipts', list: '/sales/payments', paidInto: 'Deposit to' }
+    : { doc: 'Bill', docs: 'bills', party: 'Vendor', pay: 'Payment made', pays: 'Payments Made', title: 'Record Bulk Payments', list: '/purchases/payments', paidInto: 'Paid through' };
 
   const docs = useMemo(() => (state.data ?? []).filter((d) => !party || d.party === party), [state.data, party]);
   const parties = useMemo(() => [...new Set((state.data ?? []).map((d) => d.party))].sort(), [state.data]);
@@ -88,7 +88,7 @@ export function BulkPayments({ side }: { side: 'received' | 'made' }) {
   return (
     <>
       <PageHeader title={word.title} description={`Pay many ${word.docs} at once: one ${side === 'received' ? 'receipt per customer' : 'payment per vendor'}, settling the ${word.docs} ticked.`}
-        actions={<Link href={word.list} className="text-sm text-link hover:underline">Back to {word.pay}s</Link>} />
+        actions={<Link href={word.list} className="text-sm text-link hover:underline">Back to {word.pays}</Link>} />
       <div className="mb-4 grid gap-3 rounded-[6px] border p-4 sm:grid-cols-5" data-slot="bulk-pay-head">
         <Field label="Payment date" required><Input type="date" value={date} onChange={(e) => setDate(e.target.value)} data-slot="bulk-pay-date" /></Field>
         <Field label="Mode"><select className="h-9 w-full rounded-md border bg-background px-2 text-sm" value={mode} onChange={(e) => setMode(e.target.value)} data-slot="bulk-pay-mode">

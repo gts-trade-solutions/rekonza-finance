@@ -516,7 +516,7 @@ export interface BillDetail {
   amountPaidPaise: number;
   balancePaise: number;
   lines: {
-    id: string; itemId?: string | null; accountId?: string | null; accountName: string | null; description: string | null; hsnSac: string | null;
+    id: string; itemId?: string | null; itemName?: string | null; accountId?: string | null; accountName: string | null; description: string | null; hsnSac: string | null;
     qty: number; uqc: string | null; ratePaise: number; discountPct: number; gstRatePct: number;
     taxablePaise: number; cgstPaise: number; sgstPaise: number; igstPaise: number;
     totalPaise: number; itcEligibility: string;
@@ -2500,6 +2500,8 @@ export interface StockRow {
   /** Taken back on credit notes. */
   returnedQty: number;
   adjustedQty: number;
+  /** Sent back to suppliers on vendor credits with goods. */
+  sentBackQty?: number;
   qty: number;
   reorderLevel: number;
   minLevel: number;

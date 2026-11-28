@@ -148,7 +148,7 @@ export default function StockAdjustmentsPage() {
     toast.success('Stock adjusted', {
       description: done.journalEntryId
         ? `Value of ${(done.valuePaise / 100).toLocaleString('en-IN')} posted to the ledger.`
-        : 'Quantity only — this item carries no cost, so nothing moved in the ledger.',
+        : 'Quantity changed. This book values stock at the period end (periodic): the loss reaches the profit and loss through closing stock, not by an entry now.',
     });
     setOpen(false);
     setF(BLANK);

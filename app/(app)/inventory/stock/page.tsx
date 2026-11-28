@@ -101,6 +101,7 @@ export default function StockPage() {
         <span className="text-xs text-muted-foreground tabular">
           {r.openingQty} opening + {r.boughtQty} in − {r.soldQty} out
           {r.returnedQty !== 0 && ` + ${r.returnedQty} returned`}
+          {(r.sentBackQty ?? 0) !== 0 && ` − ${r.sentBackQty} sent back`}
           {r.adjustedQty !== 0 && (r.adjustedQty > 0 ? ` + ${r.adjustedQty} adj` : ` − ${-r.adjustedQty} adj`)}
         </span>
       ),
@@ -240,8 +241,9 @@ export default function StockPage() {
               <Info className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
               <p className="text-xs leading-relaxed text-muted-foreground">
                 Quantities are calculated, not stored — opening stock plus everything received on bills, minus
-                everything sold on invoices, plus any adjustment. Valuation is weighted average cost, taken from
-                what was actually paid on the bills rather than the catalogue price. Adjustments post to the ledger,
+                everything sold on invoices, less goods sent back to suppliers, plus any adjustment. Each item is
+                valued as it is set: first-in first-out (FIFO) or weighted average cost, taken from what was actually
+                paid on the bills rather than the catalogue price. Adjustments post to the ledger,
                 so the Inventory figure on the balance sheet moves with them.
               </p>
             </Card>

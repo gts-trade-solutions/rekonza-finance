@@ -117,7 +117,9 @@ export default function VendorCreditsPage() {
     // Choosing a bill in goods mode lists its item lines, each at nothing to return yet.
     if (mode !== 'goods' || !bill.data || editing) return;
     setGoods(bill.data.lines.filter((l) => l.itemId).map((l) => ({
-      key: `b${l.id}`, itemId: String(l.itemId), billLineId: l.id, name: l.description ?? 'Item', cameIn: l.qty, qty: 0, ratePaise: l.ratePaise, gstRatePct: l.gstRatePct,
+      key: `b${l.id}`, itemId: String(l.itemId), billLineId: l.id,
+      // A line entered by item has no description of its own: the item's name stands for it.
+      name: l.description?.trim() || '', cameIn: l.qty, qty: 0, ratePaise: l.ratePaise, gstRatePct: l.gstRatePct,
     })));
   }, [bill.data, mode, editing]);
   const goodsTaxable = goods.reduce((t, g) => t + Math.round(g.qty * g.ratePaise), 0);
@@ -299,11 +301,15 @@ export default function VendorCreditsPage() {
                         <tbody>
                           {goods.map((g, i) => (
                             <tr key={g.key} className="border-t" data-slot="vc-goods-row">
-                              <td className="py-1 pr-2">{g.name}</td>
+                              <td className="py-1 pr-2">{g.name || stockItems.data?.items.find((it) => String(it.id) === String(g.itemId))?.name || 'Item'}</td>
                               <td className="py-1 text-right tabular">{g.cameIn ?? '—'}</td>
                               <td className="py-1 text-right"><Input type="number" min={0} step="any" value={g.qty || ''} placeholder="0" className="h-7 w-20 text-right" data-slot="vc-goods-qty"
                                 onChange={(e) => setGoods(goods.map((x, k) => (k === i ? { ...x, qty: Math.max(0, Number(e.target.value) || 0) } : x)))} /></td>
-                              <td className="py-1 text-right tabular">{formatINR(g.ratePaise)}</td>
+                              {/* Against a bill the rate is the bill's; with no bill it is the supplier's credit note rate, so it can be changed. */}
+                              <td className="py-1 text-right tabular">{g.billLineId ? formatINR(g.ratePaise) : (
+                                <Input type="number" min={0} step="0.01" value={g.ratePaise ? g.ratePaise / 100 : ''} className="ml-auto h-7 w-24 text-right" data-slot="vc-goods-rate" aria-label="Rate"
+                                  onChange={(e) => setGoods(goods.map((x, k) => (k === i ? { ...x, ratePaise: Math.max(0, Math.round((Number(e.target.value) || 0) * 100)) } : x)))} />
+                              )}</td>
                               <td className="py-1 text-right tabular">{g.gstRatePct}%</td>
                             </tr>
                           ))}
