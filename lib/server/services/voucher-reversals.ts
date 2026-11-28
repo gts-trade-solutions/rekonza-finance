@@ -215,7 +215,8 @@ export async function reversalRegister(ex: Executor, orgId: number, opts: { from
     .innerJoin('journal_entries as o', 'o.id', 'h.reverses_entry_id')
     .leftJoin('users as u', 'u.id', 'h.created_by_user_id')
     .select(['h.id', 'h.kind', 'h.entry_date', 'h.reason', 'h.memo', 'o.id as entry_id', 'o.entry_no', 'o.entry_date as o_date', 'o.memo as o_memo', 'o.source_type', 'o.source_id', 'o.total_debit', 'u.name'])
-    .where('h.org_id', '=', orgId).where('h.status', '=', 'held').where('h.entry_date', '>=', from).where('h.entry_date', '<=', to)
+    // Still to come whatever the range: an accrual due next month is listed today, as the screen's heading says.
+    .where('h.org_id', '=', orgId).where('h.status', '=', 'held')
     .orderBy('h.entry_date').execute();
   return [
     ...held.map((h): ReversalPair => ({

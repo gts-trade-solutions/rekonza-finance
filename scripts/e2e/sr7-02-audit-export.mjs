@@ -63,6 +63,7 @@ try {
   await t.loginDemo(creds.email, creds.password);
   check('signed in again', page.url().includes('/dashboard'));
 
+  const waitText = (sel, text) => page.waitForFunction(([s, t]) => (document.querySelector(s)?.textContent ?? '').includes(t), [sel, text], { timeout: 90000 }).catch(() => {});
   // ── 2. The audit trail, filtered by date, user, action and record type.
   await go('/accountant/audit-trail');
   await page.waitForSelector('[data-slot="audit-filters"]', { timeout: 60000 });
@@ -80,6 +81,7 @@ try {
   const types = await page.locator('[data-slot="audit-type"] option').allInnerTexts();
   const invType = types.find((x) => /^invoice/i.test(x.trim()));
   if (invType) await page.selectOption('[data-slot="audit-type"]', { label: invType });
+  await waitText('main', `Raised twice ${tag}`);
   await idle(1500);
   const shown = await page.locator('main').innerText();
   check('the deleted invoice is found by date, user, action and record type', shown.includes(inv.number) && /Raised twice/.test(shown), inv.number);
@@ -109,7 +111,8 @@ try {
   await page.selectOption('select[aria-label="Action"]', 'all');
   await page.selectOption('[data-slot="audit-type"]', 'all');
   await page.fill('[data-slot="audit-search"]', 'Exported the audit trail');
-  await idle(1800);
+  await waitText('main', 'Exported the audit trail as PDF');
+  await idle(1000);
   check('each export is recorded in the trail', /Exported the audit trail as PDF/.test(await page.locator('main').innerText()));
   await shot('export-recorded');
   await page.fill('[data-slot="audit-search"]', '');
@@ -142,7 +145,9 @@ try {
   if (await page.locator('[data-slot="add-auditor-role"]').count()) {
     await page.click('[data-slot="add-auditor-role"]');
     await page.getByRole('dialog').getByRole('button', { name: /^Save/ }).click();
-    await idle(1500);
+    await page.getByRole('dialog').waitFor({ state: 'detached', timeout: 60000 }).catch(() => {});
+    await waitText('main', 'Accountant — view, print, export');
+    await idle(1000);
   }
   const roles = await page.locator('[data-slot="role-rights"]').allInnerTexts();
   check('an Auditor role: view, print and export, nothing else', roles.some((r) => /Accountant — view, print, export/.test(r) && !/create|edit|void|approve/.test(r)), roles.join(' || ').slice(0, 200));

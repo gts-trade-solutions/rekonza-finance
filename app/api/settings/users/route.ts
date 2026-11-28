@@ -33,7 +33,7 @@ const Input = z.discriminatedUnion('action', [
   z.object({ action: z.literal('reset-mfa'), id: Id }),
   z.object({
     action: z.literal('save-role'), id: Id.nullish(), name: z.string().max(60), baseRole: z.enum(['accountant', 'sales', 'staff', 'viewer']),
-    permissions: z.record(z.string(), z.array(z.enum(['view', 'create', 'edit', 'approve', 'void']))), description: z.string().max(255).nullish(),
+    permissions: z.record(z.string(), z.array(z.enum(['view', 'create', 'edit', 'approve', 'void', 'print', 'export']))), description: z.string().max(255).nullish(),
   }),
   z.object({ action: z.literal('delete-role'), id: Id }),
 ]);

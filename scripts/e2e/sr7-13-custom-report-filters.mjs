@@ -51,6 +51,7 @@ try {
   const assigned = await api('POST', '/api/reporting-tags', { action: 'assign', entity: 'invoice', id: String(i2.id), values: { [tagRow.id]: north.id } });
   check('set-up: a project expense and a tagged invoice', !!proj?.id && !!exp?.id && assigned.status === 200, `${JSON.stringify(exp).slice(0, 80)} ${assigned.status}`);
 
+  const waitText = (sel, text) => page.waitForFunction(([s, t]) => (document.querySelector(s)?.textContent ?? '').includes(t), [sel, text], { timeout: 90000 }).catch(() => {});
   // ── 1. The plain profit and loss, then Customize Report.
   await go('/reports/profit-and-loss');
   await page.waitForSelector('[data-slot="customize-report"]');
@@ -88,7 +89,8 @@ try {
   await page.click('[data-slot="customize-tab-columns"]');
   await page.check('[data-slot="customize-col-pct"]');
   await page.click('[data-slot="customize-apply"]');
-  await idle(1200);
+  await waitText('[data-slot="custom-report-applied"]', `Cost centre: Showroom ${tag}`);
+  await idle(800);
   applied = await page.locator('[data-slot="custom-report-applied"]').innerText();
   check('heading states the cost centre and the comparison', applied.includes(`Cost centre: Showroom ${tag}`) && /Compared with: 1 previous year/.test(applied), applied.replace(/\n/g, ' | '));
   const cols2 = await page.locator('[data-slot="custom-column"]').count();
@@ -99,7 +101,7 @@ try {
 
   // ── 2b. Project and reporting tag filters.
   // Clear this run's project, tag and cost centre, then tick the one asked for (matched by both its text and its group).
-  const runWith = async (slot, text, group = '') => {
+  const runWith = async (slot, text, group = '', expect = '') => {
     await page.click('text=Edit filters');
     await page.waitForSelector('[data-slot="customize-panel"]');
     await page.selectOption('[data-slot="customize-compare"]', 'none');
@@ -110,22 +112,23 @@ try {
     await pick('customize-tags', 'North', `Region ${tag}`).uncheck();
     await pick(slot, text, group).check();
     await page.click('[data-slot="customize-apply"]');
+    if (expect) await waitText('[data-slot="custom-report-applied"]', expect);
     await idle(1200);
   };
-  await runWith('customize-projects', `Fleet contract ${tag}`);
+  await runWith('customize-projects', `Fleet contract ${tag}`, '', `Project: Fleet contract ${tag}`);
   applied = await page.locator('[data-slot="custom-report-applied"]').innerText();
   const firstLine = (t) => t.split(String.fromCharCode(10))[0];
   const oneLine = (t) => t.split(String.fromCharCode(10)).join(' | ');
   const projExp = rupees(firstLine(await page.locator('[data-slot="rpt-account"]', { hasText: expenseAcc.code }).first().locator('td').nth(2).innerText()));
   check('project filter: the project expense of ₹3,000', applied.includes(`Project: Fleet contract ${tag}`) && projExp === 3000, `${projExp} | ${oneLine(applied)}`);
   await shot('pl-project');
-  await runWith('customize-tags', 'North', `Region ${tag}`);
+  await runWith('customize-tags', 'North', `Region ${tag}`, `Reporting tag: Region ${tag} = North`);
   applied = await page.locator('[data-slot="custom-report-applied"]').innerText();
   const tagSales = rupees(firstLine(await page.locator('[data-slot="rpt-account"]', { hasText: '4100' }).first().locator('td').nth(2).innerText()));
   check('reporting tag filter: Bharat invoice of ₹5,000 tagged North', applied.includes(`Reporting tag: Region ${tag} = North`) && tagSales === 5000, `${tagSales} | ${oneLine(applied)}`);
   await shot('pl-tag');
   // Back to the cost centre for the exports.
-  await runWith('customize-cost-centres', `Showroom ${tag}`);
+  await runWith('customize-cost-centres', `Showroom ${tag}`, '', `Cost centre: Showroom ${tag}`);
 
   // ── 3. Exports carry the filters: Excel and PDF.
   const exportAs = async (label) => {

@@ -152,6 +152,7 @@ try {
   void auto;
   // The approval rule holds it (₹800 is under ₹1,000, so it posts).
   await go('/accountant/journals');
+  await page.waitForSelector('[data-slot="held-reverses"]', { timeout: 60000 }).catch(() => {});
   check('the auto-reversal is held for its date, "Reverses #…"', (await page.locator('[data-slot="held-reverses"]').count()) >= 1);
   await shot('auto-reversal-held');
 

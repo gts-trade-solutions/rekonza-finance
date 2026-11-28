@@ -54,11 +54,19 @@ export async function start(item) {
   const idle = async (ms = 400) => { await page.waitForLoadState('networkidle', { timeout: 20000 }).catch(() => {}); await page.waitForTimeout(ms); };
   const go = async (p) => { await page.goto(`${BASE}${p}`, { waitUntil: 'domcontentloaded', timeout: 180000 }); await idle(800); };
   /** Call the app's API from the signed-in page, as the screens do. */
-  const api = (method, p, body) => page.evaluate(async ([m, u, b]) => {
+  const api1 = (method, p, body) => page.evaluate(async ([m, u, b]) => {
     const r = await fetch(u, { method: m, credentials: 'include', headers: { 'Content-Type': 'application/json', 'X-Change-Reason': encodeURIComponent('End-to-end test') }, body: b ? JSON.stringify(b) : undefined });
     let j = null; try { j = await r.json(); } catch { /* none */ }
     return { status: r.status, body: j };
   }, [method, p, body]);
+  // A GET caught by the page moving on (a company switch reloads it) is asked again once the page settles.
+  const api = async (method, p, body) => {
+    try { return await api1(method, p, body); } catch (e) {
+      if (method !== 'GET' || !/Execution context was destroyed/.test(String(e?.message ?? e))) throw e;
+      await page.waitForLoadState('networkidle', { timeout: 60000 }).catch(() => {});
+      return api1(method, p, body);
+    }
+  };
   const expect4xx = (urlPart) => expected.push(urlPart);
   // A book that keeps a reason with every change asks for one (components/layout/reason-prompt.tsx), and the
   // browser logs the first 428 that triggers the question: answered here as a person would, and not an error.

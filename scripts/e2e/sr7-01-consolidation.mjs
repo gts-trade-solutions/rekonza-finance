@@ -30,6 +30,7 @@ async function switchTo(name) {
   await page.click('[data-slot="org-switcher"]');
   await page.getByRole('menuitem', { name: new RegExp(name) }).click();
   await page.waitForURL('**/dashboard', { timeout: 180000 });
+  await page.waitForLoadState('networkidle', { timeout: 60000 }).catch(() => {});
   await idle(1200);
 }
 
@@ -50,6 +51,7 @@ try {
     await shot('add-company');
     await page.getByRole('button', { name: /Create and move there/ }).click();
     await page.waitForURL('**/dashboard', { timeout: 180000 });
+    await page.waitForLoadState('networkidle', { timeout: 60000 }).catch(() => {});
     await idle(1500);
     check('the second company is made and opened', (await page.locator('[data-slot="org-switcher"]').innerText()).includes(B));
 
@@ -140,7 +142,8 @@ try {
   // ── 7. Drill-down to a company's ledger.
   await ar.locator('[data-slot="consolidated-drill"]').first().click();
   await page.waitForSelector('[data-slot="consolidated-ledger"]', { timeout: 60000 });
-  await idle(1500);
+  await page.waitForSelector('[data-slot="consolidated-ledger-line"]', { timeout: 60000 }).catch(() => {});
+  await idle(1000);
   check('a company figure opens that company\'s ledger', (await page.locator('[data-slot="consolidated-ledger-line"]').count()) > 0);
   await shot('drill-ledger');
   await page.keyboard.press('Escape');
