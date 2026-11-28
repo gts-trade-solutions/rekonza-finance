@@ -64,6 +64,10 @@ export interface CalendarProfile {
   lutValidTo: string | null;
   /** Has employees on the payroll: PF, ESI and the salary TDS return. */
   payroll: boolean;
+  /** Registered as a GST TDS deductor (CGST Act s.51): GSTR-7 every month. */
+  gstTdsDeductor?: boolean;
+  /** An e-commerce operator collecting TCS (s.52): GSTR-8 every month. */
+  gstEcoOperator?: boolean;
 }
 
 /** States and UTs whose quarterly GSTR-3B is due on the 22nd; the rest file by the 24th. */
@@ -128,6 +132,21 @@ export function obligations(p: CalendarProfile, fy: number): Obligation[] {
     }
     out.push({ key: 'gstr4', period: String(fy), periodLabel: fyLabel(fy), title: 'GSTR-4 annual return', area: 'gst', dueDate: `${fy + 1}-06-30`,
       detail: 'The composition dealer\'s annual return.' });
+  }
+
+  // The withholding roles file every month, whatever the book's own frequency
+  // (CGST Rules 66 and 67): GSTR-7 and GSTR-8 by the 10th of the next month.
+  if (p.gstTdsDeductor) {
+    for (const m of monthsOf(fy)) {
+      out.push({ key: 'gstr7', period: m, periodLabel: monthLabel(m), title: 'GSTR-7 (GST TDS)', area: 'gst', dueDate: nextMonthOn(m, 10),
+        detail: 'GST deducted at source from payments to suppliers (section 51), deductee by deductee, with the TDS paid.', href: '/gst/gstr7' });
+    }
+  }
+  if (p.gstEcoOperator) {
+    for (const m of monthsOf(fy)) {
+      out.push({ key: 'gstr8', period: m, periodLabel: monthLabel(m), title: 'GSTR-8 (e-commerce TCS)', area: 'gst', dueDate: nextMonthOn(m, 10),
+        detail: 'TCS collected on supplies made through the operator (section 52), supplier by supplier.', href: '/gst/gstr8' });
+    }
   }
 
   if (p.lutValidTo) {
@@ -207,7 +226,7 @@ const COMPANY_NAME = /\b(private|pvt\.?)\s*(limited|ltd\.?)|\b(limited|ltd\.?)\s
 
 export async function calendarProfile(ex: Executor, orgId: number): Promise<CalendarProfile> {
   const o = await ex.selectFrom('organizations')
-    .select(['name', 'legal_name', 'gst_registration_type', 'gst_filing_frequency', 'aato_above_5cr', 'tan', 'deductor_type', 'lut_valid_to'])
+    .select(['name', 'legal_name', 'gst_registration_type', 'gst_filing_frequency', 'aato_above_5cr', 'tan', 'deductor_type', 'lut_valid_to', 'gst_tds_deductor', 'gst_eco_operator'])
     .where('id', '=', orgId).executeTakeFirstOrThrow();
   const branch = await ex.selectFrom('branches').select('state_code').where('org_id', '=', orgId).orderBy('is_primary', 'desc').executeTakeFirst();
   const { rows } = await sql<{ tcs: number; msme: number; payroll: number }>`
@@ -227,6 +246,8 @@ export async function calendarProfile(ex: Executor, orgId: number): Promise<Cale
     owesMsmes: !!Number(rows[0]?.msme),
     lutValidTo: o.lut_valid_to ? String(o.lut_valid_to).slice(0, 10) : null,
     payroll: !!Number(rows[0]?.payroll),
+    gstTdsDeductor: !!o.gst_tds_deductor,
+    gstEcoOperator: !!o.gst_eco_operator,
   };
 }
 

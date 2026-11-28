@@ -34,6 +34,7 @@ interface Statutory {
     name: string | null; designation: string | null; pan: string | null; mobile: string | null; email: string | null;
   };
   payroll: { pfCode: string | null; esiCode: string | null };
+  gstRoles: { tdsDeductor: boolean; tdsGstin: string | null; ecoOperator: boolean; ecoGstin: string | null; branchGstin: string | null };
   branches: { id: string; name: string; stateCode: string; stateName: string; builtInPaise: number; overridePaise: number | null }[];
 }
 
@@ -74,6 +75,7 @@ export function StatutoryPanel({ canEdit }: { canEdit: boolean }) {
           <Registration d={d} canEdit={canEdit} busy={busy === 'registration'} send={send} />
           <Einvoicing d={d} canEdit={canEdit} busy={busy === 'einvoicing'} send={send} />
           <Deductor d={d} canEdit={canEdit} busy={busy === 'deductor'} send={send} />
+          <GstRoles d={d} canEdit={canEdit} busy={busy === 'gst-roles'} send={send} />
           <PayrollCodes d={d} canEdit={canEdit} busy={busy === 'payroll'} send={send} />
           <EwayThresholds d={d} canEdit={canEdit} send={send} />
         </div>
@@ -305,6 +307,79 @@ function EwayThresholds({ d, canEdit, send }: { d: Statutory; canEdit: boolean; 
           );
         })}
       </ul>
+    </Card>
+  );
+}
+
+/**
+ * The GST withholding roles: a GST TDS deductor (CGST Act s.51) files GSTR-7,
+ * an e-commerce operator collecting TCS (s.52) files GSTR-8. Each needs its
+ * own registration; the screens for them appear in GST & Taxes once turned on.
+ */
+function GstRoles({ d, canEdit, busy, send }: { d: Statutory; canEdit: boolean; busy: boolean; send: Send }) {
+  const init = () => ({
+    tdsDeductor: d.gstRoles.tdsDeductor, tdsGstin: d.gstRoles.tdsGstin ?? '',
+    ecoOperator: d.gstRoles.ecoOperator, ecoGstin: d.gstRoles.ecoGstin ?? '',
+  });
+  const [f, setF] = useState(init);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => setF(init()), [d.gstRoles]);
+  const changed = f.tdsDeductor !== d.gstRoles.tdsDeductor || f.ecoOperator !== d.gstRoles.ecoOperator
+    || f.tdsGstin !== (d.gstRoles.tdsGstin ?? '') || f.ecoGstin !== (d.gstRoles.ecoGstin ?? '');
+  const fallback = d.gstRoles.branchGstin ? `Empty: the branch GSTIN ${d.gstRoles.branchGstin} stands in` : 'As on the registration certificate';
+  return (
+    <Card className="space-y-4 p-5" data-slot="gst-roles">
+      <div>
+        <h3 className="text-sm font-semibold">GST withheld at source</h3>
+        <p className="mt-1 max-w-2xl text-xs text-muted-foreground">
+          Turn these on only if the business holds the role. Each brings its own monthly return into GST &amp; Taxes, due by the 10th of the next month.
+        </p>
+      </div>
+      <div className="grid gap-4 md:grid-cols-2">
+        <div className="space-y-3 rounded-md border p-4" data-slot="gst-role-tds">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-sm font-medium">GST TDS deductor (GSTR-7)</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Government departments, local authorities, government agencies and notified bodies deduct 2% from payments to
+                registered suppliers under contracts above ₹2.5 lakh (section 51).
+              </p>
+            </div>
+            <Switch checked={f.tdsDeductor} disabled={!canEdit} onCheckedChange={(v) => setF({ ...f, tdsDeductor: v })} data-slot="gst-role-tds-switch" aria-label="GST TDS deductor" />
+          </div>
+          {f.tdsDeductor && (
+            <Field label="GST TDS registration (GSTIN with D)" hint={fallback}>
+              <Input value={f.tdsGstin} disabled={!canEdit} maxLength={15} className="font-mono" placeholder="33ABCD12345E1DZ"
+                onChange={(e) => setF({ ...f, tdsGstin: e.target.value.toUpperCase().trim() })} data-slot="gst-role-tds-gstin" />
+            </Field>
+          )}
+        </div>
+        <div className="space-y-3 rounded-md border p-4" data-slot="gst-role-eco">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-sm font-medium">E-commerce operator (GSTR-8)</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                A marketplace that collects payment for its sellers keeps back TCS on their net supplies (section 52), and pays the GST
+                itself on supplies notified under section 9(5).
+              </p>
+            </div>
+            <Switch checked={f.ecoOperator} disabled={!canEdit} onCheckedChange={(v) => setF({ ...f, ecoOperator: v })} data-slot="gst-role-eco-switch" aria-label="E-commerce operator" />
+          </div>
+          {f.ecoOperator && (
+            <Field label="TCS registration (GSTIN with C)" hint={fallback}>
+              <Input value={f.ecoGstin} disabled={!canEdit} maxLength={15} className="font-mono" placeholder="33ABCDE1234F1CZ"
+                onChange={(e) => setF({ ...f, ecoGstin: e.target.value.toUpperCase().trim() })} data-slot="gst-role-eco-gstin" />
+            </Field>
+          )}
+        </div>
+      </div>
+      {canEdit && changed && (
+        <Button size="sm" disabled={busy} className="gap-1.5" data-slot="gst-roles-save"
+          onClick={() => void send('gst-roles', { action: 'gst-roles', ...f, tdsGstin: f.tdsGstin || null, ecoGstin: f.ecoGstin || null },
+            () => 'GST roles saved. Reload the page to see GSTR-7 or GSTR-8 in the menu.')}>
+          {busy && <Loader2 className="size-3.5 animate-spin" />} Save
+        </Button>
+      )}
     </Card>
   );
 }

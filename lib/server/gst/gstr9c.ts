@@ -187,8 +187,8 @@ export async function gstr9c(ex: Executor, orgId: number, startYear: number, bra
 
   const t5p = booksTurnover + advancesEnd - advancesStart;
   // Turnover in GSTR-9 is table 5N: 4N less 4G (inward supplies under reverse
-  // charge are not our turnover) plus the zero-rated and exempt supplies.
-  const t5q = ret.table4.total.taxablePaise - ret.table4.rcmInward.taxablePaise + ret.table5.total;
+  // charge are not our turnover) plus the supplies without tax (5M).
+  const t5q = ret.table5.totalTurnover;
   const table5: Line[] = [
     { ref: '5A', label: 'Turnover (including exports) as per the audited financial statements', paise: booksTurnover, source: 'books' },
     { ref: '5B', label: 'Unbilled revenue at the beginning of the year (+)', paise: 0, source: 'preparer' },
@@ -225,22 +225,28 @@ export async function gstr9c(ex: Executor, orgId: number, startYear: number, bra
   }
 
   // ── Table 7: taxable turnover ──────────────────────────────────────────────
-  const exempt = ret.table5.exemptOrNil;
-  const zeroRated = ret.table5.exportsLut + ret.table5.sezLut;
-  const t7e = t5p - exempt - zeroRated;
+  const exempt = ret.table5.exempt + ret.table5.nil + ret.table5.nonGst;
+  const zeroRated = ret.table5.zeroRated + ret.table5.sez;
+  // Supplies on which the buyer pays the tax (reverse charge, and the
+  // operator under s.9(5)) are turnover, but not our taxable turnover.
+  const recipientPays = ret.table5.reverseCharge + ret.table5.ecoSupplies;
+  const t7e = t5p - exempt - zeroRated - recipientPays;
   const t7f = ret.table4.total.taxablePaise - ret.table4.rcmInward.taxablePaise;
   const table7: Line[] = [
     { ref: '7A', label: 'Annual turnover after adjustments (5P)', paise: t5p, source: 'total' },
     { ref: '7B', label: 'Exempted, nil-rated, non-GST and no-supply turnover', paise: exempt, source: 'books' },
     { ref: '7C', label: 'Zero-rated supplies without payment of tax', paise: zeroRated, source: 'books' },
-    { ref: '7D', label: 'Supplies on which the recipient pays tax under reverse charge', paise: 0, source: 'preparer' },
+    { ref: '7D', label: 'Supplies on which the recipient pays tax under reverse charge', paise: recipientPays, source: 'books' },
     { ref: '7E', label: 'Taxable turnover as per the adjustments above', paise: t7e, source: 'total' },
     { ref: '7F', label: 'Taxable turnover as per the liability declared in GSTR-9', paise: t7f, source: 'return' },
     { ref: '7G', label: 'Un-reconciled taxable turnover (F − E)', paise: t7f - t7e, source: 'total' },
   ];
 
   // ── Table 9: tax ───────────────────────────────────────────────────────────
-  const ledger = (code: string, sign: 1 | -1) => rows.filter((r) => r.code === code).reduce((t, r) => t + r.net * sign, 0);
+  // A payment or set-off entry clears the tax ledgers once the return is paid;
+  // it is neither tax raised nor credit taken, so it is left out here.
+  const ledger = (code: string, sign: 1 | -1) => rows.filter((r) => r.code === code && !/^gst_(set_?off|payment|tax_payment)|^gstr3b/.test(r.source_type))
+    .reduce((t, r) => t + r.net * sign, 0);
   const table9Heads = HEADS.map((head) => {
     const books = ledger(OUTPUT[head], 1);
     const returned = ret.table9.find((t) => t.head === head)?.payablePaise ?? 0;
@@ -251,14 +257,19 @@ export async function gstr9c(ex: Executor, orgId: number, startYear: number, bra
 
   // ── Table 12: credit ───────────────────────────────────────────────────────
   const itcBooks = HEADS.reduce((t, h) => t + ledger(INPUT[h], -1), 0);
-  const itcReturn = taxOf(ret.table6.total) - ret.table7.vendorCreditsPaise;
+  // 12E is 7J, the net credit the annual return says is available; credit of
+  // this year's bills that the returns did not take (held back after GSTR-2B,
+  // or claimed later) is in the books and not in 7J, so it is 12C.
+  const itcReturn = taxOf(ret.table7.netAvailable);
+  const laterYear = ret.deferredCreditPaise;
+  const itcAdjusted = itcBooks - laterYear;
   const table12: Line[] = [
     { ref: '12A', label: 'ITC availed as per the audited financial statements', paise: itcBooks, source: 'books' },
     { ref: '12B', label: 'ITC booked in an earlier year, claimed in this one (+)', paise: 0, source: 'preparer' },
-    { ref: '12C', label: 'ITC booked this year, to be claimed in a later one (−)', paise: 0, source: 'preparer' },
-    { ref: '12D', label: 'ITC availed as per the accounts, adjusted', paise: itcBooks, source: 'total' },
-    { ref: '12E', label: 'ITC claimed in the annual return (GSTR-9, net of reversals)', paise: itcReturn, source: 'return' },
-    { ref: '12F', label: 'Un-reconciled ITC (D − E)', paise: itcBooks - itcReturn, source: 'total' },
+    { ref: '12C', label: 'ITC booked this year, to be claimed in a later one (−)', paise: -laterYear, source: 'books' },
+    { ref: '12D', label: 'ITC availed as per the accounts, adjusted', paise: itcAdjusted, source: 'total' },
+    { ref: '12E', label: 'ITC claimed in the annual return (GSTR-9 table 7J, net of reversals)', paise: itcReturn, source: 'return' },
+    { ref: '12F', label: 'Un-reconciled ITC (D − E)', paise: itcAdjusted - itcReturn, source: 'total' },
   ];
   const inputRows = rows.filter((r) => (Object.values(INPUT) as string[]).includes(r.code));
 
@@ -266,7 +277,7 @@ export async function gstr9c(ex: Executor, orgId: number, startYear: number, bra
     turnoverPaise: t5q - t5p,
     taxableTurnoverPaise: t7f - t7e,
     taxPaise: table9Heads.reduce((t, h) => t + h.unreconciledPaise, 0),
-    itcPaise: itcBooks - itcReturn,
+    itcPaise: itcAdjusted - itcReturn,
   };
 
   const notes: string[] = [

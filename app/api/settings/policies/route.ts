@@ -8,7 +8,18 @@ import { getPolicies, setPolicies } from '@/lib/server/services/org-settings';
 // credit-limit, stock and cash rules are applied. See org-settings.ts.
 
 // Read by everyone signed in: the menus need the feature switches.
-export const GET = route(async ({ orgId }) => getPolicies(db, orgId));
+//
+// Two of them are not switches of their own but follow the book's statutory
+// settings (Settings → Statutory): GSTR-7 shows only for a GST TDS deductor
+// (CGST Act s.51) and GSTR-8 only for an e-commerce operator (s.52). They are
+// sent as plain false when off, because the menu takes a missing key as on.
+export const GET = route(async ({ orgId }) => {
+  const [policies, roles] = await Promise.all([
+    getPolicies(db, orgId),
+    db.selectFrom('organizations').select(['gst_tds_deductor', 'gst_eco_operator']).where('id', '=', orgId).executeTakeFirst(),
+  ]);
+  return { ...policies, features: { ...policies.features, gstTds: !!roles?.gst_tds_deductor, gstEco: !!roles?.gst_eco_operator } };
+});
 
 const Enforcement = z.enum(['off', 'warn', 'block']);
 const Input = z.object({

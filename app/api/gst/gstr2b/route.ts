@@ -4,6 +4,7 @@ import { route, body, query } from '@/lib/server/http';
 import { deleteGstr2bPeriod } from '@/lib/server/gst/changes';
 import { logAudit, auditMeta } from '@/lib/server/audit';
 import { importGstr2b, parseGstr2b, setImsAction } from '@/lib/server/gst/gstr2b-import';
+import { setClaimDecision } from '@/lib/server/gst/itc-claims';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GSTR-2B in, IMS actions recorded.
@@ -24,6 +25,16 @@ const Input = z.discriminatedUnion('action', [
     imsAction: z.enum(['accepted', 'rejected', 'pending']).nullable(),
     note: z.string().trim().max(300).nullish(),
   }),
+  // After matching, when the credit on our own bills is taken: accept (its
+  // own month), defer (until the supplier files), or claim later in a named
+  // month (gst/itc-claims.ts). GSTR-3B 4(A)(5) follows it.
+  z.object({
+    action: z.literal('claim'),
+    billIds: z.array(z.union([z.string(), z.number()]).transform(Number)).min(1).max(500),
+    decision: z.enum(['accept', 'defer', 'claim_later']),
+    claimPeriod: z.string().regex(/^\d{4}-\d{2}$/, 'Give the month as yyyy-mm.').nullish(),
+    note: z.string().trim().max(300).nullish(),
+  }),
 ]);
 
 export const POST = route(
@@ -41,6 +52,19 @@ export const POST = route(
         ...auditMeta(req),
       });
       return result;
+    }
+
+    if (input.action === 'claim') {
+      return transaction(async (trx) => {
+        const r = await setClaimDecision(trx, orgId, user.userId, input);
+        const what = input.decision === 'accept' ? 'claimed in its own month' : input.decision === 'defer' ? 'held back until the supplier files' : `to be claimed in ${input.claimPeriod}`;
+        await logAudit({
+          trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'update',
+          targetType: 'gst_itc_claim', targetLabel: r.bills.join(', '),
+          detail: `ITC on ${r.bills.join(', ')}: ${what}${input.note ? ` — ${input.note}` : ''}`, ...auditMeta(req),
+        });
+        return r;
+      });
     }
 
     const updated = await transaction((trx) =>

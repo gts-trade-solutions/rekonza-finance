@@ -20,6 +20,8 @@ import type { Paise } from '../../types';
 import { toPaiseFromSql } from '../money-sql';
 import { advancesForMonth } from './advances';
 import { creditUsedFor, setOffCredit } from './set-off';
+import { claimShifts, shiftTotal } from './itc-claims';
+import { amendmentDeltas } from './gstr1-amendments';
 
 /**
  * The B2CL threshold: an inter-state sale to a consumer above this is listed
@@ -502,12 +504,17 @@ export async function gstr3b(ex: Executor, orgId: number, month: string, branchI
   const adv = await advancesForMonth(ex, orgId, period, branchId);
   const advTax = (rows: typeof adv.received) => rows.reduce((t, r) => t + r.cgstPaise + r.sgstPaise + r.igstPaise, 0);
 
+  // Amendments of earlier filed GSTR-1 documents reported this month, as the form adds them.
+  const am = (branchId ? [] : await amendmentDeltas(ex, orgId, [month])).reduce(
+    (t, d) => ({ taxable: t.taxable + d.delta.taxablePaise, cgst: t.cgst + d.delta.cgstPaise, sgst: t.sgst + d.delta.sgstPaise, igst: t.igst + d.delta.igstPaise, cess: t.cess + d.delta.cessPaise }),
+    { taxable: 0, cgst: 0, sgst: 0, igst: 0, cess: 0 },
+  );
   const outward = {
-    taxablePaise: p(o.taxable) - p(n.taxable) + adv.net.taxablePaise,
-    cgstPaise: p(o.cgst) - p(n.cgst) + adv.net.cgstPaise,
-    sgstPaise: p(o.sgst) - p(n.sgst) + adv.net.sgstPaise,
-    igstPaise: p(o.igst) - p(n.igst) + adv.net.igstPaise,
-    cessPaise: p(o.cess) - p(n.cess),
+    taxablePaise: p(o.taxable) - p(n.taxable) + adv.net.taxablePaise + am.taxable,
+    cgstPaise: p(o.cgst) - p(n.cgst) + adv.net.cgstPaise + am.cgst,
+    sgstPaise: p(o.sgst) - p(n.sgst) + adv.net.sgstPaise + am.sgst,
+    igstPaise: p(o.igst) - p(n.igst) + adv.net.igstPaise + am.igst,
+    cessPaise: p(o.cess) - p(n.cess) + am.cess,
   };
 
   const inwardRcm = {
@@ -559,12 +566,20 @@ export async function gstr3b(ex: Executor, orgId: number, month: string, branchI
   // A reclaim debits the ledgers, so its 'credit less debit' is negative.
   const out = (k: keyof Heads) => p(rule42[k]) + p(rule37[k]) + p(reclaim[k]);
 
+  // Credit moved by the GSTR-2B claim decisions (itc-claims.ts), as the form does.
+  const shift = shiftTotal(await claimShifts(ex, orgId, [month], branchId));
+  // The operator's s.9(5) tax, paid in cash with reverse charge (gstr3b-form.ts 3.1.1(i)).
+  const op95 = await sql<Heads>`
+    SELECT COALESCE(SUM(cgst), 0) AS cgst, COALESCE(SUM(sgst), 0) AS sgst, COALESCE(SUM(igst), 0) AS igst, 0 AS cess
+      FROM gst_eco_supplies WHERE org_id = ${orgId} AND section = '9_5' AND period = ${month} ${inv}
+  `.execute(ex).then((r) => r.rows[0]);
+
   // RCM tax is paid in cash and then claimed back as credit in the same return.
   const itc = {
-    cgstPaise: p(i.cgst) + p(x.cgst) + p(rcmCredit.cgst) - reversed.cgst - out('cgst'),
-    sgstPaise: p(i.sgst) + p(x.sgst) + p(rcmCredit.sgst) - reversed.sgst - out('sgst'),
-    igstPaise: p(i.igst) + p(x.igst) + p(rcmCredit.igst) + p(boe.igst) - reversed.igst - out('igst'),
-    cessPaise: p(i.cess) + p(rcmCredit.cess) + p(boe.cess) - reversed.cess - out('cess'),
+    cgstPaise: p(i.cgst) + p(x.cgst) + p(rcmCredit.cgst) - reversed.cgst - out('cgst') + shift.cgstPaise,
+    sgstPaise: p(i.sgst) + p(x.sgst) + p(rcmCredit.sgst) - reversed.sgst - out('sgst') + shift.sgstPaise,
+    igstPaise: p(i.igst) + p(x.igst) + p(rcmCredit.igst) + p(boe.igst) - reversed.igst - out('igst') + shift.igstPaise,
+    cessPaise: p(i.cess) + p(rcmCredit.cess) + p(boe.cess) - reversed.cess - out('cess') + shift.cessPaise,
     blockedPaise: p(blockedRes.rows[0].blocked) + p(boe.blocked),
     importsPaise: p(boe.igst) + p(boe.cess),
     reversedPaise: reversed.cgst + reversed.sgst + reversed.igst + reversed.cess,
@@ -584,7 +599,7 @@ export async function gstr3b(ex: Executor, orgId: number, month: string, branchI
   const used = { IGST: creditUsedFor(so, 'IGST'), CGST: creditUsedFor(so, 'CGST'), SGST: creditUsedFor(so, 'SGST'), CESS: creditUsedFor(so, 'CESS') };
 
   const rcm = {
-    IGST: inwardRcm.igstPaise, CGST: inwardRcm.cgstPaise, SGST: inwardRcm.sgstPaise, CESS: inwardRcm.cessPaise,
+    IGST: inwardRcm.igstPaise + p(op95.igst), CGST: inwardRcm.cgstPaise + p(op95.cgst), SGST: inwardRcm.sgstPaise + p(op95.sgst), CESS: inwardRcm.cessPaise,
   };
   const setOff: Gstr3b['setOff'] = (['IGST', 'CGST', 'SGST', 'CESS'] as const).map((head) => ({
     head,

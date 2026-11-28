@@ -20,6 +20,7 @@ import { seedDemoSr7A } from '../lib/server/seed/demo-sr7-a';
 import { turnOnDemoControls } from '../lib/server/seed/demo-controls';
 import { seedDemoSr7B } from '../lib/server/seed/demo-sr7-b';
 import { seedSr7c, seedSr7cBefore } from '../lib/server/seed/demo-sr7-c';
+import { seedDemoSr7d } from '../lib/server/seed/demo-sr7-d';
 import { wipeOrganizations } from '../lib/server/seed/wipe';
 import { verifyLedgerBalances } from '../lib/server/ledger/posting';
 
@@ -69,6 +70,7 @@ async function main() {
     if (!masters) await seedDemoCoverage(trx, created);
     // Status review 7 (builder A): consolidation group, reversals, budgets, report filters.
     if (!masters) await seedDemoSr7A(trx, created);
+    if (!masters) await seedDemoSr7d(trx, created);
     // Last: perpetual inventory takes the stock the documents above left on hand.
     if (!masters) await turnOnDemoControls(trx, created.orgId);
     // Status review 7, builder B: FIFO, duplicate bills, credit notes, bulk payments, import history.

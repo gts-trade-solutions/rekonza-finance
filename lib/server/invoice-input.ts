@@ -48,6 +48,11 @@ export const CreateInput = z.object({
   /** Zoho's reverse charge checkbox, and its New Bill Of Supply (migration 124). */
   reverseCharge: z.boolean().optional(),
   billOfSupply: z.boolean().optional(),
+  /** Sold through an e-commerce operator: its GSTIN, and TCS (s.52) or the operator pays the tax (s.9(5)). */
+  eco: z.object({
+    gstin: z.string().trim().toUpperCase().length(15, 'A GSTIN is 15 characters.'),
+    section: z.enum(['52', '9_5']),
+  }).nullish(),
   adjustmentPaise: z.number().int().optional(),
   adjustmentLabel: z.string().nullish(),
   // The TCS head; the server applies the rate in force on the invoice date.
@@ -117,6 +122,7 @@ export function toInvoiceInput(input: InvoiceBody, role: RoleName | undefined): 
     shippingChargePaise: input.shippingChargePaise,
     reverseCharge: input.reverseCharge,
     billOfSupply: input.billOfSupply,
+    eco: input.eco ?? null,
     adjustmentPaise: input.adjustmentPaise,
     adjustmentLabel: input.adjustmentLabel,
     tcsCode: input.tcsCode ?? null,

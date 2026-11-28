@@ -32,6 +32,7 @@ import { usePermission } from '@/lib/store/hooks';
 import { cn } from '@/lib/utils';
 import { formatINRCompact } from '@/lib/money';
 import { DeleteButton, reasonQuery, useConfirmDelete } from '@/components/shared/row-actions';
+import { ClaimActions, HeldBackCard, type ClaimOnRow } from '@/components/gst/itc-claim';
 
 const BUCKETS = {
   matched: {
@@ -77,12 +78,14 @@ function ImsBadge({ action }: { action: ItcMatchRow['imsAction'] }) {
 }
 
 function MatchTable({
-  rows, selected, onToggle, canEdit,
+  rows, selected, onToggle, canEdit, onClaim,
 }: {
   rows: ItcMatchRow[];
   selected: Set<string>;
   onToggle: (id: string) => void;
   canEdit: boolean;
+  /** After a claim decision (accept, defer, claim later) on one of our bills. */
+  onClaim: () => void;
 }) {
   if (rows.length === 0) {
     return (
@@ -106,6 +109,7 @@ function MatchTable({
             <th className="px-3 py-2 text-right font-semibold">Books</th>
             <th className="px-3 py-2 text-right font-semibold">Difference</th>
             <th className="px-3 py-2 text-left font-semibold">IMS</th>
+            <th className="px-3 py-2 text-left font-semibold">Credit on our bill</th>
           </tr>
         </thead>
         <tbody>
@@ -144,6 +148,13 @@ function MatchTable({
               </td>
               <td className="px-3 py-2">
                 {r.id ? <ImsBadge action={r.imsAction} /> : <span className="text-[10px] text-muted-foreground">—</span>}
+              </td>
+              <td className="px-3 py-2">
+                {r.billId && !r.isReverseCharge ? (
+                  canEdit
+                    ? <ClaimActions billId={r.billId} billNo={r.billNo ?? r.invoiceNo} billMonth={r.invoiceDate.slice(0, 7)} claim={(r as ItcMatchRow & { claim?: ClaimOnRow | null }).claim} onDone={onClaim} />
+                    : <span className="text-xs text-muted-foreground">{(r as ItcMatchRow & { claim?: ClaimOnRow | null }).claim?.decision ?? 'accept'}</span>
+                ) : <span className="text-[10px] text-muted-foreground">—</span>}
               </td>
             </tr>
           ))}
@@ -214,7 +225,7 @@ export default function ItcReconciliationPage() {
     <>
       <PageHeader
         title="ITC reconciliation"
-        description="Your purchase records against what the government says your suppliers actually filed."
+        description="Your purchase records against GSTR-2B: matched, mismatched, missing in the books, missing in 2B — and, bill by bill, whether its credit is claimed now, deferred, or claimed later."
         actions={
           <>
             <Input
@@ -327,10 +338,12 @@ export default function ItcReconciliationPage() {
                       </Badge>
                       <p className="text-xs text-muted-foreground">{BUCKETS[b].blurb}</p>
                     </div>
-                    <MatchTable rows={byBucket(b)} selected={selected} onToggle={toggle} canEdit={canEdit} />
+                    <MatchTable rows={byBucket(b)} selected={selected} onToggle={toggle} canEdit={canEdit} onClaim={() => state.refetch()} />
                   </TabsContent>
                 ))}
               </Tabs>
+
+              <HeldBackCard period={period} onChange={() => state.refetch()} />
 
               <Card className="flex items-start gap-3 p-4">
                 <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-muted-foreground" />

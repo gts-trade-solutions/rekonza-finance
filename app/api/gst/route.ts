@@ -9,6 +9,7 @@ import { gstr9c } from '@/lib/server/gst/gstr9c';
 import { gstr1PortalFile } from '@/lib/server/gst/gstr1-json';
 import { gstr3bForm, gstr3bPortalJson } from '@/lib/server/gst/gstr3b-form';
 import { einvoiceQueue, itcReconciliation, tdsSummary } from '@/lib/server/gst/compliance';
+import { claimDecisions } from '@/lib/server/gst/itc-claims';
 import { cancelEinvoice, previewEinvoice, registerInvoice } from '@/lib/server/integrations/gst/einvoice-service';
 import { CANCEL_REASONS } from '@/lib/server/integrations/gst';
 import { einvoiceReadiness } from '@/lib/server/integrations/gst/readiness';
@@ -146,8 +147,15 @@ export const GET = route(
         return { view: q.view, einvoices: rows, statusCounts: counts, portal };
       }
 
-      case 'itc':
-        return { view: q.view, period, ...(await itcReconciliation(db, orgId, period)) };
+      case 'itc': {
+        const r = await itcReconciliation(db, orgId, period);
+        // With each of our bills, what was decided about its credit after matching (gst/itc-claims.ts).
+        const decided = await claimDecisions(db, orgId, r.rows.map((x) => Number(x.billId)).filter(Boolean));
+        return {
+          view: q.view, period, ...r,
+          rows: r.rows.map((x) => ({ ...x, claim: x.billId ? decided.get(Number(x.billId)) ?? null : null })),
+        };
+      }
 
       case 'tds': {
         // The financial year to date by default: TDS thresholds are annual, so

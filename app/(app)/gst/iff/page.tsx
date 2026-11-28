@@ -15,12 +15,14 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/shared/page-header';
 import { GstnReturnBar } from '@/components/gst/gstn-portal';
+import { ReturnFilingBar } from '@/components/gst/return-filing';
 import { Money } from '@/components/shared/money';
 import { AsyncPage, LoadingRows } from '@/components/shared/async-state';
 import { downloadCsv, downloadJson, ReportTable } from '@/components/shared/report-shell';
 import { gst, type Gstr1Row, type IffResponse } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
 import { toRupees } from '@/lib/money';
+import { useUrlPeriod } from '@/lib/gst/url-period';
 
 const thisMonth = () => new Date().toISOString().slice(0, 7);
 const th = 'px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground';
@@ -64,6 +66,7 @@ function Docs({ title, rows }: { title: string; rows: Gstr1Row[] }) {
 
 export default function IffPage() {
   const [month, setMonth] = useState(thisMonth());
+  useUrlPeriod(setMonth, 'period', /^\d{4}-\d{2}$/);
   const state = useApi<IffResponse>(() => gst.iff(month), [month]);
 
   const exportCsv = (d: IffResponse) => {
@@ -113,6 +116,7 @@ export default function IffPage() {
         }
       />
 
+      <ReturnFilingBar returnType="iff" period={month} title="IFF" />
       <GstnReturnBar returnType="IFF" period={month} />
 
       <AsyncPage state={state} loading={<LoadingRows rows={8} />}>

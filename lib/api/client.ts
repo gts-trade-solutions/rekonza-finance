@@ -303,6 +303,8 @@ export interface InvoiceDetail {
   /** Under reverse charge (the buyer pays the GST), and a bill of supply. */
   reverseCharge?: boolean;
   billOfSupply?: boolean;
+  /** Sold through an e-commerce operator: TCS under s.52, or the operator pays the tax under s.9(5). */
+  eco?: { gstin: string; section: '52' | '9_5' } | null;
   totalPaise: number;
   amountPaidPaise: number;
   balancePaise: number;
@@ -3736,4 +3738,176 @@ export const integration = {
   imports: () => api.get<{ imports: PayrollImportListRow[] }>('/api/payroll/imports'),
   importRegister: (input: { month: string; sourceSystem?: string | null; fileName?: string | null; rows: PayrollImportRow[]; dryRun: boolean; paidFromBankAccountId?: string | null; paidOn?: string | null }) =>
     api.post<PayrollImportResult>('/api/payroll/imports', input),
+};
+
+// ── GSTR-7 and GSTR-8 (status review 7) ──────────────────────────────────────
+// GST withheld by this book: TDS as a deductor (CGST Act s.51, GSTR-7) and TCS
+// as an e-commerce operator (s.52, GSTR-8). See app/api/gst/withholding.
+
+export interface WithholdingHeadsRow { igstPaise: number; cgstPaise: number; sgstPaise: number }
+export interface WithholdingPaymentRow extends WithholdingHeadsRow {
+  id: string; returnType: 'GSTR7' | 'GSTR8'; period: string; paidOn: string; cpin: string | null;
+  bankAccountId: string | null; bankName: string | null; interestPaise: number; lateFeePaise: number; totalPaise: number;
+  journalEntryId: string | null; notes: string | null;
+}
+export interface WithholdingInterest {
+  dueDate: string; daysLate: number; interest: WithholdingHeadsRow; lateFee: { cgstPaise: number; sgstPaise: number }; basis: string;
+}
+export interface WithholdingRole { on: boolean; gstin: string | null; ownGstin: boolean; legalName: string; tradeName: string | null; stateCode: string }
+export interface WithholdingFiling { on: string; reference: string | null; by: string | null }
+
+export interface Gstr7DeductionRow extends WithholdingHeadsRow {
+  id: string; date: string; vendorId: string; vendorName: string; deducteeGstin: string;
+  billId: string | null; billNo: string | null; vendorInvoiceNo: string | null;
+  contractRef: string | null; contractValuePaise: number; taxablePaise: number; totalPaise: number;
+  certificateNo: string | null; notes: string | null; amended: boolean;
+}
+export interface Gstr7DeducteeRow extends WithholdingHeadsRow { gstin: string; name: string; count: number; taxablePaise: number; totalPaise: number; certificateNo: string | null }
+export interface Gstr7AmendmentRow extends WithholdingHeadsRow {
+  deductionId: string; date: string; originalMonth: string; vendorName: string;
+  originalGstin: string; originalTaxablePaise: number; originalTaxPaise: number; gstin: string; taxablePaise: number; deltaPaise: number;
+}
+export interface PendingTdsBillRow {
+  billId: string; billNo: string; vendorInvoiceNo: string; billDate: string; vendorId: string; vendorName: string; gstin: string;
+  placeOfSupply: string; taxablePaise: number; taxPaise: number; totalPaise: number; outstandingPaise: number;
+  preview: WithholdingHeadsRow & { applies: boolean; reason: string; totalPaise: number };
+}
+export interface Gstr7Response {
+  view: 'gstr7';
+  period: { month: string; from: string; to: string; label: string };
+  role: WithholdingRole; dueDate: string; filing: WithholdingFiling | null;
+  deductions: Gstr7DeductionRow[]; table3: Gstr7DeducteeRow[]; table4: Gstr7AmendmentRow[];
+  table5: { payable: WithholdingHeadsRow; paid: WithholdingHeadsRow; balance: WithholdingHeadsRow };
+  table6: WithholdingInterest; payment: WithholdingPaymentRow | null; pending: PendingTdsBillRow[];
+  tieOut: { ledgerWithheldPaise: number; returnWithheldPaise: number; differencePaise: number; otherPaise: number; paymentsPaise: number; closingBalancePaise: number };
+  totals: { taxablePaise: number; taxPaise: number; deductees: number };
+  notes: string[];
+}
+export interface Gstr7aResponse {
+  view: 'gstr7a'; certificateNo: string | null; month: string; monthLabel: string;
+  deductor: { gstin: string | null; legalName: string; tradeName: string | null; address: string | null; email: string | null; phone: string | null };
+  deductee: { gstin: string; legalName: string; tradeName: string | null; address: string | null; stateCode: string };
+  lines: (WithholdingHeadsRow & { id: string; date: string; contractRef: string | null; contractValuePaise: number; billNo: string | null; vendorInvoiceNo: string | null; billDate: string | null; taxablePaise: number })[];
+  totals: WithholdingHeadsRow & { taxablePaise: number; taxPaise: number };
+  paid: { on: string; cpin: string | null } | null;
+  filed: WithholdingFiling | null;
+}
+export interface TdsPreview extends WithholdingHeadsRow {
+  /** Why it cannot be deducted as it stands; the figures are then left out. */
+  problem: string | null;
+  vendorName: string; deducteeGstin: string; taxablePaise: number; contractValuePaise: number; placeOfSupply: string;
+  applies: boolean; inter: boolean; reason: string; ratePct: number; totalPaise: number; billOutstandingPaise: number | null;
+}
+
+export interface EcoSupplyRow extends WithholdingHeadsRow {
+  id: string; date: string; section: '52' | '9_5'; supplierId: string; supplierName: string; supplierGstin: string;
+  placeOfSupply: string; inter: boolean;
+  grossRegisteredPaise: number; returnsRegisteredPaise: number; grossUnregisteredPaise: number; returnsUnregisteredPaise: number;
+  netPaise: number; ratePct: number; totalPaise: number; notes: string | null; amended: boolean;
+}
+export interface Gstr8SupplierRow extends WithholdingHeadsRow {
+  gstin: string; name: string; supRPaise: number; retsupRPaise: number; supUPaise: number; retsupUPaise: number; netPaise: number; totalPaise: number;
+}
+export interface EcoAmendValues extends WithholdingHeadsRow { gstin: string; valuePaise: number; supR?: number; retsupR?: number; supU?: number; retsupU?: number }
+export interface Gstr8AmendmentRow { supplyId: string; date: string; originalMonth: string; supplierName: string; original: EcoAmendValues; amended: EcoAmendValues; deltaPaise: number }
+export interface Gstr8Response {
+  view: 'gstr8';
+  period: { month: string; from: string; to: string; label: string };
+  role: WithholdingRole; dueDate: string; ratePct: number; filing: WithholdingFiling | null;
+  supplies: EcoSupplyRow[]; table3: Gstr8SupplierRow[]; table4: Gstr8AmendmentRow[];
+  table5: { payable: WithholdingHeadsRow; paid: WithholdingHeadsRow; balance: WithholdingHeadsRow };
+  table6: WithholdingInterest; payment: WithholdingPaymentRow | null;
+  section95: WithholdingHeadsRow & { count: number; netPaise: number };
+  tieOut: { ledgerCollectedPaise: number; returnCollectedPaise: number; differencePaise: number; otherPaise: number; paymentsPaise: number; closingBalancePaise: number };
+  totals: { netPaise: number; taxPaise: number; suppliers: number };
+  notes: string[];
+}
+
+export interface GstTdsDeductionBody {
+  billId?: string | null; vendorId?: string | null; deductionDate: string; contractRef?: string | null;
+  contractValuePaise?: number | null; taxablePaise?: number | null; placeOfSupply?: string | null; notes?: string | null;
+}
+export interface EcoSupplyBody {
+  supplierId: string; entryDate: string; section: '52' | '9_5'; placeOfSupply: string;
+  grossRegisteredPaise: number; returnsRegisteredPaise: number; grossUnregisteredPaise: number; returnsUnregisteredPaise: number;
+  gstRatePct?: number | null; notes?: string | null;
+}
+export interface WithholdingPaymentBody {
+  returnType: 'GSTR7' | 'GSTR8'; period: string; paidOn: string; cpin?: string | null; bankAccountId: string;
+  igstPaise: number; cgstPaise: number; sgstPaise: number; interestPaise?: number; lateFeePaise?: number; notes?: string | null;
+}
+
+const WH = '/api/gst/withholding';
+const whReason = (reason?: string | null) => (reason?.trim() ? `&reason=${encodeURIComponent(reason.trim())}` : '');
+export const withholding = {
+  gstr7: (period: string) => api.get<Gstr7Response>(WH, { view: 'gstr7', period }),
+  gstr7File: (period: string) => api.get<Record<string, unknown>>(WH, { view: 'gstr7-file', period }),
+  gstr7a: (period: string, gstin: string) => api.get<Gstr7aResponse>(WH, { view: 'gstr7a', period, gstin }),
+  tdsPreview: (q: { billId?: string; vendorId?: string; date: string; contractValuePaise?: number; taxablePaise?: number; pos?: string }) =>
+    api.get<TdsPreview>(WH, { view: 'tds-preview', ...q }),
+  deduct: (b: GstTdsDeductionBody) => api.post<{ id: number; totalPaise: number }>(WH, { action: 'tds-deduct', ...b }),
+  updateDeduction: (id: string, b: GstTdsDeductionBody) => api.put(WH, { kind: 'tds', id, ...b }),
+  deleteDeduction: (id: string, reason?: string | null) => api.delete(`${WH}?kind=tds&id=${id}${whReason(reason)}`),
+  amendDeduction: (id: string, b: { date: string; deducteeGstin?: string | null; taxablePaise: number; placeOfSupply?: string | null; notes?: string | null }) =>
+    api.post(WH, { action: 'tds-amend', id, ...b }),
+  undoDeductionAmendment: (id: string, month: string, reason?: string | null) => api.delete(`${WH}?kind=tds-amendment&id=${id}&month=${month}${whReason(reason)}`),
+  setCertificate: (period: string, gstin: string, certificateNo: string | null) => api.post(WH, { action: 'certificate', period, gstin, certificateNo }),
+  gstr8: (period: string) => api.get<Gstr8Response>(WH, { view: 'gstr8', period }),
+  gstr8File: (period: string) => api.get<Record<string, unknown>>(WH, { view: 'gstr8-file', period }),
+  addSupply: (b: EcoSupplyBody) => api.post<{ id: number; totalPaise: number }>(WH, { action: 'eco-supply', ...b }),
+  updateSupply: (id: string, b: EcoSupplyBody) => api.put(WH, { kind: 'eco', id, ...b }),
+  deleteSupply: (id: string, reason?: string | null) => api.delete(`${WH}?kind=eco&id=${id}${whReason(reason)}`),
+  amendSupply: (id: string, b: { date: string; supplierGstin?: string | null; grossRegisteredPaise: number; returnsRegisteredPaise: number; grossUnregisteredPaise: number; returnsUnregisteredPaise: number; notes?: string | null }) =>
+    api.post(WH, { action: 'eco-amend', id, ...b }),
+  undoSupplyAmendment: (id: string, month: string, reason?: string | null) => api.delete(`${WH}?kind=eco-amendment&id=${id}&month=${month}${whReason(reason)}`),
+  pay: (b: WithholdingPaymentBody) => api.post<{ id: number; totalPaise: number }>(WH, { action: 'payment', ...b }),
+  updatePayment: (id: string, b: WithholdingPaymentBody) => api.put(WH, { kind: 'payment', id, ...b }),
+  deletePayment: (id: string, reason?: string | null) => api.delete(`${WH}?kind=payment&id=${id}${whReason(reason)}`),
+};
+
+// ── GSTR-9 (status review 7) ─────────────────────────────────────────────────
+// The annual return, tables 4 to 19, from /api/gst/annual (lib/server/gst/gstr9.ts).
+
+export type Gstr9Annual = import('../gst/gstr9-types').Gstr9 & { view: 'gstr9' };
+export type Gstr9AnnualInputs = import('../gst/gstr9-types').Gstr9Inputs;
+export type Gstr9AnnualHeads = import('../gst/gstr9-types').TaxHeads;
+export type Gstr9AnnualHsnRow = import('../gst/gstr9-types').HsnSummaryRow;
+
+export const gstr9Annual = {
+  /** `fy` is the year the financial year starts in: 2025 for 2025-26. */
+  get: (fy: number, branchId?: string) => api.get<Gstr9Annual>('/api/gst/annual', { view: 'gstr9', fy, branchId }),
+  /** The file the portal's offline tool takes, in the GSTN's own schema. */
+  file: (fy: number, branchId?: string) => api.get<Record<string, unknown>>('/api/gst/annual', { view: 'gstr9-file', fy, branchId }),
+  inputs: (fy: number) => api.get<{ fy: number; inputs: Gstr9AnnualInputs }>('/api/gst/annual', { view: 'gstr9-inputs', fy }),
+  saveInputs: (fy: number, inputs: Gstr9AnnualInputs) => api.put<{ fy: number; inputs: Gstr9AnnualInputs }>('/api/gst/annual', { fy, inputs }),
+  deleteInputs: (fy: number) => api.delete<{ fy: number; deleted: true }>(`/api/gst/annual?fy=${fy}`),
+};
+
+// ── GST return filing reports (status review 7, item 11) ─────────────────────
+// GSTR-1 table by table with its tie-out, GSTR-3B's checks and its payment,
+// the GSTR-1 vs 3B vs books reconciliation, GSTR-2B claim decisions, and the
+// filed mark of any return (/api/gst/returns, /api/gst/filing, /api/gst/gstr2b).
+
+export type Gstr1ReportView = import('../server/gst/gstr1-report').Gstr1Report;
+export type Gstr1DocRowView = import('../server/gst/gstr1-report').Gstr1DocRow;
+export type Gstr3bChecksView = import('../server/gst/gstr3b-checks').Gstr3bChecks;
+export type ReconciliationView = Awaited<ReturnType<typeof import('../server/gst/gstr3b-checks').reconciliation>>;
+export type Gstr3bPaymentView = import('../server/gst/gstr3b-payment').Gstr3bPaymentView;
+export type Gstr3bSettlementView = Awaited<ReturnType<typeof import('../server/gst/gstr3b-payment').gstr3bSettlement>>;
+export type ClaimShiftView = import('../server/gst/itc-claims').ClaimShift;
+
+const GR = '/api/gst/returns';
+export const gstReturns = {
+  gstr1Report: (period: string) => api.get<Gstr1ReportView>(GR, { view: 'gstr1-report', period }),
+  gstr3bChecks: (ret: string) => api.get<Gstr3bChecksView>(GR, { view: 'gstr3b-checks', ret }),
+  gstr3bPayment: (ret: string) => api.get<{ recorded: Gstr3bPaymentView | null; settlement: Gstr3bSettlementView }>(GR, { view: 'gstr3b-payment', ret }),
+  recordPayment: (b: { period: string; paidOn: string; cpin?: string | null; bankAccountId?: string | null; notes?: string | null }) =>
+    api.post<{ id: number; journalEntryId: number }>(GR, { action: 'gstr3b-payment', ...b }),
+  updatePayment: (id: string, b: { period: string; paidOn: string; cpin?: string | null; bankAccountId?: string | null; notes?: string | null }) =>
+    api.put<{ id: number }>(`${GR}?id=${id}`, b),
+  deletePayment: (id: string, reason?: string | null) => api.delete(`${GR}?id=${id}${reason?.trim() ? `&reason=${encodeURIComponent(reason.trim())}` : ''}`),
+  reconciliation: (fy: number) => api.get<ReconciliationView>(GR, { view: 'reconciliation', fy }),
+  itcClaims: (period: string) => api.get<{ period: string; shifts: ClaimShiftView[]; decisions: { billId: string; number: string; vendorInvoiceNo: string | null; billDate: string; party: string; gstin: string | null; decision: 'accept' | 'defer' | 'claim_later'; claimPeriod: string | null; note: string | null; by: string | null; taxPaise: number }[] }>(GR, { view: 'itc-claims', period }),
+  setClaim: (b: { billIds: string[]; decision: 'accept' | 'defer' | 'claim_later'; claimPeriod?: string | null; note?: string | null }) =>
+    api.post<{ changed: number; bills: string[] }>('/api/gst/gstr2b', { action: 'claim', ...b }),
 };

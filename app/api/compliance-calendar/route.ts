@@ -3,6 +3,7 @@ import { db, transaction } from '@/lib/server/db';
 import { route, body, query, notFound } from '@/lib/server/http';
 import { logAudit, auditMeta } from '@/lib/server/audit';
 import { complianceCalendar } from '@/lib/server/tax/compliance-calendar';
+import { dropSnapshot, snapshotReturn } from '@/lib/server/gst/filed-snapshots';
 
 // What the book owes the government, and when: worked out from its profile,
 // marked done as each return is filed or tax paid. See compliance-calendar.ts.
@@ -40,10 +41,14 @@ export const POST = route(
         const values = { done_on: input.doneOn, reference: input.reference || null, note: input.note || null, created_by_user_id: user.userId };
         await trx.insertInto('compliance_filings').values({ org_id: orgId, item_key: input.key, period: input.period, ...values })
           .onDuplicateKeyUpdate(values).execute();
+        // A GST return marked filed here keeps its documents as filed, as the
+        // filing bar does, so later changes to them show as amendments.
+        await snapshotReturn(trx, orgId, input.key, input.period);
       } else {
         const r = await trx.deleteFrom('compliance_filings')
           .where('org_id', '=', orgId).where('item_key', '=', input.key).where('period', '=', input.period).executeTakeFirst();
         if (!Number(r.numDeletedRows)) throw notFound('That was not marked done.');
+        await dropSnapshot(trx, orgId, input.key, input.period);
       }
       await logAudit({
         trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'update',
