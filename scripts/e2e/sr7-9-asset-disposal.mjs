@@ -103,7 +103,10 @@ try {
   await field(panel, 'Up to').locator('input').fill('2026-08-31');
   await panel.getByText('Dr Depreciation · Cr Accumulated Depreciation').waitFor();
   const want = ASSETS.reduce((s, a) => s + dep(a, '2026-04-01', '2026-08-31'), 0);
-  const shown = await panel.locator('tr', { hasText: 'Dr Depreciation · Cr Accumulated Depreciation' }).innerText();
+  // The preview first shows the run up to today, then again for the date typed: wait for the second.
+  const totalRow = panel.locator('tr', { hasText: 'Dr Depreciation · Cr Accumulated Depreciation' });
+  await totalRow.filter({ hasText: inr(want).slice(1) }).waitFor({ timeout: 30_000 }).catch(() => {});
+  const shown = await totalRow.innerText();
   check('Run preview: April–August by days for each asset', shown.includes(inr(want).slice(1)), `${inr(want)} expected; ${shown.replace(/\s+/g, ' ')}`);
   await shot('depreciation-preview');
   await panel.getByRole('button', { name: /^Post$/ }).click();
@@ -137,12 +140,17 @@ try {
   const lathe = ASSETS[0];
   const catchUp = dep(lathe, '2026-09-01', '2026-09-15', charged['CNC lathe']);
   await p.locator('[data-slot="dispose-preview"]').getByText(inr(catchUp).slice(1)).first().waitFor();
+  // The preview is worked out again once the sale value reaches it: wait for the proceeds, or the
+  // checks below would read a preview of a sale for nothing (and "5,73,764.38" contains "73,764.38").
+  await p.locator('[data-slot="dispose-preview"]').getByText('Asset Disposal Clearing').first().waitFor({ timeout: 30_000 }).catch(() => {});
   const latheAcc = charged['CNC lathe'] + catchUp;
   const latheGain = 5_00_000_00 + latheAcc - lathe.cost;
   const pv = await p.locator('[data-slot="dispose-preview"]').innerText();
   check('Preview: depreciation 1–15 September, pro rata, before the disposal', pv.includes(inr(catchUp).slice(1)), inr(catchUp));
-  check('Preview: the loss on the lathe', pv.includes(inr(Math.abs(latheGain)).slice(1)) && /Loss/.test(pv), inr(latheGain));
-  check('Preview: one disposal entry, Dr accumulated depreciation and clearing, Cr cost, loss', /Accumulated Depreciation[\s\S]*Asset Disposal Clearing[\s\S]*its cost[\s\S]*Loss on Sale/.test(pv));
+  // The exact loss beside "Loss", not a substring of a bigger figure.
+  const lossText = inr(Math.abs(latheGain)).slice(1).replace(/[.,]/g, '\\$&');
+  check('Preview: the loss on the lathe', new RegExp(`Loss -?₹${lossText}(?![0-9])`).test(pv.replace(/\s+/g, ' ')), inr(latheGain));
+  check('Preview: one disposal entry, Dr accumulated depreciation and clearing, Cr cost, loss', /Accumulated Depreciation[\s\S]*Asset Disposal Clearing[\s\S]*its cost[\s\S]*Loss on Sale/.test(pv), pv.replace(/\s+/g, ' ').slice(0, 400));
   await shot('lathe-sale-preview');
   await clickAndWait(page, p.locator('[data-slot="dispose-submit"]'), '/api/fixed-assets');
   await toast(page, /Sold by/);

@@ -61,7 +61,8 @@ try {
   await rowOf('4100').locator('[data-slot="budget-same-go"]').click();
   await rowOf('6100').locator('[data-slot="budget-same-input"]').fill('2000');
   await rowOf('6100').locator('[data-slot="budget-same-go"]').click();
-  const net = firstLine(await page.locator('[data-slot="budget-grid-net"] td').last().innerText());
+  // The year's total is the last cell with a figure (the row ends with an empty cell under "Same amount every period").
+  const net = firstLine((await page.locator('[data-slot="budget-grid-net"] td').allInnerTexts()).filter((c) => /₹/.test(c)).pop() ?? '');
   check('budgeted profit for the year: ₹96,000', rupees(net) === 96000, net);
   await shot('budget-grid');
   await page.click('[data-slot="budget-save"]');

@@ -82,6 +82,17 @@ export async function api(t, method, url, body) {
 export const stamp = Date.now().toString(36).slice(-5);
 
 /** Sign up a brand-new company through the sign-up screen, or sign in to the demo book. */
+/** A GSTIN that passes the check digit (lib/tax/gst.ts isValidGstin), new each time: state, a company PAN, 1Z, check. */
+export function newGstin(state) {
+  const cp = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  const L = () => String.fromCharCode(65 + Math.floor(Math.random() * 26));
+  const pan = `${L()}${L()}${L()}C${L()}${String(Math.floor(Math.random() * 10000)).padStart(4, '0')}${L()}`;
+  const g = `${state}${pan}1Z`;
+  let sum = 0;
+  for (let i = 0; i < 14; i++) { const p = cp.indexOf(g[i]) * (i % 2 === 0 ? 1 : 2); sum += Math.floor(p / 36) + (p % 36); }
+  return g + cp[(36 - (sum % 36)) % 36];
+}
+
 export async function enter(t) {
   const { page } = t;
   t.branchId = null;
@@ -91,6 +102,9 @@ export async function enter(t) {
     await page.locator('[data-slot="combobox-trigger"]', { hasText: 'Select a state' }).click();
     await page.locator('input[placeholder="Search states"]').fill('Tamil');
     await page.getByRole('option', { name: /Tamil Nadu/ }).first().click();
+    // A GST-registered business, as the auditors' own company is: without a GSTIN the company is
+    // unregistered, cannot claim input tax, and every bill's GST becomes part of the stock's cost.
+    await page.locator('#gstin').fill(newGstin('33'));
     await page.locator('#name').fill('Audit Tester');
     await page.locator('#email').fill(`audit-${t.item}-${stamp}-${Math.floor(Math.random() * 1e6)}@example.test`);
     await page.locator('#password').fill('Audit@Test2026');

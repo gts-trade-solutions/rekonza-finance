@@ -343,7 +343,12 @@ try {
     await page.locator('[data-slot="gstr3b-compare"]').waitFor({ timeout: 120_000 });
     const form = (await api('GET', `/api/gst?view=gstr3b-form&ret=${CUR}`)).json;
     const r = form.rows;
-    check('3.1(a): taxable ₹1,77,000 with the amendment and the advance, CGST ₹4,860', r['3.1a'].taxablePaise === 1_77_000_00 && r['3.1a'].cgstPaise === 4_860_00, `${r['3.1a'].taxablePaise} ${r['3.1a'].cgstPaise}`);
+    // 3.1(a) by hand: walk-in ₹4,000 (CGST 360) + inter-state consumer ₹1,20,000 (IGST) + EOU deemed
+    // export ₹8,000 (720) + B2B ₹30,000 (2,700) − credit note ₹1,000 (−90) + advance ₹10,000 (900) =
+    // ₹1,71,000 and CGST ₹4,590; plus last month's invoice amended from ₹10,000 (900, as filed) to
+    // ₹20,000 (1,800): +₹10,000 and +₹900. The export (3.1(b)), the nil-rated dal (3.1(c)) and the
+    // s.9(5) car wash (3.1.1) are elsewhere.
+    check('3.1(a): taxable ₹1,81,000 with the amendment and the advance, CGST ₹5,490', r['3.1a'].taxablePaise === 1_81_000_00 && r['3.1a'].cgstPaise === 5_490_00, `${r['3.1a'].taxablePaise} ${r['3.1a'].cgstPaise}`);
     check('3.1(b): the export, IGST ₹9,000', r['3.1b'].igstPaise === 9_000_00);
     check('3.1(c): the nil-rated sale, ₹1,000', r['3.1c'].taxablePaise === 1_000_00);
     check('3.1.1(ii): through the operator under 9(5), ₹2,000', r['3.1.1ii'].taxablePaise === 2_000_00);

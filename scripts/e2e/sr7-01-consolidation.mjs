@@ -98,8 +98,8 @@ try {
       await page.locator('[data-slot="setup-member"]', { hasText: B }).locator('[data-slot="setup-investment"]').selectOption({ label: opts.find((o) => o.startsWith('1700')) });
     });
     // Neither company has a PAN: link the customer and the vendor by hand.
-    await page.locator('[data-slot="setup-links"]', { hasText: `In ${A}` }).locator('[data-slot="setup-link"]', { hasText: B }).locator('select').selectOption({ label: `is ${B}` });
-    await page.locator('[data-slot="setup-links"]', { hasText: `In ${B}` }).locator('[data-slot="setup-link"]', { hasText: A }).locator('select').selectOption({ label: `is ${A}` });
+    await page.locator('[data-slot="setup-links"]', { hasText: `In ${A}` }).locator(`select[aria-label="${B} is"]`).selectOption({ label: `is ${B}` });
+    await page.locator('[data-slot="setup-links"]', { hasText: `In ${B}` }).locator(`select[aria-label="${A} is"]`).selectOption({ label: `is ${A}` });
     await shot('group-setup');
     await page.click('[data-slot="setup-save"]');
     await page.waitForSelector('text=Group set up', { timeout: 60000 });

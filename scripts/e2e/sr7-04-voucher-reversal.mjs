@@ -53,7 +53,8 @@ try {
   await dlg.getByPlaceholder('What this entry records').fill(`Office rent ${tag}`);
   const pick = async (row, search, name) => {
     await dlg.locator('tbody tr').nth(row).locator('[data-slot="combobox-trigger"]').click();
-    await page.getByPlaceholder('Search accounts by name or code').fill(search);
+    // The picker just opened is the last one in the page; a closed one may linger while it animates out.
+    await page.getByPlaceholder('Search accounts by name or code').last().fill(search);
     await page.getByRole('option', { name }).first().click();
   };
   await pick(0, '6100', /Rent/);

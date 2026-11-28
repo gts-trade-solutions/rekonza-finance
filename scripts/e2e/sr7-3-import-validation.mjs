@@ -83,7 +83,8 @@ if (process.env.FRESH === '1') {
   await page.waitForURL(/import\/history\?batch=\d+/, { timeout: 120_000 });
   await page.locator('[data-slot="import-batch-detail"]').waitFor();
   const detail = await page.locator('[data-slot="import-batch-detail"]').innerText();
-  check(t, '4. after import, its history entry: who, when, the file, 2 imported, 7 left out with reasons', /customers\.csv/.test(detail) && /Audit Tester/.test(detail) && (await page.locator('[data-slot="batch-imported"]').innerText()) === '2' && (await page.locator('[data-slot="batch-failed"]').innerText()) === '7',
+  // 7 left out: 6 with errors, and 1 skipped as already in the books (counted apart, as the history shows them).
+  check(t, '4. after import, its history entry: who, when, the file, 2 imported, 7 left out with reasons (6 failed, 1 already in the books)', /customers\.csv/.test(detail) && /Audit Tester/.test(detail) && (await page.locator('[data-slot="batch-imported"]').innerText()) === '2' && (await page.locator('[data-slot="batch-failed"]').innerText()) === '6' && (await page.locator('[data-slot="batch-skipped"]').innerText()) === '1',
     detail.replace(/\s+/g, ' ').slice(0, 200));
   await shot(t, 'history-detail');
 
