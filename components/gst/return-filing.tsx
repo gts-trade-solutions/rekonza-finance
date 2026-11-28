@@ -74,7 +74,11 @@ export function FilingDialog({ s, onClose, onDone }: { s: FilingStatusView; onCl
   const [note, setNote] = useState(s.filed?.note ?? '');
   // Offered only where the lock would move forward.
   const lockable = s.suggestedLocks.filter((m) => !s.locks[m] || s.locks[m]! < s.periodEnd);
-  const [lock, setLock] = useState<('sales' | 'purchases')[]>(s.filed ? [] : lockable);
+  // Unticked unless the person asks for it (auditor check, 2026-11-28): a lock
+  // stops every edit to the period's documents, which surprised a reviewer who
+  // only meant to record the ARN. The choice and what it does are spelled out
+  // below the tick, so nobody locks a period by accident.
+  const [lock, setLock] = useState<('sales' | 'purchases')[]>([]);
   const [busy, setBusy] = useState(false);
   const save = async () => {
     setBusy(true);
@@ -122,14 +126,29 @@ export function FilingDialog({ s, onClose, onDone }: { s: FilingStatusView; onCl
           </div>
           {lockable.length > 0 && (
             <div className="space-y-1.5 rounded-md border bg-muted/30 p-3" data-slot="filing-lock">
-              <p className="flex items-center gap-1.5 text-xs font-medium"><Lock className="size-3.5" /> Lock the period after filing</p>
+              <p className="flex items-center gap-1.5 text-xs font-medium"><Lock className="size-3.5" /> Also lock the period (optional, off unless you tick it)</p>
               {lockable.map((m) => (
                 <label key={m} className="flex items-center gap-2 text-[13px]">
                   <Checkbox checked={lock.includes(m)} onCheckedChange={(v) => setLock((l) => (v === true ? [...l, m] : l.filter((x) => x !== m)))} data-slot={`filing-lock-${m}`} />
-                  {m === 'sales' ? 'Sales' : 'Purchases'}: nothing dated up to {longDay(s.periodEnd)} can be added, changed or deleted
+                  Lock {m === 'sales' ? 'Sales' : 'Purchases'} up to {longDay(s.periodEnd)}
                 </label>
               ))}
-              <p className="text-[11px] text-muted-foreground">A correction after that goes in the next return. The lock can be lifted in Settings → Transaction locking (it is recorded in the audit trail).</p>
+              <div className="space-y-1 text-[11px] leading-relaxed text-muted-foreground" data-slot="filing-lock-help">
+                <p>
+                  Locking means no {lockable.length > 1
+                    ? 'invoice, credit note, debit note, customer receipt, bill, vendor credit or vendor payment'
+                    : lockable[0] === 'sales' ? 'invoice, credit note, debit note or customer receipt' : 'bill, vendor credit or vendor payment'} dated
+                  on or before {longDay(s.periodEnd)} can be added, edited, voided or deleted, so the books cannot drift from the return you filed.
+                </p>
+                <p>
+                  A mistake found later is not fixed by changing the old document: under CGST Act section 37(3) it is corrected in the
+                  return of a later month (an amendment in GSTR-1 table 9A/10, or a credit or debit note dated now).
+                </p>
+                <p>
+                  Leave it unticked to keep the period open. Either way the return is marked filed, and a later change to one of its
+                  documents shows as an amendment. A lock can be lifted in Settings → Transaction locking, and the unlock is recorded in the audit trail.
+                </p>
+              </div>
             </div>
           )}
         </div>
