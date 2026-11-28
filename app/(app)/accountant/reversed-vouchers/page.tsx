@@ -136,10 +136,14 @@ export default function ReversedVouchersPage() {
           </div>
         )}
       />
+      {/* One paragraph: a Card lays its children out as a column, which broke the sentence around "Reverse". */}
       <Card className="p-3 text-xs text-muted-foreground">
-        To reverse a journal: Accountant → Manual Journals → the journal → <span className="font-medium text-foreground">Reverse</span>, with a date and a reason.
-        A date in a locked period or a closed year is refused and the first open date is offered. Where a journal approval rule covers the amount,
-        the reversal waits under Approvals for someone else. An invoice, bill, receipt, payment or transfer is reversed by voiding or deleting it on its own screen.
+        <p data-slot="rv-howto">
+          To reverse a journal: Accountant → Manual Journals → the journal → <span className="font-medium text-foreground">Reverse</span>, with a date and a reason.
+          A date in a locked period or a closed year is refused and the first open date is offered. Where a journal approval rule covers the amount,
+          the reversal waits under Approvals for someone else. An invoice, bill, receipt, payment or transfer is reversed by voiding or deleting it on its own screen,
+          and that window asks for the reason shown here.
+        </p>
       </Card>
       <AsyncPage state={state}>
         {(d) => d.pairs.length === 0 ? (

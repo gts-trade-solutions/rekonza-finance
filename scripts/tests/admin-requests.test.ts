@@ -130,7 +130,7 @@ test('approved but refused by the books: the person is told why', async () => {
 
 test('uncategorising a bank line and voiding a credit note are asked about', async () => {
   for (const [method, path, body, words] of [
-    ['POST', '/api/banking/transactions', { action: 'unmatch', id: 5 }, /uncategorise bank transaction/],
+    ['POST', '/api/banking/transactions', { action: 'unmatch', id: 5, reason: 'Categorised to the wrong vendor' }, /uncategorise bank transaction/],
     ['PATCH', '/api/sales-documents', { action: 'void-credit-note', id: 3, reason: 'x' }, /void credit note/],
   ] as const) {
     const e = await ask(clerk, method, path, body);
@@ -139,10 +139,22 @@ test('uncategorising a bank line and voiding a credit note are asked about', asy
   }
 });
 
+test('undoing posted work without a reason is asked for one first (428), before it goes to an admin', async () => {
+  const before = (await db.selectFrom('admin_requests').select('id').where('org_id', '=', orgId).execute()).length;
+  for (const [method, path, body] of [
+    ['DELETE', '/api/payments/21', undefined], ['POST', '/api/banking/transactions', { action: 'unmatch', id: 6 }],
+  ] as const) {
+    const e = await ask(clerk, method, path, body);
+    assert.equal(e?.status, 428, `${method} ${path}`);
+    assert.equal(e?.code, 'reason_required');
+  }
+  assert.equal((await db.selectFrom('admin_requests').select('id').where('org_id', '=', orgId).execute()).length, before, 'nothing kept without a reason');
+});
+
 test('each half can be switched off in Settings → Controls', async () => {
   await setPolicies(db as never, orgId, admin.userId, { controls: { adminApprovalInvoiceEdit: false } } as never);
   assert.equal(await ask(clerk, 'PUT', '/api/invoices/13', { lines: [] }), null);
-  assert.equal((await ask(clerk, 'DELETE', '/api/invoices/13'))?.code, 'sent_for_approval', 'undo is still asked about');
+  assert.equal((await ask(clerk, 'DELETE', '/api/invoices/13?reason=duplicate'))?.code, 'sent_for_approval', 'undo is still asked about');
   await setPolicies(db as never, orgId, admin.userId, { controls: { adminApprovalUndo: false } } as never);
   assert.equal(await ask(clerk, 'DELETE', '/api/invoices/14'), null);
 });

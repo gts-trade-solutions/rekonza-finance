@@ -20,3 +20,12 @@ export function withChangeReason<T>(reason: string | null, fn: () => Promise<T>)
 export function changeReason(): string | null {
   return reasons.getStore() ?? null;
 }
+
+/**
+ * Whether this code runs inside a person's request (route() sets the store,
+ * even to null when no reason was given). A service called from a test, a seed
+ * or the job worker is not, and is not asked for a reason it cannot give.
+ */
+export function inRequest(): boolean {
+  return reasons.getStore() !== undefined;
+}

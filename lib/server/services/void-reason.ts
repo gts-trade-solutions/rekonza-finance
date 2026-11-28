@@ -6,10 +6,20 @@ import 'server-only';
 // of a void, and Rule 3(1) of the Companies (Accounts) Rules expects the books
 // to answer it.
 
-import { badRequest } from '../http';
+import { ApiError, badRequest } from '../http';
+import { changeReason, inRequest } from '../request-context';
 
+/**
+ * The reason for cancelling: the one passed, or the one the person gave for
+ * the request (a reason box, or the browser's own question answered after a
+ * 428). A request that gave none is answered 428 reason_required, so the
+ * browser asks for it instead of the void failing with an error.
+ */
 export function voidReason(reason: string | null | undefined): string {
-  const r = (reason ?? '').trim();
+  const r = (reason?.trim() || changeReason()?.trim() || '');
+  if (!r && inRequest()) {
+    throw new ApiError(428, 'Give a reason for cancelling. It stays with the document, on the reversing entry and in the audit trail.', 'reason_required');
+  }
   if (r.length < 4) throw badRequest('Give a reason for cancelling. It stays with the document and in the audit trail.');
   return r.slice(0, 300);
 }

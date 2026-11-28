@@ -77,6 +77,8 @@ export interface ConfirmingRowActionsProps {
   alternative?: DeleteAlternative;
   alternativeUpfront?: boolean;
   withReasonField?: boolean;
+  /** The reason must be given (a posted document: its entry is reversed, and the reversal says why). */
+  reasonRequired?: boolean;
   editLabel?: string;
   deleteLabel?: string;
   editTitle?: string;
@@ -138,7 +140,7 @@ export interface DeleteAlternative {
 }
 
 export function ConfirmDelete({
-  open, onClose, title, description, withReasonField = true, confirmLabel = 'Delete', onConfirm, done, alternative, alternativeUpfront = false,
+  open, onClose, title, description, withReasonField = true, confirmLabel = 'Delete', onConfirm, done, alternative, alternativeUpfront = false, reasonRequired = false,
 }: {
   open: boolean;
   onClose: () => void;
@@ -154,6 +156,8 @@ export function ConfirmDelete({
   alternative?: DeleteAlternative;
   /** Offer the alternative before Delete is tried (when it is known Delete will be refused). */
   alternativeUpfront?: boolean;
+  /** The reason must be given, four letters or more (a posted document). */
+  reasonRequired?: boolean;
 }) {
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
@@ -200,8 +204,8 @@ export function ConfirmDelete({
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>{description}</DialogDescription>
         </DialogHeader>
-        {withReasonField && !refused && (
-          <Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Reason (optional): entered in error"
+        {(withReasonField || reasonRequired) && !refused && (
+          <Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder={reasonRequired ? 'Reason (needed): entered in error' : 'Reason (optional): entered in error'}
             maxLength={300} data-slot="delete-reason" />
         )}
         {refused && (
@@ -213,7 +217,7 @@ export function ConfirmDelete({
             <Button variant="outline" disabled={busy} onClick={() => void instead()} data-slot="delete-alternative">{alternative!.label}</Button>
           )}
           {!refused && (
-            <Button variant="destructive" disabled={busy} onClick={() => void go()} data-slot="confirm-delete-go">
+            <Button variant="destructive" disabled={busy || (reasonRequired && reason.trim().length < 4)} onClick={() => void go()} data-slot="confirm-delete-go">
               {busy && <Loader2 className="size-3.5 animate-spin" />} {confirmLabel}
             </Button>
           )}
@@ -230,7 +234,7 @@ export function ConfirmDelete({
  */
 function ConfirmingRowActions({
   label, canEdit = true, canDelete = true, onEdit, onDelete, deleteTitle, deleteDescription, done, alternative, alternativeUpfront,
-  withReasonField, editLabel, deleteLabel, editTitle, deleteTitleAttr, extra, className,
+  withReasonField, reasonRequired, editLabel, deleteLabel, editTitle, deleteTitleAttr, extra, className,
 }: ConfirmingRowActionsProps) {
   const [asking, setAsking] = useState(false);
   const showEdit = canEdit && !!onEdit;
@@ -255,6 +259,7 @@ function ConfirmingRowActions({
           alternative={alternative}
           alternativeUpfront={alternativeUpfront}
           withReasonField={withReasonField}
+          reasonRequired={reasonRequired}
         />
       )}
     </div>
@@ -276,6 +281,8 @@ export interface DeleteConfirmProps {
   doneMessage?: string;
   /** A reason box (kept with the record). Off for things that are not documents. */
   withReason?: boolean;
+  /** The reason must be given, four letters or more: a posted document, whose reversal says why. */
+  reasonRequired?: boolean;
   confirmLabel?: string;
   /**
    * What to offer when the server refuses with `in_use`: Zoho's "Mark as
@@ -286,7 +293,7 @@ export interface DeleteConfirmProps {
 
 /** Delete, asked once: what happens, an optional reason, the refusal if there is one. */
 export function DeleteConfirmDialog({
-  open, onOpenChange, title, description, onConfirm, onDone, doneMessage, withReason = true, confirmLabel = 'Delete', inUse,
+  open, onOpenChange, title, description, onConfirm, onDone, doneMessage, withReason = true, reasonRequired = false, confirmLabel = 'Delete', inUse,
 }: DeleteConfirmProps) {
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
@@ -296,7 +303,7 @@ export function DeleteConfirmDialog({
   const run = async () => {
     setBusy(true); setError(null);
     try {
-      await onConfirm(withReason ? reason.trim() || undefined : undefined);
+      await onConfirm(withReason || reasonRequired ? reason.trim() || undefined : undefined);
       if (doneMessage) toast.success(doneMessage);
       close();
       onDone?.();
@@ -332,9 +339,9 @@ export function DeleteConfirmDialog({
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>{description}</DialogDescription>
         </DialogHeader>
-        {withReason && (
+        {(withReason || reasonRequired) && (
           <Input value={reason} onChange={(e) => setReason(e.target.value)} maxLength={300}
-            placeholder="Reason (optional): entered in error" data-slot="delete-confirm-reason" />
+            placeholder={reasonRequired ? 'Reason (needed): entered in error' : 'Reason (optional): entered in error'} data-slot="delete-confirm-reason" />
         )}
         {error && <p className="text-sm text-destructive" data-slot="delete-confirm-error">{error.message}</p>}
         <DialogFooter>
@@ -342,7 +349,7 @@ export function DeleteConfirmDialog({
           {inUse && error?.code === 'in_use' && (
             <Button variant="secondary" onClick={() => void fallBack()} disabled={busy} data-slot="delete-confirm-inactive">{inUse.label}</Button>
           )}
-          <Button variant="destructive" onClick={() => void run()} disabled={busy} className="gap-1.5" data-slot="delete-confirm-go">
+          <Button variant="destructive" onClick={() => void run()} disabled={busy || (reasonRequired && reason.trim().length < 4)} className="gap-1.5" data-slot="delete-confirm-go">
             {busy && <Loader2 className="size-3.5 animate-spin" />} {confirmLabel}
           </Button>
         </DialogFooter>

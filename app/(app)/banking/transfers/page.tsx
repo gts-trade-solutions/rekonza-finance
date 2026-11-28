@@ -232,6 +232,7 @@ export default function TransfersPage() {
                     onEdit={() => startEdit(t)}
                     onDelete={async (reason) => { await api.delete(withReason(`/api/banking/transfers/${t.id}`, reason)); state.refetch(); accounts.refetch(); }}
                     done="Transfer deleted"
+                    reasonRequired
                     deleteTitle={`Delete the transfer from ${t.fromName} to ${t.toName}?`}
                     deleteDescription="Its entry is reversed on its own date, so both accounts go back; the ledger keeps both entries. Refused while a bank statement line is matched to it: undo that match first."
                   />

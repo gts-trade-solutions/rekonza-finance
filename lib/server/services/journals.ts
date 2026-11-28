@@ -161,7 +161,7 @@ function indiaToday(now = new Date()): string {
  * off are owed again — the same rule as voiding a payment.
  */
 export async function reverseJournal(
-  trx: Trx, orgId: number, userId: number | null, entryId: number, opts: { date?: string; memo?: string } = {},
+  trx: Trx, orgId: number, userId: number | null, entryId: number, opts: { date?: string; memo?: string; reason?: string | null } = {},
 ) {
   const allocations = await trx.selectFrom('journal_allocations').selectAll()
     .where('org_id', '=', orgId).where('entry_id', '=', entryId).where('reversed', '=', 0).execute();
