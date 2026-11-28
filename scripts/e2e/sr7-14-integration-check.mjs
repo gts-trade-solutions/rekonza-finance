@@ -171,6 +171,23 @@ try {
   // Drill-down: a run's lines, its entry, the ledger.
   await ic.locator('[data-slot="ic-run"]').first().click();
   await ic.locator('[data-slot="ic-run-line"]').first().waitFor();
+  check('Drill-down: the run\'s lines, account by account, register against ledger', (await ic.locator('[data-slot="ic-run-line"]').count()) >= 9);
+  await shot('integration-run-lines');
+  await ic.locator('[data-slot="ic-run"]').first().getByRole('button', { name: /Entry 1/ }).click();
+  await page.locator('[data-slot="journal-dialog"]').getByText('Total').waitFor();
+  check('Drill-down: the run\'s journal entry opens', /Salaries & Wages/.test(await page.locator('[data-slot="journal-dialog"]').innerText()));
+  await shot('integration-entry');
+  await page.keyboard.press('Escape');
+  const ext = await ic.locator('[data-slot="ic-external"]').innerText();
+  check('External feeds named with their last run: payroll import and Tally', /Payroll from another system/.test(ext) && /Tally sync/.test(ext) && /(Keka|greytHR)/.test(ext), ext.split('\n').slice(0, 4).join(' | '));
+  await shot('integration-external');
+  const [xl] = await Promise.all([page.waitForEvent('download'), page.locator('[data-slot="ic-export"]').click()]);
+  check('The whole check exports (Excel)', /integration-check-.*\.xlsx/.test(await xl.suggestedFilename()), await xl.suggestedFilename());
+  await page.emulateMedia({ media: 'print' });
+  await shot('integration-print');
+  await page.emulateMedia({ media: 'screen' });
+
+  // The 28-November step reloads the page at another date, so it runs after the drill-down above.
   // Fixes after the auditor check: at a mid-month date both sides read what is posted up to it.
   // A run dated at its month's end (after the date) is timing, listed with its date, never a difference.
   // sr7c-helpers' api returns the body itself (and throws on a non-2xx).
@@ -187,21 +204,6 @@ try {
     }
     check('No Difference shown at 28 November', !/Difference/.test(await icMid.locator('[data-slot="ic-payroll-summary"]').innerText()));
   } else check('The check reads at 28 November', false, String(mid.status));
-  check('Drill-down: the run\'s lines, account by account, register against ledger', (await ic.locator('[data-slot="ic-run-line"]').count()) >= 9);
-  await shot('integration-run-lines');
-  await ic.locator('[data-slot="ic-run"]').first().getByRole('button', { name: /Entry 1/ }).click();
-  await page.locator('[data-slot="journal-dialog"]').getByText('Total').waitFor();
-  check('Drill-down: the run\'s journal entry opens', /Salaries & Wages/.test(await page.locator('[data-slot="journal-dialog"]').innerText()));
-  await shot('integration-entry');
-  await page.keyboard.press('Escape');
-  const ext = await ic.locator('[data-slot="ic-external"]').innerText();
-  check('External feeds named with their last run: payroll import and Tally', /Payroll from another system/.test(ext) && /Tally sync/.test(ext) && /(Keka|greytHR)/.test(ext), ext.split('\n').slice(0, 4).join(' | '));
-  await shot('integration-external');
-  const [xl] = await Promise.all([page.waitForEvent('download'), page.locator('[data-slot="ic-export"]').click()]);
-  check('The whole check exports (Excel)', /integration-check-.*\.xlsx/.test(await xl.suggestedFilename()), await xl.suggestedFilename());
-  await page.emulateMedia({ media: 'print' });
-  await shot('integration-print');
-  await page.emulateMedia({ media: 'screen' });
 } catch (e) {
   check('The run finished without an error', false, e instanceof Error ? e.message.split('\n')[0] : String(e));
   await shot('failure').catch(() => {});

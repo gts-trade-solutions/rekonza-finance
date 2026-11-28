@@ -218,11 +218,12 @@ const CHANGES = new Set(['PATCH', 'PUT', 'DELETE']);
 const NO_REASON = /^\/api\/(notifications|auth|ai|exceptions)(\/|$)/;
 
 export async function readReason(req: Request): Promise<string | null> {
-  // A delete sends the reason typed in its own confirm dialog as ?reason= (doc-delete's routes keep it
-  // on the deleted record too); it counts as the change's reason, so the person is not asked twice.
-  // So does a `reason` in the body: the Reverse, Void and Undo windows send the one typed there.
-  const raw = req.headers.get('x-change-reason') ?? (req.method === 'DELETE' ? new URL(req.url).searchParams.get('reason') : null);
-  if (!raw && (CHANGES.has(req.method) || req.method === 'POST') && (req.headers.get('content-type') ?? '').includes('application/json')) {
+  // The reason typed in the window that undoes something (the Reverse, Void and Undo windows send
+  // it as `reason` in the body) comes first: it is the most specific answer to "why", and it is the
+  // one shown on the reversal in Reversed Vouchers. Then the reason the browser's own prompt sends
+  // (X-Change-Reason), then a delete's ?reason= (doc-delete's routes keep it on the deleted record
+  // too). Any of them counts as the change's reason, so the person is not asked twice.
+  if ((CHANGES.has(req.method) || req.method === 'POST') && (req.headers.get('content-type') ?? '').includes('application/json')) {
     const body = await req.clone().json().catch(() => null) as { reason?: unknown; action?: unknown } | null;
     // A POST counts its body's reason only when it undoes something (action void-credit-note,
     // void-vendor-credit, reverse…): a new credit note's or adjustment's own "reason" field says
@@ -230,6 +231,7 @@ export async function readReason(req: Request): Promise<string | null> {
     const undoes = req.method !== 'POST' || (typeof body?.action === 'string' && UNDO_ACTION_RE.test(body.action));
     if (undoes && body && typeof body.reason === 'string' && body.reason.trim()) return body.reason.trim().slice(0, 500);
   }
+  const raw = req.headers.get('x-change-reason') ?? (req.method === 'DELETE' ? new URL(req.url).searchParams.get('reason') : null);
   if (!raw) return null;
   let text = raw;
   try { text = decodeURIComponent(raw); } catch { /* sent plain */ }

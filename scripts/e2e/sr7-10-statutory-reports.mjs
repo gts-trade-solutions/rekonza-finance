@@ -97,14 +97,17 @@ try {
   await pf.waitFor();
   const firstHigh = FRESH ? 'Aarti Kulkarni' : 'Rohit Menon';
   const pfRow = await pf.locator('[data-slot="pf-row"]', { hasText: firstHigh }).first().innerText();
-  check('PF: basic above the ceiling contributes on ₹15,000; EE ₹1,800, EPS capped at ₹1,250, ER difference ₹550',
-    /15,000\.00/.test(pfRow) && /1,800\.00/.test(pfRow) && /1,250\.00/.test(pfRow) && /550\.00/.test(pfRow), pfRow.replace(/\s+/g, ' '));
+  // EPS para 6A (from 1 Sep 2014): someone joining on PF wages above Rs 15,000 is not in the pension
+  // scheme, so the employer's whole 12% goes to EPF. Both of these joined after 2014.
+  const pfFlat = pfRow.replace(/\s+/g, ' ');
+  check('PF: basic above the ceiling contributes on Rs 15,000; EE Rs 1,800; a post-2014 joiner has no EPS, the employer Rs 1,800 goes to EPF',
+    /15,000\.00 \S*0\.00 \S*15,000\.00 \S*1,800\.00 \S*0\.00 \S*1,800\.00/.test(pfFlat), pfFlat);
   check('PF reconciles with the pay runs and PF Payable in the ledger', /Reconciles/.test(await pf.locator('[data-slot="stat-tie"]').innerText()));
   await shot('pf-register');
   const [ecrDl] = await Promise.all([page.waitForEvent('download'), pf.locator('[data-slot="pf-ecr-download"]').first().click()]);
   const ecr = readFileSync(await ecrDl.path(), 'utf8');
   const ecrLine = ecr.split('\n').find((l) => l.includes(FRESH ? 'AARTI KULKARNI' : 'ROHIT MENON')) ?? '';
-  check('ECR 2.0 file: #~# separated, 11 fields, whole rupees, EPS 1250', ecrLine.split('#~#').length === 11 && ecrLine.includes('#~#15000#~#15000#~#15000#~#1800#~#1250#~#550#~#'), ecrLine);
+  check('ECR 2.0 file: #~# separated, 11 fields, whole rupees, no EPS wages or EPS for a post-2014 joiner above the ceiling', ecrLine.split('#~#').length === 11 && ecrLine.includes('#~#15000#~#0#~#15000#~#1800#~#0#~#1800#~#'), ecrLine);
   const [pfCsv] = await Promise.all([page.waitForEvent('download'), pf.locator('[data-slot="pf-export"]').click()]);
   check('PF register exports', (await pfCsv.suggestedFilename()).endsWith('.csv'));
 

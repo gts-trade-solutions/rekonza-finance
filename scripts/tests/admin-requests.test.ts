@@ -191,3 +191,11 @@ test('a reason typed in the window counts as the change reason, so the person is
   assert.equal(await readReason(req('PUT', '/api/invoices/3', { lines: [] })), null, 'no reason anywhere: the person is asked');
   assert.equal(await readReason(req('PATCH', '/api/journal', { entryId: 4, reason: '   ' })), null);
 });
+
+test('the reason typed in the window wins over the generic reason a header carries', async () => {
+  const { readReason } = await import('../../lib/server/http');
+  const both = req('POST', '/api/invoices/9', { action: 'void', reason: 'Raised to the wrong customer' }, { 'x-change-reason': encodeURIComponent('End-to-end test') });
+  assert.equal(await readReason(both), 'Raised to the wrong customer');
+  const newNote = req('POST', '/api/credit-notes', { reason: 'Goods returned' }, { 'x-change-reason': encodeURIComponent('Asked by the customer') });
+  assert.equal(await readReason(newNote), 'Asked by the customer', "a new document's own reason field is not the change's reason");
+});
