@@ -137,18 +137,16 @@ async function fresh() {
 
   const tr = await api(t, 'POST', '/api/banking/transfers', { fromBankAccountId: hdfc.id, toBankAccountId: cash.id, date: day(3), amountPaise: 2_000_00 });
   check(t, 'setup: a transfer HDFC → Cash in Hand of ₹2,000', tr.status === 200, JSON.stringify(tr.json).slice(0, 80));
-  await goto(t, `/banking/${hdfc.id}`);
-  const allTab = page.getByText('All Transactions').first();
-  if (await allTab.count()) await allTab.click().catch(() => {});
-  await page.waitForTimeout(1500);
-  const trow = page.locator('tr', { hasText: /Transfer HDFC Current A\/c to/ }).first();
-  await trow.locator('[data-slot="ledger-delete"]').click();
-  const ldlg = page.locator('[data-slot="ledger-confirm"]');
+  // Banking → Transfers: the transfer's Delete window.
+  await goto(t, '/banking/transfers');
+  const tcard = page.locator('[data-slot="row-actions"][aria-label^="Actions for the transfer"]').first();
+  await tcard.locator('[data-slot="row-delete"]').click();
+  const ldlg = page.locator('[data-slot="confirm-delete"]');
   await ldlg.waitFor();
-  check(t, '2: the bank screen\'s Delete window will not delete the transfer without a reason', await ldlg.locator('[data-slot="ledger-confirm-go"]').isDisabled());
-  await ldlg.locator('[data-slot="ledger-reason"]').fill('Moved to the wrong account');
+  check(t, "2: the transfer's Delete window will not delete it without a reason", await ldlg.locator('[data-slot="confirm-delete-go"]').isDisabled());
+  await ldlg.locator('[data-slot="delete-reason"]').fill('Moved to the wrong account');
   await shot(t, 'transfer-delete-window');
-  await ldlg.locator('[data-slot="ledger-confirm-go"]').click();
+  await ldlg.locator('[data-slot="confirm-delete-go"]').click();
   await waitToast(/deleted/);
 
   const sinv = await api(t, 'POST', '/api/invoices', { customerId: customer, date: day(3), dueDate: day(3), status: 'approved', lines: [{ description: 'Fitting charges', qty: 1, ratePaise: 500_00, gstRatePct: 18, hsnSac: '998714' }] });
@@ -170,21 +168,23 @@ async function fresh() {
   // ── 4. Negative stock and cash ─────────────────────────────────────────────
   const over = await api(t, 'POST', '/api/invoices', { customerId: customer, date: day(1), dueDate: day(1), status: 'approved', lines: [{ itemId, qty: 50, ratePaise: 20_000 }] });
   const ow = (over.json?.warnings ?? []).join(' | ');
-  check(t, '4: an invoice selling 50 of 14 in stock is warned: item, stock, going out, shortfall', /FIFO Widget: 14 in stock, 50 going out, short by 36/.test(ow), ow.slice(0, 200));
+  // On hand: 5 − 1 written off + 6 bought − 1 sent back = 9.
+  check(t, '4: an invoice selling 50 of 9 in stock is warned: item, stock, going out, shortfall', /FIFO Widget: 9 in stock, 50 going out, short by 41/.test(ow), ow.slice(0, 200));
   // Through the invoice form's own warning toast: a second oversale typed on the screen is shown the same way (API above; toast below).
   const expense = await api(t, 'POST', '/api/expenses', { branchId, date: day(1), accountId: await accountId('6300') ?? await accountId('6400'), paidThroughBankAccountId: cash.id, amountPaise: 13_098_00 });
   const ew = (expense.json?.warnings ?? []).join(' | ');
-  check(t, '4: an expense paid from Cash in Hand beyond what is in hand is warned, with the shortfall', /Cash in Hand would go below nil: ₹2,000\.00 in hand .* ₹13,098\.00 going out — short by ₹11,098\.00/.test(ew), ew.slice(0, 220) || JSON.stringify(expense.json).slice(0, 200));
+  // The till is empty (the ₹2,000 transfer into it was deleted above).
+  check(t, '4: an expense paid from Cash in Hand beyond what is in hand is warned, with the shortfall', /Cash in Hand would go below nil: ₹0\.00 in hand .* ₹13,098\.00 going out — short by ₹13,098\.00/.test(ew), ew.slice(0, 400) || JSON.stringify(expense.json).slice(0, 200));
 
   await goto(t, '/reports/profit-and-loss');
   await page.locator('[data-slot="below-zero-notice"]').waitFor();
   const pln = await page.locator('[data-slot="below-zero-notice"]').innerText();
-  check(t, '4: the profit and loss says stock is below zero, naming FIFO Widget', /Stock (and cash )?below zero/.test(pln) && /FIFO Widget/.test(pln) && /-36/.test(pln), pln.replace(/\s+/g, ' ').slice(0, 200));
+  check(t, '4: the profit and loss says stock is below zero, naming FIFO Widget', /Stock (and cash )?below zero/.test(pln) && /FIFO Widget/.test(pln) && /-41/.test(pln), pln.replace(/\s+/g, ' ').slice(0, 200));
   await shot(t, 'pl-below-zero');
   await goto(t, '/reports/balance-sheet');
   await page.locator('[data-slot="below-zero-notice"]').waitFor();
   const bsn = await page.locator('[data-slot="below-zero-notice"]').innerText();
-  check(t, '4: the balance sheet says so too, with Cash in Hand at −₹11,098.00', /FIFO Widget/.test(bsn) && /Cash in Hand/.test(bsn) && /11,098\.00/.test(bsn), bsn.replace(/\s+/g, ' ').slice(0, 220));
+  check(t, '4: the balance sheet says so too, with Cash in Hand at −₹13,098.00', /FIFO Widget/.test(bsn) && /Cash in Hand/.test(bsn) && /13,098\.00/.test(bsn), bsn.replace(/\s+/g, ' ').slice(0, 220));
   await shot(t, 'bs-below-zero');
 
   // Settings → Policies: Negative stock and Negative cash, set to Block.
