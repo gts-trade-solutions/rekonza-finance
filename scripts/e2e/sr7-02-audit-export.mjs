@@ -39,6 +39,10 @@ try {
   const setting = await api('POST', '/api/reporting-tags', { action: 'save', name: `Channel ${tag}`, values: ['Retail', 'Fleet'] });
   const rule = await api('POST', '/api/approvals', { action: 'save-rule', documentType: 'bill', thresholdPaise: 50000000, approverRole: 'admin', isActive: true });
   check('settings changed (a reporting tag, an approval rule)', setting.status === 200 && rule.status === 200);
+  const pol0 = (await api('GET', '/api/settings/policies')).body;
+  const polTo = pol0.cashLimits === 'block' ? 'warn' : 'block';
+  const pol = await api('PUT', '/api/settings/policies', { cashLimits: polTo });
+  check('Settings → Policies: cash limits changed', pol.status === 200, String(pol.status));
   let viewerEmail = 'deepa@raceautospares.in', viewerPassword = 'Rekonza@2026';
   if (FRESH) {
     viewerEmail = `viewer-${tag}@example.test`;
@@ -118,6 +122,54 @@ try {
   await page.fill('[data-slot="audit-search"]', '');
   await idle(800);
 
+  // ── 4b. Fixes after the auditor check: what an edit changed, old → new, and the IP.
+  const opts = (await page.locator('[data-slot="audit-type"] option').allInnerTexts()).map((o) => o.replace(/\s*\(\d+\)$/, '').trim().toLowerCase());
+  check('each record type is listed once in the filter', opts.length === new Set(opts).size, opts.join(', '));
+  await page.selectOption('select[aria-label="Action"]', 'update');
+  await page.fill('[data-slot="audit-search"]', inv.number);
+  await waitText('main', 'line 1 · rate');
+  await idle(1000);
+  const editRow = await page.locator('main').innerText();
+  check('the invoice edit shows line 1 · rate 4500 → 5000 on screen', /line 1 · rate\s*4500\s*→\s*5000/.test(editRow), editRow.slice(editRow.indexOf('Edited'), editRow.indexOf('Edited') + 200));
+  await shot('edit-old-new');
+  await page.fill('[data-slot="audit-search"]', 'Policies changed');
+  await waitText('main', 'cash limits');
+  await idle(800);
+  const polRow = await page.locator('main').innerText();
+  check('the settings change shows cash limits before → after', new RegExp(`cash limits\\s*${pol0.cashLimits}\\s*→\\s*${polTo}`).test(polRow), polRow.slice(polRow.indexOf('Policies changed'), polRow.indexOf('Policies changed') + 160));
+  await shot('setting-old-new');
+  // CSV of the updates with IP addresses: the label ticks the box, and every row has an address.
+  await page.fill('[data-slot="audit-search"]', '');
+  await idle(800);
+  await page.click('[data-slot="audit-export"]');
+  await page.waitForSelector('[data-slot="audit-export-dialog"]');
+  await page.check('[data-slot="audit-format-csv"]');
+  await page.click('[data-slot="audit-export-ip-label"]');
+  check('clicking the label text unticks "Include IP addresses"', !(await page.isChecked('[data-slot="audit-export-ip"]')));
+  await page.click('[data-slot="audit-export-ip-label"]');
+  check('clicking it again ticks it', await page.isChecked('[data-slot="audit-export-ip"]'));
+  await shot('export-ip-dialog');
+  const [udl] = await Promise.all([page.waitForEvent('download', { timeout: 90000 }), page.click('[data-slot="audit-export-go"]')]);
+  const ucsv = readFileSync(await udl.path(), 'utf8').replace(/^\ufeff/, '');
+  const uhead = ucsv.split('\r\n')[0].split(',');
+  const ipCol = uhead.indexOf('IP address');
+  const urows = ucsv.split('\r\n').slice(1).filter(Boolean);
+  const parseCsv = (line) => { const out = []; let cur = ''; let q = false; for (let i = 0; i < line.length; i++) { const ch = line[i]; if (q) { if (ch === '"' && line[i + 1] === '"') { cur += '"'; i++; } else if (ch === '"') q = false; else cur += ch; } else if (ch === '"') q = true; else if (ch === ',') { out.push(cur); cur = ''; } else cur += ch; } out.push(cur); return out; };
+  const invRow = urows.map(parseCsv).find((r) => r.includes(inv.number) && r.includes('update'));
+  check('CSV: the invoice edit carries line 1 · rate: 4500 → 5000', !!invRow && invRow.some((c) => /line 1 · rate: 4500 → 5000/.test(c)), invRow?.join(' | ').slice(0, 300));
+  check('CSV: the IP column is filled for every event', ipCol > 0 && urows.map(parseCsv).every((r) => (r[ipCol] ?? '').trim() !== ''), urows.map(parseCsv).map((r) => r[ipCol]).slice(0, 5).join(' '));
+  const polCsv = urows.map(parseCsv).find((r) => r.some((c) => c.startsWith('Policies changed')));
+  check('CSV: the settings change carries cash limits old → new', !!polCsv && polCsv.some((c) => c.includes(`cash limits: ${pol0.cashLimits} → ${polTo}`)), polCsv?.join(' | ').slice(0, 200));
+  // Each export is one line in the trail: four so far (XLSX, CSV, PDF, CSV), none doubled by the download gate.
+  await idle(1500);
+  const ex = (await api('GET', `/api/audit?action=export&from=${today()}&to=${today()}&limit=1000`)).body.events.filter((e) => e.actorName === me);
+  const fromServer = ex.filter((e) => /^Exported the audit trail/.test(e.detail)).length;
+  const fromGate = ex.filter((e) => /^Exported Audit trail - /.test(e.detail)).length;
+  check('each audit-trail export is recorded once', fromGate === 0 && fromServer >= 4, `server ${fromServer}, gate ${fromGate}`);
+  if (!(await page.locator('[data-slot="audit-db-lock-note"]').count()) === 0) check('the database-lock note explains the hash chain and who installs the lock', /root access to MySQL/.test(await page.locator('[data-slot="audit-db-lock-note"]').innerText()));
+  await page.selectOption('select[aria-label="Action"]', 'all');
+  if (pol0.cashLimits !== polTo) await api('PUT', '/api/settings/policies', { cashLimits: pol0.cashLimits });
+
   // ── 5. Verify integrity.
   await page.click('[data-slot="audit-verify"]');
   await page.waitForSelector('[data-slot="audit-verify-ok"], [data-slot="audit-verify-problems"]', { timeout: 120000 });
@@ -155,7 +207,7 @@ try {
 
   // ── 8. Tampering behind the application is found (fresh company only).
   if (FRESH) {
-    const c2 = await mysql.createConnection({ host: process.env.DB_HOST || '127.0.0.1', port: Number(process.env.DB_PORT || 3331), user: 'root', database: 'finora' });
+    const c2 = await mysql.createConnection({ host: process.env.DB_HOST || '127.0.0.1', port: Number(process.env.DB_PORT || 3310), user: 'root', database: process.env.DB_NAME || 'finora_fb' });
     const [rows] = await c2.query('SELECT id FROM audit_log WHERE org_id = ? AND action = ? ORDER BY id LIMIT 1', [Number(masters.org.id), 'delete']);
     await c2.query('UPDATE audit_log SET actor_name = ? WHERE id = ?', ['Someone else', rows[0].id]);
     await c2.end();

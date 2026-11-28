@@ -35,7 +35,7 @@ export async function seedDemoFxB(trx: Trx, ids: IdMap): Promise<void> {
   const branch = ids.branches.br_chennai;
   const customer = ids.contacts.c_apex ?? Object.values(ids.contacts)[0];
   const item = await trx.selectFrom('items').select(['id', 'name', 'hsn_sac', 'gst_rate_pct']).where('org_id', '=', org).where('kind', '=', 'goods')
-    .where('is_active', '=', 1).orderBy('id').executeTakeFirst();
+    .orderBy('id').executeTakeFirst();
   if (!customer || !item || !branch) return;
   const day = shift(DEMO_TODAY, -2);
   const meta = (ip: string) => ({ ip, userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0 Safari/537.36' });
