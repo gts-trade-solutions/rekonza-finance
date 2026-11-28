@@ -173,8 +173,10 @@ try {
   await ic.locator('[data-slot="ic-run-line"]').first().waitFor();
   // Fixes after the auditor check: at a mid-month date both sides read what is posted up to it.
   // A run dated at its month's end (after the date) is timing, listed with its date, never a difference.
-  const mid = await api('GET', `/api/integration-check?from=${from}&to=2026-11-28`);
-  if (mid.status === 200 && mid.body?.payroll) {
+  // sr7c-helpers' api returns the body itself (and throws on a non-2xx).
+  const midBody = await api('GET', `/api/integration-check?from=${from}&to=2026-11-28`);
+  const mid = { status: 200, body: midBody };
+  if (mid.body?.payroll) {
     check('At 28 November every payroll liability passes (both sides as posted up to that day)', mid.body.payroll.liabilities.every((l) => l.ok),
       mid.body.payroll.liabilities.filter((l) => !l.ok).map((l) => `${l.label} ${inr(l.differencePaise)}`).join(', ') || 'all pass');
     check('Runs on the payroll side are those posted by 28 November', /^2026-1[01]-3[01]$/.test(mid.body.payroll.postedThrough), mid.body.payroll.postedThrough);
