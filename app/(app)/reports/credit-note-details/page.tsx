@@ -20,7 +20,8 @@ const columns: GridColumn<SalesDocRow>[] = [
   { key: 'date', header: 'Date', cell: (r) => <span className="tabular text-xs">{short(r.date)}</span>, csv: (r) => r.date },
   { key: 'number', header: 'Credit Note#', cell: (r) => <span className="font-medium">{r.number}</span>, csv: (r) => r.number },
   { key: 'customer', header: 'Customer', cell: (r) => r.customerName, csv: (r) => r.customerName },
-  { key: 'against', header: 'Against Invoice', cell: (r) => <span className="text-xs">{r.linkedId ? `#${r.linkedId}` : 'Standalone'}</span>, csv: (r) => (r.linkedId ? `#${r.linkedId}` : 'Standalone') },
+  // The invoice by its number, never by its row id.
+  { key: 'against', header: 'Against Invoice', cell: (r) => <span className="text-xs">{r.linkedId ? r.linkedNumber ?? 'Invoice' : 'Standalone'}</span>, csv: (r) => (r.linkedId ? r.linkedNumber ?? 'Invoice' : 'Standalone') },
   { key: 'reason', header: 'Reason', cell: (r) => <span className="text-xs text-muted-foreground">{r.detail}</span>, csv: (r) => r.detail ?? '' },
   { key: 'applied', header: 'Applied', align: 'right', cell: (r) => <Money value={r.appliedPaise ?? 0} showZero={false} />, csv: (r) => toRupees(r.appliedPaise ?? 0), total: (rs) => <Money value={rs.reduce((t, r) => t + (r.appliedPaise ?? 0), 0)} /> },
   { key: 'status', header: 'Status', cell: (r) => <StatusBadge status={r.status} />, csv: (r) => r.status },

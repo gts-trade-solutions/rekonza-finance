@@ -55,19 +55,22 @@ export const GET = route(
 
     const extra =
       q.kind === 'purchase-order'
-        ? sql`, d.expected_date AS expected, d.subtotal, NULL AS reason, NULL AS linked, d.billed_amount AS applied, d.vendor_response AS response, d.vendor_response_note AS response_note`
-        : sql`, NULL AS expected, d.total AS subtotal, d.reason, d.against_bill_id AS linked, d.applied_amount AS applied, NULL AS response, NULL AS response_note`;
+        ? sql`, d.expected_date AS expected, d.subtotal, NULL AS reason, NULL AS linked, NULL AS linked_no, NULL AS linked_ref, d.billed_amount AS applied, d.vendor_response AS response, d.vendor_response_note AS response_note`
+        : sql`, NULL AS expected, d.total AS subtotal, d.reason, d.against_bill_id AS linked, lb.internal_no AS linked_no, lb.vendor_invoice_no AS linked_ref, d.applied_amount AS applied, NULL AS response, NULL AS response_note`;
+    // A vendor credit names its bill by the bill's number, never by the row id.
+    const linkedJoin = q.kind === 'purchase-order' ? sql`` : sql`LEFT JOIN bills lb ON lb.id = d.against_bill_id AND lb.org_id = d.org_id`;
 
     const { rows } = await sql<{
       id: number; number: string; dt: string; status: string; vendor_id: number;
       vendor_name: string; is_msme: number; total: string; subtotal: string;
-      expected: string | null; reason: string | null; linked: number | null; applied: string;
+      expected: string | null; reason: string | null; linked: number | null; linked_no: string | null; linked_ref: string | null; applied: string;
       response: 'accepted' | 'declined' | null; response_note: string | null;
     }>`
       SELECT d.id, d.number, ${dateCol} AS dt, d.status, d.vendor_id,
              c.display_name AS vendor_name, c.is_msme, d.total ${extra}
         FROM ${t} d
         JOIN contacts c ON c.id = d.vendor_id
+        ${linkedJoin}
        WHERE ${clause}
        ORDER BY ${dateCol} DESC, d.id DESC
        LIMIT ${q.limit}
@@ -99,6 +102,8 @@ export const GET = route(
         expected: r.expected ? String(r.expected).slice(0, 10) : null,
         reason: r.reason,
         linkedId: r.linked === null ? null : asId(r.linked),
+        // The bill a vendor credit is against, by its number and the supplier's invoice number.
+        linkedNumber: r.linked_no, linkedRef: r.linked_ref,
         // The vendor's answer from the portal (migration 094).
         vendorResponse: r.response, vendorResponseNote: r.response_note,
       })),

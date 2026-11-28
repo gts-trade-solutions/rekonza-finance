@@ -277,8 +277,12 @@ export async function createVendorCredit(
   });
   const totals = lineRows.length ? sumTax(lineRows.map((l) => l.tax)) : sumTax([tax]);
   const taxablePaise = lineRows.length ? lineRows.reduce((t, l) => t + l.taxable, 0) : input.amountPaise;
-  const raw = taxablePaise + totalTaxPaise(totals);
-  const { rounded, roundOff } = roundToRupee(raw);
+  // Not rounded to the rupee: a bill posts its exact total (round_off 0, services/purchases.ts),
+  // so the credit that takes part of it back is exact too — ₹141.60 of a bill is credited as
+  // ₹141.60, not ₹142 with 40 paise to Rounding Off. Rounding the credit and not the bill left a
+  // bill credited in full still showing paise owed, or the supplier's account off by the round-off.
+  const rounded = taxablePaise + totalTaxPaise(totals);
+  const roundOff = 0;
 
   let bill: { id: number; internal_no: string; total: string; amount_paid: string } | undefined;
   if (input.againstBillId) {
