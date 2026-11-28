@@ -13,6 +13,7 @@ import { AssistantLauncher } from '@/components/ai/assistant-launcher';
 import { OutputGuard } from '@/components/layout/output-guard';
 import { OfflineSync } from '@/components/layout/offline-sync';
 import { ReasonPrompt } from '@/components/layout/reason-prompt';
+import { AdminCodePrompt } from '@/components/layout/admin-code-prompt';
 import { useNavCollapsed } from '@/components/layout/nav-state';
 import { SettingsTopbar, isSettingsMode } from '@/components/settings/all-settings';
 import { usePathname } from 'next/navigation';
@@ -90,6 +91,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           <OutputGuard />
           <OfflineSync />
           <ReasonPrompt />
+          <AdminCodePrompt />
         </CreditsProvider>
         </TooltipProvider>
         </MastersGate>

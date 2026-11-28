@@ -521,6 +521,25 @@ export interface LedgerLine {
   reversedBy: { entryId: string; entryNo: number } | null;
 }
 
+/**
+ * An entry that was undone on its own date, or the entry that undid it: a bank
+ * line uncategorised, a document voided or edited the same day (an edit
+ * reverses the old entry on its own date and posts the corrected one). The two
+ * cancel exactly on one day, so leaving both out changes no balance on any
+ * date; the ledger then reads as the books now stand (the client, 2026-11-28:
+ * "once I uncategorised, that reversed should not show"). Nothing is erased:
+ * both stay in the journal, the audit trail and Accountant → Reversed
+ * Vouchers, and the ledger shows them again when asked. A reversal on a later
+ * date (an accrual reversed next month) is real movement between the two
+ * dates and always shows. Written against `journal_entries`, unaliased.
+ */
+export const UNDONE_ENTRY = sql`(
+  EXISTS (SELECT 1 FROM journal_entries rv WHERE rv.org_id = journal_entries.org_id
+           AND rv.reversal_of_entry_id = journal_entries.id AND rv.entry_date = journal_entries.entry_date)
+  OR EXISTS (SELECT 1 FROM journal_entries og WHERE og.id = journal_entries.reversal_of_entry_id
+           AND og.entry_date = journal_entries.entry_date)
+)`;
+
 /** One account, in order, with a running balance — how an auditor reads it. */
 export async function generalLedger(
   ex: Executor,
@@ -529,7 +548,8 @@ export async function generalLedger(
   from: string,
   to: string,
   filter?: LineFilter | null,
-): Promise<{ openingPaise: Paise; lines: LedgerLine[]; closingPaise: Paise }> {
+  opts: { showReversed?: boolean } = {},
+): Promise<{ openingPaise: Paise; lines: LedgerLine[]; closingPaise: Paise; hiddenReversed: number }> {
   // The ledger's own account is the account; the rest of a filter narrows its lines.
   const f = filter ? { ...filter, accountIds: [], accountTypes: [] } : null;
   const narrowed = !isEmptyFilter(f);
@@ -576,6 +596,7 @@ export async function generalLedger(
     .where('journal_lines.entry_date', '<=', to)
     .$if(narrowed, (qb) => qb.where('journal_lines.id', 'in', sql<number>`(SELECT jl.id FROM journal_lines jl JOIN journal_entries e ON e.id = jl.entry_id
       WHERE jl.org_id = ${orgId} AND jl.account_id = ${accountId} AND jl.entry_date BETWEEN ${from} AND ${to} ${lineFilterSql(orgId, f)})` as never))
+    .$if(!opts.showReversed, (qb) => qb.where(sql<boolean>`NOT ${UNDONE_ENTRY}`))
     .orderBy('journal_lines.entry_date')
     .orderBy('journal_entries.entry_no')
     .execute();
@@ -606,7 +627,13 @@ export async function generalLedger(
     };
   });
 
-  return { openingPaise, lines, closingPaise: running };
+  // How many lines the rule above left out, so the screen can say so and offer them.
+  const hidden = opts.showReversed ? 0 : Number((await sql<{ n: number }>`
+    SELECT COUNT(*) AS n FROM journal_lines JOIN journal_entries ON journal_entries.id = journal_lines.entry_id
+     WHERE journal_lines.org_id = ${orgId} AND journal_lines.account_id = ${accountId}
+       AND journal_lines.entry_date BETWEEN ${from} AND ${to} AND ${UNDONE_ENTRY}`.execute(ex)).rows[0]?.n ?? 0);
+
+  return { openingPaise, lines, closingPaise: running, hiddenReversed: hidden };
 }
 
 // ── Ageing ───────────────────────────────────────────────────────────────────

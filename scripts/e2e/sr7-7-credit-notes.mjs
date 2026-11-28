@@ -120,8 +120,10 @@ if (process.env.FRESH === '1') {
   const tb = (await api(t, 'GET', `/api/reports?report=trial-balance&to=${d}`)).json;
   const outTax = (tb?.rows ?? []).filter((r) => ['2210', '2220', '2230'].includes(r.code)).reduce((s, r) => s + (r.creditPaise ?? 0) - (r.debitPaise ?? 0), 0);
   check(t, 'output tax in the ledger: ₹1,800 + ₹360 − ₹603 = ₹1,557', outTax === 155_700, money(outTax));
-  await goto(t, `/gst/gstr1?month=${d.slice(0, 7)}`);
-  await page.waitForTimeout(2000);
+  await goto(t, `/gst/gstr1?period=${d.slice(0, 7)}`);
+  // Credit notes to registered buyers are table 9B (CDNR): its tab.
+  await page.locator('[data-slot="gstr1-tab-cdnr"]').click();
+  await page.locator('[data-slot="gstr1-against"]').first().waitFor({ timeout: 30_000 }).catch(() => {});
   const against = await page.locator('[data-slot="gstr1-against"]').allInnerTexts().catch(() => []);
   check(t, 'GSTR-1 lists the note against the invoice, with its date', against.some((a) => a.includes(inv.json.number) && a.includes(d)), against.join(' | '));
   await shot(t, 'gstr1-cdnr');
@@ -149,7 +151,8 @@ if (process.env.FRESH === '1') {
   await shot(t, 'refunded');
 
   // 6. Void a credit note: entry reversed, applications undone, the invoice owes again.
-  const cn3 = await api(t, 'POST', '/api/sales-documents', { kind: 'credit-note', customerId: buyer, date: d, reason: 'Raised in error', againstInvoiceId: inv.json.id, lines: [{ itemId: item.json.id, qty: 1, ratePaise: 100_000, gstRatePct: 18 }] });
+  const cn3 = await api(t, 'POST', '/api/sales-documents', { kind: 'credit-note', customerId: buyer, date: d, reason: 'Raised in error', againstInvoiceId: inv.json.id, lines: [{ itemId: item.json.id, qty: 1, ratePaise: 50_000, gstRatePct: 18 }] });
+  // ₹500 + 18% = ₹590: under the ₹1,000 approval rule, so it posts at once and can be voided (a note waiting for approval has nothing to void).
   const before = await invoiceOwes(inv.json.id);
   await goto(t, `/sales/credit-notes/${cn3.json.id}`);
   await page.locator('[data-slot="doc-more"]').click();
@@ -158,7 +161,7 @@ if (process.env.FRESH === '1') {
   await vdlg.locator('input').fill('Raised against the wrong invoice');
   await vdlg.getByRole('button', { name: /^Void$/ }).click();
   await page.waitForTimeout(1500);
-  check(t, '6. voided: the invoice owes ₹1,180 more again', (await invoiceOwes(inv.json.id)) === before + 118_000, `${money(before)} → ${money(await invoiceOwes(inv.json.id))}`);
+  check(t, '6. voided: the invoice owes ₹590 more again', (await invoiceOwes(inv.json.id)) === before + 59_000, `${money(before)} → ${money(await invoiceOwes(inv.json.id))}`);
   await shot(t, 'voided');
   // Edit and Delete only where allowed: a refunded note cannot be voided or edited.
   const noEdit = await api(t, 'PATCH', '/api/sales-documents', { action: 'void-credit-note', id: cn2.json.id, reason: 'try' });

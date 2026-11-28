@@ -53,6 +53,8 @@ const ReportQuery = z.object({
   to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Give an end date as yyyy-mm-dd.'),
   branchId: z.string().optional(),
   accountId: z.string().optional(),
+  /** The general ledger: also list entries undone on their own date, and their reversals. */
+  showReversed: z.enum(['0', '1']).optional(),
   /** Zoho's "Report basis": accrual (the default) or cash, for the statements. */
   basis: z.enum(['accrual', 'cash']).default('accrual'),
 });
@@ -123,7 +125,7 @@ export const GET = route(
           .where('id', '=', Number(q.accountId)).where('org_id', '=', orgId).executeTakeFirst();
         if (!account) throw badRequest('That account does not exist.');
 
-        const gl = await generalLedger(db, orgId, Number(q.accountId), q.from, q.to);
+        const gl = await generalLedger(db, orgId, Number(q.accountId), q.from, q.to, null, { showReversed: q.showReversed === '1' });
         return {
           report: q.report,
           account: { id: String(account.id), code: account.code, name: account.name, type: account.type },

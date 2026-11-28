@@ -154,6 +154,12 @@ export function route(handler: Handler, options: RouteOptions = {}) {
         }
       }
 
+      // Undoing posted work, or changing a saved invoice, needs an admin's one-time
+      // code from anyone who is not an admin (services/admin-codes.ts).
+      if (user && user.role !== 'admin' && req.method !== 'GET' && !NO_REASON.test(path)) {
+        await (await import('./services/admin-codes')).requireAdminCode(req, path, user);
+      }
+
       // The same request sent again under its key gets the first one's reply (idempotency.ts).
       const idem = user && req.method !== 'GET' ? req.headers.get('idempotency-key')?.trim().slice(0, 80) || null : null;
       if (user && idem) {

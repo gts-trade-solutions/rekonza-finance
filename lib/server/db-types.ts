@@ -39,6 +39,20 @@ export interface Accounts {
   updated_at: Generated<Date>;
 }
 
+export interface AdminCodes {
+  attempts: Generated<number>;
+  code_hash: string;
+  created_at: Generated<Date>;
+  expires_at: Date;
+  id: Generated<number>;
+  kind: string;
+  label: string;
+  org_id: number;
+  requested_by_user_id: number;
+  scope: string;
+  used_at: Date | null;
+}
+
 export interface AdvanceTaxAdjustments {
   adjusted_on: ColumnType<string, string, string>;
   allocation_id: number | null;
@@ -3962,6 +3976,7 @@ export interface WorkflowRuns {
 
 export interface DB {
   accounts: Accounts;
+  admin_codes: AdminCodes;
   advance_tax_adjustments: AdvanceTaxAdjustments;
   ai_conversations: AiConversations;
   ai_credit_buckets: AiCreditBuckets;

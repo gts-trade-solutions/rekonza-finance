@@ -33,6 +33,9 @@ function GeneralLedger() {
   const params = useSearchParams();
   const [range, setRange] = useReportRange({ from: params.get('from'), to: params.get('to') });
   const [accountId, setAccountId] = useState(params.get('account') ?? '');
+  // An entry undone on its own date (a bank line uncategorised, a document voided or edited that day)
+  // and its reversal are left out unless asked for: the ledger reads as the books now stand.
+  const [showReversed, setShowReversed] = useState(false);
 
   const masters = useApi<{ accounts: { id: string; code: string; name: string; type: string }[] }>(
     () => api.get('/api/masters'),
@@ -57,8 +60,8 @@ function GeneralLedger() {
   }, [accountId, masters.data]);
 
   const state = useApi<GeneralLedgerReport | null>(
-    () => (accountId ? reports.generalLedger(accountId, range.from, range.to) : Promise.resolve(null)),
-    [accountId, range.from, range.to],
+    () => (accountId ? reports.generalLedger(accountId, range.from, range.to, showReversed) : Promise.resolve(null)),
+    [accountId, range.from, range.to, showReversed],
   );
   // After an edit or delete from a row's ⋯: the ledger as it now stands.
   const refresh = () => { void state.refetch(); };
@@ -129,6 +132,14 @@ function GeneralLedger() {
                   <Money value={gl.closingPaise} className="mt-1 block text-xl font-semibold" />
                 </div>
               </div>
+
+              {(showReversed || (gl.hiddenReversed ?? 0) > 0) && (
+                <label className="flex w-fit items-center gap-2 text-xs text-muted-foreground no-print" data-slot="ledger-show-reversed">
+                  <input type="checkbox" className="size-3.5 accent-primary" checked={showReversed} onChange={(e) => setShowReversed(e.target.checked)} />
+                  Show reversed entries
+                  {!showReversed && <span>({gl.hiddenReversed} undone on {gl.hiddenReversed === 1 ? 'its' : 'their'} own date, with the reversal; the balances are the same either way)</span>}
+                </label>
+              )}
 
               <ReportTable>
                 <thead>

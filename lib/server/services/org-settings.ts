@@ -82,6 +82,13 @@ export interface OrgPolicies {
     autoDepreciation: boolean;
     /** Time logged waits for someone else to approve it before it can be billed (services/projects.ts). */
     timesheetApproval: boolean;
+    /**
+     * Reversing, voiding, deleting or uncategorising posted work needs an admin's
+     * one-time code from anyone who is not an admin (services/admin-codes.ts).
+     */
+    adminCodeUndo: boolean;
+    /** Changing a saved invoice needs an admin's one-time code from anyone who is not an admin. */
+    adminCodeInvoiceEdit: boolean;
   };
   /** Passwords: how long, how often changed, and how many old ones may not come back. */
   password: { minLength: number; expiryDays: number; history: number };
@@ -112,6 +119,10 @@ export const DEFAULT_CONTROLS: OrgPolicies['controls'] = {
   escalateAfterDays: 3,
   autoDepreciation: false,
   timesheetApproval: false,
+  // On from the start (the client, 2026-11-28): only people who are not admins are asked,
+  // so a book with one admin and nobody else never sees it.
+  adminCodeUndo: true,
+  adminCodeInvoiceEdit: true,
 };
 
 export const DEFAULT_POLICIES: OrgPolicies = {

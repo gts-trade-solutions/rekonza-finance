@@ -50,6 +50,19 @@ export function setReasonAsker(fn: (() => Promise<string | null>) | null) {
   askReason = fn;
 }
 
+/**
+ * Asks for the admin's one-time code, when someone who is not an admin undoes
+ * posted work or changes a saved invoice (the server answers 428
+ * admin_code_required, having sent the code to the admins). Set by
+ * components/layout/admin-code-prompt.tsx. Resolves to the code typed,
+ * 'resend' for a new code, or null when the person gives up.
+ */
+export interface AdminCodeAsk { message: string; action?: string; admins?: string; wrong?: boolean }
+let askAdminCode: ((ask: AdminCodeAsk) => Promise<string | null>) | null = null;
+export function setAdminCodeAsker(fn: ((ask: AdminCodeAsk) => Promise<string | null>) | null) {
+  askAdminCode = fn;
+}
+
 interface Options extends Omit<RequestInit, 'body'> {
   body?: unknown;
   /** Query parameters; undefined and null values are dropped. */
@@ -111,6 +124,14 @@ async function request<T>(path: string, options: Options = {}): Promise<T> {
       const reason = await askReason();
       if (!reason) throw new ApiError(0, 'Not saved: a reason is needed for this change.', 'reason_cancelled');
       return request<T>(path, { ...options, headers: { ...(headers as Record<string, string> | undefined), 'X-Change-Reason': encodeURIComponent(reason) } });
+    }
+    // An admin has to agree: the code has gone to them; ask for it and send the same request again with it.
+    if (res.status === 428 && (b.code === 'admin_code_required' || b.code === 'admin_code_wrong') && askAdminCode) {
+      const h = { ...(headers as Record<string, string> | undefined) };
+      const typed = await askAdminCode({ message: b.error ?? 'An admin has to agree to this.', action: b.details?.action, admins: b.details?.admins, wrong: b.code === 'admin_code_wrong' });
+      if (!typed) throw new ApiError(0, 'Not done: it needs the code an admin was sent.', 'admin_code_cancelled');
+      if (typed === 'resend') delete h['X-Admin-Code']; else h['X-Admin-Code'] = typed;
+      return request<T>(path, { ...options, headers: h });
     }
     throw new ApiError(
       res.status,
@@ -2606,6 +2627,8 @@ export interface GeneralLedgerReport {
   to: string;
   openingPaise: number;
   closingPaise: number;
+  /** Lines left out because the entry was undone on its own date (shown again with showReversed). */
+  hiddenReversed?: number;
   lines: {
     entryId: string; entryNo: number; date: string; memo: string | null;
     description: string | null; sourceType: string; sourceId: string | null; debitPaise: number;
@@ -2831,8 +2854,8 @@ export const reports = {
     api.get<ProfitAndLossReport>('/api/reports', { report: 'profit-and-loss', from, to, branchId, basis }),
   balanceSheet: (to: string, branchId?: string, basis?: 'accrual' | 'cash') =>
     api.get<BalanceSheetReport>('/api/reports', { report: 'balance-sheet', to, branchId, basis }),
-  generalLedger: (accountId: string, from: string, to: string) =>
-    api.get<GeneralLedgerReport>('/api/reports', { report: 'general-ledger', accountId, from, to }),
+  generalLedger: (accountId: string, from: string, to: string, showReversed = false) =>
+    api.get<GeneralLedgerReport>('/api/reports', { report: 'general-ledger', accountId, from, to, ...(showReversed ? { showReversed: '1' } : {}) }),
   ageing: (side: 'ar' | 'ap', to: string) =>
     api.get<AgeingReport>('/api/reports', { report: side === 'ar' ? 'ar-ageing' : 'ap-ageing', to }),
 
