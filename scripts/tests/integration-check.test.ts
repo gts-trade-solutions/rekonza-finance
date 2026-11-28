@@ -151,7 +151,10 @@ test('inventory vs GL: periodic is a stated pass; perpetual ties after the true-
     const after = await inventoryVsLedger(f.trx, f.orgId, '2026-05-31');
     assert.equal(after.differencePaise, 0);
     assert.equal(after.status, 'pass');
-    assert.equal(after.lastTrueUp, '2026-05-31');
+    // Bills and invoices now post the Inventory account item by item as they go (stock_postings), so a
+    // month-end true-up may find nothing to bring into line and post nothing: the account was in line
+    // all along. The last line-up is then the day perpetual began.
+    assert.ok(['2026-05-01', '2026-05-31'].includes(after.lastTrueUp ?? ''), `last line-up ${after.lastTrueUp}`);
 
     const whole = await integrationCheck(f.trx, f.orgId, '2026-05-01', '2026-05-31');
     assert.equal(whole.inventory.status, 'pass');
