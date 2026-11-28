@@ -14,7 +14,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { DropdownMenuItem } from '@/components/ui/dropdown-menu';
 import { useMemo, useState } from 'react';
-import { Download, FileCheck2, Mail, Plus, Receipt, Send } from 'lucide-react';
+import { Download, FileCheck2, FileJson, Mail, Plus, Receipt, Send } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { PaymentSummary } from '@/components/shared/payment-summary';
@@ -31,7 +31,7 @@ import { AsyncPage, LoadingRows, Refreshing } from '@/components/shared/async-st
 import { usePermission } from '@/lib/store/hooks';
 import { ALL_TIME, type RangeValue } from '@/lib/date-range';
 import { formatINRCompact, toRupees } from '@/lib/money';
-import { downloadCsv } from '@/components/shared/report-shell';
+import { downloadCsv, downloadJson } from '@/components/shared/report-shell';
 import { api, gst, invoices as invoiceApi, type InvoiceListItem, type InvoiceListResponse } from '@/lib/api/client';
 import { useApi, useApiAction } from '@/lib/api/use-api';
 
@@ -63,6 +63,23 @@ export default function InvoicesPage() {
 
   const [filter, setFilter] = useState<string>('all');
   const [range, setRange] = useState<RangeValue>(() => ({ ...ALL_TIME, mode: 'all' }));
+
+  // The GST portal's GSTR-1 JSON for one month: the month the list is on, or the one the person
+  // names when the list shows all dates. Built on the server from every invoice and note of the
+  // month, rate by rate, as GST → GSTR-1 → Export builds it (the same file).
+  const exportGstJson = async () => {
+    const inView = range.mode === 'all' ? '' : range.from.slice(0, 7);
+    const thisMonth = new Date().toISOString().slice(0, 7);
+    const month = inView && inView === range.to.slice(0, 7) ? inView : window.prompt('Which month, as YYYY-MM? The GST portal takes one month at a time.', inView || thisMonth);
+    if (!month) return;
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) { toast.error('Give the month as YYYY-MM, for example 2026-11.'); return; }
+    try {
+      downloadJson(`GSTR1-${month}.json`, await gst.gstr1File(month));
+      toast.success(`GST JSON for ${month} downloaded`, { description: 'Every invoice and note of the month, in the GST portal format (GSTR-1). On gst.gov.in: Returns → GSTR-1 → Prepare Offline → Upload. The full return, with its tables and tie-out, is under GST & Taxes → GSTR-1.' });
+    } catch (e) {
+      toast.error('Could not build the GST JSON', { description: e instanceof Error ? e.message : String(e) });
+    }
+  };
 
   // Refetched whenever the filter or the period changes, because both are
   // applied by the database rather than in the browser.
@@ -161,6 +178,9 @@ export default function InvoicesPage() {
             )}
           </>
         }<ModuleMenu slug="invoices" onRefresh={() => void state.refetch()}>
+          {/* The client (2026-11-28): "convert all the data to export JSON format here, GST connected".
+              The month's invoices, credit and debit notes as the GST portal's GSTR-1 JSON, from the list itself. */}
+          <DropdownMenuItem onClick={() => void exportGstJson()} data-slot="module-gst-json"><FileJson className="mr-2 size-4 text-primary" /> GST JSON (GSTR-1, portal upload)</DropdownMenuItem>
           {/* Zoho's ⋯ → Preferences: Invoice Preferences. */}
           <DropdownMenuItem onClick={() => router.push('/settings/preferences/invoices')} data-slot="module-preferences">Preferences</DropdownMenuItem>
         </ModuleMenu></>
