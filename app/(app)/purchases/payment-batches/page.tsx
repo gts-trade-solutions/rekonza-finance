@@ -21,7 +21,8 @@ import { Field, MoneyInput } from '@/components/shared/form-bits';
 import { Money } from '@/components/shared/money';
 import { downloadCsv } from '@/components/shared/report-shell';
 import { Attachments } from '@/components/shared/attachments';
-import { api } from '@/lib/api/client';
+import { api, BANK_UPLOAD_FORMATS, batchBank, type BankUploadFormat } from '@/lib/api/client';
+import { readGrid } from '@/lib/imports/read-file';
 import { useApi } from '@/lib/api/use-api';
 import { usePermission } from '@/lib/store/hooks';
 import { downloadWorkbook } from '@/lib/xlsx';
@@ -32,10 +33,13 @@ type Status = 'draft' | 'pending' | 'approved' | 'paid' | 'rejected' | 'cancelle
 interface Transfer {
   vendorId: string; vendorName: string; accountNo: string | null; ifsc: string | null; amountPaise: number; mode: 'RTGS' | 'NEFT';
   paymentNumber: string | null; bills: { billId: string; number: string; vendorInvoiceNo: string; amountPaise: number }[];
+  /** What the bank's status file said (status review 7). */
+  bankStatus?: 'pending' | 'paid' | 'failed'; utr?: string | null; failureReason?: string | null; reference?: string;
 }
 interface Batch {
   id: string; number: string; status: Status; payDate: string; bankAccountId: string; bankName: string; totalPaise: number; notes: string | null;
   createdBy: string | null; approvedBy: string | null; rejectionReason: string | null; fileDownloadedAt: string | null; transfers: Transfer[];
+  bankFormat?: string | null;
 }
 interface PayableBill {
   id: string; number: string; vendorInvoiceNo: string; vendorId: string; vendorName: string; billDate: string; dueDate: string;
@@ -77,6 +81,42 @@ export default function PaymentBatchesPage() {
     } finally {
       setBusy(null);
     }
+  };
+
+  // The bulk upload file in the bank's own layout (services/bank-upload.ts).
+  const [format, setFormat] = useState<Record<string, BankUploadFormat>>({});
+  const bankDownload = async (b: Batch) => {
+    setBusy(b.id);
+    try {
+      const f = await batchBank.file(b.id, format[b.id] ?? (b.bankFormat as BankUploadFormat) ?? 'generic');
+      const blob = new Blob([f.text], { type: f.mime });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = f.fileName;
+      a.click();
+      URL.revokeObjectURL(a.href);
+      if (!f.format.verified) toast.info(`${f.format.label} layout`, { description: f.format.note, duration: 10_000 });
+      if (f.debitAccountMissing) toast.warning('The paying account has no account number', { description: 'Add it under Banking so the file carries the debit account.' });
+      await state.refetch();
+    } catch (e) {
+      toast.error('No file', { description: errorText(e) });
+    } finally { setBusy(null); }
+  };
+  // The bank's status (reverse) file: each transfer paid with its UTR, or returned with the reason.
+  const bankReply = async (b: Batch, file: File) => {
+    setBusy(b.id);
+    try {
+      const { grid } = await readGrid(file, 'payments-made');
+      const r = await batchBank.reply(b.id, grid.map((row) => row.map((c) => (c === null || c === undefined ? null : typeof c === 'number' ? c : c instanceof Date ? c.toISOString().slice(0, 10) : String(c)))));
+      toast.success(`${b.number}: ${r.paid.length} paid, ${r.failed.length} returned`, {
+        description: [r.paid.length ? `Recorded ${r.paid.map((p) => p.number).join(', ')}.` : '', r.failed.length ? `Returned: ${r.failed.map((x) => `${x.beneficiary} (${x.reason})`).join('; ')}; their bills are free for the next batch.` : '',
+          r.unmatched.length ? `Not used: ${r.unmatched.map((u) => `row ${u.row} ${u.why}`).join('; ')}.` : ''].filter(Boolean).join(' '),
+        duration: 12_000,
+      });
+      await state.refetch();
+    } catch (e) {
+      toast.error('The bank\'s file was not read', { description: errorText(e), duration: 12_000 });
+    } finally { setBusy(null); }
   };
 
   const download = async (b: Batch, as: 'csv' | 'xlsx') => {
@@ -145,6 +185,7 @@ export default function PaymentBatchesPage() {
                         <th className="px-3 py-1.5 font-semibold">Mode</th>
                         <th className="px-3 py-1.5 text-right font-semibold">Amount</th>
                         {b.status === 'paid' && <th className="px-3 py-1.5 font-semibold">Payment</th>}
+                        {b.transfers.some((t) => t.bankStatus && t.bankStatus !== 'pending') && <th className="px-3 py-1.5 font-semibold">Bank says</th>}
                       </tr>
                     </thead>
                     <tbody>
@@ -160,6 +201,12 @@ export default function PaymentBatchesPage() {
                           <td className="px-3 py-1.5 text-xs">{t.mode}</td>
                           <td className="px-3 py-1.5 text-right"><Money value={t.amountPaise} /></td>
                           {b.status === 'paid' && <td className="px-3 py-1.5 font-mono text-xs">{t.paymentNumber ?? 'Returned'}</td>}
+                          {b.transfers.some((x) => x.bankStatus && x.bankStatus !== 'pending') && (
+                            <td className="px-3 py-1.5 text-xs" data-slot="batch-bank-status">
+                              {t.bankStatus === 'paid' ? <span className="text-emerald-700">Paid{t.utr ? ` · UTR ${t.utr}` : ''}</span>
+                                : t.bankStatus === 'failed' ? <span className="text-destructive">Returned: {t.failureReason}</span> : 'Not in the reply'}
+                            </td>
+                          )}
                         </tr>
                       ))}
                     </tbody>
@@ -192,7 +239,24 @@ export default function PaymentBatchesPage() {
                         <Button size="sm" variant="outline" className="gap-1.5" disabled={busy === b.id} onClick={() => void download(b, 'xlsx')}>
                           <FileSpreadsheet className="size-3.5" /> Excel
                         </Button>
+                        {/* The bank's own bulk upload layout, and its reply read back. */}
+                        <span className="flex items-center gap-1" data-slot="batch-bank-format">
+                          <select className="h-8 rounded-md border bg-background px-2 text-xs" value={format[b.id] ?? (b.bankFormat as BankUploadFormat) ?? 'generic'}
+                            onChange={(e) => setFormat({ ...format, [b.id]: e.target.value as BankUploadFormat })} aria-label="Bank file layout" data-slot="batch-format-select">
+                            {BANK_UPLOAD_FORMATS.map((f) => <option key={f.id} value={f.id}>{f.label}{f.verified ? '' : ' (check with the bank)'}</option>)}
+                          </select>
+                          <Button size="sm" variant="outline" className="gap-1.5" disabled={busy === b.id} onClick={() => void bankDownload(b)} data-slot="batch-bank-file">
+                            <Download className="size-3.5" /> Bank upload file
+                          </Button>
+                        </span>
                       </>
+                    )}
+                    {b.status === 'approved' && (
+                      <label className={cn('inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-md border px-3 text-xs font-medium hover:bg-muted', busy === b.id && 'pointer-events-none opacity-60')} data-slot="batch-bank-reply">
+                        <FileSpreadsheet className="size-3.5" /> Read the bank&apos;s reply
+                        <input type="file" accept=".csv,.txt,.xls,.xlsx" className="hidden" data-slot="batch-bank-reply-input"
+                          onChange={(e) => { const f = e.target.files?.[0]; if (f) void bankReply(b, f); e.target.value = ''; }} />
+                      </label>
                     )}
                     {b.status === 'approved' && (
                       <Button size="sm" className="gap-1.5" disabled={busy === b.id} onClick={() => setPaying(b)}>Mark paid</Button>

@@ -238,9 +238,14 @@ export function BillForm({ editing }: { editing?: BillDetail } = {}) {
 
   // Is this supplier's bill already in the books? Asked as the number, the total or the date change.
   const [twins, setTwins] = useState<BillTwinsResult | null>(null);
+  // A bill that only looks like another is saved with the reason it is not a duplicate (kept in the audit trail).
+  const [dupReason, setDupReason] = useState('');
+  // The server's refusal, shown on the form beside the number, not only as a toast.
+  const [dupRefusal, setDupRefusal] = useState<{ code: string; message: string; href: string | null } | null>(null);
   const twinTotal = totals.payable > 0 ? totals.payable : null;
   useEffect(() => {
     const no = vendorInvoiceNo.trim();
+    setDupRefusal(null);
     if (!vendorId || !no) { setTwins(null); return; }
     const timer = window.setTimeout(() => {
       api.get<BillTwinsResult>('/api/bills/duplicates', { vendorId, number: no, date, ...(twinTotal ? { totalPaise: String(twinTotal) } : {}), ...(editId ? { excludeId: editId } : {}) })
@@ -304,6 +309,7 @@ export function BillForm({ editing }: { editing?: BillDetail } = {}) {
           warehouseId: warehouseId || undefined,
           ...(foreign ? { currency, exchangeRate: rate } : {}),
           tdsSectionOverride: tdsOverride || undefined,
+          duplicateReason: dupReason.trim() || undefined,
           lines: lines
             .filter((l) => l.qty > 0)
             .map((l) => ({
@@ -336,6 +342,9 @@ export function BillForm({ editing }: { editing?: BillDetail } = {}) {
           toast.success('Kept on this device', { description: 'It will be sent when you are back online.' });
           router.push('/purchases/bills');
           return null;
+        }
+        if (err instanceof ApiError && (err.code === 'duplicate_bill' || err.code === 'possible_duplicate')) {
+          setDupRefusal({ code: err.code, message: err.message, href: (err.details as Record<string, string> | undefined)?.href ?? null });
         }
         toast.error(err instanceof ApiError ? err.message : editId ? 'Could not save the bill.' : 'Could not record the bill.', {
           description:
@@ -457,8 +466,23 @@ export function BillForm({ editing }: { editing?: BillDetail } = {}) {
                 onChange={(e) => setVendorInvoiceNo(e.target.value)}
                 placeholder="Their invoice number"
                 aria-invalid={!!twins?.exact}
+                data-slot="bill-vendor-invoice-no"
               />
               <BillTwins twins={twins} />
+              {dupRefusal && (
+                <p className="rounded-[4px] border border-[#e85b4f]/40 bg-[#fdecee] px-3 py-2 text-[12px] text-[#c0392b]" data-slot="bill-duplicate-refusal">
+                  {dupRefusal.message}{' '}
+                  {dupRefusal.href && <Link href={dupRefusal.href} target="_blank" className="font-medium underline">Open the first bill</Link>}
+                </p>
+              )}
+              {(twins?.likely.length || dupRefusal?.code === 'possible_duplicate') && !twins?.exact ? (
+                <label className="block text-[12px]" data-slot="bill-duplicate-reason">
+                  <span className="font-medium">Why is this not a duplicate?</span>
+                  <Input value={dupReason} onChange={(e) => setDupReason(e.target.value)} placeholder="e.g. Second delivery the same week, separate invoice"
+                    className="mt-1" data-slot="bill-duplicate-reason-input" />
+                  <span className="text-muted-foreground">Kept in the audit trail, and on the Possible duplicate bills list for an accountant to clear.</span>
+                </label>
+              ) : null}
             </div>
           </FormRow>
           <FormRow label="Order Number">
@@ -682,15 +706,15 @@ export function BillForm({ editing }: { editing?: BillDetail } = {}) {
   );
 }
 
-interface BillTwin { id: string; internalNo: string; vendorInvoiceNo: string; vendorName: string; date: string; totalPaise: number; why: string }
+interface BillTwin { id: string; kind?: 'bill' | 'expense' | 'goods_receipt'; href?: string; internalNo: string; vendorInvoiceNo: string; vendorName: string; date: string; totalPaise: number; why: string }
 interface BillTwinsResult { exact: BillTwin | null; likely: BillTwin[] }
 
 /** The same supplier's bill already entered (refused on save), or one that looks like it (a second look). */
 function BillTwins({ twins }: { twins: BillTwinsResult | null }) {
   if (!twins || (!twins.exact && !twins.likely.length)) return null;
   const line = (t: BillTwin) => (
-    <li key={t.id}>
-      <Link href={`/purchases/bills/${t.id}`} target="_blank" className="font-medium underline">{t.internalNo}</Link>{' '}
+    <li key={`${t.kind}${t.id}`}>
+      <Link href={t.href ?? `/purchases/bills/${t.id}`} target="_blank" className="font-medium underline">{t.internalNo}</Link>{' '}
       ({t.vendorInvoiceNo}, {t.date}, ₹{(t.totalPaise / 100).toLocaleString('en-IN', { minimumFractionDigits: 2 })}): {t.why}
     </li>
   );
@@ -701,7 +725,7 @@ function BillTwins({ twins }: { twins: BillTwinsResult | null }) {
     </div>
   ) : (
     <div className="rounded-[4px] border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-900" data-slot="bill-likely-duplicate">
-      <p className="font-medium">Possible duplicate. Check before saving:</p>
+      <p className="font-medium">Possible duplicate. Check before saving, and give the reason below if it is a different bill:</p>
       <ul className="mt-1 list-disc pl-4">{twins.likely.slice(0, 3).map(line)}</ul>
     </div>
   );

@@ -567,6 +567,9 @@ export interface VendorCreditForEdit {
   id: string; number: string; status: string; branchId: string; vendorId: string; date: string; reason: string;
   againstBillId: string | null; againstBillNo: string | null; againstBillRef: string | null;
   amountPaise: number; gstRatePct: number; itcClaimed: boolean; totalPaise: number; appliedPaise: number;
+  /** Goods sent back, line by line (migration 131). */
+  lines?: { itemId: string | null; itemName: string | null; billLineId: string | null; description: string | null; hsnSac: string | null;
+    qty: number; uqc: string | null; ratePaise: number; gstRatePct: number; taxablePaise: number; stockCostPaise: number | null }[];
 }
 
 /** Zoho's Edit and Delete on a vendor credit (services/purchase-changes.ts). */
@@ -575,6 +578,7 @@ export const vendorCredits = {
   update: (id: string, input: {
     branchId: string; vendorId: string; date: string; reason: string; againstBillId: string | null;
     amountPaise: number; gstRatePct: number; itcClaimed: boolean;
+    lines?: { itemId: string | null; billLineId: string | null; qty: number; ratePaise: number; gstRatePct: number }[];
   }) => api.put<{ id: string; number: string; totalPaise: number; journalEntryId: string | null }>(`/api/vendor-credits/${id}`, input),
   remove: (id: string, reason?: string | null) =>
     api.delete<{ deleted: true; number: string }>(`/api/vendor-credits/${id}${reason ? `?reason=${encodeURIComponent(reason)}` : ''}`),
@@ -1294,6 +1298,9 @@ export interface EditableSalesDoc {
     qty: number; uqc: string | null; ratePaise: number; discountPct: number; gstRatePct: number; amountPaise?: number;
     qtyInvoiced?: number; qtyDelivered?: number; qtyCancelled?: number;
   }[];
+  /** A credit note's approval (status review 7): none, pending, approved or rejected. */
+  approvalStatus?: string | null;
+  rejectionReason?: string | null;
 }
 
 export interface ExpenseDetail {
@@ -1328,10 +1335,10 @@ export const salesDocuments = {
   list: (kind: SalesDocKind, params?: { from?: string; to?: string; status?: string; customerId?: string; search?: string; limit?: number }) =>
     api.get<SalesDocListResponse>('/api/sales-documents', { kind, ...params }),
   create: (input: unknown) =>
-    api.post<{ id: string; number: string; totalPaise: number; journalEntryId: string | null }>(
+    api.post<{ id: string; number: string; totalPaise: number; journalEntryId: string | null; heldForApproval?: boolean; warnings?: string[] }>(
       '/api/sales-documents',
       input,
-    ),
+    ).then((r) => (toastWarnings(r), r)),
   convert: (kind: 'estimate' | 'sales-order', id: string, date: string, dueDate: string, status?: 'draft' | 'approved') =>
     api.patch<{ invoiceId: string; number: string; totalPaise: number; heldForApproval?: boolean }>('/api/sales-documents', {
       action: 'convert', kind, id, date, dueDate, status,
@@ -1760,6 +1767,7 @@ export interface Gstr1Row {
   /** C for a credit note, D for a debit note. */
   noteType?: 'C' | 'D';
   againstNumber?: string | null;
+  againstDate?: string | null;
   irnStatus?: string;
   /** Reported with rchrg Y: the recipient pays the GST. */
   reverseCharge?: boolean;
@@ -3193,7 +3201,7 @@ export const orderFlow = {
 
 // ── Approvals ────────────────────────────────────────────────────────────────
 
-export type ApprovalDoc = 'invoice' | 'bill' | 'journal' | 'payment_batch';
+export type ApprovalDoc = 'invoice' | 'bill' | 'journal' | 'payment_batch' | 'credit_note';
 export type ApproverRole = 'admin' | 'accountant' | 'sales' | 'staff';
 
 export interface ApprovalRule {
@@ -3239,14 +3247,24 @@ export interface ImportOutcome {
   rows: number;
   created: number;
   skipped: number;
-  errors: { row: number; message: string }[];
+  errors: ImportRowError[];
   notes: string[];
+  valid?: number;
+  duplicates?: number;
+  skippedRows?: ImportRowError[];
 }
 
-export interface ImportResponse { committed: boolean; outcomes: ImportOutcome[] }
+/** One row's problem: its line in the file, the field and its value, and why (status review 7). */
+export interface ImportRowError { row: number; message: string; field?: string; value?: string; duplicate?: boolean }
+
+export interface ImportResponse { committed: boolean; outcomes: ImportOutcome[]; batchId?: string | null }
 
 export const imports = {
-  rows: (kind: string, rows: Record<string, unknown>[], opts: { dryRun: boolean; onDuplicate?: 'skip' | 'error' }) =>
+  rows: (kind: string, rows: Record<string, unknown>[], opts: {
+    dryRun: boolean; onDuplicate?: 'skip' | 'error';
+    /** Keep everything or nothing, or keep the rows that passed (status review 7). */
+    mode?: 'all' | 'valid_only'; module?: string; fileName?: string; fileFormat?: string;
+  }) =>
     api.post<ImportResponse>('/api/imports', { source: 'rows', kind, rows, ...opts }),
   tallyXml: (xml: string, dryRun: boolean) => api.post<ImportResponse>('/api/imports', { source: 'tally-xml', xml, dryRun }),
   /** QuickBooks' lists and transactions, each file read into rows by the browser. */
@@ -3458,4 +3476,83 @@ export const consolidation = {
   ledger: (orgId: string, code: string, from: string, to: string) =>
     api.get<{ company: string; account: { code: string; name: string; type: string } | null; openingPaise: number; closingPaise: number; lines: { entryId: string; entryNo: number; date: string; memo: string | null; description: string | null; sourceType: string; debitPaise: number; creditPaise: number; runningPaise: number; contactName: string | null }[] }>(
       '/api/reports/consolidated/ledger', { orgId, code, from, to }),
+};
+
+// ── Status review 7, builder B: stock valuation vs ledger, FIFO layers ──────
+
+export interface StockRecLine {
+  itemId: string; name: string; sku: string | null; uqc: string; valuation: 'average' | 'fifo'; qty: number;
+  valuationPaise: number; ledgerPaise: number | null; variancePaise: number; reasons: string[];
+}
+export interface StockReconciliationResponse {
+  asOf: string; method: 'perpetual' | 'periodic'; perpetualFrom: string | null; lines: StockRecLine[];
+  unassigned: { amountPaise: number; entries: { entryId: string; entryNo: number; date: string; memo: string | null; amountPaise: number }[] };
+  totals: { valuationPaise: number; ledgerPaise: number; variancePaise: number; inStatementsPaise: number };
+  proof: { from: string; openingStockPaise: number; directCostsPaise: number; closingStockPaise: number; costOfGoodsSoldPaise: number; cogsAccountPaise: number };
+  notes: string[];
+}
+export interface ItemLayersResponse {
+  asOf: string; itemId: string; valuation: 'average' | 'fifo'; qty: number; valuePaise: number;
+  layers: { date: string; source: 'bill' | 'production'; documentId: string | null; document: string; party: string | null;
+    receivedQty: number; returnedQty: number; qty: number; onHandQty: number; ratePaise: number; valuePaise: number }[];
+  olderQty: number; olderRatePaise: number; olderValuePaise: number;
+}
+export const stockReconciliation = {
+  get: (asOf?: string) => api.get<StockReconciliationResponse>('/api/reports/stock-reconciliation', asOf ? { asOf } : undefined),
+  /** The existing true-up: Inventory brought into line with the valuation at a date. */
+  bringIntoLine: (asOf: string) => api.post<{ asOf: string; movedPaise: number }>('/api/settings/stock-accounting', { action: 'true_up', asOf }),
+  layers: (itemId: string, asOf?: string) => api.get<ItemLayersResponse>(`/api/items/${encodeURIComponent(itemId)}/layers`, asOf ? { asOf } : undefined),
+};
+
+// ── Status review 7, builder B: the Possible duplicate bills register ───────
+
+export interface DuplicateDocView { type: 'bill' | 'expense' | 'goods_receipt' | 'invoice'; id: string; number: string; reference: string | null; party: string; date: string; totalPaise: number; status: string; href: string }
+export interface DuplicateReviewRow {
+  id: string; status: 'open' | 'cleared' | 'confirmed'; why: string; enteredReason: string | null; enteredBy: string | null; createdAt: string;
+  reviewedBy: string | null; reviewedAt: string | null; reviewNote: string | null; doc: DuplicateDocView; twin: DuplicateDocView;
+}
+export const duplicateReviews = {
+  list: (status?: 'open' | 'cleared' | 'confirmed' | 'all') =>
+    api.get<{ counts: Record<'open' | 'cleared' | 'confirmed', number>; rows: DuplicateReviewRow[] }>('/api/duplicate-reviews', status ? { status } : undefined),
+  review: (id: string, action: 'clear' | 'confirm' | 'reopen', note?: string) => api.post<{ id: number; status: string }>('/api/duplicate-reviews', { action, id, note }),
+  scan: () => api.post<{ added: number }>('/api/duplicate-reviews', { action: 'scan' }),
+};
+
+// ── Status review 7, builder B: import history ──────────────────────────────
+
+export interface ImportBatchRow {
+  id: string; module: string; kind: string; fileName: string | null; fileFormat: string | null; mode: 'all' | 'valid_only';
+  rowsTotal: number; imported: number; skipped: number; failed: number; note: string | null; status: 'imported' | 'undone';
+  by: string | null; at: string; undoneBy: string | null; undoneAt: string | null; undoable: boolean;
+}
+export const importHistory = {
+  list: (module?: string) => api.get<{ batches: ImportBatchRow[] }>('/api/imports/history', module ? { module } : undefined),
+  get: (id: string) => api.get<ImportBatchRow & { errors: ImportRowError[]; createdCounts: Record<string, number> }>(`/api/imports/history/${id}`),
+  setNote: (id: string, note: string | null) => api.patch<{ id: string }>(`/api/imports/history/${id}`, { note }),
+  undo: (id: string) => api.delete<{ undone: true; deleted: Record<string, number> }>(`/api/imports/history/${id}`),
+};
+
+// ── Status review 7, builder B: bulk payments and bank upload files ─────────
+
+export const bulkPayments = {
+  record: (input: {
+    side: 'received' | 'made'; date: string; mode: string; bankAccountId: string; reference?: string | null;
+    rows: { docId: string; amountPaise: number; tdsPaise?: number; reference?: string | null }[];
+  }) => api.post<{ payments: { partyId: string; partyName: string; paymentId: string; number: string; amountPaise: number; tdsPaise: number; documents: number }[] }>('/api/payments/bulk', input),
+};
+export type BankUploadFormat = 'generic' | 'hdfc' | 'icici' | 'sbi' | 'axis';
+export const BANK_UPLOAD_FORMATS: { id: BankUploadFormat; label: string; verified: boolean }[] = [
+  { id: 'generic', label: 'NEFT / RTGS / IMPS (generic CSV)', verified: true },
+  { id: 'hdfc', label: 'HDFC Bank ENet', verified: false },
+  { id: 'icici', label: 'ICICI Bank CIB', verified: false },
+  { id: 'sbi', label: 'SBI CINB', verified: false },
+  { id: 'axis', label: 'Axis Bank CIB', verified: false },
+];
+export const batchBank = {
+  file: (id: string, format: BankUploadFormat) => api.post<{ fileName: string; text: string; mime: string; number: string; bankName: string; debitAccountMissing: boolean; transfers: number; format: { id: string; label: string; verified: boolean; note: string } }>('/api/payment-batches', { action: 'bank-file', id, format }),
+  reply: (id: string, grid: (string | number | null)[][]) => api.post<{
+    paid: { vendorId: string; paymentId: string; number: string; amountPaise: number; utr: string | null }[];
+    failed: { vendorId: string; beneficiary: string; amountPaise: number; reason: string }[];
+    unmatched: { row: number; why: string }[];
+  }>('/api/payment-batches', { action: 'bank-reply', id, grid }),
 };

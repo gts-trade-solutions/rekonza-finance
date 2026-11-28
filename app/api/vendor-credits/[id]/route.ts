@@ -19,10 +19,19 @@ const EditInput = z.object({
   date: DATE,
   reason: z.string().trim().min(1, 'Say why the supplier is crediting you.').max(200),
   againstBillId: z.union([z.string(), z.number()]).nullish(),
-  amountPaise: z.number().int().positive(),
+  amountPaise: z.number().int().min(0),
   gstRatePct: z.number().min(0).max(50).optional(),
   itcClaimed: z.boolean().optional(),
   applyImmediately: z.boolean().optional(),
+  lines: z.array(z.object({
+    itemId: z.union([z.string(), z.number()]).nullish(),
+    billLineId: z.union([z.string(), z.number()]).nullish(),
+    description: z.string().trim().max(500).nullish(),
+    hsnSac: z.string().trim().max(8).nullish(),
+    qty: z.number().min(0).max(1e9),
+    ratePaise: z.number().int().min(0).nullish(),
+    gstRatePct: z.number().min(0).max(50).nullish(),
+  })).max(200).nullish(),
 });
 
 /**
@@ -39,6 +48,7 @@ export const PUT = route(
         branchId: Number(input.branchId), vendorId: Number(input.vendorId), date: input.date, reason: input.reason,
         againstBillId: toNum(input.againstBillId), amountPaise: input.amountPaise, gstRatePct: input.gstRatePct,
         itcClaimed: input.itcClaimed, applyImmediately: input.applyImmediately,
+        lines: (input.lines ?? []).map((l) => ({ ...l, itemId: toNum(l.itemId), billLineId: toNum(l.billLineId) })),
       });
       await logAudit({
         trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'update',

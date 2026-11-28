@@ -73,6 +73,8 @@ test('bought by batch, sold first-expiry-first-out', async () => {
 
       const buy = (no: string, batchNo: string, expiryDate: string) => createBill(trx, orgId, null, {
         branchId, vendorId: vendor, vendorInvoiceNo: no, date: '2026-06-01', dueDate: '2026-06-01', status: 'open',
+        // Two lots of one amount on one day are meant: said so, as the duplicate check asks (bill-duplicates.ts).
+        duplicateReason: 'Two batches delivered on separate invoices',
         lines: [{ itemId, qty: 10, ratePaise: 60_00, gstRatePct: 12, batch: { batchNo, mfgDate: '2026-01-01', expiryDate } }],
       } as never);
       await buy('D-1', 'SY-AUG', '2026-08-31');

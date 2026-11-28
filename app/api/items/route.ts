@@ -1,4 +1,6 @@
 import { checkHsnCode } from '@/lib/tax/hsn';
+import { itemProblems, unitProblem } from '@/lib/validation/masters';
+import { GST_RATES } from '@/lib/tax/gst';
 import { getPolicies } from '@/lib/server/services/org-settings';
 import { z } from 'zod';
 import { sql } from 'kysely';
@@ -99,10 +101,32 @@ async function checkHsn(orgId: number, hsn: string | null | undefined, kind: 'go
   if (!check.ok) throw badRequest(check.problem ?? `${hsn} is not an HSN or SAC.`);
 }
 
+/**
+ * The unit, as the bulk import checks it too (lib/validation/masters.ts): a
+ * GST unit (UQC), or one the book already uses. "PIECE" for PCS or "KG" for
+ * KGS is read as the code; anything else is refused, as GSTR-1's HSN summary
+ * and the e-invoice would refuse it.
+ */
+async function checkUnit(orgId: number, uqc: string | null | undefined): Promise<string | undefined> {
+  if (!uqc) return uqc ?? undefined;
+  const known = new Set((await db.selectFrom('items').select('uqc').distinct().where('org_id', '=', orgId).execute()).map((r) => String(r.uqc).toUpperCase()));
+  const u = unitProblem(uqc, known);
+  if (u.problem) throw badRequest(u.problem.message);
+  return u.unit ?? uqc;
+}
+
+/** A GST rate the law has, as the bulk import checks it too (lib/validation/masters.ts). */
+function checkRate(rate: number) {
+  const p = itemProblems({ kind: 'goods', gstRatePct: rate }, { hsnDigits: 4, gstRates: GST_RATES })[0];
+  if (p) throw badRequest(p.message);
+}
+
 export const POST = route(
   async ({ orgId, user, req }) => {
     const input = await body(req, ItemInput);
     await checkHsn(orgId, input.hsnSac, input.kind);
+    input.uqc = (await checkUnit(orgId, input.uqc)) ?? input.uqc;
+    checkRate(input.gstRatePct);
     checkMaster(input);
     await checkGroup(orgId, input.stockGroupId);
     await checkLinks(orgId, input);
@@ -175,6 +199,8 @@ export const PATCH = route(
   async ({ orgId, user, req }) => {
     const input = await body(req, UpdateInput);
     const id = Number(input.id);
+    if (input.uqc) input.uqc = (await checkUnit(orgId, input.uqc)) ?? input.uqc;
+    if (input.gstRatePct !== undefined) checkRate(input.gstRatePct);
 
     const existing = await db
       .selectFrom('items')

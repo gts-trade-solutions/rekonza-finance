@@ -118,6 +118,9 @@ export async function salesDocRecord(orgId: number, kind: EditableSalesDoc, id: 
     invoicedPaise: row.invoiced_amount != null ? paise(row.invoiced_amount) : 0,
     /** A credit note's: what is left to apply or refund. */
     balancePaise: kind === 'credit-note' ? Math.max(0, totalPaise - appliedPaise) : null,
+    /** A credit note's maker-checker state (migration 131): none, pending, approved or rejected, and why it was sent back. */
+    approvalStatus: kind === 'credit-note' ? str(row.approval_status) : null,
+    rejectionReason: kind === 'credit-note' ? str(row.rejection_reason) : null,
     journalEntryId: row.journal_entry_id ? String(row.journal_entry_id) : null,
     createdAt: row.created_at ? new Date(row.created_at as string).toISOString() : null,
     createdByName,

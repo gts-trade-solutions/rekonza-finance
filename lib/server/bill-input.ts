@@ -40,6 +40,8 @@ export const BillInput = z.object({
   tdsSectionOverride: z.string().nullish(),
   notes: z.string().nullish(),
   status: z.enum(['draft', 'open']).optional(),
+  /** Why it is not a duplicate of a bill it looks like (services/bill-duplicates.ts). */
+  duplicateReason: z.string().trim().max(500).nullish(),
   /** Priced in another currency: amounts in its minor unit, booked in rupees at the rate. */
   currency: z.string().trim().toUpperCase().length(3).optional(),
   exchangeRate: z.number().positive().optional(),
@@ -65,6 +67,7 @@ export function toBillInput(input: z.infer<typeof BillInput>, opts: { keepSource
     exchangeRate: input.exchangeRate,
     notes: input.notes,
     status: input.status,
+    duplicateReason: input.duplicateReason ?? null,
     lines: input.lines.map((l) => ({
       itemId: l.itemId ? Number(l.itemId) : null,
       accountId: l.accountId ? Number(l.accountId) : null,

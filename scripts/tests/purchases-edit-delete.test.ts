@@ -320,7 +320,7 @@ test('deleting a bill raised from an order gives the order its quantities back',
 
 test('a deleted reverse-charge bill counts its self-invoice as cancelled in GSTR-1 table 13', async () => {
   await withFixture(async (f) => {
-    const rcm = (no: string) => ({ ...bill(f, 1), vendorId: f.unregId, vendorInvoiceNo: no, isRcm: true });
+    const rcm = (no: string) => ({ ...bill(f, 1), vendorId: f.unregId, vendorInvoiceNo: no, isRcm: true, duplicateReason: 'Two separate self-invoiced purchases' });
     await createBill(f.trx, f.orgId, null, rcm('C-1'));
     const second = await createBill(f.trx, f.orgId, null, rcm('C-2'));
     const self = (await f.trx.selectFrom('bills').select('self_invoice_no').where('id', '=', second.id).executeTakeFirstOrThrow()).self_invoice_no;

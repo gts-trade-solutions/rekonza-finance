@@ -69,6 +69,11 @@ export async function movements(ex: Executor, orgId: number, opts: { itemId?: nu
         FROM credit_note_lines cl JOIN credit_notes c ON c.id = cl.credit_note_id
        WHERE c.org_id = ${orgId} AND c.status <> 'void' AND cl.item_id IS NOT NULL ${item('cl.item_id')}
       UNION ALL
+      -- Goods sent back to the supplier on a vendor credit (migration 131).
+      SELECT vc.credit_date, vcl.item_id, 'Returned to vendor', 'vendor_credit', vc.id, vc.number, 0, vcl.qty
+        FROM vendor_credit_lines vcl JOIN vendor_credits vc ON vc.id = vcl.vendor_credit_id
+       WHERE vc.org_id = ${orgId} AND vc.status <> 'void' AND vcl.item_id IS NOT NULL ${item('vcl.item_id')}
+      UNION ALL
       SELECT a.adjust_date, a.item_id, CONCAT('Adjustment: ', a.reason), 'stock_adjustment', a.id, CONCAT('ADJ-', a.id),
              GREATEST(a.qty_delta, 0), GREATEST(-a.qty_delta, 0)
         FROM stock_adjustments a WHERE a.org_id = ${orgId} ${item('a.item_id')}

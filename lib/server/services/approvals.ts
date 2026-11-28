@@ -22,7 +22,12 @@ import type { Paise, RoleName } from '../../types';
 import { toPaiseFromSql, toSqlFromPaise } from '../money-sql';
 import { ApiError, badRequest, conflict, forbidden, notFound } from '../http';
 
-export type ApprovalDoc = 'invoice' | 'bill';
+/**
+ * Documents saved as a draft and submitted. A credit note joined them in
+ * status review 7: it gives a customer money back and cuts output tax (CGST
+ * Act s.34), so a rule can make a second person approve it before it posts.
+ */
+export type ApprovalDoc = 'invoice' | 'bill' | 'credit_note';
 /** What a rule can cover: documents, and manual journals. */
 export type RuleDoc = ApprovalDoc | 'journal' | 'payment_batch';
 
@@ -34,7 +39,7 @@ export interface ApprovalRule {
   isActive: boolean;
 }
 
-const LABEL: Record<RuleDoc, string> = { invoice: 'Invoices', bill: 'Bills', journal: 'Journals', payment_batch: 'Payment batches' };
+const LABEL: Record<RuleDoc, string> = { invoice: 'Invoices', bill: 'Bills', journal: 'Journals', payment_batch: 'Payment batches', credit_note: 'Credit notes' };
 
 export async function listRules(ex: Executor, orgId: number): Promise<ApprovalRule[]> {
   const rows = await ex.selectFrom('approval_rules').selectAll().where('org_id', '=', orgId)
@@ -104,11 +109,14 @@ export async function assertApproved(
   );
 }
 
-const TABLE = { invoice: 'invoices', bill: 'bills' } as const;
+const TABLE = { invoice: 'invoices', bill: 'bills', credit_note: 'credit_notes' } as const;
 
 async function load(trx: Trx, orgId: number, doc: ApprovalDoc, id: number) {
   const row = doc === 'invoice'
     ? await trx.selectFrom('invoices').select(['id', 'number', 'status', 'total', 'approval_status', 'submitted_by_user_id'])
+        .where('id', '=', id).where('org_id', '=', orgId).forUpdate().executeTakeFirst()
+    : doc === 'credit_note'
+    ? await trx.selectFrom('credit_notes').select(['id', 'number', 'status', 'total', 'approval_status', 'submitted_by_user_id'])
         .where('id', '=', id).where('org_id', '=', orgId).forUpdate().executeTakeFirst()
     : await trx.selectFrom('bills').select(['id', 'internal_no as number', 'status', 'total', 'approval_status', 'submitted_by_user_id'])
         .where('id', '=', id).where('org_id', '=', orgId).forUpdate().executeTakeFirst();
@@ -186,7 +194,7 @@ export interface PendingApproval {
 }
 
 export async function pendingApprovals(ex: Executor, orgId: number): Promise<PendingApproval[]> {
-  const [inv, bills, journals, batches] = await Promise.all([
+  const [inv, bills, journals, batches, credits] = await Promise.all([
     ex.selectFrom('invoices as d').innerJoin('contacts as c', 'c.id', 'd.customer_id')
       .leftJoin('users as u', 'u.id', 'd.submitted_by_user_id')
       .select(['d.id', 'd.number', 'd.invoice_date as date', 'd.total', 'c.display_name', 'u.name as submitted_by', 'd.submitted_by_user_id', 'd.submitted_at'])
@@ -202,9 +210,13 @@ export async function pendingApprovals(ex: Executor, orgId: number): Promise<Pen
       .select((eb) => ['d.id', 'd.number', 'd.pay_date as date', 'd.total_amount as total', 'u.name as submitted_by', 'd.created_by_user_id', 'd.submitted_at',
         eb.selectFrom('payment_batch_lines as l').select((e) => e.fn.count<string>('l.vendor_id').distinct().as('n')).whereRef('l.batch_id', '=', 'd.id').as('suppliers')])
       .where('d.org_id', '=', orgId).where('d.status', '=', 'pending').execute(),
+    ex.selectFrom('credit_notes as d').innerJoin('contacts as c', 'c.id', 'd.customer_id')
+      .leftJoin('users as u', 'u.id', 'd.submitted_by_user_id')
+      .select(['d.id', 'd.number', 'd.note_date as date', 'd.total', 'c.display_name', 'u.name as submitted_by', 'd.submitted_by_user_id', 'd.submitted_at'])
+      .where('d.org_id', '=', orgId).where('d.approval_status', '=', 'pending').execute(),
   ]);
   const out: PendingApproval[] = [];
-  for (const [doc, rows] of [['invoice', inv], ['bill', bills]] as const) {
+  for (const [doc, rows] of [['invoice', inv], ['bill', bills], ['credit_note', credits]] as const) {
     for (const r of rows) {
       const rule = await ruleFor(ex, orgId, doc, toPaiseFromSql(r.total));
       out.push({

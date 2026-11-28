@@ -65,6 +65,8 @@ export interface Gstr1Row {
   /** C for a credit note, D for a debit note (kept with the invoices, reported here). */
   noteType?: 'C' | 'D';
   againstNumber?: string | null;
+  /** The original invoice's date, beside its number: the note is matched to it (CGST Act s.34). */
+  againstDate?: string | null;
   irnStatus?: string;
   /** Under reverse charge (an invoice, or a credit note against one): reported with rchrg Y. */
   reverseCharge?: boolean;
@@ -169,12 +171,12 @@ export async function gstr1(ex: Executor, orgId: number, month: string, branchId
     id: number; number: string; note_date: string; reason: string;
     customer_name: string; gstin: string | null; place_of_supply: string; supply_type: string;
     subtotal: string; cgst: string; sgst: string; igst: string; cess: string; total: string;
-    against_number: string | null; against_rc: number | null;
+    against_number: string | null; against_rc: number | null; against_date: string | null;
   }>`
     SELECT n.id, n.number, n.note_date, n.reason, i.reverse_charge AS against_rc,
            c.display_name AS customer_name, c.gstin, n.place_of_supply, n.supply_type,
            n.subtotal, n.cgst, n.sgst, n.igst, n.cess, n.total,
-           i.number AS against_number
+           i.number AS against_number, i.invoice_date AS against_date
       FROM credit_notes n
       JOIN contacts c ON c.id = n.customer_id
       LEFT JOIN invoices i ON i.id = n.against_invoice_id
@@ -200,6 +202,7 @@ export async function gstr1(ex: Executor, orgId: number, month: string, branchId
     totalPaise: toPaiseFromSql(r.total),
     reason: r.reason,
     againstNumber: r.against_number,
+    againstDate: r.against_date ? String(r.against_date).slice(0, 10) : null,
     noteType: 'C' as const,
     reverseCharge: Number(r.against_rc ?? 0) === 1,
   }));

@@ -177,6 +177,12 @@ export function PaymentsList({ kind }: { kind: 'received' | 'made' }) {
                 </Link>
               </Button>
             )}
+            {/* Zoho's Record Bulk Payments: many bills (or invoices) at once (status review 7, item 6). */}
+            {canCreate && (
+              <Button size="sm" variant="outline" asChild data-slot="payments-bulk">
+                <Link href={isReceipt ? '/sales/payments/bulk' : '/purchases/payments/bulk'}>{isReceipt ? 'Bulk receipts' : 'Bulk payments'}</Link>
+              </Button>
+            )}
             {isReceipt
               ? <ReceivedMenu sort={sort} onSort={setSort} onRefresh={() => void state.refetch()} onExportView={() => exportView(state.data?.payments ?? [])} />
               : <ModuleMenu slug="payments-made" onRefresh={() => void state.refetch()} />}

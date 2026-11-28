@@ -6,6 +6,7 @@
 // number and the entry; this is a preview of them.
 
 import { useRouter, useSearchParams } from 'next/navigation';
+import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import {
   ChevronDown, FileText, Info, Loader2, Save, Send, Settings2,
@@ -207,6 +208,17 @@ export function InvoiceForm({ variant = 'invoice', editing }: {
   const states = useMemo(() => stateOptions(), []);
 
   const customer = s.contacts.find((c) => c.id === customerId);
+  // The customer's PO already on another invoice of theirs: warned on the form (status review 7, item 8).
+  const [poTwins, setPoTwins] = useState<{ id: string; number: string; date: string }[]>([]);
+  useEffect(() => {
+    const po = orderNumber.trim();
+    if (!customerId || !po || debitNote) { setPoTwins([]); return; }
+    const t = window.setTimeout(() => {
+      api.get<{ invoices: { id: string; number: string; date: string }[] }>('/api/invoices/po-check', { customerId, orderNumber: po, ...(ed?.id ? { excludeId: ed.id } : {}) })
+        .then((r) => setPoTwins(r.invoices)).catch(() => setPoTwins([]));
+    }, 450);
+    return () => window.clearTimeout(t);
+  }, [customerId, orderNumber, debitNote, ed?.id]);
   const addressState = useApi(
     () => (customerId ? api.get<{ addresses: ContactAddress[] }>(`/api/contacts/${customerId}/addresses`) : Promise.resolve({ addresses: [] as ContactAddress[] })),
     [customerId],
@@ -684,7 +696,15 @@ export function InvoiceForm({ variant = 'invoice', editing }: {
               value={orderNumber}
               onChange={(e) => setOrderNumber(e.target.value)}
               placeholder="Customer PO reference"
+              data-slot="invoice-order-number"
             />
+            {poTwins.length > 0 && (
+              <p className="mt-1.5 rounded-[4px] border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-900" data-slot="invoice-po-twin">
+                This customer&apos;s PO is already on{' '}
+                {poTwins.map((t, i) => <span key={t.id}>{i > 0 && ', '}<Link href={`/sales/invoices/${t.id}`} target="_blank" className="font-medium underline">{t.number}</Link> ({t.date})</span>)}.
+                Check the order is not being billed twice.
+              </p>
+            )}
           </FormRow>
         </FormRowPair>
 

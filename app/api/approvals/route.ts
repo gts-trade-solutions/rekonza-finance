@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { openCreditNote } from '@/lib/server/services/sales-extras';
 import { db, transaction } from '@/lib/server/db';
 import { route, body, asId, badRequest, forbidden } from '@/lib/server/http';
 import { hasPermission } from '@/lib/rbac';
@@ -16,8 +17,8 @@ import { postBill } from '@/lib/server/services/purchases';
 // Who may approve is the rule's business, checked by the service; this route
 // only makes sure the caller can see the kind of document at all.
 
-const MODULE: Record<RuleDoc, 'sales' | 'purchases' | 'accountant'> = { invoice: 'sales', bill: 'purchases', journal: 'accountant', payment_batch: 'purchases' };
-const LABEL: Record<RuleDoc, string> = { invoice: 'Invoices', bill: 'Bills', journal: 'Journals', payment_batch: 'Payment batches' };
+const MODULE: Record<RuleDoc, 'sales' | 'purchases' | 'accountant'> = { invoice: 'sales', bill: 'purchases', journal: 'accountant', payment_batch: 'purchases', credit_note: 'sales' };
+const LABEL: Record<RuleDoc, string> = { invoice: 'Invoices', bill: 'Bills', journal: 'Journals', payment_batch: 'Payment batches', credit_note: 'Credit notes' };
 
 export const GET = route(async ({ orgId, role, user, req }) => {
   const url = new URL(req.url);
@@ -43,7 +44,7 @@ export const GET = route(async ({ orgId, role, user, req }) => {
   };
 });
 
-const DOC = z.enum(['invoice', 'bill', 'journal', 'payment_batch']);
+const DOC = z.enum(['invoice', 'bill', 'journal', 'payment_batch', 'credit_note']);
 const Input = z.discriminatedUnion('action', [
   z.object({
     action: z.literal('save-rule'),
@@ -103,7 +104,8 @@ export const POST = route(async ({ orgId, user, role, req }) => {
     } else if (input.action === 'approve') {
       if (doc === 'journal') await approveHeldJournal(trx, orgId, { userId: user.userId, role }, id, input.note);
       else if (doc === 'payment_batch') await approveBatch(trx, orgId, { userId: user.userId, role }, id, input.note);
-      else await approve(trx, orgId, { userId: user.userId, role }, doc, id, doc === 'invoice' ? postInvoice : postBill, input.note);
+      // A credit note posts as a draft converted to open does (services/sales-extras.ts).
+      else await approve(trx, orgId, { userId: user.userId, role }, doc, id, doc === 'invoice' ? postInvoice : doc === 'credit_note' ? openCreditNote : postBill, input.note);
     } else if (doc === 'journal') {
       await rejectHeldJournal(trx, orgId, { userId: user.userId, role }, id, input.reason);
     } else if (doc === 'payment_batch') {

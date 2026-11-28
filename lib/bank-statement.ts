@@ -11,6 +11,8 @@
 // screen, as Zoho Books' "map fields" step allows; readWithMapping then reads
 // the lines with whatever mapping was settled on.
 
+import { findHeader } from './imports/header';
+
 export interface StatementRow {
   date: string;
   narration: string;
@@ -103,19 +105,28 @@ export const MAPPING_FIELDS: { key: Exclude<keyof StatementMapping, 'headerAt' |
 
 /** The header row and what each column most likely holds. Null when no header can be found. */
 export function guessMapping(grid: unknown[][]): StatementMapping | null {
-  const headerAt = grid.findIndex((r) => r.some((c) => /date/.test(norm(c))) && r.some((c) => /narration|description|particular|remarks|details|payee|memo/.test(norm(c))));
-  if (headerAt < 0) return null;
-  const headers = grid[headerAt].map(norm);
+  // The heading row may sit under a bank's logo and account lines, and run
+  // over two rows where a merged "Amount" heads "Debit" and "Credit"
+  // (lib/imports/header.ts): it is the row naming a date and a narration.
+  const found = findHeader(grid, (cells) => {
+    const c = cells.map(norm);
+    if (!c.some((x) => /date/.test(x)) || !c.some((x) => /narration|description|particular|remarks|details|payee|memo/.test(x))) return 0;
+    return c.filter((x) => /date|narration|description|particular|remarks|details|ref|chq|cheque|withdraw|deposit|debit|credit|amount|balance|dr|cr/.test(x)).length;
+  });
+  if (!found || !found.headings.some((h) => /date/.test(norm(h)))) return null;
+  const headerAt = found.bodyFrom - 1;
+  const headers = found.headings.map(norm);
   const date = find(headers, /^(txn|transaction|tran|posting|value)?\.?\s*date/, /^date$/, /date/);
   const m: StatementMapping = {
     headerAt,
     date,
     narration: find(headers, /narration/, /description/, /particular/, /remarks/, /details/, /payee/, /memo/),
     reference: find(headers, /ref/, /chq|cheque/),
-    withdrawal: find(headers, /withdraw/, /^debit/, /\bdr\b/, /paid out/),
-    deposit: find(headers, /deposit/, /^credit/, /\bcr\b/, /paid in/),
-    amount: find(headers, /^amount/, /transaction amount/),
-    drcr: find(headers, /dr\s*\/\s*cr|cr\s*\/\s*dr|^type$|txn type|transaction type/),
+    withdrawal: find(headers, /withdraw/, /^debit(?!\s*\/)/, /amount debit|debit amount/, /\bdr\b(?!\s*\/)/, /paid out/),
+    deposit: find(headers, /deposit/, /^credit(?!\s*\/)/, /amount credit|credit amount/, /\bcr\b(?!\s*\/)/, /paid in/),
+    amount: find(headers, /^amount$/, /^amount(?! (debit|credit))/, /transaction amount/),
+    // The flag beside a single amount: Dr/Cr, Cr/Dr, Debit/Credit, or a Type column holding D or C.
+    drcr: find(headers, /dr\s*\/\s*cr|cr\s*\/\s*dr|debit\s*\/\s*credit|credit\s*\/\s*debit|^type$|txn type|transaction type/),
     balance: find(headers, /balance/),
     dateOrder: 'dmy',
   };
@@ -156,7 +167,8 @@ export function readWithMapping(grid: unknown[][], col: StatementMapping): { row
     }
     if (!out && !inn && col.amount >= 0) {
       const a = amount(r[col.amount]);
-      const kind = col.drcr >= 0 ? norm(r[col.drcr]) : String(r[col.amount] ?? '').toLowerCase();
+      // The flag column when it says something; else the amount's own "Dr" or "Cr".
+      const kind = (col.drcr >= 0 ? norm(r[col.drcr]) : '') || String(r[col.amount] ?? '').toLowerCase();
       if (isDebitMark(kind) || a < 0) out = Math.abs(a); else inn = Math.abs(a);
     }
     if (!out && !inn) continue;

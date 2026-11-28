@@ -28,12 +28,13 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { downloadCsv } from '@/components/shared/report-shell';
-import { ApiError, imports, type ImportResponse } from '@/lib/api/client';
+import { ApiError, imports, type ImportResponse, type ImportRowError } from '@/lib/api/client';
 import { usePermission } from '@/lib/store/hooks';
 import { cn } from '@/lib/utils';
 import { downloadWorkbook } from '@/lib/xlsx';
 import { cellText, readGrid } from '@/lib/imports/read-file';
 import { readTallyReportGrid } from '@/lib/tally/reports';
+import { findHeader } from '@/lib/imports/header';
 import { columnFor, MAX_IMPORT_ROWS, TEMPLATES, templateCsv, templateSheets, type ColumnSpec } from '@/lib/imports/templates';
 import { ENCODINGS, importModule, type ImportModule } from '@/lib/imports/modules';
 
@@ -93,11 +94,14 @@ function Wizard({ m }: { m: ImportModule }) {
       const tallyLaid = grid.slice(0, 20).some((r) => r.some((c) => /^particulars$/i.test(cellText(c).trim())));
       const tally = tallyLaid ? readTallyReportGrid(grid.map((r) => r.map((c) => ({ v: typeof c === 'number' ? c : cellText(c) }))), 'Excel') : null;
       setTallyReport(tally ? tally.label : null);
-      const rows = grid.map((r) => r.map((c) => cellText(c).trim()));
-      const start = rows.findIndex((r) => r.filter(Boolean).length >= 2);
-      if (start < 0 || rows.length - start < 2) throw new Error('The file needs a row of headings and at least one row under it.');
-      const headings = rows[start];
-      const kept = rows.map((r, i) => ({ r, line: i + 1 })).slice(start + 1).filter(({ r }) => r.some((c) => c !== ''));
+      const rows = grid.map((r) => r.map((c) => cellText(c).replace(/^\uFEFF/, '').trim()));
+      // The headings may sit under a bank's logo and account lines, or run over
+      // two rows under a merged cell (lib/imports/header.ts): the row naming the
+      // most of this import's columns.
+      const found = findHeader(rows, (cells) => cells.filter((c) => c && columnFor(m.kind, c)).length);
+      if (!found || rows.length - found.bodyFrom < 1) throw new Error('The file needs a row of headings and at least one row under it.');
+      const headings = found.headings;
+      const kept = rows.map((r, i) => ({ r, line: i + 1 })).slice(found.bodyFrom).filter(({ r }) => r.some((c) => c !== ''));
       const body = kept.map((k) => k.r);
       if (body.length > MAX_IMPORT_ROWS) throw new Error(`The file has ${body.length} rows; import up to ${MAX_IMPORT_ROWS} at a time.`);
       setLoaded({ file, headings, body, lines: kept.map((k) => k.line) });
@@ -169,8 +173,11 @@ function Wizard({ m }: { m: ImportModule }) {
           <MapFields m={m} fields={fields} loaded={loaded} map={map} setMap={setMap} remember={remember} setRemember={setRemember} error={mapError} />
         )}
         {step === 3 && loaded && (
-          <Preview m={m} rows={rows} fields={fields} unmapped={unmapped} onDuplicate={onDuplicate} canImport={canImport}
-            onDone={(n) => { toast.success(`${n} ${n === 1 ? m.noun : m.title.toLowerCase()} imported successfully.`); router.push(m.back); }}
+          <Preview m={m} rows={rows} fields={fields} unmapped={unmapped} onDuplicate={onDuplicate} canImport={canImport} loaded={loaded}
+            onDone={(n, batchId) => {
+              toast.success(`${n} ${n === 1 ? m.noun : m.title.toLowerCase()} imported successfully.`, { description: 'Kept in the import history, with any rows left out and why.' });
+              router.push(batchId ? `/import/history?batch=${batchId}` : m.back);
+            }}
             onBack={() => setStep(2)} />
         )}
       </main>
@@ -297,7 +304,8 @@ function Configure({ m, loaded, encoding, onDuplicate, onFile, onRemove, onEncod
           <li>A file exported from Zoho Books imports as it is: its column headings are recognised.</li>
           <li>You can download the sample xls file to get detailed information about the data fields used while importing.</li>
           <li>If you have files in other formats, you can convert it to an accepted file format using any online/offline converter.</li>
-          <li>Nothing is saved until the last step. The preview checks every row first, and an import keeps all its rows or none.</li>
+          <li>Nothing is saved until the last step. The preview checks every row first, with the same rules as the single-record form, and lists each problem by row and field.</li>
+          <li>Rows with problems: import the valid ones and skip the rest, or stop and fix the file. Every import is kept in the <Link href={`/import/history?module=${m.slug}`} className="text-link hover:underline">Import History</Link>.</li>
         </ul>
       </div>
     </div>
@@ -353,14 +361,20 @@ function MapFields({ m, fields, loaded, map, setMap, remember, setRemember, erro
   );
 }
 
-function Preview({ m, rows, fields, unmapped, onDuplicate, canImport, onDone, onBack }: {
+/** A row's problem as the auditor reads it: "Row 7, GSTIN: 33ABC… fails the GSTIN check digit". */
+const problemText = (e: ImportRowError) => `Row ${e.row}${e.field ? `, ${e.field}` : ''}: ${e.message}`;
+
+function Preview({ m, rows, fields, unmapped, onDuplicate, canImport, loaded, onDone, onBack }: {
   m: ImportModule; rows: Record<string, string>[]; fields: ColumnSpec[]; unmapped: string[]; onDuplicate: 'skip' | 'error'; canImport: boolean;
-  onDone: (created: number) => void; onBack: () => void;
+  loaded: Loaded; onDone: (created: number, batchId: string | null) => void; onBack: () => void;
 }) {
   const router = useRouter();
   const [state, setState] = useState<{ kind: 'checking' } | { kind: 'checked'; r: ImportResponse } | { kind: 'demo' } | { kind: 'failed'; message: string }>({ kind: 'checking' });
   const [importing, setImporting] = useState(false);
-  const [open, setOpen] = useState<Record<string, boolean>>({ errors: true });
+  const [open, setOpen] = useState<Record<string, boolean>>({ errors: true, duplicates: true, skipped: true });
+  // What to do with rows that fail: keep the good ones, or import nothing until the file is right.
+  const [mode, setMode] = useState<'valid_only' | 'all'>('all');
+  const fileFormat = (loaded.file.name.match(/\.([a-z0-9]+)$/i)?.[1] ?? '').toLowerCase();
   useEffect(() => {
     let live = true;
     imports.rows(m.kind, rows, { dryRun: true, onDuplicate })
@@ -374,14 +388,30 @@ function Preview({ m, rows, fields, unmapped, onDuplicate, canImport, onDone, on
   }, [m.kind, rows, onDuplicate]);
 
   // On the online demo the server cannot run the check; the file is still read and its blanks found here.
-  const blanks = useMemo(() => rows.flatMap((r, i) => fields.filter((f) => f.required && !String(r[f.key] ?? '').trim()).map((f) => ({ row: Number(r.__line) || i + 2, message: `${f.label} is missing.` }))), [rows, fields]);
+  const blanks = useMemo(() => rows.flatMap((r, i) => fields.filter((f) => f.required && !String(r[f.key] ?? '').trim()).map((f) => ({ row: Number(r.__line) || i + 2, field: f.label, value: '', message: `${f.label} is missing: it is a mandatory field.` } as ImportRowError))), [rows, fields]);
 
   const o = state.kind === 'checked' ? state.r.outcomes : [];
   const created = o.reduce((t, x) => t + x.created, 0);
   const skipped = o.reduce((t, x) => t + x.skipped, 0);
-  const errors = state.kind === 'checked' ? o.flatMap((x) => x.errors) : state.kind === 'demo' ? blanks : [];
+  const errors: ImportRowError[] = state.kind === 'checked' ? o.flatMap((x) => x.errors) : state.kind === 'demo' ? blanks : [];
+  const duplicates = errors.filter((e) => e.duplicate);
+  const problems = errors.filter((e) => !e.duplicate);
+  const skippedRows = o.flatMap((x) => x.skippedRows ?? []);
   const notes = o.flatMap((x) => x.notes);
+  const badRows = new Set(errors.map((e) => e.row));
   const ready = state.kind === 'checked' ? created : state.kind === 'demo' ? rows.length - new Set(blanks.map((b) => b.row)).size : 0;
+  const dupCount = o.reduce((t, x) => t + (x.duplicates ?? 0), 0);
+
+  /** The file as it was read, with an Error column saying what is wrong on each row, to fix and upload again. */
+  const errorReport = (as: 'csv' | 'xlsx') => {
+    const byRow = new Map<number, string[]>();
+    for (const e of [...errors, ...skippedRows]) byRow.set(e.row, [...(byRow.get(e.row) ?? []), `${e.field ? `${e.field}: ` : ''}${e.message}`]);
+    const head = ['Row', ...loaded.headings, 'Error'];
+    const body = loaded.body.map((r, i) => [String(loaded.lines[i]), ...loaded.headings.map((_, k) => r[k] ?? ''), (byRow.get(loaded.lines[i]) ?? []).join(' | ')]);
+    const name = `${m.slug}-import-errors`;
+    if (as === 'csv') downloadCsv(`${name}.csv`, [head, ...body]);
+    else downloadWorkbook(`${name}.xlsx`, [{ name: 'Errors', rows: [head, ...body] }]);
+  };
 
   const run = async () => {
     if (state.kind === 'demo') {
@@ -390,8 +420,8 @@ function Preview({ m, rows, fields, unmapped, onDuplicate, canImport, onDone, on
     }
     setImporting(true);
     try {
-      const r = await imports.rows(m.kind, rows, { dryRun: false, onDuplicate });
-      if (r.committed) onDone(r.outcomes.reduce((t, x) => t + x.created, 0));
+      const r = await imports.rows(m.kind, rows, { dryRun: false, onDuplicate, mode, module: m.slug, fileName: loaded.file.name, fileFormat });
+      if (r.committed) onDone(r.outcomes.reduce((t, x) => t + x.created, 0), r.batchId ?? null);
       else { setState({ kind: 'checked', r }); toast.error('Nothing was imported: some rows have problems.'); }
     } catch (e) {
       toast.error('The import did not run', { description: e instanceof Error ? e.message : String(e) });
@@ -403,7 +433,7 @@ function Preview({ m, rows, fields, unmapped, onDuplicate, canImport, onDone, on
   const Row = ({ id, label, count, children }: { id: string; label: string; count: number; children?: React.ReactNode }) => (
     <div className="border-b py-3.5 last:border-0" data-slot={`preview-${id}`}>
       <div className="flex items-center justify-between gap-3 text-[13.5px]">
-        <span>{label} - <span className="font-semibold">{count}</span></span>
+        <span>{label} - <span className="font-semibold" data-slot={`preview-${id}-count`}>{count}</span></span>
         {children && count > 0 && (
           <button type="button" className="flex items-center gap-1 text-[13px] text-link hover:underline" onClick={() => setOpen({ ...open, [id]: !open[id] })}>
             {open[id] ? 'Hide Details' : 'View Details'} <ChevronDown className={cn('size-3.5 transition-transform', open[id] && 'rotate-180')} />
@@ -413,12 +443,30 @@ function Preview({ m, rows, fields, unmapped, onDuplicate, canImport, onDone, on
       {children && open[id] && count > 0 && <div className="mt-3">{children}</div>}
     </div>
   );
+  const ErrorTable = ({ list, slot }: { list: ImportRowError[]; slot: string }) => (
+    <div className="max-h-80 overflow-auto rounded border thin-scroll">
+      <table className="w-full text-[12.5px]" data-slot={slot}>
+        <thead className="sticky top-0 bg-muted text-left"><tr><th className="px-2 py-1.5 font-semibold">Row</th><th className="px-2 py-1.5 font-semibold">Field</th><th className="px-2 py-1.5 font-semibold">Value</th><th className="px-2 py-1.5 font-semibold">Problem</th></tr></thead>
+        <tbody>
+          {list.slice(0, 500).map((e, i) => (
+            <tr key={i} className="border-t align-top" data-slot="import-error-row" title={problemText(e)}>
+              <td className="px-2 py-1 font-medium">{e.row}</td>
+              <td className="px-2 py-1">{e.field ?? ''}</td>
+              <td className="px-2 py-1 font-mono text-[11.5px]">{e.value ?? ''}</td>
+              <td className="px-2 py-1">{e.message}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
 
   const mapped = fields.filter((f) => rows.some((r) => String(r[f.key] ?? '').trim()));
+  const blocked = errors.length > 0 && mode === 'all';
 
   return (
     <>
-      <div className="mx-auto mb-10 w-full max-w-[820px] space-y-5" data-slot="import-preview">
+      <div className="mx-auto mb-10 w-full max-w-[880px] space-y-5" data-slot="import-preview">
         {state.kind === 'checking' && (
           <p className="flex items-center gap-2 rounded-[6px] bg-muted/50 px-4 py-6 text-[13.5px]"><Loader2 className="size-4 animate-spin" /> Checking every row of the file against your books…</p>
         )}
@@ -433,42 +481,71 @@ function Preview({ m, rows, fields, unmapped, onDuplicate, canImport, onDone, on
         )}
         {(state.kind === 'checked' || state.kind === 'demo') && (
           <>
-            {errors.length === 0 ? (
+            <div className="grid gap-2 sm:grid-cols-4" data-slot="import-counts">
+              {([['rows', 'Rows in the file', rows.length, ''], ['valid', 'Valid, ready to import', ready, 'text-[#1e7a46]'],
+                ['invalid', 'Rows with errors', new Set(problems.map((e) => e.row)).size, 'text-[#c0392b]'], ['dups', 'Duplicates', dupCount || duplicates.length, 'text-[#8a5a00]']] as const).map(([k, label, v, tone]) => (
+                <div key={k} className="rounded-[6px] border px-3 py-2" data-slot={`import-count-${k}`}>
+                  <p className="text-[11.5px] uppercase tracking-wide text-muted-foreground">{label}</p>
+                  <p className={cn('text-[20px] font-semibold tabular', tone)} data-slot={`import-count-${k}-value`}>{v}</p>
+                </div>
+              ))}
+            </div>
+            {errors.length === 0 && skipped > 0 ? (
+              <p className="flex items-center gap-2 rounded-[6px] bg-[#fdf3e2] px-4 py-3 text-[13.5px] text-[#8a5a00]" data-slot="import-ready-skipping">
+                <AlertTriangle className="size-4" /> {ready} ready to be imported; {skipped} already in your books {skipped === 1 ? 'is' : 'are'} left out, each listed below with why.
+              </p>
+            ) : errors.length === 0 ? (
               <p className="flex items-center gap-2 rounded-[6px] bg-[#e7f6ee] px-4 py-3 text-[13.5px] text-[#1e7a46]" data-slot="import-ready">
                 <CheckCircle2 className="size-4" /> All {m.title} in your file are ready to be imported
               </p>
             ) : (
-              <p className="flex items-center gap-2 rounded-[6px] bg-[#fdf3e2] px-4 py-3 text-[13.5px] text-[#8a5a00]" data-slot="import-problems">
-                <AlertTriangle className="size-4" /> {errors.length} row{errors.length === 1 ? ' has a problem' : 's have problems'}. Fix {errors.length === 1 ? 'it' : 'them'} in the file and import it again; nothing is imported until every row is right.
-              </p>
+              <div className="space-y-3 rounded-[6px] bg-[#fdf3e2] px-4 py-3 text-[13.5px] text-[#8a5a00]" data-slot="import-problems">
+                <p className="flex items-center gap-2"><AlertTriangle className="size-4" /> {badRows.size} row{badRows.size === 1 ? ' has a problem' : 's have problems'}. Each is listed below with its row, the field and why.</p>
+                <div className="flex flex-wrap items-center gap-3 text-[13px]">
+                  <span>Download the file back with an Error column, fix it, and upload it again:</span>
+                  <Button size="xs" variant="outline" className="gap-1" onClick={() => errorReport('csv')} data-slot="import-error-report-csv"><Download className="size-3" /> Error report (CSV)</Button>
+                  <Button size="xs" variant="outline" className="gap-1" onClick={() => errorReport('xlsx')} data-slot="import-error-report-xlsx"><Download className="size-3" /> Error report (Excel)</Button>
+                </div>
+                {state.kind === 'checked' && (
+                  <fieldset className="space-y-1.5 text-[13px] text-foreground" data-slot="import-mode">
+                    <legend className="mb-1 font-medium">What should happen to the rows with problems?</legend>
+                    <label className="flex items-start gap-2"><input type="radio" name="import-mode" className="mt-1" checked={mode === 'valid_only'} onChange={() => setMode('valid_only')} data-slot="import-mode-valid" />
+                      <span><b>Import the valid rows, skip the rest</b><span className="block text-[12px] text-muted-foreground">The {ready} good row{ready === 1 ? '' : 's'} go in now; the others are left out and listed in the import history, to fix and import later.</span></span></label>
+                    <label className="flex items-start gap-2"><input type="radio" name="import-mode" className="mt-1" checked={mode === 'all'} onChange={() => setMode('all')} data-slot="import-mode-all" />
+                      <span><b>Stop: import nothing until every row is right</b><span className="block text-[12px] text-muted-foreground">Fix the file (the error report shows where) and upload it again.</span></span></label>
+                  </fieldset>
+                )}
+              </div>
             )}
             <div className="rounded-[6px] border px-5">
               <Row id="ready" label={`${m.title} that are ready to be imported`} count={ready}>
                 <div className="max-h-72 overflow-auto rounded border thin-scroll">
                   <table className="w-full text-[12px]">
                     <thead className="sticky top-0 bg-muted">
-                      <tr>{mapped.slice(0, 8).map((f) => <th key={f.key} className="whitespace-nowrap px-2 py-1.5 text-left font-semibold">{f.label}</th>)}</tr>
+                      <tr><th className="px-2 py-1.5 text-left font-semibold">Row</th>{mapped.slice(0, 8).map((f) => <th key={f.key} className="whitespace-nowrap px-2 py-1.5 text-left font-semibold">{f.label}</th>)}</tr>
                     </thead>
                     <tbody>
-                      {rows.slice(0, 50).map((r, i) => (
-                        <tr key={i} className="border-t">{mapped.slice(0, 8).map((f) => <td key={f.key} className="whitespace-nowrap px-2 py-1">{r[f.key]}</td>)}</tr>
+                      {rows.filter((r) => !badRows.has(Number(r.__line))).slice(0, 50).map((r, i) => (
+                        <tr key={i} className="border-t"><td className="px-2 py-1">{r.__line}</td>{mapped.slice(0, 8).map((f) => <td key={f.key} className="whitespace-nowrap px-2 py-1">{r[f.key]}</td>)}</tr>
                       ))}
                     </tbody>
                   </table>
                 </div>
-                {rows.length > 50 && <p className="mt-1 text-[12px] text-muted-foreground">The first 50 of {rows.length} rows.</p>}
               </Row>
-              <Row id="skipped" label="No. of Records skipped" count={skipped}>
-                <p className="text-[12.5px] text-muted-foreground">Already in your books: left as they are.</p>
+              <Row id="skipped" label="No. of Records skipped (already in your books)" count={skipped}>
+                <ErrorTable list={skippedRows} slot="import-skipped" />
               </Row>
               <Row id="unmapped" label="Unmapped Fields" count={unmapped.length}>
                 <p className="text-[12.5px] text-muted-foreground">Not imported: {unmapped.map((u) => `"${u}"`).join(', ')}.</p>
               </Row>
-              {errors.length > 0 && (
-                <Row id="errors" label="Records with errors" count={errors.length}>
-                  <ul className="max-h-72 space-y-1 overflow-auto text-[12.5px] thin-scroll" data-slot="import-errors">
-                    {errors.slice(0, 300).map((e, i) => <li key={i}><span className="font-medium">Row {e.row}:</span> {e.message}</li>)}
-                  </ul>
+              {problems.length > 0 && (
+                <Row id="errors" label="Records with errors" count={problems.length}>
+                  <ErrorTable list={problems} slot="import-errors" />
+                </Row>
+              )}
+              {duplicates.length > 0 && (
+                <Row id="duplicates" label="Duplicates (in your books, or twice in the file)" count={duplicates.length}>
+                  <ErrorTable list={duplicates} slot="import-duplicates-list" />
                 </Row>
               )}
             </div>
@@ -480,11 +557,14 @@ function Preview({ m, rows, fields, unmapped, onDuplicate, canImport, onDone, on
         <div className="flex gap-2">
           <Button variant="outline" size="sm" className="gap-1" onClick={onBack}><ChevronLeft className="size-3.5" /> Previous</Button>
           <Button size="sm" className="gap-1.5" onClick={() => void run()} data-slot="import-run"
-            disabled={importing || !canImport || state.kind === 'checking' || state.kind === 'failed' || errors.length > 0 || ready === 0}>
-            {importing && <Loader2 className="size-3.5 animate-spin" />} Import
+            disabled={importing || !canImport || state.kind === 'checking' || state.kind === 'failed' || blocked || ready === 0}>
+            {importing && <Loader2 className="size-3.5 animate-spin" />} {errors.length && mode === 'valid_only' ? `Import ${ready} valid row${ready === 1 ? '' : 's'}` : 'Import'}
           </Button>
         </div>
-        <Button variant="outline" size="sm" onClick={() => router.push(m.back)}>Cancel</Button>
+        <div className="flex items-center gap-3">
+          <Link href={`/import/history?module=${m.slug}`} className="text-[13px] text-link hover:underline" data-slot="import-history-link">Import History</Link>
+          <Button variant="outline" size="sm" onClick={() => router.push(m.back)}>Cancel</Button>
+        </div>
       </footer>
     </>
   );

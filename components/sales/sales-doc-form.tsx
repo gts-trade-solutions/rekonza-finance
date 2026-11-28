@@ -178,6 +178,13 @@ export function SalesDocumentForm({ kind, editing }: {
   // ⋯ → Create Credit Note): the form starts from that document, as Zoho's does.
   const cloneId = params.get('clone');
   const fromInvoice = isCredit ? params.get('invoice') : null;
+  // CGST Act s.34(2): the last day the note's GST can reduce output tax for its invoice, warned on the form.
+  const [s34, setS34] = useState<{ late: boolean; deadline: string; why: string; invoiceNumber: string } | null>(null);
+  useEffect(() => {
+    if (!isCredit || !againstInvoiceId || !date) { setS34(null); return; }
+    api.get<{ late: boolean; deadline: string; why: string; invoiceNumber: string }>('/api/credit-notes/time-limit', { invoiceId: againstInvoiceId, date })
+      .then(setS34).catch(() => setS34(null));
+  }, [isCredit, againstInvoiceId, date]);
   useEffect(() => {
     if (ed || !cloneId) return;
     let live = true;
@@ -366,6 +373,11 @@ export function SalesDocumentForm({ kind, editing }: {
         await salesDocuments.setStatus(kind, done.id, isQuote ? 'sent' : 'open').catch(() => toast.warning('Saved, but its status did not change.'));
       }
       const creditDraft = isCredit && (mode === 'draft' || (ed?.status === 'draft' && mode === 'save'));
+      if (isCredit && (done as { heldForApproval?: boolean }).heldForApproval) {
+        toast.info(`${info.noun} ${done.number} is waiting for approval`, { description: 'An approval rule covers credit notes of this amount: it posts when someone else approves it (Approvals).' });
+        router.push(`${info.base}/${done.id}`);
+        return;
+      }
       toast.success(`${info.noun} ${done.number} ${ed ? 'updated' : mode === 'draft' ? 'saved as draft' : 'saved'}`, {
         description: isCredit
           ? creditDraft ? 'A draft posts nothing until it is converted to open.'
@@ -463,6 +475,12 @@ export function SalesDocumentForm({ kind, editing }: {
           <FormRow label="Invoice#" hint="The invoice this credit note is against; leave it blank to keep the credit on the customer’s account.">
             <Combobox options={invoiceOptions} value={againstInvoiceId} onChange={setAgainstInvoiceId}
               placeholder="Select an invoice" searchPlaceholder="Search invoice numbers" showAvatar={false} clearable />
+            {s34?.late && (
+              <p className="mt-1.5 rounded-[4px] border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-900" data-slot="credit-note-s34">
+                Past the time limit of CGST Act s.34(2) for {s34.invoiceNumber} ({s34.deadline}: {s34.why}). The GST on this credit note cannot
+                reduce your output tax: set its lines to 0% GST to issue it as a commercial credit note.
+              </p>
+            )}
           </FormRow>
         )}
 

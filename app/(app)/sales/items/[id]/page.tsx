@@ -35,6 +35,7 @@ import { Money } from '@/components/shared/money';
 import { StatusBadge } from '@/components/shared/status-badge';
 import { AsyncPage, LoadingRows } from '@/components/shared/async-state';
 import { ItemImageField } from '@/components/sales/item-image';
+import { StockLayers } from '@/components/inventory/stock-layers';
 import { refreshSplitList, useSplitRecordRefresh } from '@/components/shared/record-split';
 import { usePublishPageTitle } from '@/components/layout/page-context';
 import { items, type ItemDetail, type ItemHistoryEntry, type ItemTxKind, type ItemTxRow } from '@/lib/api/client';
@@ -495,12 +496,14 @@ export default function ItemPage() {
           <Header d={d} onChanged={state.refetch} />
           <Tabs value={tab} onValueChange={(v) => setTab(String(v))} className="-mx-6 gap-0">
             <TabsList className="w-full gap-x-0 px-5" data-slot="item-tabs">
-              {[['overview', 'Overview'], ['transactions', 'Transactions'], ['history', 'History']].map(([v, l]) => (
+              {[['overview', 'Overview'], ['transactions', 'Transactions'], ...(d.stock ? [['layers', 'Stock Layers']] : []), ['history', 'History']].map(([v, l]) => (
                 <TabsTrigger key={v} value={v} className="px-3.5 data-active:font-semibold">{l}</TabsTrigger>
               ))}
             </TabsList>
             <TabsContent value="overview"><Overview d={d} canEdit={canEdit} onPicture={state.refetch} /></TabsContent>
             <TabsContent value="transactions"><Transactions id={d.item.id} /></TabsContent>
+            {/* Each receipt, what is left of it on hand, its rate and value (status review 7, item 5). */}
+            {d.stock && <TabsContent value="layers"><StockLayers itemId={d.item.id} /></TabsContent>}
             {/* Read again whenever the item changes (marked inactive, say), so the new entry shows. */}
             <TabsContent value="history"><History key={d.item.updatedAt} id={d.item.id} /></TabsContent>
           </Tabs>

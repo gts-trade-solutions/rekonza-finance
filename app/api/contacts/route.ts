@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { sql } from 'kysely';
 import { db, transaction } from '@/lib/server/db';
-import { route, body, query, asId, badRequest, conflict, forbidden } from '@/lib/server/http';
+import { route, body, query, asId, ApiError, badRequest, conflict, forbidden } from '@/lib/server/http';
 import { hasPermission } from '@/lib/rbac';
 import { toPaiseFromSql } from '@/lib/server/money-sql';
 import { seal } from '@/lib/server/crypto/fields';
@@ -9,7 +9,7 @@ import { bankNumberFor, isMasked } from '@/lib/server/bank-mask';
 import { joinSections, parseSections } from '@/lib/tax/tds';
 import { assertFresh } from '@/lib/server/concurrency';
 import { logAudit, auditMeta, snapshot, changesBetween, describeChanges } from '@/lib/server/audit';
-import { isValidGstin } from '@/lib/tax/gst';
+import { contactProblems } from '@/lib/validation/masters';
 import { ZOHO_COLUMNS, zohoFields } from '@/lib/server/services/contact-fields';
 import { outstandingBeyondDocuments } from '@/lib/server/services/party-outstanding';
 import { stockPosition } from '@/lib/server/reports/stock';
@@ -402,38 +402,19 @@ function toRow(input: z.infer<typeof ContactInput>) {
  * — which is the difference between charging IGST and charging CGST+SGST.
  */
 function checkGstin(input: Partial<z.infer<typeof ContactInput>>) {
-  // Zoho asks a GSTIN (or UIN) of every treatment but unregistered, consumer and overseas.
-  const registered = ['registered', 'registered_composition', 'sez', 'sez_developer', 'deemed_export', 'tax_deductor'].includes(input.gstTreatment ?? '');
-  if (registered && !input.gstin) {
-    throw badRequest('Enter the GSTIN / UIN: a registered party needs one.');
-  }
-  // An international party is outside India: no GSTIN, and not India as its country.
-  if (input.gstTreatment === 'overseas' && input.country === 'IN') {
-    throw badRequest('An overseas party is outside India: pick the country it is in.');
-  }
-  if (input.gstTreatment === 'overseas' && input.gstin) {
-    throw badRequest('An overseas party has no Indian GSTIN. Leave it empty, or choose another GST treatment.');
-  }
-  // 96 is the code for a place outside India: invoices to it go as exports, with no GST.
-  if (input.gstTreatment && input.gstTreatment !== 'overseas' && input.stateCode === '96') {
-    throw badRequest('This party is in India: pick its state. State 96 is only for a party outside India (GST treatment Overseas).');
-  }
-  if (input.gstin && input.stateCode && input.gstin.slice(0, 2) !== input.stateCode) {
-    throw badRequest(
-      `The GSTIN starts with ${input.gstin.slice(0, 2)}, which is a different state from the one selected. ` +
-        'The first two digits of a GSTIN are the state code.',
-    );
-  }
-  // The fifteenth character is a check digit over the other fourteen: a GSTIN
-  // with one character mistyped fails it, and an invoice carrying it is refused
-  // by the IRP and leaves the buyer without their input credit.
-  if (input.gstin && !isValidGstin(input.gstin)) {
-    throw badRequest(`${input.gstin} fails the GSTIN check digit, so a character is wrong. Check it against the party's registration certificate.`);
-  }
-  // Characters 3 to 12 of a GSTIN are the holder's PAN.
-  const panInGstin = input.gstin?.slice(2, 12);
-  if (input.pan && panInGstin && /^[A-Z]{5}\d{4}[A-Z]$/.test(panInGstin) && panInGstin !== input.pan) {
-    throw badRequest(`The PAN inside the GSTIN is ${panInGstin}, not ${input.pan}. One of them is wrong.`);
+  // The rules live in lib/validation/masters.ts, shared with the bulk import,
+  // so an import accepts exactly what this form accepts (status review 7).
+  // A registered party carries a GSTIN whose first two digits are its state;
+  // its fifteenth character is a check digit (one character mistyped fails
+  // it, and the IRP refuses an invoice carrying it); characters 3 to 12 are
+  // the PAN; an email, phone and Indian PIN code must be real ones.
+  const problems = contactProblems({
+    gstin: input.gstin, pan: input.pan, gstTreatment: input.gstTreatment, stateCode: input.stateCode, country: input.country,
+    email: input.email, phone: input.phone, mobile: input.mobile, pincode: input.billingPincode, shippingPincode: input.shippingPincode,
+  });
+  if (problems.length) {
+    throw new ApiError(400, `${problems[0].field}: ${problems[0].message}`, 'bad_request',
+      Object.fromEntries(problems.map((p) => [p.field, p.message])));
   }
 }
 
@@ -529,6 +510,9 @@ export const PATCH = route(
       gstTreatment: (input.gstTreatment ?? existing.gst_treatment) as never,
       pan: merged(input.pan, existing.pan),
       country: merged(input.country, existing.country),
+      // Only what the edit sends: a number already on file is left as it was.
+      email: input.email, phone: input.phone, mobile: input.mobile,
+      billingPincode: input.billingPincode, shippingPincode: input.shippingPincode,
     });
     // Only what the edit changes is checked against the others: the party
     // already on file is not its own duplicate.

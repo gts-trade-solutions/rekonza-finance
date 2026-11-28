@@ -2,6 +2,7 @@
 
 // Inventory Valuation Summary — each item's stock and its value at the date.
 
+import Link from 'next/link';
 import { SimpleReport } from '@/components/reports/simple-report';
 import { moneyCol, numCol, textCol } from '@/components/reports/cols';
 import { formatINR } from '@/lib/money';
@@ -14,7 +15,12 @@ export default function InventoryValuationPage() {
       report="inventory-valuation" title="Inventory Valuation Summary" asOf
       description="Stock on hand at the date and what it is worth, at weighted average cost or FIFO as each item is set."
       empty="No stock on hand at this date."
-      above={(d) => <p className="text-sm">Stock value at the date: <b className="tabular">{formatINR(Number(d.totalValuePaise ?? 0))}</b></p>}
+      above={(d) => (
+        <p className="flex flex-wrap items-center justify-between gap-2 text-sm">
+          <span>Stock value at the date: <b className="tabular">{formatINR(Number(d.totalValuePaise ?? 0))}</b></span>
+          <Link href="/reports/stock-reconciliation" className="text-link hover:underline" data-slot="valuation-vs-ledger">Valuation vs ledger: does the Inventory account agree?</Link>
+        </p>
+      )}
       columns={[
         textCol('name', 'Item', (r) => r.name, { strong: true }),
         textCol('sku', 'SKU', (r) => r.sku, { muted: true }),

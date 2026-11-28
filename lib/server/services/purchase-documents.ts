@@ -27,6 +27,7 @@ import { costLines, type DocumentLineInput } from './lines';
 import { fyLabelFor } from './sales';
 import { ApiError, badRequest, conflict, notFound } from '../http';
 import { voidReason, voidStamp } from './void-reason';
+import { afterStockMoved, itemValues, perpetualOn } from './stock-ledger';
 
 interface VendorContext {
   vendorName: string;
@@ -203,13 +204,31 @@ export async function convertPoToBill(
 
 // ── Vendor credits ───────────────────────────────────────────────────────────
 
+/**
+ * A line of goods (or a part of a service) the supplier takes back or credits.
+ * Naming the bill line the goods came in on returns them out of that purchase
+ * layer (reports/stock.ts fifoLayers); the rate defaults to that line's.
+ */
+export interface VendorCreditLineInput {
+  itemId?: number | null;
+  billLineId?: number | null;
+  description?: string | null;
+  hsnSac?: string | null;
+  qty: number;
+  ratePaise?: Paise | null;
+  gstRatePct?: number | null;
+}
+
 export interface CreateVendorCreditInput {
   branchId: number;
   vendorId: number;
   date: string;
   reason: string;
   againstBillId?: number | null;
+  /** The taxable amount of a credit with no lines; with lines it is their sum. */
   amountPaise: Paise;
+  /** Goods sent back or credited line by line (migration 131). */
+  lines?: VendorCreditLineInput[] | null;
   gstRatePct?: number;
   /** Whether input credit was claimed on the cost being reversed. */
   itcClaimed?: boolean;
@@ -238,9 +257,14 @@ export async function createVendorCredit(
   opts: { replace?: { id: number; number: string } } = {},
 ): Promise<CreatedPurchaseDoc> {
   if (!input.reason?.trim()) throw badRequest('A vendor credit needs a reason.');
-  if (input.amountPaise <= 0) throw badRequest('A vendor credit needs an amount above zero.');
+  const itemised = (input.lines ?? []).filter((l) => Number(l.qty) > 0);
+  if ((input.lines ?? []).some((l) => Number(l.qty) < 0)) throw badRequest('A quantity sent back cannot be negative.');
+  if (!itemised.length && input.amountPaise <= 0) throw badRequest('A vendor credit needs an amount above zero, or goods sent back.');
 
   const ctx = await vendorContext(trx, orgId, input.branchId, input.vendorId);
+  const lineRows = itemised.length
+    ? await vendorCreditLines(trx, orgId, ctx.supplyType, ctx.isComposition, input, opts.replace?.id ?? null)
+    : [];
 
   // A composition dealer charges no GST, so there is none to reverse.
   const gstRatePct = ctx.isComposition ? 0 : (input.gstRatePct ?? 0);
@@ -251,8 +275,9 @@ export async function createVendorCredit(
     gstRatePct,
     supplyType: ctx.supplyType,
   });
-  const totals = sumTax([tax]);
-  const raw = input.amountPaise + totalTaxPaise(totals);
+  const totals = lineRows.length ? sumTax(lineRows.map((l) => l.tax)) : sumTax([tax]);
+  const taxablePaise = lineRows.length ? lineRows.reduce((t, l) => t + l.taxable, 0) : input.amountPaise;
+  const raw = taxablePaise + totalTaxPaise(totals);
   const { rounded, roundOff } = roundToRupee(raw);
 
   let bill: { id: number; internal_no: string; total: string; amount_paid: string } | undefined;
@@ -266,11 +291,20 @@ export async function createVendorCredit(
       .executeTakeFirst();
     if (!bill) throw badRequest('That bill does not exist, or belongs to a different vendor.');
 
-    const balance = toPaiseFromSql(bill.total) - toPaiseFromSql(bill.amount_paid);
-    if (rounded > balance) {
+    // A supplier can credit a bill already paid (goods sent back after the
+    // payment went): the credit is capped by the bill itself, less what other
+    // credits have already taken off it, not by what is still owed. Whatever
+    // it cannot set off against the bill stays on the supplier's account, to
+    // apply to the next bill or take back as a refund.
+    const earlier = await trx.selectFrom('vendor_credits').select((eb) => eb.fn.sum<string>('total').as('t'))
+      .where('org_id', '=', orgId).where('against_bill_id', '=', bill.id).where('status', '<>', 'void')
+      .$if(!!opts.replace, (q) => q.where('id', '<>', opts.replace!.id)).executeTakeFirst();
+    const creditable = toPaiseFromSql(bill.total) - toPaiseFromSql(earlier?.t ?? '0');
+    if (rounded > creditable) {
       throw badRequest(
-        `The credit is larger than what is still owed on ${bill.internal_no}. ` +
-          'Credit only the outstanding amount, or record it without linking a bill.',
+        `The credit (${(rounded / 100).toLocaleString('en-IN', { minimumFractionDigits: 2 })}) is more than ${bill.internal_no} ` +
+          `has left to credit (${(creditable / 100).toLocaleString('en-IN', { minimumFractionDigits: 2 })}). ` +
+          'Credit no more than the bill, or record it without linking a bill.',
       );
     }
   }
@@ -278,6 +312,11 @@ export async function createVendorCredit(
   const number = opts.replace?.number ??
     (input.number?.trim() ||
     (await allocateNumber(trx, orgId, input.branchId, 'VC', fyLabelFor(input.date), { prefix: 'VC' })));
+
+  // On a perpetual book, the goods' value before they leave, so what they take out can be posted (stock-ledger.ts).
+  const stockItems = new Set(lineRows.filter((l) => l.tracked && l.itemId).map((l) => l.itemId!));
+  if (opts.replace) await trx.deleteFrom('vendor_credit_lines').where('vendor_credit_id', '=', opts.replace.id).execute();
+  const valueBefore = stockItems.size && (await perpetualOn(trx, orgId, input.date)) ? await itemValues(trx, orgId, input.date) : null;
 
   let id: number;
   if (opts.replace) {
@@ -307,10 +346,54 @@ export async function createVendorCredit(
     id = Number(inserted.insertId);
   }
 
+  if (lineRows.length) {
+    await trx.insertInto('vendor_credit_lines').values(lineRows.map((l, i) => ({
+      org_id: orgId, vendor_credit_id: id, line_no: i + 1, item_id: l.itemId, bill_line_id: l.billLineId,
+      description: l.description, hsn_sac: l.hsnSac, qty: String(l.qty), uqc: l.uqc, rate: toSqlFromPaise(l.ratePaise),
+      gst_rate_pct: String(l.gstRatePct), taxable: toSqlFromPaise(l.taxable), cgst: toSqlFromPaise(l.tax.cgstPaise),
+      sgst: toSqlFromPaise(l.tax.sgstPaise), igst: toSqlFromPaise(l.tax.igstPaise), cess: toSqlFromPaise(l.tax.cessPaise),
+      line_total: toSqlFromPaise(l.taxable + totalTaxPaise(l.tax)),
+    }))).execute();
+  }
+
   const acc = await accountIds(trx, orgId);
+  // Goods leaving stock on a perpetual book come out of Inventory at what the
+  // FIFO layers (or the year's average) carried them at, item by item; the
+  // rest of the credit, and everything on a periodic book, comes out of
+  // Purchases, as the bill put it there.
+  const stockLines: DraftLine[] = [];
+  let stockTaxable = 0;
+  if (valueBefore) {
+    const after = await itemValues(trx, orgId, input.date);
+    let out = 0;
+    for (const itemId of stockItems) {
+      const lost = (valueBefore.get(itemId) ?? 0) - (after.get(itemId) ?? 0);
+      if (lost) stockLines.push(lost > 0
+        ? { accountId: requireAccount(acc, CODE.INVENTORY), credit: lost, itemId, description: 'Goods sent back to the supplier' }
+        : { accountId: requireAccount(acc, CODE.INVENTORY), debit: -lost, itemId, description: 'Goods sent back to the supplier' });
+      out += lost;
+      // What each line took out of stock, shared by quantity within the item.
+      const mine = lineRows.map((l, i) => ({ l, i })).filter((x) => x.l.itemId === itemId && x.l.tracked);
+      const q = mine.reduce((t, x) => t + x.l.qty, 0);
+      let given = 0;
+      for (const [k, x] of mine.entries()) {
+        const share = k === mine.length - 1 ? lost - given : Math.round((lost * x.l.qty) / q);
+        given += share;
+        await trx.updateTable('vendor_credit_lines').set({ stock_cost: toSqlFromPaise(share) })
+          .where('vendor_credit_id', '=', id).where('line_no', '=', x.i + 1).execute();
+      }
+    }
+    stockTaxable = lineRows.filter((l) => l.tracked && l.itemId).reduce((t, l) => t + l.taxable, 0);
+    // The supplier credits what was agreed; stock gives up what it carried the
+    // goods at. Any difference is a cost variance, shown on its own line.
+    const variance = out - stockTaxable;
+    if (variance > 0) stockLines.push({ accountId: requireAccount(acc, CODE.COGS), debit: variance, description: 'Goods returned below their stock cost: cost variance' });
+    else if (variance < 0) stockLines.push({ accountId: requireAccount(acc, CODE.COGS), credit: -variance, description: 'Goods returned above their stock cost: cost variance' });
+  }
   const lines: DraftLine[] = [
     { accountId: requireAccount(acc, CODE.AP), debit: rounded, contactId: input.vendorId },
-    { accountId: requireAccount(acc, CODE.PURCHASES), credit: input.amountPaise },
+    { accountId: requireAccount(acc, CODE.PURCHASES), credit: taxablePaise - stockTaxable },
+    ...stockLines,
   ];
 
   // Only reverse credit that was actually claimed. On a blocked or reverse-
@@ -347,21 +430,91 @@ export async function createVendorCredit(
   // Setting it against the bill is an allocation, not a second posting: the
   // entry above already reduced payables. This records which bill the reduction
   // belongs to, so the AP ageing and the control account keep agreeing.
-  if (bill && input.applyImmediately !== false) {
+  // Only what is still owed on the bill is set off; the rest stays open.
+  const setOff = bill ? Math.min(rounded, Math.max(0, toPaiseFromSql(bill.total) - toPaiseFromSql(bill.amount_paid))) : 0;
+  if (bill && input.applyImmediately !== false && setOff > 0) {
     await trx
       .updateTable('bills')
-      .set((eb) => ({ amount_paid: eb('amount_paid', '+', toSqlFromPaise(rounded)) }))
+      .set((eb) => ({ amount_paid: eb('amount_paid', '+', toSqlFromPaise(setOff)) }))
       .where('id', '=', bill.id)
       .execute();
     await trx
       .updateTable('vendor_credits')
-      .set({ applied_amount: toSqlFromPaise(rounded), status: 'applied' })
+      .set({ applied_amount: toSqlFromPaise(setOff), status: setOff >= rounded ? 'applied' : 'open' })
       .where('id', '=', id)
       .execute();
     await settleBillIfPaid(trx, orgId, bill.id);
   }
 
+  // Goods out of the layers from its date: what later sales cost may change.
+  if (stockItems.size) await afterStockMoved(trx, orgId, userId, input.date, `vendor credit ${number} dated ${input.date} sends goods back`);
+
   return { id, number, totalPaise: rounded, journalEntryId: entry.id };
+}
+
+interface VendorCreditLineRow {
+  itemId: number | null; billLineId: number | null; description: string | null; hsnSac: string | null; uqc: string | null;
+  qty: number; ratePaise: Paise; gstRatePct: number; taxable: Paise; tax: ReturnType<typeof computeLineTax>['tax']; tracked: boolean;
+}
+
+/**
+ * The lines of a vendor credit, checked: an item must be the book's, a bill
+ * line must be on the bill the credit is against and carry the same item, and
+ * no more can go back on a bill line than came in on it less what earlier
+ * credits sent back. GST on each line follows the supply, as on the bill.
+ */
+async function vendorCreditLines(
+  trx: Trx, orgId: number, supplyType: SupplyType, isComposition: boolean, input: CreateVendorCreditInput, exceptCreditId: number | null,
+): Promise<VendorCreditLineRow[]> {
+  const out: VendorCreditLineRow[] = [];
+  for (const [i, l] of (input.lines ?? []).filter((x) => Number(x.qty) > 0).entries()) {
+    const n = i + 1;
+    let itemId = l.itemId ?? null;
+    let rate = l.ratePaise ?? null;
+    let gst = l.gstRatePct ?? null;
+    let hsn = l.hsnSac ?? null;
+    let description = l.description?.trim() || null;
+    if (l.billLineId) {
+      if (!input.againstBillId) throw badRequest(`Line ${n}: name the bill the goods came in on.`);
+      const bl = await trx.selectFrom('bill_lines as bl').innerJoin('bills as b', 'b.id', 'bl.bill_id')
+        .select(['bl.id', 'bl.item_id', 'bl.qty', 'bl.rate', 'bl.gst_rate_pct', 'bl.hsn_sac', 'bl.description', 'b.internal_no'])
+        .where('bl.id', '=', l.billLineId).where('b.id', '=', input.againstBillId).where('b.org_id', '=', orgId).executeTakeFirst();
+      if (!bl) throw badRequest(`Line ${n}: that line is not on the bill this credit is against.`);
+      if (itemId && bl.item_id && Number(bl.item_id) !== itemId) throw badRequest(`Line ${n}: the bill line is for another item.`);
+      itemId = bl.item_id ? Number(bl.item_id) : itemId;
+      rate ??= toPaiseFromSql(bl.rate);
+      gst ??= Number(bl.gst_rate_pct);
+      hsn ??= bl.hsn_sac;
+      description ??= bl.description;
+      const back = await trx.selectFrom('vendor_credit_lines as vcl').innerJoin('vendor_credits as vc', 'vc.id', 'vcl.vendor_credit_id')
+        .select((eb) => eb.fn.sum<string>('vcl.qty').as('q'))
+        .where('vcl.bill_line_id', '=', l.billLineId).where('vc.status', '<>', 'void')
+        .$if(!!exceptCreditId, (q) => q.where('vc.id', '<>', exceptCreditId!)).executeTakeFirst();
+      const left = Number(bl.qty) - Number(back?.q ?? 0);
+      if (Number(l.qty) > left + 1e-9) {
+        throw badRequest(`Line ${n}: only ${left} of ${description ?? 'this item'} came in on ${bl.internal_no} and have not been sent back already.`);
+      }
+    }
+    let tracked = false;
+    let uqc: string | null = null;
+    if (itemId) {
+      const it = await trx.selectFrom('items').select(['id', 'name', 'kind', 'track_inventory', 'purchase_price', 'gst_rate_pct', 'hsn_sac', 'uqc'])
+        .where('id', '=', itemId).where('org_id', '=', orgId).executeTakeFirst();
+      if (!it) throw badRequest(`Line ${n}: that item is not in your items.`);
+      tracked = it.kind === 'goods' && !!it.track_inventory;
+      rate ??= toPaiseFromSql(it.purchase_price);
+      gst ??= Number(it.gst_rate_pct);
+      hsn ??= it.hsn_sac;
+      description ??= it.name;
+      uqc = it.uqc;
+    }
+    if (!description) throw badRequest(`Line ${n}: give an item or a description.`);
+    if (rate === null || rate < 0) throw badRequest(`Line ${n}: give the rate it is credited at.`);
+    const g = isComposition ? 0 : (gst ?? input.gstRatePct ?? 0);
+    const t = computeLineTax({ ratePaise: rate, qty: Number(l.qty), discountPct: 0, gstRatePct: g, supplyType });
+    out.push({ itemId, billLineId: l.billLineId ?? null, description, hsnSac: hsn, uqc, qty: Number(l.qty), ratePaise: rate, gstRatePct: g, taxable: t.taxable, tax: t.tax, tracked });
+  }
+  return out;
 }
 
 /** Move a bill to 'paid' once nothing is left owing on it. */
@@ -485,4 +638,10 @@ export async function voidVendorCredit(
     .set({ status: 'void', applied_amount: toSqlFromPaise(0), ...voidStamp(why, userId) })
     .where('id', '=', creditId)
     .execute();
+  // Goods it sent back count as stock again from its date.
+  const sent = await trx.selectFrom('vendor_credit_lines').select('id').where('vendor_credit_id', '=', creditId).where('item_id', 'is not', null).limit(1).executeTakeFirst();
+  if (sent) {
+    const d = await trx.selectFrom('vendor_credits').select('credit_date').where('id', '=', creditId).executeTakeFirstOrThrow();
+    await afterStockMoved(trx, orgId, userId, String(d.credit_date).slice(0, 10), `vendor credit ${vc.number} voided`);
+  }
 }

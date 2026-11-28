@@ -9,6 +9,8 @@ import {
 } from 'lucide-react';
 // Status review 7, builder A.
 import { History } from 'lucide-react';
+// Status review 7, builder B.
+import { Copy, History } from 'lucide-react';
 
 export interface NavItem {
   label: string;
@@ -62,6 +64,8 @@ export const NAV_GROUPS: NavGroup[] = [
       { label: 'Batches & Expiry', href: '/inventory/batches', icon: CalendarClock, module: 'inventory', feature: 'inventory' },
       { label: 'Serial Numbers', href: '/inventory/serials', icon: ScanBarcode, module: 'inventory', feature: 'inventory' },
       { label: 'Warehouses', href: '/inventory/warehouses', icon: Building, module: 'inventory', feature: 'inventory' },
+      // Status review 7, item 5: the Inventory account against the valuation, item by item.
+      { label: 'Valuation vs Ledger', href: '/reports/stock-reconciliation', icon: Scale, module: 'accountant', feature: 'inventory' },
     ],
   },
   {
@@ -99,6 +103,8 @@ export const NAV_GROUPS: NavGroup[] = [
       { label: 'Purchase Orders', href: '/purchases/purchase-orders', icon: ClipboardList, module: 'purchases' },
       { label: 'Bills', href: '/purchases/bills', icon: FileText, module: 'purchases' },
       { label: 'Recurring Bills', href: '/purchases/recurring?kind=bill', icon: Repeat, module: 'purchases' },
+      // Status review 7, item 8: bills saved although they looked like one already in the books.
+      { label: 'Possible Duplicate Bills', href: '/purchases/duplicate-bills', icon: Copy, module: 'purchases' },
       { label: 'Payments Made', href: '/purchases/payments', icon: Banknote, module: 'purchases' },
       { label: 'Vendor Credits', href: '/purchases/vendor-credits', icon: FileMinus, module: 'purchases' },
       { label: 'Goods Receipts', href: '/purchases/goods-receipts', icon: PackageCheck, module: 'purchases' },
@@ -208,6 +214,8 @@ export const NAV_GROUPS: NavGroup[] = [
       { label: 'Import Excel, CSV, Text', href: '/settings/import', icon: FileUp, module: 'accountant', exact: true },
       { label: 'Import invoices from PDF', href: '/settings/import?tab=pdf', icon: FileUp, module: 'accountant' },
       { label: 'Import from QuickBooks', href: '/settings/import/quickbooks', icon: FileUp, module: 'accountant' },
+      // Status review 7, item 3: every import, its rows left out and why, and undo.
+      { label: 'Import History', href: '/import/history', icon: History, module: 'accountant' },
       { label: 'Import from Tally', href: '/tally/import', icon: Download, module: 'tally', feature: 'tally' },
       { label: 'Export CSV, Text, Excel', href: '/settings/export', icon: FileDown, module: 'accountant' },
       { label: 'Export to Tally', href: '/tally/export', icon: Upload, module: 'tally', feature: 'tally' },

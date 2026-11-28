@@ -142,6 +142,7 @@ const CATALOGUE: { group: string; blurb: string; reports: ReportDef[] }[] = [
       { title: 'Stock Ledger', href: '/reports/stock-ledger', description: 'Every receipt, issue, sale and adjustment of one item, with a running balance.' },
       { title: 'Stock Ageing', href: '/reports/stock-ageing', description: 'How long the stock on hand has been sitting, in buckets.' },
       { title: 'Inventory Valuation Summary', href: '/reports/inventory-valuation', description: 'Each item’s quantity, unit cost and value at a date.' },
+      { title: 'Stock Valuation vs Ledger', href: '/reports/stock-reconciliation', description: 'Each item’s value per the valuation against the Inventory account, the variance and its reason.' },
       { title: 'Committed Stock Details', href: '/reports/committed-stock', description: 'Promised on open sales orders against what is on hand.' },
       { title: 'ABC Classification', href: '/reports/abc-classification', description: 'Items ranked by sales into A, B and C: where stock care pays most.' },
       { title: 'Batches and Expiry', href: '/inventory/batches', description: 'Stock by batch, and what is expiring.' },

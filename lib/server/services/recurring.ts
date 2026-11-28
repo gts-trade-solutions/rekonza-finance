@@ -180,6 +180,8 @@ export async function runRecurringPurchase(trx: Trx, orgId: number, userId: numb
       vendorInvoiceNo: `RB${id}/${runDate.slice(2).replace(/-/g, '')}`,
       date: runDate, dueDate: due.toISOString().slice(0, 10),
       notes: `${profile.profile_name} — raised from a recurring profile. Replace the bill number with the vendor's own when their bill arrives.`,
+      // A scheduled run is never refused as a look-alike; it is put on the register instead.
+      duplicateReason: `Raised by recurring profile ${profile.profile_name}`,
       lines: lines.map((l) => ({
         itemId: l.itemId, accountId: l.accountId, description: l.description, hsnSac: l.hsnSac,
         qty: l.qty, ratePaise: l.ratePaise, gstRatePct: l.gstRatePct,

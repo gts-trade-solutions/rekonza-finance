@@ -21,6 +21,8 @@ import { allocateOrgNumber } from '../ledger/posting';
 import { stockPosition } from '../reports/stock';
 import { fyLabelFor } from './sales';
 import { checkStock } from './guards';
+import { afterStockMoved, itemValues, perpetualOn, postStockChange } from './stock-ledger';
+import { reverseEntry } from '../ledger/posting';
 
 export interface BomInput { itemId: number; name: string; outputQty: number; lines: { itemId: number; qty: number }[]; isActive?: boolean; notes?: string | null }
 
@@ -108,6 +110,10 @@ export async function recordProduction(
     return { ...n, cost: Math.round(unit * n.qty) };
   });
   const componentsCost = costed.reduce((t, c) => t + c.cost, 0);
+  // On a perpetual book the run posts as it is recorded: the value of stock
+  // before it, so what it changed can be posted after (stock-ledger.ts).
+  const perpetual = await perpetualOn(trx, orgId, input.date);
+  const valueBefore = perpetual ? await itemValues(trx, orgId, input.date) : null;
   const overhead = input.overheadPaise ?? 0;
   if (overhead < 0) throw badRequest('Overhead cannot be negative.');
   const values = {
@@ -128,14 +134,31 @@ export async function recordProduction(
   await trx.insertInto('production_lines').values(costed.map((c) => ({
     production_id: id, item_id: c.itemId, qty: String(c.qty), cost: toSqlFromPaise(c.cost),
   }))).execute();
+  // Finished goods into Inventory, components out of it, the overhead absorbed
+  // into the goods' cost against cost of goods sold (AS 2 / Ind AS 2: the cost
+  // of conversion is part of the cost of inventory). Posted now, not at the
+  // month-end true-up, so the Inventory account agrees with the valuation on
+  // the day of the run.
+  if (valueBefore) {
+    const posted = await postStockChange(trx, orgId, userId, {
+      date: input.date, before: valueBefore, sourceType: 'production', sourceId: id, branchId: input.branchId,
+      memo: `Production ${number}: ${input.qty} ${bom.itemName} made, components used`,
+      describe: { in: 'Made: into stock', out: 'Used in production', counter: 'Production overhead absorbed into stock' },
+    });
+    await trx.updateTable('productions').set({ journal_entry_id: posted?.entryId ?? null }).where('id', '=', id).execute();
+    await afterStockMoved(trx, orgId, userId, input.date, `production ${number} dated ${input.date}`);
+  }
   return { id, number, costPaise: componentsCost + overhead, unitCostPaise: Math.round((componentsCost + overhead) / input.qty), warnings };
 }
 
-export async function voidProduction(trx: Trx, orgId: number, id: number) {
-  const p = await trx.selectFrom('productions').select(['number', 'status']).where('id', '=', id).where('org_id', '=', orgId).forUpdate().executeTakeFirst();
+export async function voidProduction(trx: Trx, orgId: number, id: number, userId: number | null = null) {
+  const p = await trx.selectFrom('productions').select(['number', 'status', 'journal_entry_id', 'produced_on']).where('id', '=', id).where('org_id', '=', orgId).forUpdate().executeTakeFirst();
   if (!p) throw notFound('That production does not exist.');
   if (p.status === 'void') throw conflict(`${p.number} is already void.`);
-  await trx.updateTable('productions').set({ status: 'void' }).where('id', '=', id).execute();
+  await trx.updateTable('productions').set({ status: 'void', journal_entry_id: null }).where('id', '=', id).execute();
+  // What it posted comes back out with it, and later costs are checked again.
+  if (p.journal_entry_id) await reverseEntry(trx, orgId, p.journal_entry_id, { memo: `Production ${p.number} voided`, userId, module: 'accountant' });
+  await afterStockMoved(trx, orgId, userId, String(p.produced_on).slice(0, 10), `production ${p.number} voided`);
 }
 
 export async function listProductions(ex: Executor, orgId: number) {

@@ -229,7 +229,7 @@ export interface ApprovalActions {
   action: "approved" | "rejected" | "submitted";
   created_at: Generated<Date>;
   document_id: number;
-  document_type: "bill" | "invoice" | "journal" | "payment_batch";
+  document_type: "bill" | "credit_note" | "invoice" | "journal" | "payment_batch";
   id: Generated<number>;
   note: string | null;
   org_id: number;
@@ -239,7 +239,7 @@ export interface ApprovalActions {
 export interface ApprovalRules {
   approver_role: Generated<"accountant" | "admin" | "sales" | "staff" | "viewer">;
   created_at: Generated<Date>;
-  document_type: "bill" | "invoice" | "journal" | "payment_batch";
+  document_type: "bill" | "credit_note" | "invoice" | "journal" | "payment_batch";
   id: Generated<number>;
   is_active: Generated<number>;
   org_id: number;
@@ -284,26 +284,6 @@ export interface AssetVerifications {
   org_id: number;
   verified_by_user_id: number | null;
   verified_on: ColumnType<string, string, string>;
-}
-
-export interface AuditChain {
-  audit_id: number;
-  id: Generated<number>;
-  org_id: number;
-  prev_hash: string;
-  row_hash: string;
-  sealed_at: Generated<Date>;
-  seq: number;
-}
-
-export interface AuditChainHeads {
-  last_hash: string;
-  last_seq: Generated<number>;
-  max_audit_id: Generated<number>;
-  org_id: number;
-  updated_at: Generated<Date>;
-  verified_at: Date | null;
-  verified_ok: number | null;
 }
 
 export interface AuditLog {
@@ -733,32 +713,6 @@ export interface Branches {
   updated_at: Generated<Date>;
 }
 
-export interface BudgetPlanLines {
-  account_id: number;
-  amount: Generated<Decimal>;
-  id: Generated<number>;
-  org_id: number;
-  period_no: number;
-  plan_id: number;
-}
-
-export interface BudgetPlans {
-  branch_id: number | null;
-  cost_centre_id: number | null;
-  created_at: Generated<Date>;
-  created_by_user_id: number | null;
-  fy_label: string;
-  id: Generated<number>;
-  include_balance_sheet: Generated<number>;
-  is_primary: Generated<number>;
-  name: string;
-  notes: string | null;
-  org_id: number;
-  period: Generated<"half_yearly" | "monthly" | "quarterly" | "yearly">;
-  project_id: number | null;
-  updated_at: Generated<Date>;
-}
-
 export interface Budgets {
   account_id: number;
   amount: Generated<Decimal>;
@@ -895,34 +849,6 @@ export interface Consents {
   subject_id: number;
   subject_type: "contact" | "employee";
   withdrawn_at: Date | null;
-}
-
-export interface ConsolidationContactLinks {
-  contact_id: number;
-  counterpart_org_id: number;
-  created_at: Generated<Date>;
-  created_by_user_id: number | null;
-  id: Generated<number>;
-  org_id: number;
-}
-
-export interface ConsolidationGroups {
-  created_at: Generated<Date>;
-  created_by_user_id: number | null;
-  id: Generated<number>;
-  name: string;
-  org_id: number;
-  updated_at: Generated<Date>;
-}
-
-export interface ConsolidationMembers {
-  acquired_on: ColumnType<string | null, string | null, string | null>;
-  group_id: number;
-  id: Generated<number>;
-  investment_account_id: number | null;
-  member_org_id: number;
-  org_id: number;
-  ownership_pct: Generated<Decimal>;
 }
 
 export interface ContactAddresses {
@@ -1094,6 +1020,9 @@ export interface CreditNotes {
   adjustment_label: string | null;
   against_invoice_id: number | null;
   applied_amount: Generated<Decimal>;
+  approval_status: Generated<"approved" | "none" | "pending" | "rejected">;
+  approved_at: Date | null;
+  approved_by_user_id: number | null;
   branch_id: number;
   cess: Generated<Decimal>;
   cgst: Generated<Decimal>;
@@ -1110,10 +1039,13 @@ export interface CreditNotes {
   place_of_supply: string;
   reason: string;
   reference_number: string | null;
+  rejection_reason: string | null;
   salesperson_id: number | null;
   sgst: Generated<Decimal>;
   shipping_charge: Generated<Decimal>;
   status: Generated<"applied" | "draft" | "open" | "refunded" | "void">;
+  submitted_at: Date | null;
+  submitted_by_user_id: number | null;
   subtotal: Generated<Decimal>;
   supply_type: "export_lut" | "export_with_tax" | "inter" | "intra" | "nil_or_exempt" | "sez";
   terms: string | null;
@@ -1256,6 +1188,23 @@ export interface Documents {
   reference: string | null;
   title: string;
   updated_at: Generated<Date>;
+}
+
+export interface DuplicateReviews {
+  created_at: Generated<Date>;
+  doc_id: number;
+  doc_type: "bill" | "expense" | "goods_receipt" | "invoice";
+  entered_by_user_id: number | null;
+  entered_reason: string | null;
+  id: Generated<number>;
+  org_id: number;
+  review_note: string | null;
+  reviewed_at: Date | null;
+  reviewed_by_user_id: number | null;
+  status: Generated<"cleared" | "confirmed" | "open">;
+  twin_id: number;
+  twin_type: "bill" | "expense" | "goods_receipt" | "invoice";
+  why: string;
 }
 
 export interface Einvoices {
@@ -1761,9 +1710,7 @@ export interface HeldJournals {
   memo: string;
   note: string | null;
   org_id: number;
-  reason: string | null;
   reverse_on: ColumnType<string | null, string | null, string | null>;
-  reverses_entry_id: number | null;
   status: Generated<"discarded" | "held" | "posted" | "rejected">;
   total_amount: Decimal;
 }
@@ -1803,6 +1750,28 @@ export interface IdempotencyKeys {
   response: string | null;
   status: number | null;
   user_id: number;
+}
+
+export interface ImportBatches {
+  created_at: Generated<Date>;
+  created_by_user_id: number | null;
+  created_ids: Json | null;
+  errors: Json | null;
+  failed: Generated<number>;
+  file_format: string | null;
+  file_name: string | null;
+  id: Generated<number>;
+  imported: Generated<number>;
+  kind: string;
+  mode: Generated<"all" | "valid_only">;
+  module: string;
+  note: string | null;
+  org_id: number;
+  rows_total: Generated<number>;
+  skipped: Generated<number>;
+  status: Generated<"imported" | "undone">;
+  undone_at: Date | null;
+  undone_by_user_id: number | null;
 }
 
 export interface InboundStatements {
@@ -2214,19 +2183,6 @@ export interface JournalLines {
   org_id: number;
 }
 
-export interface JournalReversals {
-  approved_by_user_id: number | null;
-  created_at: Generated<Date>;
-  entry_id: number;
-  id: Generated<number>;
-  kind: Generated<"approved" | "manual" | "scheduled">;
-  org_id: number;
-  reason: string;
-  requested_by_user_id: number | null;
-  reversal_entry_id: number;
-  reverse_on: ColumnType<string, string, string>;
-}
-
 export interface JournalTemplates {
   created_at: Generated<Date>;
   created_by_user_id: number | null;
@@ -2426,6 +2382,7 @@ export interface PaymentBatches {
   approved_at: Date | null;
   approved_by_user_id: number | null;
   bank_account_id: number;
+  bank_format: string | null;
   branch_id: number;
   created_at: Generated<Date>;
   created_by_user_id: number | null;
@@ -2445,13 +2402,16 @@ export interface PaymentBatches {
 export interface PaymentBatchLines {
   account_no: string | null;
   amount: Decimal;
+  bank_status: Generated<"failed" | "paid" | "pending">;
   batch_id: number;
   beneficiary_name: string | null;
   bill_id: number;
+  failure_reason: string | null;
   id: Generated<number>;
   ifsc: string | null;
   org_id: number;
   payment_id: number | null;
+  utr: string | null;
   vendor_id: number;
 }
 
@@ -2715,6 +2675,7 @@ export interface Productions {
   created_by_user_id: number | null;
   id: Generated<number>;
   item_id: number;
+  journal_entry_id: number | null;
   notes: string | null;
   number: string;
   org_id: number;
@@ -3175,6 +3136,18 @@ export interface StockGroups {
   parent_id: number | null;
 }
 
+export interface StockPostings {
+  amount: Decimal;
+  created_at: Generated<Date>;
+  entry_id: number | null;
+  id: Generated<number>;
+  item_id: number;
+  org_id: number;
+  posting_date: ColumnType<string, string, string>;
+  source_id: number | null;
+  source_type: string;
+}
+
 export interface StockTransferLines {
   id: Generated<number>;
   item_id: number;
@@ -3506,6 +3479,28 @@ export interface Users {
   updated_at: Generated<Date>;
 }
 
+export interface VendorCreditLines {
+  bill_line_id: number | null;
+  cess: Generated<Decimal>;
+  cgst: Generated<Decimal>;
+  description: string | null;
+  gst_rate_pct: Generated<Decimal>;
+  hsn_sac: string | null;
+  id: Generated<number>;
+  igst: Generated<Decimal>;
+  item_id: number | null;
+  line_no: number;
+  line_total: Generated<Decimal>;
+  org_id: number;
+  qty: Generated<Decimal>;
+  rate: Generated<Decimal>;
+  sgst: Generated<Decimal>;
+  stock_cost: Decimal | null;
+  taxable: Generated<Decimal>;
+  uqc: string | null;
+  vendor_credit_id: number;
+}
+
 export interface VendorCredits {
   against_bill_id: number | null;
   applied_amount: Generated<Decimal>;
@@ -3630,8 +3625,6 @@ export interface DB {
   asset_classes: AssetClasses;
   asset_costs: AssetCosts;
   asset_verifications: AssetVerifications;
-  audit_chain: AuditChain;
-  audit_chain_heads: AuditChainHeads;
   audit_log: AuditLog;
   auth_throttle: AuthThrottle;
   backup_runs: BackupRuns;
@@ -3656,8 +3649,6 @@ export interface DB {
   bom_lines: BomLines;
   boms: Boms;
   branches: Branches;
-  budget_plan_lines: BudgetPlanLines;
-  budget_plans: BudgetPlans;
   budgets: Budgets;
   cash_counts: CashCounts;
   challan_lines: ChallanLines;
@@ -3667,9 +3658,6 @@ export interface DB {
   compliance_filings: ComplianceFilings;
   composition_returns: CompositionReturns;
   consents: Consents;
-  consolidation_contact_links: ConsolidationContactLinks;
-  consolidation_groups: ConsolidationGroups;
-  consolidation_members: ConsolidationMembers;
   contact_addresses: ContactAddresses;
   contact_persons: ContactPersons;
   contacts: Contacts;
@@ -3686,6 +3674,7 @@ export interface DB {
   depreciation_runs: DepreciationRuns;
   document_preferences: DocumentPreferences;
   documents: Documents;
+  duplicate_reviews: DuplicateReviews;
   einvoices: Einvoices;
   email_log: EmailLog;
   email_templates: EmailTemplates;
@@ -3714,6 +3703,7 @@ export interface DB {
   hsn_codes: HsnCodes;
   hsn_rate_history: HsnRateHistory;
   idempotency_keys: IdempotencyKeys;
+  import_batches: ImportBatches;
   inbound_statements: InboundStatements;
   integration_calls: IntegrationCalls;
   integration_connections: IntegrationConnections;
@@ -3737,7 +3727,6 @@ export interface DB {
   journal_allocations: JournalAllocations;
   journal_entries: JournalEntries;
   journal_lines: JournalLines;
-  journal_reversals: JournalReversals;
   journal_templates: JournalTemplates;
   landed_cost_lines: LandedCostLines;
   landed_costs: LandedCosts;
@@ -3798,6 +3787,7 @@ export interface DB {
   statutory_payments: StatutoryPayments;
   stock_adjustments: StockAdjustments;
   stock_groups: StockGroups;
+  stock_postings: StockPostings;
   stock_transfer_lines: StockTransferLines;
   stock_transfers: StockTransfers;
   tally_companies: TallyCompanies;
@@ -3821,6 +3811,7 @@ export interface DB {
   transaction_locks: TransactionLocks;
   user_branches: UserBranches;
   users: Users;
+  vendor_credit_lines: VendorCreditLines;
   vendor_credits: VendorCredits;
   voucher_types: VoucherTypes;
   warehouses: Warehouses;

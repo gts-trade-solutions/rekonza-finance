@@ -168,7 +168,8 @@ test('bringing them in: new parties, a known one widened to both, sales invoices
     assert.match(again[0].notes.join(' '), /Already in the books, so left out: our-1\.pdf \(OLD\/26-27\/0107\), our-2\.pdf/);
 
     // One PDF chosen twice in the same upload goes in once.
-    const dup = { ...docs[2], number: 'LAC/0419', file: 'lakshmi-2.pdf' };
+    // (Another quantity: the same amount from the same supplier within a week is a look-alike that needs a reason, bill-duplicates.ts.)
+    const dup = { ...docs[2], number: 'LAC/0419', file: 'lakshmi-2.pdf', lines: docs[2].lines.map((l) => ({ ...l, qty: l.qty + 1 })) };
     const once = await importPdfInvoices(trx, ctx, [dup, { ...dup, file: 'lakshmi-2 (copy).pdf' }]);
     assert.deepEqual(once.map((o) => [o.label, o.created, o.skipped]), [['Supplier bills', 1, 1]]);
     assert.match(once[0].notes.join(' '), /Chosen twice, so taken once: lakshmi-2 \(copy\)\.pdf \(LAC\/0419\)/);
