@@ -44,7 +44,9 @@ const visit = async (route) => {
       if (new URL(page.url()).pathname !== route.split('?')[0]) { await page.goto(BASE + route, { waitUntil: 'domcontentloaded' }).catch(() => {}); await settle(); }
     } catch { /* not clickable */ }
   }
-  const text = (await page.locator('main').innerText().catch(() => '')).replace(/\s+/g, ' ');
+  // A full-screen page (the import wizard) sits outside <main>: read the whole page then.
+  let text = (await page.locator('main').innerText().catch(() => '')).replace(/\s+/g, ' ');
+  if (text.length < 40) text = (await page.locator('body').innerText().catch(() => '')).replace(/\s+/g, ' ');
   return text;
 };
 let screens = 0;

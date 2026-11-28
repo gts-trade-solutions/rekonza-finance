@@ -1,0 +1,1 @@
+{"views":[{"id":"13","name":"Trial balance, every account","shared":true,"mine":false,"filters":{"to":"2026-11-28","from":"2026-04-01","basis":"accrual","filter":{},"report":"trial-balance","columns":{"net":true,"type":true},"accounts":"all","reportBy":"total","compareMode":"none"}}]}

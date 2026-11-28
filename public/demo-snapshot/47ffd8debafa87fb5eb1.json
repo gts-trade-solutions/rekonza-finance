@@ -1,0 +1,1 @@
+{"purchases":true,"rows":[{"kind":"invoice","id":"298","date":"2026-11-20","number":"INV/26-27/0025","party":"Gulf Fleet Services LLC","qty":2,"ratePaise":1500000,"amountPaise":3000000,"status":"sent"},{"kind":"invoice","id":"285","date":"2026-10-21","number":"INV/26-27/0014","party":"Gulf Fleet Services LLC","qty":4,"ratePaise":1500000,"amountPaise":6000000,"status":"paid"}]}

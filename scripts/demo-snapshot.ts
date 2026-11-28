@@ -88,6 +88,12 @@ const DIALOGS = [
   { list: '/api/goods-receipts', detail: '/api/goods-receipts/[id]' },
   // Fixed Assets: an asset's window (History, Details, Verify & dispose), opened from a register row.
   { list: '/api/fixed-assets?view=register', detail: '/api/fixed-assets?view=asset&id=[id]' },
+  // Its Verify & dispose tab: the sale advice and the preview for each way out (a typed amount or date still matches).
+  { list: '/api/fixed-assets?view=register', detail: `/api/fixed-assets?view=sale-advice&id=[id]&date=${new Date().toISOString().slice(0, 10)}` },
+  ...['invoice', 'bank', 'none'].map((via) => ({
+    list: '/api/fixed-assets?view=register',
+    detail: `/api/fixed-assets?view=disposal-preview&id=[id]&date=${new Date().toISOString().slice(0, 10)}&salePaise=0&via=${via}`,
+  })),
 ];
 
 /**
