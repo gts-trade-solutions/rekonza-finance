@@ -22,6 +22,23 @@ const rupeeUp = (p: Paise) => Math.ceil(p / 100) * 100;
 /** The statutory wage ceiling for contributions and the pension scheme. */
 export const PF_WAGE_CEILING: Paise = 15_000_00;
 
+/** The day the pension scheme closed to new members above the ceiling (EPS 1995, para 6A, from G.S.R. 609(E)). */
+export const EPS_CUTOFF = '2014-09-01';
+
+/**
+ * Whether someone may be in the Employees' Pension Scheme. A member who joins
+ * on or after 1 September 2014 with PF wages (basic and DA) above ₹15,000 a
+ * month at joining is not eligible: the employer's whole 12% goes to EPF. One
+ * who was already an EPS member before that date, here or with an earlier
+ * employer, stays one, whatever they now earn. A later raise above the
+ * ceiling does not take away membership begun below it.
+ */
+export function epsEligible(o: { dateOfJoining: string; pfWageAtJoining: Paise; memberBeforeSep2014: boolean }): boolean {
+  if (o.memberBeforeSep2014) return true;
+  if (o.dateOfJoining.slice(0, 10) < EPS_CUTOFF) return true;
+  return o.pfWageAtJoining <= PF_WAGE_CEILING;
+}
+
 export interface PfResult {
   /** Basic and DA earned in the month: what PF is worked on. */
   pfWage: Paise;

@@ -36,12 +36,13 @@ export function OutputGuard() {
       const part = moduleForPath(window.location.pathname, window.location.search);
       return !part || hasPermission(role, part, action);
     };
-    setOutputGuard((action, what) => {
+    setOutputGuard((action, what, recorded) => {
       if (!may(action)) {
         toast.error(action === 'print' ? 'Your role cannot print this' : 'Your role cannot export this', { description: 'Ask an admin if you need a copy.' });
         return false;
       }
-      void api.post('/api/audit/output', { action, what: what.slice(0, 200), path: window.location.pathname }).catch(() => {});
+      // Recorded already by the server that produced it (the audit trail's own export): one line per copy, not two.
+      if (!recorded) void api.post('/api/audit/output', { action, what: what.slice(0, 200), path: window.location.pathname }).catch(() => {});
       return true;
     });
     // The browser's own print command: blank, with a notice, without the right.

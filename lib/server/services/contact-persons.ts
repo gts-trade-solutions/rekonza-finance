@@ -62,7 +62,7 @@ export async function updatePerson(trx: Trx, orgId: number, contactId: number, p
     designation: cut(input.designation, 100), department: cut(input.department, 100),
     is_primary: input.isPrimary ? 1 : 0, receives_documents: input.receivesDocuments === false ? 0 : 1,
   }).where('id', '=', personId).execute();
-  return { id: personId, name, before: plain(before) };
+  return { id: personId, name, before: plain(before), after: plain(await findPerson(trx, orgId, contactId, personId)) };
 }
 
 /** Remove one person: they no longer get documents or sign in to the portal by their own address. */

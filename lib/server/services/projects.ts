@@ -272,8 +272,9 @@ export async function updateTime(trx: Trx, orgId: number, id: number, input: Tim
     task_id: taskId, entry_date: input.date, minutes: input.minutes, notes: input.notes?.trim().slice(0, 500) || null, billable: billable ? 1 : 0,
     ...(reset ? { approval_status: 'pending' as const, approved_by_user_id: null, approved_at: null, approval_note: null } : {}),
   }).where('id', '=', id).execute();
-  const after = await trx.selectFrom('time_entries').select(['approval_status']).where('id', '=', id).executeTakeFirstOrThrow();
-  return { id, before, approvalStatus: after.approval_status, userId: row.user_id, projectId: row.project_id };
+  const now = await trx.selectFrom('time_entries').select(['entry_date', 'minutes', 'task_id', 'notes', 'billable', 'approval_status']).where('id', '=', id).executeTakeFirstOrThrow();
+  const after = { date: String(now.entry_date).slice(0, 10), minutes: now.minutes, taskId: now.task_id, notes: now.notes, billable: !!now.billable, approval: now.approval_status };
+  return { id, before, after, approvalStatus: now.approval_status, userId: row.user_id, projectId: row.project_id };
 }
 
 // ── Tasks ───────────────────────────────────────────────────────────────────

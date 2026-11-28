@@ -45,7 +45,7 @@ import { postEntry, reverseEntry, type DraftLine } from '../ledger/posting';
 import { CODE, accountIds, requireAccount } from '../ledger/chart-of-accounts';
 import { monthLabel } from '../../date-range';
 import {
-  annualTax, esi, esiPeriodOf, labourWelfare, monthlyTds, monthsLeftInFy, oldRegimeDeductions, pf, professionalTax,
+  annualTax, EPS_CUTOFF, epsEligible, esi, esiPeriodOf, labourWelfare, monthlyTds, monthsLeftInFy, oldRegimeDeductions, pf, professionalTax,
 } from '../../payroll/statutory';
 
 const p = toPaiseFromSql;
@@ -82,7 +82,7 @@ type EmployeeRow = Awaited<ReturnType<typeof activeEmployees>>[number];
 async function activeEmployees(ex: Executor, orgId: number, month: string) {
   return ex.selectFrom('employees as e').innerJoin('branches as b', 'b.id', 'e.branch_id')
     .select([
-      'e.id', 'e.name', 'e.gender', 'e.date_of_joining', 'e.date_of_leaving', 'e.pf_member', 'e.eps_member', 'e.pf_on_actual',
+      'e.id', 'e.name', 'e.gender', 'e.date_of_joining', 'e.date_of_leaving', 'e.pf_member', 'e.eps_member', 'e.eps_before_sep2014', 'e.pf_on_actual',
       'e.pt_applicable', 'e.lwf_applicable', 'e.disabled', 'e.tax_regime', 'e.declared_deductions', 'e.metro_city',
       // Professional Tax and LWF are the state's where the work is done (migration 132).
       sql<string>`COALESCE(e.work_state_code, b.state_code)`.as('state_code'),
@@ -169,8 +169,13 @@ async function computeLine(ex: Executor, orgId: number, runId: number, month: st
   const reimbursement = (input.reimbursementPaise ?? 0) + claims;
   const gross = earn.basic + earn.da + earn.hra + earn.special + earn.other + bonus + arrearsTotal;
 
-  // Arrears of basic and DA carry PF, counted with this month's wage.
-  const pfr = pf({ pfWage: earn.basic + earn.da + arrearsBasicDa, member: !!e.pf_member, epsMember: !!e.eps_member, onActual: !!e.pf_on_actual });
+  // Arrears of basic and DA carry PF, counted with this month's wage. EPS only for
+  // someone eligible under para 6A (joined before 1 September 2014, or at PF
+  // wages up to ₹15,000, or already a member then), whatever the record says.
+  const doj = String(e.date_of_joining).slice(0, 10);
+  const joining = e.eps_member && !e.eps_before_sep2014 && doj >= EPS_CUTOFF ? await salaryOn(ex, e.id, doj) ?? structure : null;
+  const epsMember = !!e.eps_member && (!joining || epsEligible({ dateOfJoining: doj, pfWageAtJoining: joining.basic + joining.da, memberBeforeSep2014: !!e.eps_before_sep2014 }));
+  const pfr = pf({ pfWage: earn.basic + earn.da + arrearsBasicDa, member: !!e.pf_member, epsMember, onActual: !!e.pf_on_actual });
 
   // Covered at any point earlier in the contribution period means covered now.
   const period = esiPeriodOf(month);
@@ -375,8 +380,14 @@ export async function payRun(trx: Trx, orgId: number, userId: number | null, run
   return r.entryId;
 }
 
-/** Take a posted run back to draft: its entry is reversed, never deleted. */
-export async function reopenRun(trx: Trx, orgId: number, userId: number | null, runId: number, reason: string): Promise<void> {
+/**
+ * Take a posted run back to draft: its entry is reversed, never deleted. The
+ * draft is then worked out again, as Prepare does, so an employee who joined
+ * the books after the run was first prepared (and is on them for that month,
+ * with a salary) is on it now; everyone else keeps the days and extras they
+ * had. Returns who was added.
+ */
+export async function reopenRun(trx: Trx, orgId: number, userId: number | null, runId: number, reason: string): Promise<{ added: string[] }> {
   const run = await trx.selectFrom('payroll_runs').selectAll().where('id', '=', runId).where('org_id', '=', orgId).forUpdate().executeTakeFirst();
   if (!run) throw notFound('That payroll run does not exist.');
   if (run.status === 'paid') throw conflict('Salaries for this month have been paid. Record a correction in next month’s payroll instead.');
@@ -388,6 +399,28 @@ export async function reopenRun(trx: Trx, orgId: number, userId: number | null, 
     await reverseEntry(trx, orgId, run.journal_entry_id, { memo: `Payroll for ${monthLabel(run.month)} reopened — ${reason.trim()}`, userId, module: 'accountant' });
   }
   await trx.updateTable('payroll_runs').set({ status: 'draft', journal_entry_id: null }).where('id', '=', runId).execute();
+  const before = new Set((await trx.selectFrom('payroll_lines').select('employee_id').where('run_id', '=', runId).execute()).map((l) => Number(l.employee_id)));
+  await prepareRun(trx, orgId, userId, run.month);
+  const now = await trx.selectFrom('payroll_lines as l').innerJoin('employees as e', 'e.id', 'l.employee_id').select(['l.employee_id', 'e.code', 'e.name'])
+    .where('l.run_id', '=', runId).orderBy('e.code').execute();
+  return { added: now.filter((l) => !before.has(Number(l.employee_id))).map((l) => `${l.name} (${l.code})`) };
+}
+
+/**
+ * Employees on the books for the month, with a salary, who are not on its
+ * run: joined (or were given a salary) after the run was prepared. A draft
+ * shows them with an "Add new employees" button, which works the draft out
+ * again (prepareRun) with everyone.
+ */
+async function missingFromRun(ex: Executor, orgId: number, runId: number, month: string) {
+  const on = new Set((await ex.selectFrom('payroll_lines').select('employee_id').where('run_id', '=', runId).execute()).map((l) => Number(l.employee_id)));
+  const out: { employeeId: string; code: string; name: string; dateOfJoining: string }[] = [];
+  for (const e of await activeEmployees(ex, orgId, month)) {
+    if (on.has(e.id) || !(await salaryOn(ex, e.id, lastDay(month)))) continue;
+    const row = await ex.selectFrom('employees').select(['code']).where('id', '=', e.id).executeTakeFirstOrThrow();
+    out.push({ employeeId: String(e.id), code: row.code, name: e.name, dateOfJoining: String(e.date_of_joining).slice(0, 10) });
+  }
+  return out;
 }
 
 export interface RunLine {
@@ -433,6 +466,8 @@ export async function runDetail(ex: Executor, orgId: number, runId: number) {
     journalEntryId: run.journal_entry_id ? String(run.journal_entry_id) : null,
     org: { name: org.legal_name ?? org.name, pfCode: org.pf_establishment_code, esiCode: org.esi_employer_code, tan: org.tan },
     lines,
+    /** On the books for the month with a salary, but not on this run (a draft can add them). */
+    missingEmployees: run.status === 'draft' ? await missingFromRun(ex, orgId, run.id, run.month) : [],
   };
 }
 

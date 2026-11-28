@@ -20,6 +20,7 @@ import { deleteSalaryChallan, form16PartA, form24Q, recordSalaryChallan, salaryT
 import { paySalaries, reverseSalaryPayment, salaryBankFile, salaryPayments } from '../../lib/server/payroll/salary-payments';
 import { form16 } from '../../lib/server/payroll/form16';
 import { deleteRun, unpayRun } from '../../lib/server/payroll/changes';
+import { setTodayForTests } from '../../lib/server/payroll/paid-dates';
 
 const R = (rupees: number) => Math.round(rupees * 100);
 
@@ -44,7 +45,8 @@ async function withFixture(fn: (f: Fixture) => Promise<void>) {
       }, { basic: R(s.basic), da: 0, hra: R(s.hra), special: R(s.special), other: 0 });
       const ids = {
         // Basic above the ₹15,000 PF ceiling; gross above the ₹21,000 ESI ceiling; works in Maharashtra.
-        a: await emp('A', '27', { basic: 20_000, hra: 8_000, special: 7_000 }, { costCentreId: cc }),
+        // An EPS member since before 1 September 2014 (UAN carried over), so EPS is capped, not taken away.
+        a: await emp('A', '27', { basic: 20_000, hra: 8_000, special: 7_000 }, { costCentreId: cc, epsBeforeSep2014: true }),
         // Below both ceilings; Karnataka, under its ₹25,000 PT threshold.
         b: await emp('B', '29', { basic: 10_000, hra: 5_000, special: 3_000 }),
         // Below both; the branch's own Tamil Nadu (half-yearly PT).
@@ -134,7 +136,10 @@ test('PF, ESI, PT and LWF reports: the ceilings, the ECR line, the states, and t
   });
 });
 
-test('TDS on salary: challans with BSR code and serial, deductions linked, 24Q Annexure I and II, Form 16 Part A', async () => {
+test('TDS on salary: challans with BSR code and serial, deductions linked, 24Q Annexure I and II, Form 16 Part A', async (t) => {
+  // The whole year to March 2027 is run and deposited: stand after it, as a future challan is refused.
+  setTodayForTests('2027-06-30');
+  t.after(() => setTodayForTests(null));
   await withFixture(async (f) => {
     const months = ['2026-04', '2026-05', '2026-06', '2026-07', '2026-08', '2026-09', '2026-10', '2026-11', '2026-12', '2027-01', '2027-02', '2027-03'];
     await runMonths(f, months);
@@ -162,7 +167,14 @@ test('TDS on salary: challans with BSR code and serial, deductions linked, 24Q A
     const c = q1.challans[0];
     assert.equal(c.bsrCode, '0510308');
     assert.equal(c.deductees.reduce((t, d) => t + d.depositedPaise, 0), c.taxPaise);
-    assert.ok(c.deductees.every((d) => d.pan && d.paymentDate === '2026-04-30'));
+    // Not paid yet: no payment date is reported (section 192 deducts at payment), and the return says so.
+    assert.ok(c.deductees.every((d) => d.pan && d.paymentDate === null));
+    assert.ok(q1.issues.some((i) => /no salary payment recorded/.test(i.message)), JSON.stringify(q1.issues));
+    // April's salaries paid on 30 April: that is the date Annexure I reports, for each employee.
+    const aprRun = (await f.trx.selectFrom('payroll_runs').select('id').where('org_id', '=', f.orgId).where('month', '=', '2026-04').executeTakeFirstOrThrow()).id;
+    await paySalaries(f.trx, f.orgId, null, aprRun, { bankAccountId: f.bankId, date: '2026-04-30', employeeIds: null });
+    const q1paid = await form24Q(f.trx, f.orgId, 2026, 1);
+    assert.ok(q1paid.challans[0].deductees.every((d) => d.paymentDate === '2026-04-30'));
     assert.equal(q1.annexureII, null, 'Annexure II is for the fourth quarter');
     assert.ok(!q1.issues.some((i) => i.level === 'error'), JSON.stringify(q1.issues));
 

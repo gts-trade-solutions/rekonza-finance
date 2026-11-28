@@ -44,6 +44,7 @@ const p = toPaiseFromSql;
 const ymd = (v: unknown) => (v ? String(v instanceof Date ? v.toISOString() : v).slice(0, 10) : null);
 const pad = (n: number) => String(n).padStart(2, '0');
 const lastDay = (month: string) => { const [y, m] = month.split('-').map(Number); return `${month}-${pad(new Date(y, m, 0).getDate())}`; };
+const prevMonth = (month: string) => { const [y, m] = month.split('-').map(Number); return m === 1 ? `${y - 1}-12` : `${y}-${pad(m - 1)}`; };
 
 /** Entries that belong to payroll: runs, imports, settlements, and the payments of them. */
 const PAYROLL_SOURCES = ['payroll', 'payroll_payment', 'statutory_payment', 'salary_tds_challan', 'payroll_import', 'payroll_import_payment', 'fnf', 'fnf_payment'];
@@ -54,6 +55,14 @@ export interface RunCheck {
   components: { label: string; amountPaise: Paise }[];
   lines: CheckLine[]; entryIds: string[]; ok: boolean;
 }
+/**
+ * A document dated after the check's To date: on neither side of the
+ * liability comparison (the ledger as at To does not hold it, so the payroll
+ * side leaves it out too), listed so the timing is explained, not shown as a
+ * difference.
+ */
+export interface TimingItem { kind: 'run' | 'import' | 'statutory_payment' | 'tds_challan' | 'salary_payment'; label: string; date: string; amountPaise: Paise; href: string | null }
+
 export interface LiabilityCheck {
   code: string; label: string; accountId: string | null;
   postedPaise: Paise; settledPaise: Paise; subledgerPaise: Paise;
@@ -140,7 +149,15 @@ export async function payrollVsLedger(ex: Executor, orgId: number, from: string,
   }
 
   // The liabilities at the period's end, from the documents against the ledger.
-  const toM = toMonth;
+  //
+  // Both sides on one date basis: what is posted up to the To date. A run posts
+  // on its month's last day (payroll.ts postRun), so a November run dated
+  // 30 November is not in the ledger as at 28 November, and must not be on the
+  // payroll side either; otherwise every liability shows a false difference
+  // mid-month. Payments, challans and salary payments already count by their
+  // own dates. What falls after To is listed under timing, with its date.
+  const postedThrough = lastDay(toMonth) <= to ? toMonth : prevMonth(toMonth);
+  const toM = postedThrough;
   const allRuns = await ex.selectFrom('payroll_lines as l').innerJoin('payroll_runs as r', 'r.id', 'l.run_id')
     .select([sql<string>`SUM(l.pf_employee + l.pf_employer_epf + l.pf_employer_eps + l.pf_admin + l.pf_edli)`.as('pf'),
       sql<string>`SUM(l.esi_employee + l.esi_employer)`.as('esi'), sql<string>`SUM(l.pt)`.as('pt'), sql<string>`SUM(l.lwf_employee + l.lwf_employer)`.as('lwf'),
@@ -195,8 +212,26 @@ export async function payrollVsLedger(ex: Executor, orgId: number, from: string,
       })),
     });
   }
+  // What the To date leaves out on both sides, with its date: runs and imports
+  // of the period that post after To, and payments dated after To for months up to To's.
+  const timing: TimingItem[] = [];
+  for (const r of runs) if (lastDay(r.month) > to) {
+    const t = runLines.find((x) => x.run_id === r.id);
+    timing.push({ kind: 'run', label: `Pay run ${r.month} posts on its month's last day`, date: lastDay(r.month), amountPaise: p(((t as Record<string, unknown> | undefined)?.gross as string) ?? '0'), href: `/payroll/runs/${r.id}` });
+  }
+  for (const i of imports) if (lastDay(i.month) > to) timing.push({ kind: 'import', label: `Imported payroll ${i.month} posts on its month's last day`, date: lastDay(i.month), amountPaise: p(i.gross), href: '/payroll/import' });
+  const [laterStat, laterChallans, laterSal] = await Promise.all([
+    ex.selectFrom('statutory_payments').select(['component', 'period', 'paid_on', 'amount']).where('org_id', '=', orgId).where('paid_on', '>', to).where('period', '<=', toMonth).execute(),
+    ex.selectFrom('salary_tds_challans').select(['for_month', 'challan_date', 'tax', 'surcharge', 'cess']).where('org_id', '=', orgId).where('challan_date', '>', to).where('for_month', '<=', toMonth).execute(),
+    ex.selectFrom('payroll_payments as pp').innerJoin('payroll_runs as r', 'r.id', 'pp.run_id').select(['r.month', 'pp.paid_on', sql<string>`SUM(pp.amount)`.as('v')])
+      .where('pp.org_id', '=', orgId).where('pp.reversed', '=', 0).where('pp.paid_on', '>', to).where('r.month', '<=', toMonth).groupBy(['r.month', 'pp.paid_on']).execute(),
+  ]);
+  for (const x of laterStat) timing.push({ kind: 'statutory_payment', label: `${x.component.toUpperCase()} for ${x.period} paid`, date: ymd(x.paid_on)!, amountPaise: p(x.amount), href: '/payroll/statutory' });
+  for (const x of laterChallans) timing.push({ kind: 'tds_challan', label: `TDS challan for ${x.for_month}`, date: ymd(x.challan_date)!, amountPaise: p(x.tax) + p(x.surcharge) + p(x.cess), href: '/payroll/statutory' });
+  for (const x of laterSal) timing.push({ kind: 'salary_payment', label: `Salaries for ${x.month} paid`, date: ymd(x.paid_on)!, amountPaise: p(x.v), href: '/payroll/runs' });
+  timing.sort((a, b) => a.date.localeCompare(b.date));
   const ok = runChecks.every((r) => r.ok) && liabilities.every((l) => l.ok);
-  return { runs: runChecks, liabilities, ok };
+  return { runs: runChecks, liabilities, ok, postedThrough: lastDay(postedThrough), timing };
 }
 
 export async function inventoryVsLedger(ex: Executor, orgId: number, asOf: string) {

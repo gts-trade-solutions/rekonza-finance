@@ -257,7 +257,8 @@ export async function updateBill(trx: Trx, orgId: number, userId: number | null,
       .where('id', '=', billId).execute();
   }
   if (bill.source_po_id) await refreshPurchaseOrder(trx, bill.source_po_id, made.totalPaise - toPaiseFromSql(bill.total));
-  return { ...made, before };
+  // The record as it now stands, beside the one before: the audit trail writes the field-by-field edit log from the two.
+  return { ...made, before, after: await billSnapshot(trx, orgId, billId) };
 }
 
 /**
@@ -388,13 +389,21 @@ export async function updateVendorCredit(trx: Trx, orgId: number, userId: number
   if (!vc) throw notFound('That vendor credit does not exist.');
   const blocked = await vendorCreditBlocker(trx, orgId, vc, 'edit');
   if (blocked) throw locked(blocked);
-  const before = plain(vc);
+  const before = await vendorCreditSnapshot(trx, creditId);
   await reverseForChange(trx, orgId, vc.journal_entry_id, { memo: `Vendor credit ${vc.number} edited: the entry as it was, reversed`, userId, module: 'purchases' });
   await unapplyVendorCredit(trx, orgId, vc);
   // Set against its bill again, as New does whenever a bill is named.
   const made = await createVendorCredit(trx, orgId, userId, input, { replace: { id: creditId, number: vc.number } });
   if (ymd(vc.credit_date) < input.date) await afterStockMoved(trx, orgId, userId, ymd(vc.credit_date), `vendor credit ${vc.number} edited`);
-  return { ...made, before };
+  // The record as it now stands, beside the one before: the audit trail writes the field-by-field edit log from the two.
+  return { ...made, before, after: await vendorCreditSnapshot(trx, creditId) };
+}
+
+/** A vendor credit as the edit log compares it: the header and its lines. */
+async function vendorCreditSnapshot(trx: Trx, creditId: number) {
+  const head = await trx.selectFrom('vendor_credits').selectAll().where('id', '=', creditId).executeTakeFirst();
+  const lines = await trx.selectFrom('vendor_credit_lines').selectAll().where('vendor_credit_id', '=', creditId).orderBy('line_no').execute();
+  return head ? { vendorCredit: plain(head), lines: lines.map(plain) } : null;
 }
 
 /** Delete a vendor credit: its entry reversed, taken off its bill, the record kept (migration 118). */
@@ -498,7 +507,8 @@ export async function updateGoodsReceipt(
   for (const l of input.lines.filter((x) => x.poLineId)) {
     await trx.updateTable('purchase_order_lines').set({ qty_received: sql<string>`qty_received + ${String(q6(l.qty))}` }).where('id', '=', l.poLineId!).execute();
   }
-  return { ...made, before };
+  // The record as it now stands, beside the one before: the audit trail writes the field-by-field edit log from the two.
+  return { ...made, before, after: await goodsReceiptForEdit(trx, orgId, receiptId) };
 }
 
 /** Delete a receipt note: while nothing on it is billed. Its accrual reversed, the order's quantities given back, the record kept. */
@@ -591,7 +601,8 @@ export async function updatePurchaseOrder(trx: Trx, orgId: number, userId: numbe
   await trx.deleteFrom('purchase_order_lines').where('purchase_order_id', '=', poId).execute();
   const status = po.status === 'draft' ? (input.status ?? 'draft') : po.status === 'closed' ? 'closed' : 'open';
   const made = await createPurchaseOrder(trx, orgId, userId, input, { replace: { id: poId, number: po.number, status } });
-  return { ...made, before };
+  // The record as it now stands, beside the one before: the audit trail writes the field-by-field edit log from the two.
+  return { ...made, before, after: await purchaseOrderSnapshot(trx, orgId, poId) };
 }
 
 /** Delete a purchase order: while nothing on it is received or billed. Nothing was posted, so nothing is reversed; the record is kept. */
@@ -643,7 +654,8 @@ export async function updateBillOfEntry(trx: Trx, orgId: number, userId: number 
   const before = plain(e);
   await reverseForChange(trx, orgId, e.journal_entry_id, { memo: `Bill of entry ${e.boe_no} edited: the entry as it was, reversed`, userId, module: 'purchases' });
   const made = await recordBillOfEntry(trx, orgId, userId, input, { replace: { id } });
-  return { ...made, before };
+  // The record as it now stands, beside the one before: the audit trail writes the field-by-field edit log from the two.
+  return { ...made, before, after: plain(await trx.selectFrom('bills_of_entry').selectAll().where('id', '=', id).executeTakeFirstOrThrow()) };
 }
 
 /** Delete a bill of entry: its entry reversed (a void one's already was), the record kept. */

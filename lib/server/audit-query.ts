@@ -12,6 +12,7 @@ import 'server-only';
 
 import { z } from 'zod';
 import { db, type Executor } from './db';
+import { changesOf } from '../audit-changes';
 
 export const AuditFilter = z.object({
   targetType: z.string().optional(),
@@ -29,7 +30,7 @@ export const istEnd = (day: string) => new Date(`${day}T23:59:59.999+05:30`);
 
 export function auditRows(orgId: number, q: AuditFilterInput, ex: Executor = db) {
   let base = ex.selectFrom('audit_log').where('org_id', '=', orgId);
-  if (q.targetType && q.targetType !== 'all') base = base.where('target_type', '=', q.targetType);
+  if (q.targetType && q.targetType !== 'all') base = base.where('target_type', 'in', typeVariants(q.targetType));
   if (q.action && q.action !== 'all') base = base.where('action', '=', q.action);
   if (q.actorUserId) base = base.where('actor_user_id', '=', Number(q.actorUserId));
   if (q.from) base = base.where('created_at', '>=', istStart(q.from));
@@ -45,15 +46,18 @@ export function auditRows(orgId: number, q: AuditFilterInput, ex: Executor = db)
   return base;
 }
 
-/** The edit log an update carries, if it carries one. */
+/** The edit log an update carries, if it carries one, whichever shape it was written in (lib/audit-changes.ts). */
 export function changesIn(payload: unknown): Record<string, { from: unknown; to: unknown }> | null {
-  let p: unknown = payload;
-  if (typeof payload === 'string') {
-    try { p = JSON.parse(payload); } catch { p = null; }
-  }
-  const c = p && typeof p === 'object' ? (p as { changes?: unknown }).changes : null;
-  return c && typeof c === 'object' && Object.keys(c).length ? (c as Record<string, { from: unknown; to: unknown }>) : null;
+  return changesOf(payload);
 }
+
+/**
+ * A record type as the trail names it on screen: "credit-note" and
+ * "credit_note" are one type, written both ways by different parts of the
+ * code over the years. The filter lists it once and finds both.
+ */
+export const typeKey = (t: string) => t.replace(/[-\s]+/g, '_').toLowerCase();
+export const typeVariants = (t: string) => [...new Set([t, typeKey(t), typeKey(t).replace(/_/g, '-')])];
 
 /** "19 Nov 2026, 10:04:31": an instant in Indian time, as the auditor reads it. */
 export function istStamp(at: Date): string {

@@ -22,7 +22,7 @@ import { passwordProblem } from '@/components/shared/export-dialog';
 import { auditTrail } from '@/lib/api/client';
 import { downloadExport, istWallClock, type Cell } from '@/lib/xlsx';
 import { downloadPdf, istNow, pdfTable } from '@/lib/pdf';
-import { allowOutput } from '@/lib/output-guard';
+import { allowOutput, outputRecorded } from '@/lib/output-guard';
 
 export interface AuditFilters { targetType: string; action: string; actorUserId?: string; from?: string; to?: string; search?: string }
 
@@ -57,7 +57,8 @@ export function AuditExportDialog({ open, onOpenChange, filters, userName }: {
       const name = auditFileName(r.company, filters.from, filters.to);
       if (format === 'pdf') {
         // downloadExport passes the gate itself; the PDF is written here, so it passes it here.
-        if (!allowOutput('export', name)) return;
+        // GET /api/audit/export has recorded this export already: the gate checks the right only.
+        if (!outputRecorded(() => allowOutput('export', name))) return;
         const widths = [1.25, 1, 0.65, 0.9, 0.55, 1.3, 2.4, 1.2, ...(withIp ? [0.9] : []), 2, 1.8];
         const bytes = pdfTable({
           title: 'Audit trail (edit log)',
@@ -79,7 +80,7 @@ export function AuditExportDialog({ open, onOpenChange, filters, userName }: {
         const body: Cell[][] = format === 'xlsx'
           ? r.rows.map((row, i) => [istWallClock(new Date(r.instants[i])), ...row.slice(1)])
           : r.rows;
-        downloadExport(name, [{ name: 'Audit trail', rows: [r.header, ...body] }], format, password || undefined);
+        outputRecorded(() => downloadExport(name, [{ name: 'Audit trail', rows: [r.header, ...body] }], format, password || undefined));
       }
       toast.success(`Exported ${r.rows.length.toLocaleString('en-IN')} event${r.rows.length === 1 ? '' : 's'}`, { description: `${name}.${password && format !== 'pdf' ? 'zip' : format}` });
       if (r.truncated) toast.info('The first 200,000 events are in the file. Narrow the dates for the rest.');
@@ -119,10 +120,12 @@ export function AuditExportDialog({ open, onOpenChange, filters, userName }: {
               </label>
             ))}
           </div>
-          <label className="flex cursor-pointer items-center gap-2">
-            <input type="checkbox" className="size-3.5 accent-primary" checked={withIp} onChange={(e) => setWithIp(e.target.checked)} data-slot="audit-export-ip" />
-            Include IP addresses (personal data)
-          </label>
+          <div className="flex items-center gap-2">
+            <input id="audit-export-ip" type="checkbox" className="size-3.5 cursor-pointer accent-primary" checked={withIp} onChange={(e) => setWithIp(e.target.checked)} data-slot="audit-export-ip" />
+            <label htmlFor="audit-export-ip" className="cursor-pointer select-none" data-slot="audit-export-ip-label">
+              Include IP addresses (personal data)
+            </label>
+          </div>
           {format !== 'pdf' && (
             <label className="block space-y-1">
               <span>File Protection Password (optional)</span>

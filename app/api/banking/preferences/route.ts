@@ -25,8 +25,9 @@ const Prefs = z.object({
 export const PUT = route(
   async ({ orgId, user, req }) => {
     const input = await body(req, Prefs);
+    const before = await bankingPreferences(db, orgId);
     const saved = await transaction((trx) => saveBankingPreferences(trx, orgId, input));
-    await logAudit({ orgId, actorUserId: user.userId, actorName: user.name, action: 'update', targetType: 'banking_preferences', targetId: orgId, detail: 'Banking preferences saved', ...auditMeta(req) });
+    await logAudit({ orgId, actorUserId: user.userId, actorName: user.name, action: 'update', targetType: 'banking_preferences', targetId: orgId, detail: 'Banking preferences saved', payload: { before, after: saved }, ...auditMeta(req) });
     return saved;
   },
   { permission: { module: 'banking', action: 'edit' } },

@@ -26,6 +26,7 @@ import type { Executor, Trx } from '../db';
 import type { Paise } from '../../types';
 import { toPaiseFromSql, toSqlFromPaise } from '../money-sql';
 import { badRequest, conflict, notFound } from '../http';
+import { refuseFutureDate } from './paid-dates';
 import { postEntry, reverseEntry } from '../ledger/posting';
 import { CODE, accountIds, requireAccount } from '../ledger/chart-of-accounts';
 import { bankLineMatched } from '../services/doc-delete';
@@ -97,6 +98,7 @@ export async function paySalaries(
   if (run.status === 'paid') throw conflict(`Payroll for ${monthLabel(run.month)} is already paid.`);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(o.date)) throw badRequest('Give the date the salaries were paid.');
   if (o.date < `${run.month}-01`) throw badRequest('Salaries cannot be paid before the month they are for.');
+  refuseFutureDate(o.date, 'This salary payment');
   const bank = await trx.selectFrom('bank_accounts').select(['id', 'ledger_account_id', 'name']).where('id', '=', o.bankAccountId).where('org_id', '=', orgId).executeTakeFirst();
   if (!bank) throw notFound('That bank account does not exist.');
   const s = await salaryPayments(trx, orgId, runId);

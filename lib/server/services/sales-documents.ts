@@ -1498,7 +1498,8 @@ export async function updateSalesDocument(trx: Trx, orgId: number, userId: numbe
       made = await createCreditNote(trx, orgId, userId, { ...doc.input, status: 'open', applyImmediately: hadOwn }, { replace });
     }
   }
-  return { ...made, before };
+  // The record as it now stands, beside the one before: the audit trail writes the field-by-field edit log from the two.
+  return { ...made, before, after: await docSnapshot(trx, orgId, doc.kind, id) };
 }
 
 /**

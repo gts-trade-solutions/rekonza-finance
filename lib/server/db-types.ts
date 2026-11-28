@@ -1426,6 +1426,7 @@ export interface Employees {
   designation: string | null;
   disabled: Generated<number>;
   email: string | null;
+  eps_before_sep2014: Generated<number>;
   eps_member: Generated<number>;
   esi_ip_number: string | null;
   gender: "female" | "male" | "other" | null;

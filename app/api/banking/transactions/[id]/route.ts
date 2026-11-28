@@ -100,7 +100,7 @@ export const PATCH = route(
       const r = await editStatementLine(trx, orgId, id, input);
       await logAudit({
         trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'update', targetType: 'bank_txn', targetId: id,
-        detail: `Statement line edited: ${input.date}, ${input.narration.slice(0, 80)}`, payload: { before: r.before }, ...auditMeta(req),
+        detail: `Statement line edited: ${input.date}, ${input.narration.slice(0, 80)}`, payload: { before: r.before, after: r.after }, ...auditMeta(req),
       });
     });
     return { id: asId(id) };

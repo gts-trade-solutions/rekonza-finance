@@ -31,7 +31,7 @@ export const PUT = route(
       await logAudit({
         trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'update', targetType: 'time_entry', targetId: entryId,
         detail: `Time entry changed to ${(input.minutes / 60).toFixed(2)} h on ${input.date}${again ? '; waiting for approval again' : ''}`,
-        payload: { before: done.before }, ...auditMeta(req),
+        payload: { before: done.before, after: done.after }, ...auditMeta(req),
       });
       return done;
     });

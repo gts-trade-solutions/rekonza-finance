@@ -3687,7 +3687,7 @@ export interface Form24QData {
   fy: number; quarter: number; months: string[]; form: string; returnDueDate: string; receipt: { receiptNo: string; filedOn: string | null } | null;
   deductor: { name: string; tan: string | null; pan: string | null; address: string | null; type: string | null;
     responsible: { name: string | null; designation: string | null; pan: string | null; mobile: string | null; email: string | null } };
-  challans: (SalaryChallanRow & { deductees: { employeeId: string; code: string; name: string; pan: string | null; month: string; paymentDate: string; amountPaidPaise: number; tdsPaise: number; depositedPaise: number; deductedOn: string }[] })[];
+  challans: (SalaryChallanRow & { deductees: { employeeId: string; code: string; name: string; pan: string | null; month: string; paymentDate: string | null; amountPaidPaise: number; tdsPaise: number; depositedPaise: number; deductedOn: string | null }[] })[];
   unlinked: { employeeId: string; code: string; name: string; pan: string | null; month: string; tdsPaise: number; linkedPaise: number }[];
   totals: { paidPaise: number; deductedPaise: number; depositedPaise: number; linkedPaise: number };
   annexureII: Form16Year[] | null;
@@ -3726,6 +3726,10 @@ export interface IntegrationCheckData {
     runs: { kind: 'run' | 'import'; id: string; month: string; status: string; label: string; employees: number; components: { label: string; amountPaise: number }[]; lines: IntegrationCheckLine[]; entryIds: string[]; ok: boolean }[];
     liabilities: { code: string; label: string; accountId: string | null; postedPaise: number; settledPaise: number; subledgerPaise: number; ledgerPaise: number; settlementsPaise: number;
       otherPaise: number; differencePaise: number; ok: boolean; other: { entryId: string; entryNo: number; date: string; source: string; memo: string | null; amountPaise: number }[] }[];
+    /** Runs counted on the payroll side post on or before this day: the same basis as the ledger. */
+    postedThrough: string;
+    /** Documents dated after To, on neither side: timing, not a difference. */
+    timing: { kind: 'run' | 'import' | 'statutory_payment' | 'tds_challan' | 'salary_payment'; label: string; date: string; amountPaise: number; href: string | null }[];
   };
   inventory: {
     asOf: string; method: 'perpetual' | 'periodic'; perpetualFrom: string | null; stockValuePaise: number; ledgerPaise: number; differencePaise: number;

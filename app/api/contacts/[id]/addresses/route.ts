@@ -27,15 +27,17 @@ export const POST = route(async ({ orgId, user, role, params, req }) => {
   const contactId = idParam(params);
   const input = await body(req, Input);
   await transaction(async (trx) => {
+    // The contact's addresses before and after, for the edit log's old → new.
+    const before = { addresses: await listAddresses(trx, orgId, contactId) };
     if (input.action === 'delete') {
       const label = await deleteAddress(trx, orgId, contactId, input.id);
-      await logAudit({ trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'update', targetType: 'contact', targetId: contactId, detail: `Address removed: ${label}`, ...auditMeta(req) });
+      await logAudit({ trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'update', targetType: 'contact', targetId: contactId, detail: `Address removed: ${label}`, payload: { before, after: { addresses: await listAddresses(trx, orgId, contactId) } }, ...auditMeta(req) });
       return;
     }
     const { action: _a, ...fields } = input;
     void _a;
     await saveAddress(trx, orgId, contactId, fields);
-    await logAudit({ trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'update', targetType: 'contact', targetId: contactId, detail: `Address ${input.id ? 'changed' : 'added'}: ${input.label}`, ...auditMeta(req) });
+    await logAudit({ trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'update', targetType: 'contact', targetId: contactId, detail: `Address ${input.id ? 'changed' : 'added'}: ${input.label}`, payload: { before, after: { addresses: await listAddresses(trx, orgId, contactId) } }, ...auditMeta(req) });
   });
   return { addresses: await listAddresses(db, orgId, contactId) };
 });

@@ -25,7 +25,7 @@ export const PATCH = route(
       await logAudit({
         trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'update', targetType: 'warehouse', targetId: id, targetLabel: done.name,
         detail: `Warehouse ${done.name}${input.isActive === false ? ' marked inactive' : input.isActive ? ' in use' : ''}${input.isPrimary ? ', made the default' : ''}`,
-        payload: { before: done.before }, ...auditMeta(req),
+        payload: { before: done.before, after: done.after }, ...auditMeta(req),
       });
       return { id: asId(id), name: done.name };
     });

@@ -19,7 +19,7 @@ export const PUT = route(
       const done = await updateBatch(trx, orgId, id, input);
       await logAudit({
         trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'update', targetType: 'batch', targetId: id, targetLabel: done.batchNo,
-        detail: `Batch ${done.batchNo}: made ${input.mfgDate ?? '—'}, expires ${input.expiryDate ?? '—'}`, payload: { before: done.before }, ...auditMeta(req),
+        detail: `Batch ${done.batchNo}: made ${input.mfgDate ?? '—'}, expires ${input.expiryDate ?? '—'}`, payload: { before: done.before, after: done.after }, ...auditMeta(req),
       });
       return { id: asId(id) };
     });

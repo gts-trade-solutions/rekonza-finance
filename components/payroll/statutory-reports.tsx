@@ -399,7 +399,7 @@ function ChallanDialog({ value, onClose, onDone }: { value: { month: string; cha
         <div className="grid gap-3 sm:grid-cols-2">
           <Field label="BSR code" required hint="The bank branch's 7 digits"><Input value={f.bsr} maxLength={7} onChange={(e) => setF({ ...f, bsr: e.target.value.replace(/\D/g, '') })} className="font-mono" data-slot="tds-bsr" /></Field>
           <Field label="Challan serial no." required><Input value={f.serial} maxLength={5} onChange={(e) => setF({ ...f, serial: e.target.value.replace(/\D/g, '') })} className="font-mono" data-slot="tds-serial" /></Field>
-          <Field label="Date deposited" required><Input type="date" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} data-slot="tds-date" /></Field>
+          <Field label="Date deposited" required><Input type="date" max={new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(new Date())} value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} data-slot="tds-date" /></Field>
           <Field label="Paid from" required>
             <Select value={f.bankId} onValueChange={(v) => setF({ ...f, bankId: String(v) })}>
               <SelectTrigger data-slot="tds-bank"><SelectValue placeholder="Bank account" /></SelectTrigger>
@@ -425,7 +425,8 @@ const SECTION_VIA: Record<string, string> = { '80C': '80C', '80CCD1B': '80CCD(1B
 
 /** The workbook laid out for the RPU's grids: deductor, challans, Annexure I (deductees), Annexure II (salary). */
 function rpuWorkbook(q: Form24QData) {
-  const d = (iso: string) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}`;
+  // Not paid yet: left blank, and the return's issues say to record the salary payment first.
+  const d = (iso: string | null) => (iso ? `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}` : '');
   const sheets = [
     { name: 'Deductor', rows: [
       ['Form', q.form], ['Financial year', `${q.fy}-${String(q.fy + 1).slice(2)}`], ['Quarter', `Q${q.quarter}`], ['TAN', q.deductor.tan ?? ''], ['PAN', q.deductor.pan ?? ''],
@@ -489,7 +490,7 @@ export function Form24QTab() {
           <Button size="sm" variant="outline" className="gap-1.5" disabled={!q} onClick={() => q && rpuWorkbook(q)} data-slot="24q-rpu"><FileText className="size-3.5" /> Export for the RPU (Excel)</Button>
           <Button size="sm" variant="outline" className="gap-1.5" disabled={!q} onClick={() => q && downloadCsv(`24Q-FY${fy}-Q${quarter}-annexure-I.csv`, [
             ['Challan BSR', 'Challan date', 'Challan serial', 'Employee', 'PAN', 'Month', 'Date of payment', 'Amount paid', 'TDS', 'Deposited'],
-            ...q.challans.flatMap((c) => c.deductees.map((x) => [c.bsrCode, c.date, c.serial, x.name, x.pan ?? '', x.month, x.paymentDate, r2(x.amountPaidPaise), r2(x.tdsPaise), r2(x.depositedPaise)])),
+            ...q.challans.flatMap((c) => c.deductees.map((x) => [c.bsrCode, c.date, c.serial, x.name, x.pan ?? '', x.month, x.paymentDate ?? 'not paid yet', r2(x.amountPaidPaise), r2(x.tdsPaise), r2(x.depositedPaise)])),
           ])}><Download className="size-3.5" /> Annexure I CSV</Button>
         </div>
       </div>
@@ -514,7 +515,7 @@ export function Form24QTab() {
                   <thead><tr className="border-b"><th className={`${th} text-left`}>Employee</th><th className={`${th} text-left`}>PAN</th><th className={`${th} text-left`}>Paid on</th><th className={`${th} text-right`}>Amount paid</th><th className={`${th} text-right`}>TDS</th><th className={`${th} text-right`}>Deposited</th></tr></thead>
                   <tbody>
                     {c.deductees.map((x) => (
-                      <tr key={`${x.employeeId}-${x.month}`} className="border-b last:border-0" data-slot="24q-deductee"><td className={td}>{x.name}</td><td className={`${td} font-mono`}>{x.pan ?? 'PANNOTAVBL'}</td><td className={td}>{x.paymentDate}</td><td className={`${td} text-right`}><Money value={x.amountPaidPaise} /></td><td className={`${td} text-right`}><Money value={x.tdsPaise} /></td><td className={`${td} text-right`}><Money value={x.depositedPaise} /></td></tr>
+                      <tr key={`${x.employeeId}-${x.month}`} className="border-b last:border-0" data-slot="24q-deductee"><td className={td}>{x.name}</td><td className={`${td} font-mono`}>{x.pan ?? 'PANNOTAVBL'}</td><td className={td}>{x.paymentDate ?? <span className="text-amber-700" data-slot="24q-not-paid">Salary not paid yet</span>}</td><td className={`${td} text-right`}><Money value={x.amountPaidPaise} /></td><td className={`${td} text-right`}><Money value={x.tdsPaise} /></td><td className={`${td} text-right`}><Money value={x.depositedPaise} /></td></tr>
                     ))}
                   </tbody>
                 </table>

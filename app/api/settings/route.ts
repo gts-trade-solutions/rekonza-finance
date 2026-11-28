@@ -330,7 +330,8 @@ export const PUT = route(
           await db.updateTable('organizations').set({ gst_registration_type: 'regular' }).where('id', '=', orgId).execute();
           await logAudit({
             orgId, actorUserId: user.userId, actorName: user.name, action: 'update', targetType: 'organization', targetId: orgId,
-            targetLabel: 'GST registration', detail: `Registered for GST (regular) with GSTIN ${input.gstin}: no documents existed yet`, ...auditMeta(req),
+            targetLabel: 'GST registration', detail: `Registered for GST (regular) with GSTIN ${input.gstin}: no documents existed yet`,
+            payload: { changes: { gst_registration_type: { from: 'unregistered', to: 'regular' } } }, ...auditMeta(req),
           });
           registration = 'This company is now registered for GST (regular): invoices charge GST and the input tax on bills can be claimed.';
         } else {

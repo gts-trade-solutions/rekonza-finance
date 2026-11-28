@@ -26,7 +26,7 @@ export const PUT = route(
       const r = await editCheque(trx, orgId, id, input);
       await logAudit({
         trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'update', targetType: 'cheque', targetId: id, targetLabel: r.chequeNo,
-        detail: `Cheque ${r.chequeNo} edited: ${(input.amountPaise / 100).toFixed(2)}, matures ${input.maturityDate}`, payload: { before: r.before }, ...auditMeta(req),
+        detail: `Cheque ${r.chequeNo} edited: ${(input.amountPaise / 100).toFixed(2)}, matures ${input.maturityDate}`, payload: { before: r.before, after: r.after }, ...auditMeta(req),
       });
     });
     return { id: asId(id) };

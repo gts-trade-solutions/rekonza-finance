@@ -60,6 +60,7 @@ export const POST = route(
     return transaction(async (trx) => {
       const run = await runDetail(trx, orgId, id);
       let unmatched: string[] = [];
+      let added: string[] = [];
       if (input.action === 'recompute') {
         const inputs = Object.fromEntries(Object.entries(input.inputs).map(([k, v]) => [Number(k), v]));
         await prepareRun(trx, orgId, user.userId, run.month, inputs);
@@ -82,17 +83,17 @@ export const POST = route(
       } else if (input.action === 'unpay') {
         await unpayRun(trx, orgId, user.userId, id, input.reason ?? changeReason());
       } else {
-        await reopenRun(trx, orgId, user.userId, id, input.reason);
+        ({ added } = await reopenRun(trx, orgId, user.userId, id, input.reason));
       }
       await logAudit({
         trx, orgId, actorUserId: user.userId, actorName: user.name, action: input.action === 'post' ? 'approve' : 'update',
         targetType: 'payroll', targetId: id, targetLabel: `Payroll ${run.month}`,
-        detail: input.action === 'pay' ? `${DETAIL.pay} on ${input.date}` : input.action === 'reopen' ? `${DETAIL.reopen}: ${input.reason}`
+        detail: input.action === 'pay' ? `${DETAIL.pay} on ${input.date}` : input.action === 'reopen' ? `${DETAIL.reopen}: ${input.reason}${added.length ? `; added ${added.join(', ')}` : ''}`
           : input.action === 'attendance' ? `${DETAIL.attendance}: ${input.rows.length - unmatched.length} employee(s)`
             : input.action === 'unpay' && input.reason ? `${DETAIL.unpay}: ${input.reason}` : DETAIL[input.action],
         ...auditMeta(req),
       });
-      return { ...(await runDetail(trx, orgId, id)), unmatched };
+      return { ...(await runDetail(trx, orgId, id)), unmatched, added };
     });
   },
   { permission: { module: 'payroll', action: 'edit' } },

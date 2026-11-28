@@ -160,8 +160,20 @@ test('declarations decide old-regime TDS until December; accepted proofs from Ja
     assert.deepEqual((await deductionItems(trx, orgId, d, 2026, '2027-01'))!.map((i) => i.amount), [R(1_20_000), 0]);
     await reviewProof(trx, orgId, null, rent, { accept: true });
 
-    // Form 16 on the one month posted: ₹1 lakh, HRA exempt ₹20,000 (all of it), 80C ₹1.2 lakh.
-    const f = await form16(trx, orgId, d, 2026);
+    // Mid-year (November): provisional, on the year's estimated salary, as section 192 deducts:
+    // April paid, eleven months still to come at ₹1 lakh, the declarations as made. Never "refundable".
+    const mid = await form16(trx, orgId, d, 2026, '2026-11-28');
+    assert.equal(mid.provisional, true);
+    assert.equal(mid.monthsAhead, 11);
+    assert.equal(mid.salaryToDatePaise, R(1_00_000));
+    assert.equal(mid.grossPaise, R(12_00_000));
+    // ₹12 lakh − ₹50,000 − ₹1.5 lakh 80C − ₹2.4 lakh HRA = ₹7.6 lakh: ₹67,080 with cess, as the monthly TDS used.
+    assert.equal(mid.taxPaise, R(67_080));
+    assert.equal(mid.balancePaise, R(67_080 - 5_590), 'still to be deducted in the months left, not a refund');
+
+    // After the year, on the one month posted: ₹1 lakh, HRA exempt ₹20,000 (all of it), 80C ₹1.2 lakh.
+    const f = await form16(trx, orgId, d, 2026, '2027-05-15');
+    assert.equal(f.provisional, false);
     assert.equal(f.form, 'Form 130');
     assert.deepEqual([f.grossPaise, f.hraExemptPaise, f.standardDeductionPaise, f.chapterVIAPaise, f.taxablePaise, f.taxPaise],
       [R(1_00_000), R(20_000), R(50_000), R(1_20_000), 0, 0]);

@@ -22,7 +22,8 @@ interface Form16 {
   form: string; fyStart: number; assessmentYear: string;
   employer: { name: string; pan: string | null; tan: string | null; address: string | null };
   employee: { code: string; name: string; pan: string | null; designation: string | null; regime: 'new' | 'old'; from: string; to: string };
-  monthsPaid: number; grossPaise: number; arrearsPaise: number; hraExemptPaise: number; standardDeductionPaise: number;
+  monthsPaid: number; provisional: boolean; asOf: string; lastMonthPaid: string | null; salaryToDatePaise: number;
+  monthsAhead: number; monthlyGrossPaise: number; projectedRestPaise: number; grossPaise: number; arrearsPaise: number; hraExemptPaise: number; standardDeductionPaise: number;
   professionalTaxPaise: number; incomeFromSalaryPaise: number; chapterVIA: { section: string; amountPaise: number }[]; chapterVIAPaise: number;
   taxablePaise: number; slabTaxPaise: number; rebatePaise: number; surchargePaise: number; cessPaise: number; taxPaise: number;
   deductedPaise: number; balancePaise: number; quarters: { quarter: number; months: string[]; paidPaise: number; tdsPaise: number }[];
@@ -105,7 +106,7 @@ function Form16View({ employeeId }: { employeeId: string }) {
             </div>
             <div className="mx-auto max-w-3xl rounded-lg border bg-white p-8 text-[13px] text-slate-900 print:max-w-none print:rounded-none print:border-0 print:p-0" data-slot="form16-part-b">
               <div className="border-b pb-3 text-center">
-                <p className="text-base font-semibold">{f.form}, Part B</p>
+                <p className="text-base font-semibold">{f.form}, Part B{f.provisional ? ' (provisional)' : ''}</p>
                 <p className="text-xs text-slate-500">Details of salary paid and tax deducted · Financial year {f.fyStart}-{String(f.fyStart + 1).slice(2)} · Assessment year {f.assessmentYear}</p>
               </div>
               <div className="grid grid-cols-2 gap-6 border-b py-3 text-xs">
@@ -122,9 +123,18 @@ function Form16View({ employeeId }: { employeeId: string }) {
                   <p>Employed {dmy(f.employee.from)} to {dmy(f.employee.to)} · {old ? 'Old regime' : 'New regime'}</p>
                 </div>
               </div>
+              {f.provisional && (
+                <p className="mt-3 rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900" data-slot="form16-provisional">
+                  Provisional, for the year to date ({dmy(f.asOf)}). The year is not over, so the tax is worked out, as section 192 requires of the monthly deduction,
+                  on the year&apos;s estimated salary: the salary paid up to {f.lastMonthPaid} and {f.monthsAhead} month{f.monthsAhead === 1 ? '' : 's'} still to be paid at the
+                  current structure. The final {f.form} is issued after 31 March on the salary actually paid.
+                </p>
+              )}
               <table className="mt-3 w-full">
                 <tbody>
-                  {row('1. Gross salary', f.grossPaise, { strong: true })}
+                  {f.provisional && row('Salary paid to date', f.salaryToDatePaise, { indent: true })}
+                  {f.provisional && row(`Salary still to be paid this year (estimated: ${f.monthsAhead} × ${formatINR(f.monthlyGrossPaise)})`, f.projectedRestPaise, { indent: true })}
+                  {row(f.provisional ? '1. Gross salary for the year (estimated)' : '1. Gross salary', f.grossPaise, { strong: true })}
                   {f.arrearsPaise > 0 && row('of which arrears for earlier months', f.arrearsPaise, { indent: true })}
                   {old && row('2. Less: house rent allowance exempt', f.hraExemptPaise, { less: true })}
                   {row(`${old ? '3' : '2'}. Less: standard deduction`, f.standardDeductionPaise, { less: true })}
@@ -144,7 +154,11 @@ function Form16View({ employeeId }: { employeeId: string }) {
                   {row('Health and education cess at 4%', f.cessPaise, { indent: true })}
                   {row('Tax payable', f.taxPaise, { strong: true })}
                   {row('Tax deducted at source', f.deductedPaise)}
-                  {row(f.balancePaise >= 0 ? 'Tax still payable by the employee' : 'Deducted in excess, refundable on the return', Math.abs(f.balancePaise), { strong: true })}
+                  {f.provisional
+                    ? row(f.balancePaise >= 0
+                      ? `Tax still to be deducted in the ${f.monthsAhead} month${f.monthsAhead === 1 ? '' : 's'} left`
+                      : 'Deducted ahead of the estimate so far: later months deduct less (section 192(3))', Math.abs(f.balancePaise), { strong: true })
+                    : row(f.balancePaise >= 0 ? 'Tax still payable by the employee' : 'Deducted in excess, refundable on the return', Math.abs(f.balancePaise), { strong: true })}
                 </tbody>
               </table>
               <p className="mt-4 mb-1 font-semibold">Tax deducted, quarter by quarter</p>
@@ -160,7 +174,7 @@ function Form16View({ employeeId }: { employeeId: string }) {
                 </tbody>
               </table>
               <p className="mt-4 text-[11px] text-slate-500">
-                Worked out from {f.monthsPaid} posted payroll month{f.monthsPaid === 1 ? '' : 's'}.
+                Worked out from {f.monthsPaid} posted payroll month{f.monthsPaid === 1 ? '' : 's'}{f.provisional ? `, and ${f.monthsAhead} month${f.monthsAhead === 1 ? '' : 's'} estimated` : ''}.
               </p>
               <div className="mt-10 flex justify-end text-xs">
                 <div className="text-center"><div className="mb-1 h-10 w-56 border-b" /><p>Signature of the person responsible for deduction of tax</p></div>

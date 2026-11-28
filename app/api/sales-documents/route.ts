@@ -6,6 +6,13 @@ import { db, transaction } from '@/lib/server/db';
 import { route, body, query, asId, badRequest } from '@/lib/server/http';
 import { toPaiseFromSql } from '@/lib/server/money-sql';
 import { logAudit, auditMeta } from '@/lib/server/audit';
+import type { Executor } from '@/lib/server/db';
+
+/** The header row as it stands, for the edit log's old → new (a status, a balance, a stage). */
+const headRow = async (ex: Executor, table: 'credit_notes' | 'sales_orders', orgId: number, id: number) => {
+  const r = await ex.selectFrom(table).selectAll().where('id', '=', id).where('org_id', '=', orgId).executeTakeFirst();
+  return r ? Object.fromEntries(Object.entries(r).map(([k, v]) => [k, v instanceof Date ? v.toISOString() : v])) : null;
+};
 import {
   applyRetainer, convertToInvoice, createChallan, createCreditNote, createEstimate,
   createRetainer, createSalesOrder, refundCreditNote, applyCreditNote, salesOrderFromEstimate, voidCreditNote,
@@ -360,10 +367,11 @@ export const PATCH = route(
           return { stage: pi.stage, proformaNumber: pi.number, proformaDate: pi.date };
         }
         const stage = input.stage;
+        const before = await headRow(db, 'sales_orders', orgId, id);
         const done = await transaction((trx) => setOrderStage(trx, orgId, user.userId, id, stage, input.date));
         await logAudit({
           orgId, actorUserId: user.userId, actorName: user.name, action: 'update',
-          targetType: 'sales_order', targetId: id,
+          targetType: 'sales_order', targetId: id, payload: { before, after: await headRow(db, 'sales_orders', orgId, id) },
           detail: `Sales order #${id}: ${STAGE_LABEL[done.stage]}${done.ready?.invoice ? `, invoice ${done.ready.invoice.number}` : ''}${done.ready?.challan ? `, challan ${done.ready.challan.number}` : ''}`,
           ...auditMeta(req),
         });
@@ -397,11 +405,12 @@ export const PATCH = route(
 
       case 'apply-credit-note': {
         const r = await transaction(async (trx) => {
+          const before = await headRow(trx, 'credit_notes', orgId, id);
           const out = await applyCreditNote(trx, orgId, user.userId, id, { date: input.date, allocations: input.allocations });
           await logAudit({
-            trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'update', targetType: 'credit-note', targetId: id,
+            trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'update', targetType: 'credit_note', targetId: id,
             detail: `Applied ₹${(out.appliedPaise / 100).toLocaleString('en-IN', { minimumFractionDigits: 2 })} to ${input.allocations.filter((a) => a.amountPaise > 0).length} invoice(s)`,
-            ...auditMeta(req),
+            payload: { before, after: await headRow(trx, 'credit_notes', orgId, id) }, ...auditMeta(req),
           });
           return out;
         });
@@ -412,7 +421,7 @@ export const PATCH = route(
         await transaction((trx) => voidCreditNote(trx, orgId, user.userId, id, input.reason ?? undefined));
         await logAudit({
           orgId, actorUserId: user.userId, actorName: user.name, action: 'void',
-          targetType: 'credit-note', targetId: id, detail: input.reason ?? 'Credit note voided',
+          targetType: 'credit_note', targetId: id, detail: input.reason ?? 'Credit note voided',
           ...auditMeta(req),
         });
         return { id: asId(id), status: 'void' };
@@ -420,10 +429,12 @@ export const PATCH = route(
 
       case 'open-credit-note': {
         const made = await transaction(async (trx) => {
+          const before = await headRow(trx, 'credit_notes', orgId, id);
           const out = await openCreditNote(trx, orgId, user.userId, id);
           await logAudit({
-            trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'update', targetType: 'credit-note', targetId: id,
-            targetLabel: out.number, detail: out.heldForApproval ? `Draft credit note ${out.number} submitted for approval` : `Draft credit note ${out.number} converted to open and posted`, ...auditMeta(req),
+            trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'update', targetType: 'credit_note', targetId: id,
+            targetLabel: out.number, detail: out.heldForApproval ? `Draft credit note ${out.number} submitted for approval` : `Draft credit note ${out.number} converted to open and posted`,
+            payload: { before, after: await headRow(trx, 'credit_notes', orgId, id) }, ...auditMeta(req),
           });
           return out;
         });
@@ -435,10 +446,12 @@ export const PATCH = route(
 
       case 'cancel-items': {
         const out = await transaction(async (trx) => {
+          const before = await headRow(trx, 'sales_orders', orgId, id);
           const r = await cancelSalesOrderItems(trx, orgId, id, picks(input.lines));
           await logAudit({
             trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'update', targetType: 'sales-order', targetId: id,
-            detail: `Cancelled ${r.cancelled} unit(s) still to invoice; the order is now ${r.status}`, ...auditMeta(req),
+            detail: `Cancelled ${r.cancelled} unit(s) still to invoice; the order is now ${r.status}`,
+            payload: { before, after: await headRow(trx, 'sales_orders', orgId, id) }, ...auditMeta(req),
           });
           return r;
         });

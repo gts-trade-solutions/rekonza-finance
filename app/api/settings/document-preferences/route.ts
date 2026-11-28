@@ -26,10 +26,12 @@ export const PUT = route(async ({ orgId, user, req }) => {
     }).optional(),
   }));
   return transaction(async (trx) => {
+    // Each setting's old and new value, for the edit log (Companies (Accounts) Rules, rule 3(1)).
+    const before = await getDocPreferences(trx, orgId, input.type);
     const saved = await saveDocPreferences(trx, orgId, user.userId, input.type, input);
     await logAudit({
       trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'update', targetType: 'settings', targetId: orgId,
-      detail: `${input.type.replace('_', ' ')} preferences changed`, ...auditMeta(req),
+      detail: `${input.type.replace('_', ' ')} preferences changed`, payload: { before, after: saved }, ...auditMeta(req),
     });
     return saved;
   });

@@ -10,6 +10,27 @@ import { toPaiseFromSql, toSqlFromPaise } from '../money-sql';
 import { seal, unseal } from '../crypto/fields';
 import { badRequest, conflict, notFound } from '../http';
 import { salaryOn, structureGross, type Structure } from './payroll';
+import { epsEligible } from '../../payroll/statutory';
+
+/**
+ * The pension-scheme rule (EPS 1995, para 6A): someone who joined on or after
+ * 1 September 2014 on PF wages above ₹15,000, and was not an EPS member
+ * before, is taken out of EPS, so the ECR and the challan put the employer's
+ * whole 12% into EPF. Only ever turns EPS off; a person kept out by choice
+ * stays out. Run after the record or its joining salary changes.
+ */
+export async function applyEpsRule(trx: Trx, orgId: number, employeeId: number): Promise<boolean> {
+  const e = await trx.selectFrom('employees').select(['id', 'date_of_joining', 'eps_member', 'eps_before_sep2014'])
+    .where('id', '=', employeeId).where('org_id', '=', orgId).executeTakeFirst();
+  if (!e) return false;
+  const doj = String(e.date_of_joining).slice(0, 10);
+  const atJoining = await salaryOn(trx, e.id, doj) ?? (await trx.selectFrom('employee_salaries').selectAll().where('employee_id', '=', e.id)
+    .orderBy('effective_from').executeTakeFirst().then((r) => (r ? { basic: toPaiseFromSql(r.basic), da: toPaiseFromSql(r.da), hra: 0, special: 0, other: 0 } : null)));
+  if (!atJoining) return !!e.eps_member;
+  const ok = epsEligible({ dateOfJoining: doj, pfWageAtJoining: atJoining.basic + atJoining.da, memberBeforeSep2014: !!e.eps_before_sep2014 });
+  if (!ok && e.eps_member) await trx.updateTable('employees').set({ eps_member: 0 }).where('id', '=', e.id).execute();
+  return ok && !!e.eps_member;
+}
 
 export interface EmployeeInput {
   branchId: number;
@@ -36,6 +57,8 @@ export interface EmployeeInput {
   esiIpNumber?: string | null;
   pfMember?: boolean;
   epsMember?: boolean;
+  /** Already in the pension scheme before 1 September 2014 (here or with an earlier employer): stays in EPS above ₹15,000. Left out, it stays as it was. */
+  epsBeforeSep2014?: boolean;
   pfOnActual?: boolean;
   ptApplicable?: boolean;
   lwfApplicable?: boolean;
@@ -59,6 +82,7 @@ const row = (i: EmployeeInput) => ({
   designation: i.designation || null, department: i.department || null, email: i.email || null, mobile: i.mobile || null,
   pan: seal(i.pan?.toUpperCase() || null), uan: i.uan || null, esi_ip_number: i.esiIpNumber || null,
   pf_member: i.pfMember === false ? 0 : 1, eps_member: i.epsMember === false ? 0 : 1, pf_on_actual: i.pfOnActual ? 1 : 0,
+  ...(i.epsBeforeSep2014 !== undefined ? { eps_before_sep2014: i.epsBeforeSep2014 ? 1 : 0 } : {}),
   pt_applicable: i.ptApplicable === false ? 0 : 1, lwf_applicable: i.lwfApplicable === false ? 0 : 1, disabled: i.disabled ? 1 : 0,
   tax_regime: i.taxRegime ?? 'new', declared_deductions: toSqlFromPaise(i.declaredDeductionsPaise ?? 0), metro_city: i.metroCity ? 1 : 0,
   bank_account_name: i.bankAccountName || null, bank_account_no: seal(i.bankAccountNo || null), bank_ifsc: i.bankIfsc?.toUpperCase() || null,
@@ -89,6 +113,7 @@ export async function createEmployee(trx: Trx, orgId: number, i: EmployeeInput, 
   await checkCostCentre(trx, orgId, i.costCentreId);
   const id = Number((await trx.insertInto('employees').values({ org_id: orgId, ...row(i) }).executeTakeFirstOrThrow()).insertId);
   if (salary) await setSalary(trx, orgId, id, { ...salary, effectiveFrom: salary.effectiveFrom ?? i.dateOfJoining });
+  await applyEpsRule(trx, orgId, id);
   return id;
 }
 
@@ -100,6 +125,7 @@ export async function updateEmployee(trx: Trx, orgId: number, id: number, i: Emp
   if (dup) throw conflict(`Employee code ${i.code} is already used.`);
   await checkCostCentre(trx, orgId, i.costCentreId);
   await trx.updateTable('employees').set(row(i)).where('id', '=', id).execute();
+  await applyEpsRule(trx, orgId, id);
 }
 
 /** A salary structure from a date; a second one on the same date replaces it. */
@@ -124,6 +150,8 @@ export async function setSalary(trx: Trx, orgId: number, employeeId: number, x: 
   const values = { basic: toSqlFromPaise(x.basic), da: toSqlFromPaise(x.da), hra: toSqlFromPaise(x.hra), special: toSqlFromPaise(x.special), other: toSqlFromPaise(x.other) };
   await trx.insertInto('employee_salaries').values({ employee_id: employeeId, effective_from: x.effectiveFrom, ...values })
     .onDuplicateKeyUpdate(values).execute();
+  // The joining salary decides EPS (para 6A); a raise later does not.
+  await applyEpsRule(trx, orgId, employeeId);
 }
 
 export async function listEmployees(ex: Executor, orgId: number, asOf: string) {
@@ -141,7 +169,7 @@ export async function listEmployees(ex: Executor, orgId: number, asOf: string) {
       dateOfJoining: String(e.date_of_joining).slice(0, 10), dateOfLeaving: e.date_of_leaving ? String(e.date_of_leaving).slice(0, 10) : null,
       designation: e.designation, department: e.department, email: e.email, mobile: e.mobile, pan: unseal(e.pan), uan: e.uan,
       aadhaarMasked: (() => { const a = unseal(e.aadhaar_no); return a ? `XXXX XXXX ${a.slice(-4)}` : null; })(),
-      esiIpNumber: e.esi_ip_number, pfMember: !!e.pf_member, epsMember: !!e.eps_member, pfOnActual: !!e.pf_on_actual,
+      esiIpNumber: e.esi_ip_number, pfMember: !!e.pf_member, epsMember: !!e.eps_member, epsBeforeSep2014: !!e.eps_before_sep2014, pfOnActual: !!e.pf_on_actual,
       ptApplicable: !!e.pt_applicable, lwfApplicable: !!e.lwf_applicable, disabled: !!e.disabled, taxRegime: e.tax_regime,
       declaredDeductionsPaise: toPaiseFromSql(e.declared_deductions), metroCity: !!e.metro_city,
       bankAccountName: e.bank_account_name, bankAccountNo: unseal(e.bank_account_no), bankIfsc: e.bank_ifsc,

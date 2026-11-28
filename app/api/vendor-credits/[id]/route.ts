@@ -53,7 +53,7 @@ export const PUT = route(
       await logAudit({
         trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'update',
         targetType: 'vendor-credit', targetId: id, targetLabel: made.number,
-        detail: `Edited vendor credit ${made.number}`, payload: { before: made.before }, ...auditMeta(req),
+        detail: `Edited vendor credit ${made.number}`, payload: { before: made.before, after: made.after }, ...auditMeta(req),
       });
       return made;
     });

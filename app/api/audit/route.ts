@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { sql } from 'kysely';
 import { db } from '@/lib/server/db';
 import { route, query, asId } from '@/lib/server/http';
-import { AuditFilter, auditRows, changesIn } from '@/lib/server/audit-query';
+import { AuditFilter, auditRows, changesIn, typeKey } from '@/lib/server/audit-query';
 import { chainHead, sealAuditChain } from '@/lib/server/audit-chain';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -83,9 +83,12 @@ export const GET = route(
         ip: r.ip,
         changes: changesIn(r.payload),
       })),
-      targetTypes: kinds
-        .filter((k) => k.target_type)
-        .map((k) => ({ value: k.target_type as string, count: Number(k.n) })),
+      // One entry per type as the screen names it ("credit-note" and "credit_note" are one).
+      targetTypes: [...kinds.filter((k) => k.target_type).reduce((m, k) => {
+        const key = typeKey(k.target_type as string);
+        m.set(key, { value: key, count: (m.get(key)?.count ?? 0) + Number(k.n) });
+        return m;
+      }, new Map<string, { value: string; count: number }>()).values()].sort((a, b) => a.value.localeCompare(b.value)),
       total: Number(total?.n ?? 0),
       databaseProtected: Number(guards.rows[0]?.n ?? 0) === 6,
       actors: actors.map((a) => ({ id: asId(a.actor_user_id as number), name: a.name ?? 'Unknown', count: Number(a.n) }))
