@@ -82,8 +82,10 @@ async function fresh() {
   await shot(t, 'adjustments-list');
 
   // ── 3. Vendor credit against a bill ────────────────────────────────────────
-  const b3 = await bill('NS-VC1', day(5), 12_000, 10);
+  // 6 units, so it is not taken for a duplicate of NS-A2 (the same supplier and amount needs a reason).
+  const b3 = await bill('NS-VC1', day(5), 12_000, 6);
   const billNo = b3.json?.internalNo ?? b3.json?.number;
+  check(t, 'setup: a bill of 6 @ ₹120 + 18% GST from the registered supplier', b3.status === 200 && !!billNo, `${b3.status} ${JSON.stringify(b3.json).slice(0, 160)}`);
   await goto(t, '/purchases/vendor-credits');
   await page.getByRole('button', { name: /New vendor credit/ }).click();
   const vdlg = page.locator('[data-slot="vendor-credit-dialog"]');
