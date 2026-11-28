@@ -205,14 +205,14 @@ export async function markFiled(trx: Trx, orgId: number, userId: number | null, 
 
   const locked: { module: 'sales' | 'purchases'; lockedUpto: string }[] = [];
   const upto = periodEnd(input.period);
-  for (const module of [...new Set(input.lock ?? [])]) {
-    const cur = await trx.selectFrom('transaction_locks').select(['id', 'locked_upto']).where('org_id', '=', orgId).where('module', '=', module).forUpdate().executeTakeFirst();
+  for (const mod of [...new Set(input.lock ?? [])]) {
+    const cur = await trx.selectFrom('transaction_locks').select(['id', 'locked_upto']).where('org_id', '=', orgId).where('module', '=', mod).forUpdate().executeTakeFirst();
     const have = day(cur?.locked_upto ?? null);
-    if (have && have >= upto) { locked.push({ module, lockedUpto: have }); continue; }
+    if (have && have >= upto) { locked.push({ module: mod, lockedUpto: have }); continue; }
     const reason = `${RETURN_META[input.returnType].title} for ${periodLabel(input.period)} filed (ARN ${arn})`;
     if (cur) await trx.updateTable('transaction_locks').set({ locked_upto: upto, reason, locked_by_user_id: userId }).where('id', '=', cur.id).execute();
-    else await trx.insertInto('transaction_locks').values({ org_id: orgId, module, locked_upto: upto, reason, locked_by_user_id: userId }).execute();
-    locked.push({ module, lockedUpto: upto });
+    else await trx.insertInto('transaction_locks').values({ org_id: orgId, module: mod, locked_upto: upto, reason, locked_by_user_id: userId }).execute();
+    locked.push({ module: mod, lockedUpto: upto });
   }
   return { arn, kept, locked };
 }
