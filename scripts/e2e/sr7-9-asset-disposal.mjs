@@ -118,7 +118,7 @@ try {
     await page.getByRole('tab', { name: /^Register/ }).click();
     const all = page.getByRole('button', { name: 'Including disposed' });
     if (await all.count()) await all.click();
-    await page.getByRole('row').filter({ hasText: name }).first().click();
+    await page.getByRole('row').filter({ hasText: new RegExp(name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')) }).first().click(); // case-sensitive: the demo book has a "Tata Ace delivery van"
     const dlg = page.getByRole('dialog');
     await dlg.waitFor();
     return dlg;
@@ -326,7 +326,8 @@ try {
   check('Approval: waiting, nothing posted, the lathe still in use', pend.asset.status === 'in_use' && pend.disposals.some((x) => x.status === 'pending'));
   await page.getByRole('tab', { name: 'Disposals' }).click();
   await page.locator('[data-slot="disposals-pending"]').waitFor();
-  check('Approval: the person who asked cannot approve it', await page.locator('[data-slot="disposal-approve"]').count() === 0);
+  // Only the lathe's row: the demo book has a van disposal of its own waiting, asked by someone else.
+  check('Approval: the person who asked cannot approve it', await page.locator('[data-slot="disposals-pending"] tr', { hasText: 'CNC lathe' }).locator('[data-slot="disposal-approve"]').count() === 0);
   await shot('approval-pending');
 
   // The checker signs in.

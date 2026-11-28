@@ -99,9 +99,14 @@ try {
   await idle(1500);
   const qCols = await page.locator('[data-slot="bva-table"] thead tr').first().locator('th').allInnerTexts();
   check('columns by quarter', qCols.some((c) => /^Q\d/i.test(c.trim())), qCols.join(' | '));
-  await page.fill('[data-slot="bva-threshold"]', '150');
+  const rentFlags = () => page.locator('[data-slot="bva-row"]', { hasText: '6100' }).locator('td[class*="amber"]').count();
+  const flaggedAt10 = await rentFlags();
+  // A new company's rent is 100% over: 150% flags nothing. The demo book's rent runs far over
+  // its budget, so there the highest threshold (1000%) need only flag fewer quarters.
+  await page.fill('[data-slot="bva-threshold"]', FRESH ? '150' : '1000');
   await idle(1200);
-  check('a higher threshold highlights nothing on rent', (await page.locator('[data-slot="bva-row"]', { hasText: '6100' }).locator('td[class*="amber"]').count()) === 0);
+  const flaggedHigher = await rentFlags();
+  check('a higher threshold highlights less on rent', FRESH ? flaggedHigher === 0 : flaggedHigher < flaggedAt10, `${flaggedAt10} → ${flaggedHigher}`);
   await page.fill('[data-slot="bva-threshold"]', '10');
   await page.locator('[data-slot="bva-show"] label', { hasText: 'Variance %' }).locator('input').uncheck();
   await idle(600);

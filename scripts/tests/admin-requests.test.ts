@@ -170,3 +170,12 @@ test('the ledger leaves out an entry undone on its own date, and shows it when a
     assert.equal(all.closingPaise, 100_00);
   });
 });
+
+test('a reason typed in the window counts as the change reason, so the person is not asked twice', async () => {
+  const { readReason } = await import('../../lib/server/http');
+  assert.equal(await readReason(req('PATCH', '/api/journal', { entryId: 4, reason: ' Posted to the wrong account ' })), 'Posted to the wrong account');
+  assert.equal(await readReason(req('DELETE', '/api/bills/7?reason=duplicate')), 'duplicate');
+  assert.equal(await readReason(req('PUT', '/api/invoices/3', { lines: [] }, { 'x-change-reason': encodeURIComponent('Rate corrected') })), 'Rate corrected');
+  assert.equal(await readReason(req('PUT', '/api/invoices/3', { lines: [] })), null, 'no reason anywhere: the person is asked');
+  assert.equal(await readReason(req('PATCH', '/api/journal', { entryId: 4, reason: '   ' })), null);
+});

@@ -86,6 +86,8 @@ const DIALOGS = [
   // Purchases: a vendor credit's and a goods receipt's Edit window (a bill's opens on its own page).
   { list: '/api/purchase-documents?kind=vendor-credit', detail: '/api/vendor-credits/[id]' },
   { list: '/api/goods-receipts', detail: '/api/goods-receipts/[id]' },
+  // Fixed Assets: an asset's window (History, Details, Verify & dispose), opened from a register row.
+  { list: '/api/fixed-assets?view=register', detail: '/api/fixed-assets?view=asset&id=[id]' },
 ];
 
 /**
@@ -138,6 +140,8 @@ const ON_DEMAND = [
     .map((row) => `/api/gst?view=gstr3b-docs&ret={lastMonth}&row=${encodeURIComponent(row)}`),
   '/api/gst?view=gstr3b-file&ret={lastMonth}',
   '/api/documents/targets',
+  // An asset's Verify & dispose tab: the disposal approval rule.
+  '/api/fixed-assets?view=approval',
   '/api/documents/targets?type=bill&q=',
   // Items' ⋯ → HSN/SAC Update History and Validate HSN/SAC, and the custom views behind "New View".
   '/api/items/hsn-history',

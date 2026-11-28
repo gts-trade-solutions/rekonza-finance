@@ -152,7 +152,7 @@ export function route(handler: Handler, options: RouteOptions = {}) {
 
       // Why: kept in the audit trail beside who and when. A book can insist on
       // it for every change, and the browser then asks before sending again.
-      const reason = readReason(req);
+      const reason = await readReason(req);
       if (user && !reason && CHANGES.has(req.method) && !NO_REASON.test(path)) {
         const [{ getPolicies }, { db }] = await Promise.all([import('./services/org-settings'), import('./db')]);
         if ((await getPolicies(db, user.orgId)).controls.changeReasons) {
@@ -212,10 +212,15 @@ const CHANGES = new Set(['PATCH', 'PUT', 'DELETE']);
 /** Changes that are not to the books: reading a notification, one's own sign-in, the assistant. */
 const NO_REASON = /^\/api\/(notifications|auth|ai|exceptions)(\/|$)/;
 
-function readReason(req: Request): string | null {
+export async function readReason(req: Request): Promise<string | null> {
   // A delete sends the reason typed in its own confirm dialog as ?reason= (doc-delete's routes keep it
   // on the deleted record too); it counts as the change's reason, so the person is not asked twice.
+  // So does a `reason` in the body: the Reverse, Void and Undo windows send the one typed there.
   const raw = req.headers.get('x-change-reason') ?? (req.method === 'DELETE' ? new URL(req.url).searchParams.get('reason') : null);
+  if (!raw && CHANGES.has(req.method) && (req.headers.get('content-type') ?? '').includes('application/json')) {
+    const body = await req.clone().json().catch(() => null) as { reason?: unknown } | null;
+    if (body && typeof body.reason === 'string' && body.reason.trim()) return body.reason.trim().slice(0, 500);
+  }
   if (!raw) return null;
   let text = raw;
   try { text = decodeURIComponent(raw); } catch { /* sent plain */ }

@@ -19,6 +19,7 @@ const { page, check, shot, go, api, idle } = t;
 const tag = String(Date.now()).slice(-6);
 const width = async () => Math.round((await page.locator('aside').first().boundingBox())?.width ?? 0);
 
+let clerkPage = null;
 try {
   if (FRESH) await t.signUp(`Admin Code Co ${tag}`); else await t.loginDemo();
 
@@ -63,6 +64,7 @@ try {
   // ── 2. The accountant, on their own page ─────────────────────────────────
   const cctx = await t.browser.newContext({ viewport: { width: 1500, height: 950 }, extraHTTPHeaders: { 'X-Forwarded-For': '10.6.6.6' } });
   const cpage = await cctx.newPage();
+  clerkPage = cpage;
   cpage.setDefaultTimeout(60000);
   await signInOn(cpage, clerkEmail, clerkPassword);
   check('the accountant signs in', /\/dashboard/.test(cpage.url()), cpage.url());
@@ -164,6 +166,7 @@ try {
   check('Settings → Controls has both admin-approval switches', sw === 2, String(sw));
   await shot('controls-switches');
 } catch (e) {
+  if (clerkPage) await clerkPage.screenshot({ path: `${process.env.SHOTS ?? '.'}/c1128-failure-accountant${FRESH ? '-fresh' : '-demo'}.png` }).catch(() => {});
   check('the script ran to the end', false, String(e?.message ?? e).slice(0, 300));
   await shot('failure').catch(() => {});
 }
