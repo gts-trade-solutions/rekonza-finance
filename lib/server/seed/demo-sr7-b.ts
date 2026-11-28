@@ -60,7 +60,7 @@ export async function seedDemoSr7B(trx: Trx, ids: IdMap) {
 
   // ── 5: the auditors' FIFO scenario on a FIFO item ──────────────────────────
   const fifoItem = Number((await trx.insertInto('items').values({
-    org_id: org, kind: 'goods', name: 'Brake Disc Rotor – Creta (FIFO)', description: 'Front brake disc rotor for Hyundai Creta, valued first-in first-out', sku: 'BDR-CRETA', hsn_sac: '8708', uqc: 'NOS',
+    org_id: org, kind: 'goods', name: 'Brake Disc Rotor – Creta (FIFO)', description: 'Front brake disc rotor for Hyundai Creta, valued first-in first-out', sku: 'BDR-CRETA', hsn_sac: '870830', uqc: 'NOS',
     sale_price: '200.0000', purchase_price: '100.0000', gst_rate_pct: 18, track_inventory: 1, valuation_method: 'fifo',
     sale_account_id: sales, purchase_account_id: purchases,
   }).executeTakeFirstOrThrow()).insertId);

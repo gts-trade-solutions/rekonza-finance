@@ -72,6 +72,48 @@ const HSN_TEXT: Record<string, string> = {
   '401110': 'New pneumatic tyres for motor cars',
 };
 
+/** The document line tables that carry an HSN code. Every one has its own org_id. */
+const LINE_TABLES = ['invoice_lines', 'credit_note_lines', 'bill_lines', 'estimate_lines', 'sales_order_lines', 'delivery_challan_lines', 'purchase_order_lines', 'vendor_credit_lines'] as const;
+/** Lines written without an item: their four-digit code to six. */
+const GENERIC_SIX: Record<string, string> = { '8708': '870899', '8421': '842123', '8511': '851110', '8512': '851220', '2710': '271019', '4011': '401110', '8507': '850710', '3820': '382000', '7009': '700910', '4010': '401036' };
+
+/**
+ * The demo book reports as a business above ₹5 crore, so its HSN codes get six
+ * digits (Notification 78/2020-CT): each item's own code, and on every line of
+ * that item; then the free-text lines, by their four-digit code.
+ *
+ * Every UPDATE is held to this book's org_id. The free-text pass once ran over
+ * the whole table, so seeding the demo on a database that also held a real
+ * company rewrote that company's lines: an item saved with HSN 8708 showed
+ * 870899 on its older bills and invoices, and GSTR-1 table 12 split it between
+ * the two codes (auditor check, 2026-11-28; migration 135 gives those lines
+ * their item's code back).
+ */
+export async function sixDigitHsnCodes(trx: Trx, org: number): Promise<void> {
+  const items = await trx.selectFrom('items').select(['id', 'name', 'hsn_sac']).where('org_id', '=', org).execute();
+  for (const it of items) {
+    // Named items take their own six digits; any other item still on a four-digit
+    // code the free-text pass knows takes that code, so an item and its lines never differ.
+    const six = SIX_DIGITS[it.name] ?? GENERIC_SIX[it.hsn_sac ?? ''];
+    if (!six || it.hsn_sac === six) continue;
+    await trx.updateTable('items').set({ hsn_sac: six }).where('id', '=', it.id).where('org_id', '=', org).execute();
+    for (const t of LINE_TABLES) {
+      await sql`UPDATE ${sql.table(t)} SET hsn_sac = ${six} WHERE org_id = ${org} AND item_id = ${it.id}`.execute(trx).catch(() => undefined);
+    }
+  }
+  // Lines written without an item keep their own code: given their six digits too.
+  for (const [four, six] of Object.entries(GENERIC_SIX)) {
+    for (const t of LINE_TABLES) {
+      await sql`UPDATE ${sql.table(t)} SET hsn_sac = ${six} WHERE org_id = ${org} AND item_id IS NULL AND hsn_sac = ${four}`.execute(trx).catch(() => undefined);
+    }
+  }
+  const text: Record<string, string> = { ...HSN_TEXT, '870899': 'Other parts and accessories of motor vehicles' };
+  for (const [code, description] of Object.entries(text)) {
+    const have = await trx.selectFrom('hsn_codes').select('id').where('org_id', '=', org).where('code', '=', code).executeTakeFirst();
+    if (!have) await trx.insertInto('hsn_codes').values({ org_id: org, code, kind: 'hsn', description, gst_rate_pct: code.startsWith('87') || code.startsWith('85') || code.startsWith('40') || code.startsWith('70') ? 28 : 18, is_active: 1 } as never).execute();
+  }
+}
+
 export async function seedDemoSr7d(trx: Trx, ids: IdMap): Promise<void> {
   const org = ids.orgId;
   const admin = ids.users.u_arun;
@@ -92,27 +134,7 @@ export async function seedDemoSr7d(trx: Trx, ids: IdMap): Promise<void> {
   const purchasesAccount = (await trx.selectFrom('accounts').select('id').where('org_id', '=', org).where('code', '=', '5200').executeTakeFirstOrThrow()).id;
 
   // ── 1. HSN codes to six digits ──────────────────────────────────────────
-  const items = await trx.selectFrom('items').select(['id', 'name', 'hsn_sac']).where('org_id', '=', org).execute();
-  for (const it of items) {
-    const six = SIX_DIGITS[it.name];
-    if (!six || it.hsn_sac === six) continue;
-    await trx.updateTable('items').set({ hsn_sac: six }).where('id', '=', it.id).execute();
-    for (const t of ['invoice_lines', 'credit_note_lines', 'bill_lines', 'estimate_lines', 'sales_order_lines', 'delivery_challan_lines', 'purchase_order_lines', 'vendor_credit_lines'] as const) {
-      await sql`UPDATE ${sql.table(t)} SET hsn_sac = ${six} WHERE item_id = ${it.id}`.execute(trx).catch(() => undefined);
-    }
-  }
-  // Lines written without an item keep their own code: given their six digits too.
-  const GENERIC: Record<string, string> = { '8708': '870899', '8421': '842123', '8511': '851110', '8512': '851220', '2710': '271019', '4011': '401110', '8507': '850710', '3820': '382000', '7009': '700910', '4010': '401036' };
-  for (const [four, six] of Object.entries(GENERIC)) {
-    for (const t of ['invoice_lines', 'credit_note_lines', 'bill_lines', 'estimate_lines', 'sales_order_lines', 'delivery_challan_lines', 'purchase_order_lines', 'vendor_credit_lines'] as const) {
-      await sql`UPDATE ${sql.table(t)} SET hsn_sac = ${six} WHERE hsn_sac = ${four}`.execute(trx).catch(() => undefined);
-    }
-  }
-  HSN_TEXT['870899'] = 'Other parts and accessories of motor vehicles';
-  for (const [code, description] of Object.entries(HSN_TEXT)) {
-    const have = await trx.selectFrom('hsn_codes').select('id').where('org_id', '=', org).where('code', '=', code).executeTakeFirst();
-    if (!have) await trx.insertInto('hsn_codes').values({ org_id: org, code, kind: 'hsn', description, gst_rate_pct: code.startsWith('87') || code.startsWith('85') || code.startsWith('40') || code.startsWith('70') ? 28 : 18, is_active: 1 } as never).execute();
-  }
+  await sixDigitHsnCodes(trx, org);
 
   // ── 2. The withholding roles, with their own registrations ──────────────
   const tdsGstin = gstin('33CHER07532A1D');
