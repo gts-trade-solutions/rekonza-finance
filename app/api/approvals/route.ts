@@ -91,6 +91,10 @@ export const POST = route(async ({ orgId, user, role, req }) => {
 
   await transaction(async (trx) => {
     const doc = input.doc;
+    // A journal reversal waiting for its checker says so in the trail (services/voucher-reversals.ts).
+    const reversal = doc === 'journal'
+      ? await trx.selectFrom('held_journals').select(['memo', 'reason']).where('id', '=', id).where('org_id', '=', orgId).where('reverses_entry_id', 'is not', null).executeTakeFirst()
+      : undefined;
     if (input.action === 'submit') {
       if (!hasPermission(role, area, 'create')) throw forbidden('You cannot submit that document.');
       // A journal is held for approval when it is entered; there is no draft to submit.
@@ -112,7 +116,7 @@ export const POST = route(async ({ orgId, user, role, req }) => {
       action: input.action === 'approve' ? 'approve' : 'update',
       targetType: input.doc === 'journal' ? 'held_journal' : input.doc, targetId: id,
       detail: input.action === 'submit' ? 'Submitted for approval'
-        : input.action === 'approve' ? `${input.doc === 'payment_batch' ? 'Released to the bank' : 'Approved and posted'}${input.note ? ` — ${input.note}` : ''}`
+        : input.action === 'approve' ? `${input.doc === 'payment_batch' ? 'Released to the bank' : reversal ? `Approved and posted: ${reversal.memo}` : 'Approved and posted'}${input.note ? ` — ${input.note}` : ''}`
         : `Sent back: ${input.reason}`,
       ...meta,
     });

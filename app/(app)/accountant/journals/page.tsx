@@ -10,7 +10,7 @@
 import { FoldNav } from '@/components/layout/nav-state';
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { BookOpen, CalendarClock, Clock, LayoutTemplate, Loader2, Pencil, Plus, Trash2, Undo2 } from 'lucide-react';
+import { BookOpen, CalendarClock, Clock, History, LayoutTemplate, Loader2, Pencil, Plus, Trash2, Undo2 } from 'lucide-react';
 import Link from 'next/link';
 import { toast } from 'sonner';
 import { Card } from '@/components/ui/card';
@@ -33,8 +33,8 @@ import { TagsPanel } from '@/components/shared/tags-panel';
 import { CostCentreSelect, useCostCentres } from '@/components/forms/cost-centre-picker';
 import { ContactPicker } from '@/components/forms/quick-create';
 import {
-  accounts as accountsApi, api, bills as billApi, heldJournals, invoices as invoiceApi, journal,
-  type AccountRow, type HeldJournalRow, type JournalEntryRow, type JournalResponse, type JournalTemplateRow,
+  accounts as accountsApi, api, ApiError, bills as billApi, heldJournals, invoices as invoiceApi, journal, voucherReversals,
+  type AccountRow, type HeldJournalRow, type HeldJournalWithReversal, type JournalEntryRow, type JournalResponse, type JournalTemplateRow,
 } from '@/lib/api/client';
 import { useApi, useApiAction } from '@/lib/api/use-api';
 import { usePermission } from '@/lib/store/hooks';
@@ -57,8 +57,8 @@ const SAVE_LABEL: Record<SaveMode, string> = { post: 'Post journal', optional: '
 const KIND_LABEL: Record<HeldJournalRow['kind'], string> = { optional: 'Optional', post_dated: 'Post-dated', approval: 'Awaiting approval' };
 const dmy = (d: string) => new Date(d).toLocaleDateString('en-IN');
 
-/** The entries reversed from here (the server's REVERSIBLE): a document's entry goes with its document. */
-const REVERSIBLE = new Set(['manual', 'opening', 'opening_balance', 'reclassification', 'recurring', 'doubtful_debts', 'tally_import', 'fx_revaluation']);
+/** The entries reversed from here (services/voucher-reversals.ts REVERSIBLE): a document's entry goes with its document. */
+const REVERSIBLE = new Set(['manual', 'opening', 'opening_balance', 'reclassification', 'recurring', 'doubtful_debts', 'tally_import', 'fx_revaluation', 'write_off', 'bank_entry']);
 
 export default function JournalsPage() {
   const canCreate = usePermission('accountant', 'create');
@@ -125,6 +125,11 @@ export default function JournalsPage() {
   // Reverse: asked first, with the date the reversal is posted on.
   const [reversing, setReversing] = useState<JournalEntryRow | null>(null);
   const [reverseDate, setReverseDate] = useState(() => new Date().toISOString().slice(0, 10));
+  // Why: required, kept with the reversal and in the audit trail.
+  const [reverseReason, setReverseReason] = useState('');
+  // A refusal shown in the dialog; a locked period names the first open date to reverse on instead.
+  const [reverseError, setReverseError] = useState<{ message: string; firstOpenDate?: string } | null>(null);
+  const [reverseBusy, setReverseBusy] = useState(false);
   const templates = useApi(() => api.get<{ templates: JournalTemplateRow[] }>('/api/journal-templates'), []);
   const [tplName, setTplName] = useState<string | null>(null);
   const [tplBusy, setTplBusy] = useState(false);
@@ -162,7 +167,6 @@ export default function JournalsPage() {
   };
 
   const create = useApiAction(journal.create);
-  const reverse = useApiAction(journal.reverse);
 
   const totalDr = rows.reduce((t, r) => t + r.debit, 0);
   const totalCr = rows.reduce((t, r) => t + r.credit, 0);
@@ -253,16 +257,29 @@ export default function JournalsPage() {
   };
 
   const doReverse = async (r: JournalEntryRow, date: string) => {
-    const done = await reverse.run(r.id, `Manual reversal of JE #${r.entryNo}`, date);
-    if (!done) {
-      toast.error(reverse.error ?? 'Could not reverse that entry');
-      return;
+    if (reverseReason.trim().length < 3) { setReverseError({ message: 'Say why the entry is being reversed. The reason is kept with the reversal and in the audit trail.' }); return; }
+    setReverseBusy(true);
+    setReverseError(null);
+    try {
+      const done = await voucherReversals.reverse(r.id, date, reverseReason.trim());
+      setReversing(null);
+      if (done.held) {
+        toast.success(`Reversal of #${r.entryNo} sent for ${done.approverRole} approval`, {
+          description: 'A journal approval rule covers this amount. It posts when someone else approves it under Approvals; you cannot approve your own.',
+        });
+      } else {
+        toast.success(`Reversal posted as #${done.entryNo}`, {
+          description: `Reversal of #${r.entryNo}. The original stays in the books — nothing is ever deleted.`,
+        });
+      }
+      state.refetch();
+      held.refetch();
+    } catch (e) {
+      const firstOpenDate = e instanceof ApiError && e.code === 'period_locked' ? e.details?.firstOpenDate : undefined;
+      setReverseError({ message: e instanceof Error ? e.message : String(e), firstOpenDate });
+    } finally {
+      setReverseBusy(false);
     }
-    setReversing(null);
-    toast.success(`Reversal posted as #${done.entryNo}`, {
-      description: 'The original entry stays in the books — nothing is ever deleted.',
-    });
-    state.refetch();
   };
 
   const columns: Column<JournalEntryRow>[] = [
@@ -273,7 +290,7 @@ export default function JournalsPage() {
       cell: (r) => (
         <div className="flex items-center gap-2">
           <span>{r.memo}</span>
-          {r.reversalOf && <Badge variant="outline" className="border-destructive/40 text-[9px]">Reversal</Badge>}
+          {r.reversalOf && <Badge variant="outline" className="border-destructive/40 text-[9px]" data-slot="reversal-of">Reversal of #{r.reversalOfRef?.entryNo ?? '?'}</Badge>}
           {r.reversedBy && <Badge variant="outline" className="text-[9px]" data-slot="reversed-by">Reversed by #{r.reversedBy}</Badge>}
           {r.sourceType === 'opening' && <Badge variant="secondary" className="text-[9px]">Opening</Badge>}
           {r.sourceType === 'reclassification' && <Badge variant="secondary" className="text-[9px]">Bulk update</Badge>}
@@ -304,13 +321,13 @@ export default function JournalsPage() {
               <Trash2 className="size-3" /> Delete
             </Button>
           )}
-          {canCreate && !r.reversalOf && !r.reversedBy && REVERSIBLE.has(r.sourceType) && (
+          {canDelete && !r.reversalOf && !r.reversedBy && REVERSIBLE.has(r.sourceType) && (
             <Button
               size="xs"
               variant="outline"
               className="gap-1"
-              disabled={reverse.busy}
-              onClick={(e) => { e.stopPropagation(); setReverseDate(new Date().toISOString().slice(0, 10)); setReversing(r); }}
+              disabled={reverseBusy}
+              onClick={(e) => { e.stopPropagation(); setReverseDate(new Date().toISOString().slice(0, 10)); setReverseReason(''); setReverseError(null); setReversing(r); }}
               data-slot="reverse-journal"
             >
               <Undo2 className="size-3" /> Reverse
@@ -329,6 +346,7 @@ export default function JournalsPage() {
         actions={<>{
           canCreate && (
             <div className="flex gap-2">
+            <Button size="sm" variant="outline" asChild className="gap-1.5"><Link href="/accountant/reversed-vouchers" data-slot="open-reversed-vouchers"><History className="size-4" /> Reversed vouchers</Link></Button>
             <Button size="sm" variant="outline" asChild className="gap-1.5"><Link href="/accountant/journal-templates"><LayoutTemplate className="size-4" /> Templates</Link></Button>
             <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v && editing) { setEditing(null); setRows([emptyRow('r1'), emptyRow('r2')]); setMemo(''); } }}>
               <DialogTrigger asChild>
@@ -517,7 +535,7 @@ export default function JournalsPage() {
       </Card>
 
       {(held.data?.held.length ?? 0) > 0 && (
-        <HeldList rows={held.data!.held} canAct={canCreate} onChanged={() => { held.refetch(); state.refetch(); }} />
+        <HeldList rows={held.data!.held as HeldJournalWithReversal[]} canAct={canCreate} onChanged={() => { held.refetch(); state.refetch(); }} />
       )}
 
       <label className="flex w-fit cursor-pointer items-center gap-2 text-xs text-muted-foreground" data-slot="show-reversed">
@@ -581,16 +599,33 @@ export default function JournalsPage() {
           <DialogHeader>
             <DialogTitle>Reverse journal #{reversing?.entryNo}?</DialogTitle>
             <DialogDescription>
-              A mirror entry is posted on the date below, and anything this journal settled is owed again. The original stays in the books;
-              nothing is deleted. A date in a locked period is refused.
+              A mirror entry — every debit a credit, every credit a debit — is posted on the date below as &ldquo;Reversal of #{reversing?.entryNo}&rdquo;,
+              and anything this journal settled is owed again. The original stays in the books marked &ldquo;Reversed by&rdquo; the new entry; nothing is
+              deleted. A date in a locked period or a closed year is refused. Where a journal approval rule covers the amount, the reversal waits
+              for someone else to approve it.
             </DialogDescription>
           </DialogHeader>
-          <Field label="Reversal date">
-            <Input type="date" value={reverseDate} onChange={(e) => setReverseDate(e.target.value)} />
+          <Field label="Reversal date" required>
+            <Input type="date" value={reverseDate} onChange={(e) => { setReverseDate(e.target.value); setReverseError(null); }} data-slot="reverse-date" />
           </Field>
+          <Field label="Reason" required hint="Kept with the reversal and in the audit trail">
+            <Input value={reverseReason} onChange={(e) => setReverseReason(e.target.value)} placeholder="Why is it being reversed?" maxLength={500} data-slot="reverse-reason" />
+          </Field>
+          {reverseError && (
+            <div className="space-y-2 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive" data-slot="reverse-error">
+              <p>{reverseError.message}</p>
+              {reverseError.firstOpenDate && (
+                <Button size="xs" variant="outline" onClick={() => { setReverseDate(reverseError.firstOpenDate!); setReverseError(null); }} data-slot="use-first-open-date">
+                  Use {dmy(reverseError.firstOpenDate)}, the first open date
+                </Button>
+              )}
+            </div>
+          )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setReversing(null)}>Cancel</Button>
-            <Button variant="destructive" disabled={reverse.busy || !reverseDate} onClick={() => reversing && void doReverse(reversing, reverseDate)}>Reverse</Button>
+            <Button variant="destructive" disabled={reverseBusy || !reverseDate} onClick={() => reversing && void doReverse(reversing, reverseDate)} data-slot="confirm-reverse">
+              {reverseBusy && <Loader2 className="size-3.5 animate-spin" />} Reverse
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -602,8 +637,24 @@ export default function JournalsPage() {
  * Entries held out of the books: optional vouchers, post-dated ones waiting for
  * their day, and those a journal rule holds for approval.
  */
-function HeldList({ rows, canAct, onChanged }: { rows: HeldJournalRow[]; canAct: boolean; onChanged: () => void }) {
+function HeldList({ rows, canAct, onChanged }: { rows: HeldJournalWithReversal[]; canAct: boolean; onChanged: () => void }) {
   const [busy, setBusy] = useState<string | null>(null);
+  const todayIso = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date());
+  const due = rows.filter((h) => h.kind === 'post_dated' && h.date <= todayIso).length;
+  // Post-dated entries and auto-reversals whose date has come: what the scheduler does, by hand.
+  const postDue = async () => {
+    setBusy('due');
+    try {
+      const r = await voucherReversals.postDue();
+      if (r.failed) toast.error(`${r.posted} posted, ${r.failed} could not post`, { description: r.errors[0] });
+      else toast.success(`${r.posted} due entr${r.posted === 1 ? 'y' : 'ies'} posted${r.held ? `, ${r.held} sent for approval` : ''}`);
+      onChanged();
+    } catch (e) {
+      toast.error('Not posted', { description: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setBusy(null);
+    }
+  };
   const [opened, setOpened] = useState<string | null>(null);
   const act = async (id: string, fn: () => Promise<{ status: string; entryNo?: number; approverRole?: string }>) => {
     setBusy(id);
@@ -623,6 +674,11 @@ function HeldList({ rows, canAct, onChanged }: { rows: HeldJournalRow[]; canAct:
         <Clock className="size-4 text-muted-foreground" />
         <h3 className="text-sm font-semibold">Held out of the books</h3>
         <span className="text-xs text-muted-foreground">Counted in no report until posted</span>
+        {canAct && due > 0 && (
+          <Button size="xs" variant="outline" className="ml-auto" disabled={busy === 'due'} onClick={() => void postDue()} data-slot="post-due">
+            Post {due} due now
+          </Button>
+        )}
       </div>
       <ul className="divide-y rounded-md border text-sm">
         {rows.map((h) => (
@@ -634,6 +690,8 @@ function HeldList({ rows, canAct, onChanged }: { rows: HeldJournalRow[]; canAct:
               <span className="tabular-nums text-muted-foreground">{dmy(h.date)}</span>
               <button type="button" className="font-medium hover:underline" onClick={() => setOpened(opened === h.id ? null : h.id)}>{h.memo}</button>
               {h.reverseOn && <span className="text-xs text-muted-foreground">reverses {dmy(h.reverseOn)}</span>}
+              {h.reversesEntryNo && <Badge variant="outline" className="text-[10px]" data-slot="held-reverses">Reverses #{h.reversesEntryNo}</Badge>}
+              {h.reason && h.reversesEntryNo && <span className="text-xs text-muted-foreground">Reason: {h.reason}</span>}
               <span className="text-xs text-muted-foreground">by {h.createdBy ?? 'unknown'}</span>
               <Money value={h.totalPaise} className="ml-auto font-medium" />
               {canAct && h.kind !== 'approval' && (

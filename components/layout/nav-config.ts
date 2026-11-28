@@ -7,6 +7,8 @@ import {
   ScanBarcode, BellRing, Download, Upload, ArrowLeftRight, FileUp, FileDown, AlertOctagon, Radar, FilePlus2, Timer, FolderKanban, Ship, PhoneCall, ListChecks, LayoutTemplate, Shuffle, Globe,
   House, ShoppingBasket, ShoppingBag, Clock, UserRoundCog, ChartNoAxesColumn, Folder,
 } from 'lucide-react';
+// Status review 7, builder A.
+import { History } from 'lucide-react';
 
 export interface NavItem {
   label: string;
@@ -148,6 +150,8 @@ export const NAV_GROUPS: NavGroup[] = [
       { label: 'Cost Centres', href: '/accountant/cost-centres', icon: Split, module: 'accountant', feature: 'costCentres' },
       { label: 'Period Close', href: '/accountant/period-close', icon: CalendarClock, module: 'accountant' },
       { label: 'Audit Trail', href: '/accountant/audit-trail', icon: ShieldCheck, module: 'accountant' },
+      // Status review 7 (builder A): every reversal pair with its reason and who did it.
+      { label: 'Reversed Vouchers', href: '/accountant/reversed-vouchers', icon: History, module: 'accountant' },
     ],
   },
   { label: 'Reports', icon: ChartNoAxesColumn, module: 'reports', href: '/reports', items: [] },

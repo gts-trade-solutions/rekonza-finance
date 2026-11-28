@@ -45,7 +45,7 @@ export async function runScheduledPostings(opts: { now?: Date; trx?: Trx; orgId?
   for (const h of await held.execute()) {
     try {
       const out = await run(async (trx) => {
-        const r = await releaseHeldJournal(trx, h.org_id, null, h.id);
+        const r = await releaseHeldJournal(trx, h.org_id, null, h.id, today);
         await logAudit({
           trx, orgId: h.org_id, actorUserId: null, actorName: ACTOR, action: 'create',
           targetType: r.posted ? 'journal_entry' : 'held_journal', targetId: r.posted ? r.entry.id : h.id,

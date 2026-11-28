@@ -4,7 +4,7 @@ import { db, transaction } from '@/lib/server/db';
 import { route, body, query, asId, badRequest } from '@/lib/server/http';
 import { toPaiseFromSql } from '@/lib/server/money-sql';
 import { logAudit, auditMeta } from '@/lib/server/audit';
-import { reverseJournal } from '@/lib/server/services/journals';
+import { requestReversal } from '@/lib/server/services/voucher-reversals';
 import { saveJournal } from '@/lib/server/services/held-journals';
 import { JournalInput, toJournalInput } from '@/lib/server/journal-input';
 import '@/lib/server/jobs/boot';
@@ -20,6 +20,8 @@ const ListQuery = z.object({
   search: z.string().optional(),
   /** Leave out entries that were reversed, and their reversals: a journal edited or deleted shows only as it now stands. */
   hideReversed: z.enum(['1', '0']).optional(),
+  /** Only reversal pairs (the journal report's "Reversed vouchers" filter). */
+  onlyReversals: z.enum(['1', '0']).optional(),
   limit: z.coerce.number().int().min(1).max(500).default(200),
   offset: z.coerce.number().int().min(0).default(0),
 });
@@ -46,6 +48,14 @@ export const GET = route(
         : base.where('source_type', 'in', kinds);
     }
     if (q.search) base = base.where('memo', 'like', `%${q.search}%`);
+    // Only entries that are one half of a reversal pair: the reversed and their reversals.
+    if (q.onlyReversals === '1') {
+      base = base.where((eb) => eb.or([
+        eb('reversal_of_entry_id', 'is not', null),
+        eb('id', 'in', db.selectFrom('journal_entries as r2').select('r2.reversal_of_entry_id as id')
+          .where('r2.org_id', '=', orgId).where('r2.reversal_of_entry_id', 'is not', null) as never),
+      ]));
+    }
     if (q.hideReversed === '1') {
       base = base.where('reversal_of_entry_id', 'is', null)
         .where('id', 'not in', db.selectFrom('journal_entries as r').select('r.reversal_of_entry_id as id')
@@ -212,48 +222,40 @@ export const POST = route(
 
 const ReverseInput = z.object({
   entryId: z.string(),
-  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Give the date to reverse on.'),
+  /** Why: kept with the reversal and in the audit trail. An older client sends it as memo. */
+  reason: z.string().trim().max(500).optional(),
   memo: z.string().max(500).optional(),
 });
 
-/** The entries reversed from the journal screen: those that stand on their own, not a document's. */
-const REVERSIBLE = new Set(['manual', 'opening', 'opening_balance', 'reclassification', 'recurring', 'doubtful_debts', 'tally_import', 'fx_revaluation']);
-
-/** Reverse an entry. Corrections are posted, never edited in place. */
+/**
+ * Reverse an entry on a date, for a reason (services/voucher-reversals.ts):
+ * posted now, or held for a second person where a journal approval rule
+ * covers the amount. A document's entry is reversed by voiding the document.
+ */
 export const PATCH = route(
   async ({ orgId, user, req }) => {
     const input = await body(req, ReverseInput);
     const entryId = Number(input.entryId);
     if (!Number.isInteger(entryId)) throw badRequest('Invalid entry.');
-    // An invoice's, a bill's or a payment's entry is undone by voiding the
-    // document: reversing only its entry would leave the document standing and
-    // the ledger and the documents telling different stories.
-    const entry = await db.selectFrom('journal_entries').select(['source_type', 'entry_no', 'reversal_of_entry_id'])
-      .where('id', '=', entryId).where('org_id', '=', orgId).executeTakeFirst();
-    if (!entry) throw badRequest('That entry does not exist.');
-    if (!REVERSIBLE.has(entry.source_type)) {
-      throw badRequest(`Entry #${entry.entry_no} was posted by ${entry.source_type.replace(/_/g, ' ')}. Void or cancel that document instead; its entry is reversed with it.`);
-    }
-    if (entry.reversal_of_entry_id) throw badRequest(`Entry #${entry.entry_no} is itself a reversal. Post a new journal to correct it.`);
-
-    // Whatever the entry settled is owed again once it is reversed.
-    const reversal = await transaction(async (trx) =>
-      reverseJournal(trx, orgId, user.userId, entryId, { date: input.date, memo: input.memo }),
-    );
-
-    await logAudit({
-      orgId,
-      actorUserId: user.userId,
-      actorName: user.name,
-      action: 'void',
-      targetType: 'journal_entry',
-      targetId: entryId,
-      targetLabel: `#${entry.entry_no}`,
-      detail: `Reversed by entry #${reversal.entryNo}${input.date ? ` dated ${input.date}` : ''}`,
-      ...auditMeta(req),
+    const reason = (input.reason ?? input.memo ?? '').trim();
+    return transaction(async (trx) => {
+      const r = await requestReversal(trx, orgId, user.userId, entryId, { date: input.date, reason });
+      if (r.held) {
+        await logAudit({
+          trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'create',
+          targetType: 'held_journal', targetId: r.heldId, targetLabel: `Reversal of #${r.entryNo} (H-${r.heldId})`,
+          detail: `Asked to reverse #${r.entryNo} on ${input.date}; waiting for ${r.approverRole} approval`, reason, ...auditMeta(req),
+        });
+        return { held: true as const, heldId: asId(r.heldId), approverRole: r.approverRole };
+      }
+      await logAudit({
+        trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'void',
+        targetType: 'journal_entry', targetId: entryId, targetLabel: `#${r.entryNo}`,
+        detail: `Reversed by entry #${r.reversalNo} dated ${input.date}`, reason, ...auditMeta(req),
+      });
+      return { held: false as const, id: asId(r.reversalId), entryNo: r.reversalNo };
     });
-
-    return { id: asId(reversal.id), entryNo: reversal.entryNo };
   },
   { permission: { module: 'accountant', action: 'void' } },
 );

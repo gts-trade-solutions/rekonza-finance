@@ -10,10 +10,12 @@
 // business does, investing is buying and selling long-lived assets, financing
 // is the owners putting money in or taking it out.
 
+import { Suspense } from 'react';
 import { Card } from '@/components/ui/card';
+import { CustomizeButton, CustomizePanel, CustomReportView, appliedLines, customRows, useCustomReport, useCustomReportData, useOrgName } from '@/components/reports/customize-report';
 import { Money } from '@/components/shared/money';
 import { downloadCsv, ReportShell, ReportTable, useReportRange } from '@/components/shared/report-shell';
-import { AsyncPage } from '@/components/shared/async-state';
+import { AsyncPage, LoadingRows } from '@/components/shared/async-state';
 import { reports, type CashFlowReport } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
 import { toRupees } from '@/lib/money';
@@ -27,7 +29,15 @@ const GROUP_TOTAL: Record<string, (d: CashFlowReport) => number> = {
 };
 
 export default function CashFlowPage() {
+  return <Suspense fallback={<LoadingRows rows={10} />}><CashFlow /></Suspense>;
+}
+
+function CashFlow() {
   const [range, setRange] = useReportRange();
+  // Customize Report (status review 7): report by month, quarter or year, compare, and the filters that apply to cash.
+  const custom = useCustomReport('cash-flow', () => ({ from: range.from, to: range.to }));
+  const cstate = useCustomReportData(custom.spec);
+  const org = useOrgName();
   const state = useApi<CashFlowReport>(
     () => reports.cashFlow(range.from, range.to),
     [range.from, range.to],
@@ -39,7 +49,10 @@ export default function CashFlowPage() {
       description="Profit is an opinion; cash is a fact. This traces every rupee that actually entered or left your bank and cash accounts, grouped by what caused it."
       range={range}
       onRangeChange={setRange}
+      extraActions={<CustomizeButton onClick={() => custom.setOpen(true)} active={!!custom.spec} />}
+      headerLines={custom.spec ? appliedLines(cstate.data) : undefined}
       onExport={() => {
+        if (custom.spec) { if (cstate.data) downloadCsv('cash-flow-customised.csv', customRows(cstate.data, org)); return; }
         const d = state.data;
         if (!d) return;
         downloadCsv('cash-flow.csv', [
@@ -50,6 +63,8 @@ export default function CashFlowPage() {
         ]);
       }}
     >
+      <CustomizePanel open={custom.open} onOpenChange={custom.setOpen} initial={custom.start()} onApply={custom.apply} saved={custom.saved} onSaved={custom.onSaved} />
+      {custom.spec ? <CustomReportView state={cstate} saved={custom.saved} onEdit={() => custom.setOpen(true)} onClear={custom.clear} /> : (
       <AsyncPage state={state}>
         {(d) => {
           const net = d.closingPaise - d.openingPaise;
@@ -115,6 +130,7 @@ export default function CashFlowPage() {
           );
         }}
       </AsyncPage>
+      )}
     </ReportShell>
   );
 }

@@ -14,12 +14,19 @@ import 'server-only';
 import { sql } from 'kysely';
 import type { Executor } from '../db';
 import type { Paise } from '../../types';
+import { lineFilterSql, type LineFilter } from './line-filters';
 import { toPaiseFromSql } from '../money-sql';
 import { balanceSheet, profitAndLoss, ageing } from './statements';
 
 interface Window {
   from: string;
   to: string;
+  /**
+   * Customize Report's filters, where they apply to cash: the branch, and the
+   * customer or vendor, project or tag the cash entry carries. Cost centres sit
+   * on income and expense lines, never on a bank line, so they do not apply.
+   */
+  filter?: LineFilter | null;
 }
 
 // ── Party balances ───────────────────────────────────────────────────────────
@@ -313,20 +320,23 @@ export async function cashFlow(ex: Executor, orgId: number, w: Window): Promise<
     };
   }
 
+  const cf = w.filter ? { ...w.filter, costCentreIds: [], accountIds: [], accountTypes: [] } : null;
   const { rows: opening } = await sql<{ v: string }>`
-    SELECT COALESCE(SUM(debit - credit), 0) AS v FROM journal_lines
-     WHERE org_id = ${orgId} AND account_id IN (${sql.join(ids)}) AND entry_date < ${w.from}
+    SELECT COALESCE(SUM(jl.debit - jl.credit), 0) AS v FROM journal_lines jl JOIN journal_entries e ON e.id = jl.entry_id
+     WHERE jl.org_id = ${orgId} AND jl.account_id IN (${sql.join(ids)}) AND jl.entry_date < ${w.from} ${lineFilterSql(orgId, cf)}
   `.execute(ex);
 
   // For every entry that touched cash, what the money went to or came from.
   const { rows } = await sql<{ type: string; code: string; name: string; v: string }>`
     SELECT a.type, a.code, a.name, COALESCE(SUM(other.credit - other.debit), 0) AS v
-      FROM journal_lines cashline
-      JOIN journal_lines other ON other.entry_id = cashline.entry_id AND other.id <> cashline.id
+      FROM journal_lines jl
+      JOIN journal_entries e ON e.id = jl.entry_id
+      JOIN journal_lines other ON other.entry_id = jl.entry_id AND other.id <> jl.id
       JOIN accounts a ON a.id = other.account_id
-     WHERE cashline.org_id = ${orgId}
-       AND cashline.account_id IN (${sql.join(ids)})
-       AND cashline.entry_date BETWEEN ${w.from} AND ${w.to}
+     WHERE jl.org_id = ${orgId}
+       AND jl.account_id IN (${sql.join(ids)})
+       AND jl.entry_date BETWEEN ${w.from} AND ${w.to}
+       ${lineFilterSql(orgId, cf)}
      GROUP BY a.type, a.code, a.name
     HAVING v <> 0
      ORDER BY a.type, a.code

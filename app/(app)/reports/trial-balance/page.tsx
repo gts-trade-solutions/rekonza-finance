@@ -7,12 +7,13 @@
 // disagree — there is no second copy to fall out of date.
 
 import Link from 'next/link';
-import { useState } from 'react';
+import { Suspense, useState } from 'react';
 import { CheckCircle2 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Money } from '@/components/shared/money';
 import { BasisSelect, BranchSelect, useBranchName, downloadCsv, ReportShell, ReportTable, useReportRange, type ReportBasis } from '@/components/shared/report-shell';
 import { SavedViews } from '@/components/shared/saved-views';
+import { CustomizeButton, CustomizePanel, CustomReportView, appliedLines, customRows, useCustomReport, useCustomReportData, useOrgName } from '@/components/reports/customize-report';
 
 import { AsyncPage, LoadingRows } from '@/components/shared/async-state';
 import { reports, type TrialBalanceReport } from '@/lib/api/client';
@@ -21,11 +22,19 @@ import { toRupees } from '@/lib/money';
 import { ledgerHref } from '@/lib/source-links';
 
 export default function TrialBalancePage() {
+  return <Suspense fallback={<LoadingRows rows={10} />}><TrialBalance /></Suspense>;
+}
+
+function TrialBalance() {
   const [range, setRange] = useReportRange();
   const [basis, setBasis] = useState<ReportBasis>('accrual');
   const [branch, setBranch] = useState('');
   const branchName = useBranchName(branch);
   const state = useApi<TrialBalanceReport>(() => reports.trialBalance(range.to, branch || undefined, basis), [range.to, basis, branch]);
+  // Customize Report (status review 7).
+  const custom = useCustomReport('trial-balance', () => ({ from: range.from, to: range.to, basis, filter: { branchId: branch || null } }));
+  const cstate = useCustomReportData(custom.spec);
+  const org = useOrgName();
 
   return (
     <ReportShell
@@ -38,11 +47,14 @@ export default function TrialBalancePage() {
         <div className="flex gap-2">
           <div className="w-32"><BasisSelect value={basis} onChange={setBasis} /></div>
           <div className="w-40"><BranchSelect value={branch} onChange={setBranch} /></div>
+          <CustomizeButton onClick={() => custom.setOpen(true)} active={!!custom.spec} />
           <div className="self-end"><SavedViews list="report-trial-balance" current={{ to: range.to, basis, branch }}
             onApply={(v) => { if (v.to) setRange({ ...range, to: String(v.to), mode: 'day' }); setBasis((v.basis as ReportBasis) ?? 'accrual'); setBranch(String(v.branch ?? '')); }} /></div>
         </div>
       )}
+      headerLines={custom.spec ? appliedLines(cstate.data) : undefined}
       onExport={() => {
+        if (custom.spec) { if (cstate.data) downloadCsv('trial-balance-customised.csv', customRows(cstate.data, org)); return; }
         const tb = state.data;
         if (!tb) return;
         downloadCsv('trial-balance.csv', [
@@ -53,6 +65,8 @@ export default function TrialBalancePage() {
         ]);
       }}
     >
+      <CustomizePanel open={custom.open} onOpenChange={custom.setOpen} initial={custom.start()} onApply={custom.apply} saved={custom.saved} onSaved={custom.onSaved} />
+      {custom.spec ? <CustomReportView state={cstate} saved={custom.saved} onEdit={() => custom.setOpen(true)} onClear={custom.clear} /> : (
       <AsyncPage state={state} loading={<LoadingRows rows={10} />}>
         {(tb) => (
           <>
@@ -115,6 +129,7 @@ export default function TrialBalancePage() {
           </>
         )}
       </AsyncPage>
+      )}
     </ReportShell>
   );
 }

@@ -10,22 +10,20 @@
 // carry an edit log: each field that changed, from what, to what (Rule 3(1)).
 
 import { useEffect, useState } from 'react';
-import { Download, Lock, ShieldCheck } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Download, Fingerprint, Loader2, Lock, ShieldCheck } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { ExportDialog } from '@/components/shared/export-dialog';
+import { AuditExportDialog } from '@/components/audit/audit-export';
 import { usePermission } from '@/lib/store/hooks';
+import { useAppStore } from '@/lib/store';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from '@/components/ui/select';
 import { PageHeader } from '@/components/shared/page-header';
 import { DataTable, type Column } from '@/components/shared/data-table';
 import { EmptyState } from '@/components/shared/empty-state';
 import { AsyncPage } from '@/components/shared/async-state';
-import { audit, type AuditEventRow, type AuditResponse } from '@/lib/api/client';
+import { auditTrail, type AuditChainStatus, type AuditEventRow, type AuditListResponse } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
 
 const ACTION_TONE: Record<string, string> = {
@@ -114,7 +112,7 @@ function shown(v: unknown): string {
 }
 
 const PAGE = 300;
-const ACTIONS = ['create', 'update', 'delete', 'approve', 'void', 'send', 'match', 'import', 'export', 'login'];
+const ACTIONS = ['create', 'update', 'delete', 'approve', 'void', 'send', 'match', 'import', 'export', 'login', 'verify'];
 
 export default function AuditTrailPage() {
   const canExport = usePermission('accountant', 'export');
@@ -124,16 +122,34 @@ export default function AuditTrailPage() {
   const [to, setTo] = useState('');
   const [typed, setTyped] = useState('');
   const [search, setSearch] = useState('');
+  const [actor, setActor] = useState('');
   const [limit, setLimit] = useState(PAGE);
   const [exporting, setExporting] = useState(false);
+  const [verifying, setVerifying] = useState(false);
+  const [verified, setVerified] = useState<AuditChainStatus | null>(null);
+  const me = useAppStore((st) => st.users.find((u) => u.id === st.session?.userId)?.name ?? 'me');
   // The search runs on the server, over every row, a moment after typing stops.
   useEffect(() => {
     const t = window.setTimeout(() => { setSearch(typed.trim()); setLimit(PAGE); }, 350);
     return () => window.clearTimeout(t);
   }, [typed]);
-  const filters = { targetType: entity, action, from: from || undefined, to: to || undefined, search: search || undefined };
-  const state = useApi<AuditResponse>(() => audit.list({ ...filters, limit }), [entity, action, from, to, search, limit]);
+  const filters = { targetType: entity, action, actorUserId: actor || undefined, from: from || undefined, to: to || undefined, search: search || undefined };
+  const state = useApi<AuditListResponse>(() => auditTrail.list({ ...filters, limit }), [entity, action, actor, from, to, search, limit]);
   const reset = () => setLimit(PAGE);
+  const verify = async () => {
+    setVerifying(true);
+    try {
+      const r = await auditTrail.verify();
+      setVerified(r);
+      if (r.ok) toast.success('The audit trail is intact', { description: `${r.checked.toLocaleString('en-IN')} events checked; none changed or removed.` });
+      else toast.error('The audit trail has been tampered with', { description: r.problems[0]?.detail });
+      state.refetch();
+    } catch (e) {
+      toast.error('Not verified', { description: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setVerifying(false);
+    }
+  };
 
   return (
     <>
@@ -146,22 +162,15 @@ export default function AuditTrailPage() {
           </Button>
         )}
       />
-      <ExportDialog
-        open={exporting} onOpenChange={setExporting} title="Export Audit Trail" noun="Events" filename="audit-trail"
-        modules={[{
-          value: 'events', label: 'Audit trail events',
-          sheets: async (o) => {
-            const r = await audit.exportRows({ targetType: entity, action, search: search || undefined, from: o.from ?? (from || undefined), to: o.to ?? (to || undefined), pii: o.pii });
-            if (r.truncated) toast.info('The first 100,000 events are in the file. Narrow the dates for the rest.');
-            return [{ name: 'Audit trail', rows: [r.header, ...r.rows] }];
-          },
-        }]}
-      />
+      <AuditExportDialog open={exporting} onOpenChange={setExporting} filters={filters} userName={me} />
 
       <Card className="flex items-start gap-3 border-primary/30 bg-primary/5 p-4">
         <ShieldCheck className="mt-0.5 size-4 shrink-0 text-primary" />
-        <div className="text-sm">
+        <div className="min-w-0 flex-1 text-sm">
           <p className="font-medium">Why this can&apos;t be switched off</p>
+          <p className="mt-1 text-xs font-medium" data-slot="audit-cannot-disable">
+            The audit trail cannot be switched off, and no one — not an admin, not the auditor, not Rekonza — can edit or delete an entry in it.
+          </p>
           <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
             Indian companies keeping books electronically must maintain an edit log recording every change to the
             accounts, keep it for eight financial years, and must not be able to disable it. Your auditor has to
@@ -196,6 +205,37 @@ export default function AuditTrailPage() {
         </div>
       </Card>
 
+      <Card className="flex flex-wrap items-start gap-3 p-4" data-slot="audit-integrity">
+        <Fingerprint className="mt-0.5 size-4 shrink-0 text-primary" />
+        <div className="min-w-0 flex-1 text-sm">
+          <p className="font-medium">Integrity check</p>
+          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+            Every event is sealed into a hash chain: each one&apos;s SHA-256 covers its own content and the event before it. If anyone changed or
+            removed an event directly in the database, Verify integrity shows exactly which one. Note the chain head below in your working papers;
+            if a later check shows a different head with fewer events, events were cut from the end.
+          </p>
+          {state.data && (
+            <p className="mt-2 break-all font-mono text-[11px] text-muted-foreground" data-slot="audit-chain-head">
+              Chain head: {verified?.headHash ?? state.data.chain.headHash} · {(verified?.headSeq ?? state.data.chain.headSeq).toLocaleString('en-IN')} events sealed
+              {state.data.chain.verifiedAt && !verified ? ` · last verified ${new Date(state.data.chain.verifiedAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })} IST (${state.data.chain.verifiedOk ? 'intact' : 'problems found'})` : ''}
+            </p>
+          )}
+          {verified && (verified.ok ? (
+            <p className="mt-2 flex items-center gap-1.5 text-xs font-medium text-emerald-700 dark:text-emerald-300" data-slot="audit-verify-ok">
+              <CheckCircle2 className="size-3.5" /> Intact: all {verified.checked.toLocaleString('en-IN')} sealed events match their seals, and the chain is unbroken. Checked {new Date(verified.verifiedAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })} IST.
+            </p>
+          ) : (
+            <div className="mt-2 space-y-1 text-xs text-destructive" data-slot="audit-verify-problems">
+              <p className="flex items-center gap-1.5 font-medium"><AlertTriangle className="size-3.5" /> Tampering found: {verified.problems.length} problem{verified.problems.length === 1 ? '' : 's'}.</p>
+              <ul className="list-disc pl-5">{verified.problems.slice(0, 20).map((p) => <li key={`${p.seq}-${p.kind}-${p.auditId}`}>{p.detail}</li>)}</ul>
+            </div>
+          ))}
+        </div>
+        <Button size="sm" variant="outline" className="gap-1.5" disabled={verifying} onClick={() => void verify()} data-slot="audit-verify">
+          {verifying ? <Loader2 className="size-3.5 animate-spin" /> : <ShieldCheck className="size-3.5" />} Verify integrity
+        </Button>
+      </Card>
+
       <Card className="flex flex-wrap items-end gap-3 p-3" data-slot="audit-filters">
         <label className="space-y-1 text-[11px] font-medium text-muted-foreground">
           <span className="block">From (IST)</span>
@@ -212,18 +252,32 @@ export default function AuditTrailPage() {
             {ACTIONS.map((a) => <option key={a} value={a}>{a}</option>)}
           </select>
         </label>
+        <label className="space-y-1 text-[11px] font-medium text-muted-foreground">
+          <span className="block">User</span>
+          <select value={actor} onChange={(ev) => { setActor(ev.target.value); reset(); }} className="h-9 w-44 rounded-md border bg-background px-2 text-sm" aria-label="User" data-slot="audit-user">
+            <option value="">Everyone</option>
+            {(state.data?.actors ?? []).map((a) => <option key={a.id} value={a.id}>{a.name} ({a.count})</option>)}
+          </select>
+        </label>
+        <label className="space-y-1 text-[11px] font-medium text-muted-foreground">
+          <span className="block">Record type</span>
+          <select value={entity} onChange={(ev) => { setEntity(ev.target.value); reset(); }} className="h-9 w-48 rounded-md border bg-background px-2 text-sm capitalize" aria-label="Record type" data-slot="audit-type">
+            <option value="all">All record types</option>
+            {(state.data?.targetTypes ?? []).map((t) => <option key={t.value} value={t.value}>{t.value.replace(/[_-]/g, ' ')} ({t.count})</option>)}
+          </select>
+        </label>
         <label className="min-w-56 flex-1 space-y-1 text-[11px] font-medium text-muted-foreground">
           <span className="block">Search every event</span>
           <Input value={typed} onChange={(ev) => setTyped(ev.target.value)} placeholder="User, record, detail, reason or IP" className="h-9" data-slot="audit-search" />
         </label>
-        {(from || to || action !== 'all' || typed || entity !== 'all') && (
-          <Button size="sm" variant="ghost" onClick={() => { setFrom(''); setTo(''); setAction('all'); setTyped(''); setEntity('all'); reset(); }}>Clear</Button>
+        {(from || to || action !== 'all' || typed || entity !== 'all' || actor) && (
+          <Button size="sm" variant="ghost" onClick={() => { setFrom(''); setTo(''); setAction('all'); setTyped(''); setEntity('all'); setActor(''); reset(); }}>Clear</Button>
         )}
       </Card>
 
       <AsyncPage state={state}>
         {(d) =>
-          d.events.length === 0 && entity === 'all' && action === 'all' && !from && !to && !search ? (
+          d.events.length === 0 && entity === 'all' && action === 'all' && !from && !to && !search && !actor ? (
             <EmptyState
               icon={ShieldCheck}
               title="No activity recorded yet"
@@ -241,19 +295,6 @@ export default function AuditTrailPage() {
               initialSort={{ key: 'at', dir: 'desc' }}
               searchPlaceholder="Search these rows…"
               emptyMessage="Nothing recorded for these filters."
-              toolbar={
-                <Select value={entity} onValueChange={(v) => { setEntity(v); reset(); }}>
-                  <SelectTrigger className="w-56"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All record types</SelectItem>
-                    {d.targetTypes.map((t) => (
-                      <SelectItem key={t.value} value={t.value} className="capitalize">
-                        {t.value.replace(/[_-]/g, ' ')} ({t.count})
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              }
             />
             {d.total > d.events.length && (
               <div className="flex justify-center">

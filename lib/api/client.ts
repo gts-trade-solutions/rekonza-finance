@@ -3268,3 +3268,194 @@ export const imports = {
   tallyVouchers: (companyId: string, from: string | null, to: string | null, dryRun: boolean) =>
     api.post<ImportResponse>('/api/imports', { source: 'tally-vouchers', companyId, from, to, dryRun }),
 };
+
+// ── Status review 7, builder A: audit trail integrity and export ─────────────
+
+export interface AuditChainHead { headHash: string; headSeq: number; verifiedAt: string | null; verifiedOk: boolean | null }
+
+export interface AuditListResponse extends AuditResponse {
+  /** Everyone in the trail, for the User filter. */
+  actors: { id: string; name: string; count: number }[];
+  chain: AuditChainHead;
+}
+
+export interface AuditExportResponse {
+  header: string[];
+  rows: string[][];
+  /** Each row's instant (ISO), so a spreadsheet carries a real date and time. */
+  instants: string[];
+  truncated: boolean;
+  company: string;
+  /** The filters in words, for the file's heading. */
+  filters: string[];
+  chain: { headHash: string; headSeq: number };
+}
+
+export interface AuditChainStatus {
+  ok: boolean; sealed: number; checked: number; unsealed: number;
+  problems: { seq: number; auditId: number; kind: 'changed' | 'missing' | 'broken'; detail: string }[];
+  headHash: string; headSeq: number; verifiedAt: string;
+}
+
+export const auditTrail = {
+  list: (params?: {
+    targetType?: string; action?: string; actorUserId?: string;
+    from?: string; to?: string; search?: string; limit?: number; offset?: number;
+  }) => api.get<AuditListResponse>('/api/audit', params),
+  exportRows: (params: { targetType?: string; action?: string; actorUserId?: string; from?: string; to?: string; search?: string; pii?: boolean; format?: string }) =>
+    api.get<AuditExportResponse>('/api/audit/export', { ...params, pii: params.pii === false ? '0' : '1' }),
+  verify: () => api.get<AuditChainStatus>('/api/audit/verify'),
+};
+
+// ── Status review 7, builder A: voucher reversals ───────────────────────────
+
+/** A held entry with what it reverses, when it is a reversal waiting for approval or for its date. */
+export type HeldJournalWithReversal = HeldJournalRow & { reversesEntryId?: string | null; reversesEntryNo?: number | null; reason?: string | null };
+
+export interface ReversalPairRow {
+  entryId: string; entryNo: number; entryDate: string; memo: string | null; sourceType: string; sourceId: string | null;
+  reversalId: string | null; reversalNo: number | null; reversalDate: string | null;
+  amountPaise: number; reason: string | null; requestedBy: string | null; approvedBy: string | null;
+  kind: 'manual' | 'approved' | 'scheduled' | 'document' | 'waiting_approval' | 'scheduled_pending';
+  heldId: string | null;
+}
+
+export const voucherReversals = {
+  /** Reverse an entry on a date, for a reason: posted, or held for a second person under a journal approval rule. */
+  reverse: (entryId: string, date: string, reason: string) =>
+    api.patch<{ held: false; id: string; entryNo: number } | { held: true; heldId: string; approverRole: ApproverRole }>('/api/journal', { entryId, date, reason }),
+  register: (params?: { from?: string; to?: string }) => api.get<{ pairs: ReversalPairRow[] }>('/api/journal/reversals', params),
+  /** Post every post-dated entry and auto-reversal whose date has come. */
+  postDue: () => api.post<{ posted: number; held: number; failed: number; errors: string[] }>('/api/held-journals', { action: 'post-due' }),
+};
+
+// ── Status review 7, builder A: budgets by period, Budget vs Actuals ────────
+
+export type BudgetPeriodKind = 'monthly' | 'quarterly' | 'half_yearly' | 'yearly';
+export type BudgetColumnMode = 'month' | 'quarter' | 'half' | 'year';
+
+export interface BudgetPlanSummary {
+  id: string; name: string; fyLabel: string; period: BudgetPeriodKind;
+  branchId: string | null; branchName: string | null; costCentreId: string | null; costCentreName: string | null; projectId: string | null; projectName: string | null;
+  includeBalanceSheet: boolean; isPrimary: boolean; notes: string | null; accounts: number; incomePaise: number; expensePaise: number; updatedAt: string;
+}
+export interface BudgetPlanDetail extends BudgetPlanSummary {
+  periods: { no: number; label: string; from: string; to: string }[];
+  lines: { accountId: string; code: string; name: string; type: AccountRow['type']; amountsPaise: number[] }[];
+}
+export interface BudgetVarianceCell { budgetPaise: number; actualPaise: number; variancePaise: number; variancePct: number | null; favourable: boolean | null; flagged: boolean }
+export interface BudgetVarianceRow { accountId: string; code: string; name: string; type: AccountRow['type']; budgeted: boolean; computed?: boolean; cells: BudgetVarianceCell[]; total: BudgetVarianceCell }
+export interface BudgetVarianceReport {
+  plan: BudgetPlanDetail;
+  columns: { key: string; label: string; from: string; to: string }[];
+  upto: string; thresholdPct: number;
+  sections: { key: string; label: string; rows: BudgetVarianceRow[]; total: { cells: BudgetVarianceCell[]; total: BudgetVarianceCell } }[];
+  summary: { key: string; label: string; cells: BudgetVarianceCell[]; total: BudgetVarianceCell }[];
+  notes: string[];
+}
+export interface CostCentreBudgetRow {
+  costCentreId: string; code: string; name: string; planId: string | null; planName: string | null;
+  income: BudgetVarianceCell; expense: BudgetVarianceCell; net: BudgetVarianceCell;
+}
+
+export const budgetPlans = {
+  list: (fy?: string) => api.get<{ plans: BudgetPlanSummary[]; years: string[] }>('/api/budget-plans', fy ? { fy } : undefined),
+  get: (id: string) => api.get<BudgetPlanDetail>(`/api/budget-plans/${id}`),
+  save: (input: {
+    id?: string | null; name: string; fyLabel: string; period: BudgetPeriodKind; branchId?: string | null; costCentreId?: string | null; projectId?: string | null;
+    includeBalanceSheet?: boolean; isPrimary?: boolean; notes?: string | null; lines: { accountId: string; amountsPaise: number[] }[];
+  }) => api.post<{ id: string }>('/api/budget-plans', { action: 'save', ...input }),
+  clone: (id: string, name: string, fyLabel?: string, adjustPct?: number) => api.post<{ id: string }>('/api/budget-plans', { action: 'clone', id, name, fyLabel, adjustPct }),
+  fill: (input: { fyLabel: string; period: BudgetPeriodKind; accountIds: string[]; adjustPct?: number; branchId?: string | null; costCentreId?: string | null; projectId?: string | null }) =>
+    api.get<{ sourceFy: string; lines: { accountId: string; amountsPaise: number[] }[] }>('/api/budget-plans/fill', {
+      fyLabel: input.fyLabel, period: input.period, accountIds: input.accountIds.join(','), adjustPct: input.adjustPct ?? 0,
+      branchId: input.branchId ?? undefined, costCentreId: input.costCentreId ?? undefined, projectId: input.projectId ?? undefined,
+    }),
+  remove: (id: string, reason?: string | null) => api.delete<{ deleted: true }>(`/api/budget-plans/${id}${reason ? `?reason=${encodeURIComponent(reason)}` : ''}`),
+  variance: (id: string, params?: { columns?: BudgetColumnMode; upto?: string; threshold?: number }) => api.get<BudgetVarianceReport>(`/api/budget-plans/${id}/variance`, params),
+  costing: (fy: string, upto?: string) => api.get<{ fy: string; from: string; to: string; centres: CostCentreBudgetRow[] }>('/api/budget-plans/costing', { fy, ...(upto ? { upto } : {}) }),
+};
+
+// ── Status review 7, builder A: Customize Report and custom reports ─────────
+
+export type CustomReportKind = 'profit-and-loss' | 'balance-sheet' | 'trial-balance' | 'general-ledger' | 'account-transactions' | 'cash-flow';
+export interface CustomReportFilter {
+  branchId?: string | null; costCentreIds?: string[]; projectIds?: string[]; tagOptionIds?: string[]; contactIds?: string[]; accountIds?: string[];
+  accountTypes?: ('asset' | 'liability' | 'equity' | 'income' | 'expense')[];
+}
+export interface CustomReportSpec {
+  report: CustomReportKind; from: string; to: string; basis?: 'accrual' | 'cash';
+  reportBy?: 'total' | 'month' | 'quarter' | 'year'; compareMode?: 'none' | 'previous_period' | 'previous_year'; compareCount?: number;
+  accounts?: 'all' | 'non_zero' | 'with_txns'; filter?: CustomReportFilter; accountId?: string | null;
+  /** Show/Hide columns: kept with a saved report, read by the screen only. */
+  columns?: Record<string, boolean>;
+}
+export interface CustomReportRow { accountId: string; code: string; name: string; type?: string; computed?: boolean; values: number[]; debit?: number[]; credit?: number[] }
+export interface CustomReportData {
+  spec: CustomReportSpec;
+  columns: { key: string; label: string; from: string; to: string }[];
+  sections: { key: string; label: string; depth: number; rows: CustomReportRow[]; totals: number[]; headingOnly?: boolean }[];
+  results: { key: string; label: string; values: number[] }[];
+  lines?: { date: string; entryId: string; entryNo: number; account?: string; accountCode?: string; description: string; contact: string | null; sourceType: string; sourceId: string | null; debitPaise: number; creditPaise: number; runningPaise?: number }[];
+  opening?: number; closing?: number; account?: { id: string; code: string; name: string; type: string } | null; truncated?: boolean;
+  applied: string[]; notes: string[]; balanced: boolean[] | null; cannotBalance: boolean;
+}
+export interface SavedCustomReport { id: string; report: CustomReportKind; name: string; shared: boolean; mine: boolean; owner: string | null; createdAt: string; spec: CustomReportSpec }
+
+/** The spec as the server reads it: ids as numbers, the screen's column choices left out. */
+const specForServer = (s: CustomReportSpec) => {
+  const n = (l?: string[]) => (l ?? []).map(Number).filter((x) => x > 0);
+  const f = s.filter ?? {};
+  return JSON.stringify({
+    report: s.report, from: s.from, to: s.to, basis: s.basis, reportBy: s.reportBy, compareMode: s.compareMode, compareCount: s.compareCount, accounts: s.accounts, accountId: s.accountId ?? null,
+    filter: { branchId: f.branchId ? Number(f.branchId) : null, costCentreIds: n(f.costCentreIds), projectIds: n(f.projectIds), tagOptionIds: n(f.tagOptionIds), contactIds: n(f.contactIds), accountIds: n(f.accountIds), accountTypes: f.accountTypes ?? [] },
+  });
+};
+
+export const customReports = {
+  run: (spec: CustomReportSpec) => api.get<CustomReportData>('/api/reports/custom', { spec: specForServer(spec) }),
+  list: () => api.get<{ reports: SavedCustomReport[] }>('/api/custom-reports'),
+  get: (id: string) => api.get<{ reports: SavedCustomReport[] }>('/api/custom-reports', { id }),
+  save: (report: CustomReportKind, name: string, shared: boolean, spec: CustomReportSpec) => api.post<{ id: string }>('/api/custom-reports', { report, name, shared, spec }),
+  update: (id: string, patch: { name?: string; shared?: boolean; spec?: CustomReportSpec }) => api.patch<{ id: string }>('/api/custom-reports', { id, ...patch }),
+  remove: (id: string, reason?: string | null) => api.delete<{ deleted: true }>(`/api/custom-reports?id=${id}${reason ? `&reason=${encodeURIComponent(reason)}` : ''}`),
+};
+
+// ── Status review 7, builder A: consolidation ───────────────────────────────
+
+export interface ConsolidatedRowData { code: string; name: string; by: Record<string, number>; elimination: number; total: number; computed?: boolean }
+export interface ConsolidatedSum { by: Record<string, number>; elimination: number; total: number }
+export interface ConsolidatedReport {
+  from: string; to: string; fyStart: string;
+  companies: { orgId: string; name: string; pan: string | null; included: boolean }[];
+  group: { id: string; parentOrgId: string; parentName: string; name: string; members: { orgId: string; name: string; ownershipPct: number; acquiredOn: string | null; investmentAccountId: string | null; investmentAccountName: string | null }[] } | null;
+  interCompany: { fromOrgId: string; fromName: string; toOrgId: string; toName: string; receivablePaise: number; counterpartPayablePaise: number; salesPaise: number; counterpartPurchasesPaise: number; balanceDifferencePaise: number; tradeDifferencePaise: number }[];
+  income: ConsolidatedRowData[]; expenses: ConsolidatedRowData[]; assets: ConsolidatedRowData[]; liabilities: ConsolidatedRowData[]; equity: ConsolidatedRowData[];
+  totalIncome: ConsolidatedSum; totalExpense: ConsolidatedSum; netProfit: ConsolidatedSum; totalAssets: ConsolidatedSum; totalLiabilities: ConsolidatedSum; totalEquity: ConsolidatedSum;
+  profitAttributable: { ownersPaise: number; nciPaise: number };
+  unrealisedProfit: { closing: { sellerOrgId: string; sellerName: string; buyerOrgId: string; buyerName: string; item: string; qtyHeld: number; unitPricePaise: number; sellerUnitCostPaise: number | null; profitPaise: number; basis: 'item' | 'margin'; note: string | null }[]; closingPaise: number; openingPaise: number; yearStartPaise: number; chargePaise: number };
+  investments: { subsidiaryOrgId: string; subsidiary: string; ownershipPct: number; investmentPaise: number; shareCapitalPaise: number; preAcquisitionPaise: number; goodwillPaise: number; capitalReservePaise: number; identified: boolean; note: string | null }[];
+  nci: { orgId: string; name: string; pct: number; profitSharePaise: number; netAssetsSharePaise: number }[];
+  trialBalance: { rows: ConsolidatedRowData[]; debit: ConsolidatedSum; credit: ConsolidatedSum };
+  check: {
+    companies: { orgId: string; name: string; income: number; netProfit: number; assets: number; liabilitiesAndEquity: number; balanced: boolean; tbBalanced: boolean }[];
+    eliminations: { income: number; netProfit: number; assets: number; liabilitiesAndEquity: number };
+    group: { income: number; netProfit: number; assets: number; liabilitiesAndEquity: number; nciPaise: number; balanced: boolean };
+  };
+  notes: string[];
+  unreconciledPaise: number;
+}
+export interface ConsolidationSetup {
+  group: ConsolidatedReport['group'];
+  companies: { orgId: string; name: string; pan: string | null; canEdit: boolean; contacts: { id: string; name: string; kind: string; groupCompanyOrgId: string | null }[]; assetAccounts: { id: string; code: string; name: string }[] }[];
+}
+
+export const consolidation = {
+  report: (from: string, to: string, orgIds?: string[]) => api.get<ConsolidatedReport>('/api/reports/consolidated', { from, to, ...(orgIds?.length ? { orgIds: orgIds.join(',') } : {}) }),
+  setup: (orgIds?: string[]) => api.get<ConsolidationSetup>('/api/reports/consolidated/setup', orgIds?.length ? { orgIds: orgIds.join(',') } : undefined),
+  saveSetup: (input: { parentOrgId: string; name: string; members: { orgId: string; ownershipPct: number; acquiredOn: string | null; investmentAccountId: string | null }[]; links: { orgId: string; contactId: string; counterpartOrgId: string | null }[] }) =>
+    api.put<{ id: string }>('/api/reports/consolidated/setup', input),
+  ledger: (orgId: string, code: string, from: string, to: string) =>
+    api.get<{ company: string; account: { code: string; name: string; type: string } | null; openingPaise: number; closingPaise: number; lines: { entryId: string; entryNo: number; date: string; memo: string | null; description: string | null; sourceType: string; debitPaise: number; creditPaise: number; runningPaise: number; contactName: string | null }[] }>(
+      '/api/reports/consolidated/ledger', { orgId, code, from, to }),
+};

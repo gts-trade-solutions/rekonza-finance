@@ -21,7 +21,9 @@ import { changeReason } from './request-context';
 import { clientIp } from './client-ip';
 
 export type AuditAction =
-  | 'create' | 'update' | 'delete' | 'void' | 'approve' | 'send' | 'match' | 'login' | 'export' | 'import' | 'comment';
+  | 'create' | 'update' | 'delete' | 'void' | 'approve' | 'send' | 'match' | 'login' | 'export' | 'import' | 'comment'
+  // Running the audit trail's integrity check (audit-chain.ts): an act worth recording itself.
+  | 'verify';
 
 export interface AuditInput {
   orgId: number;

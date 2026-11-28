@@ -23,6 +23,7 @@ import { tileColors } from '@/components/shared/stat-tile';
 import { Money } from '@/components/shared/money';
 import { BasisSelect, BranchSelect, CompareSelect, downloadCsv, ReportShell, useBranchName, useReportRange, type ReportBasis } from '@/components/shared/report-shell';
 import { SavedViews } from '@/components/shared/saved-views';
+import { CustomizeButton, CustomizePanel, CustomReportView, appliedLines, customRows, useCustomReport, useCustomReportData, useOrgName } from '@/components/reports/customize-report';
 
 import { AsyncPage, LoadingRows } from '@/components/shared/async-state';
 import { reports, type GroupedProfitAndLossReport } from '@/lib/api/client';
@@ -57,6 +58,10 @@ function ProfitAndLoss() {
     [cmp?.from, cmp?.to, basis, branch],
   );
   const prev = cmp ? prevState.data ?? null : null;
+  // Customize Report (status review 7): the filters, columns and comparisons Zoho's panel offers.
+  const custom = useCustomReport('profit-and-loss', () => ({ from: range.from, to: range.to, basis, filter: { branchId: branch || null } }));
+  const cstate = useCustomReportData(custom.spec);
+  const org = useOrgName();
 
   return (
     <ReportShell
@@ -69,11 +74,14 @@ function ProfitAndLoss() {
           <div className="w-32"><BasisSelect value={basis} onChange={setBasis} /></div>
           <div className="w-40"><BranchSelect value={branch} onChange={setBranch} /></div>
           {format === 'general' && <div className="w-52"><CompareSelect value={compare} onChange={setCompare} /></div>}
+          <CustomizeButton onClick={() => custom.setOpen(true)} active={!!custom.spec} />
           <div className="self-end"><SavedViews list="report-profit-and-loss" current={{ from: range.from, to: range.to, mode: range.mode, basis, branch, compare }}
             onApply={(v) => { if (v.from && v.to) setRange({ from: String(v.from), to: String(v.to), mode: 'custom' }); setBasis((v.basis as ReportBasis) ?? 'accrual'); setBranch(String(v.branch ?? '')); setCompare((v.compare as CompareMode) ?? 'none'); }} /></div>
         </div>
       )}
+      headerLines={custom.spec ? appliedLines(cstate.data) : undefined}
       onExport={() => {
+        if (custom.spec) { if (cstate.data) downloadCsv('profit-and-loss-customised.csv', customRows(cstate.data, org)); return; }
         const pl = state.data;
         if (!pl) return;
         downloadCsv(format === 'horizontal' ? 'profit-and-loss-horizontal.csv' : 'profit-and-loss.csv', [
@@ -82,6 +90,8 @@ function ProfitAndLoss() {
         ]);
       }}
     >
+      <CustomizePanel open={custom.open} onOpenChange={custom.setOpen} initial={custom.start()} onApply={custom.apply} saved={custom.saved} onSaved={custom.onSaved} />
+      {custom.spec ? <CustomReportView state={cstate} saved={custom.saved} onEdit={() => custom.setOpen(true)} onClear={custom.clear} /> : <>
       <FormatSwitch value={format} statement="pl" base="/reports/profit-and-loss" />
       <AsyncPage state={state} loading={<LoadingRows rows={10} />}>
         {(pl) => {
@@ -142,6 +152,7 @@ function ProfitAndLoss() {
           );
         }}
       </AsyncPage>
+      </>}
     </ReportShell>
   );
 }

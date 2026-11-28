@@ -10,7 +10,20 @@
 
 import { allowOutput } from './output-guard';
 
-export type Cell = string | number | null | undefined;
+/**
+ * A Date is written as a real Excel date and time (a serial number with a
+ * date format), so the sheet sorts and filters by it. Its UTC fields are what
+ * Excel shows: pass istWallClock(instant) for Indian time.
+ */
+export type Cell = string | number | Date | null | undefined;
+
+/** An instant as the Indian wall-clock time, in a Date's UTC fields: what a sheet should show. */
+export function istWallClock(at: Date): Date {
+  return new Date(at.getTime() + 330 * 60_000);
+}
+
+/** "2026-11-27 14:05:09": a Date cell where a format holds text only (CSV, the 2003 XML). */
+const dateText = (d: Date) => d.toISOString().slice(0, 19).replace('T', ' ');
 
 export interface Sheet {
   /** At most 31 characters, and none of : \ / ? * [ ]. */
@@ -38,7 +51,7 @@ function col(i: number): string {
 function sheetXml(sheet: Sheet): string {
   const widths = sheet.widths ?? (() => {
     const w: number[] = [];
-    for (const r of sheet.rows) r.forEach((c, i) => { w[i] = Math.min(60, Math.max(w[i] ?? 8, String(c ?? '').length + 2)); });
+    for (const r of sheet.rows) r.forEach((c, i) => { w[i] = Math.min(60, Math.max(w[i] ?? 8, c instanceof Date ? 20 : String(c ?? '').length + 2)); });
     return w;
   })();
   const cols = widths.length
@@ -49,6 +62,8 @@ function sheetXml(sheet: Sheet): string {
       if (c === null || c === undefined || c === '') return '';
       const ref = `${col(ci)}${ri + 1}`;
       const style = ri === 0 ? ' s="1"' : '';
+      // Days since 30 Dec 1899, the day before Excel's day 1 (25569 is 1 Jan 1970).
+      if (c instanceof Date) return `<c r="${ref}" s="2"><v>${c.getTime() / 86_400_000 + 25569}</v></c>`;
       if (typeof c === 'number' && Number.isFinite(c)) return `<c r="${ref}"${style}><v>${c}</v></c>`;
       return `<c r="${ref}" t="inlineStr"${style}><is><t xml:space="preserve">${esc(String(c))}</t></is></c>`;
     }).join('');
@@ -95,11 +110,12 @@ export function workbook(sheets: Sheet[]): Uint8Array {
       + '</Relationships>'],
     ['xl/styles.xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
       + '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+      + '<numFmts count="1"><numFmt numFmtId="164" formatCode="dd-mmm-yyyy hh:mm:ss"/></numFmts>'
       + '<fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts>'
       + '<fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>'
       + '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>'
       + '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'
-      + '<cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/></cellXfs>'
+      + '<cellXfs count="3"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/><xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/></cellXfs>'
       + '</styleSheet>'],
     ...sheets.map((s, i): [string, string] => [`xl/worksheets/sheet${i + 1}.xml`, sheetXml(s)]),
   ];
@@ -266,7 +282,7 @@ export type ExportFormat = 'csv' | 'xls' | 'xlsx';
 export function csvText(rows: Cell[][]): string {
   const cell = (v: Cell) => {
     if (v === null || v === undefined) return '';
-    const s = String(v);
+    const s = v instanceof Date ? dateText(v) : String(v);
     return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
   return '\ufeff' + rows.map((r) => r.map(cell).join(',')).join('\r\n');
@@ -281,7 +297,7 @@ export function xlsXml(sheets: Sheet[]): string {
   // The file's own esc: entities escaped, and the control characters XML forbids taken out.
   const cell = (v: Cell) => (typeof v === 'number' && Number.isFinite(v)
     ? `<Cell><Data ss:Type="Number">${v}</Data></Cell>`
-    : `<Cell><Data ss:Type="String">${esc(v === null || v === undefined ? '' : String(v))}</Data></Cell>`);
+    : `<Cell><Data ss:Type="String">${esc(v === null || v === undefined ? '' : v instanceof Date ? dateText(v) : String(v))}</Data></Cell>`);
   return `<?xml version="1.0" encoding="UTF-8"?>\n<?mso-application progid="Excel.Sheet"?>\n`
     + '<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">'
     + sheets.map((s) => `<Worksheet ss:Name="${esc(s.name.slice(0, 31))}"><Table>${s.rows.map((r) => `<Row>${r.map(cell).join('')}</Row>`).join('')}</Table></Worksheet>`).join('')

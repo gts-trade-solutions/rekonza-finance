@@ -23,6 +23,7 @@ import type { Paise } from '../../types';
 import { toPaiseFromSql } from '../money-sql';
 import { CODE } from '../ledger/chart-of-accounts';
 import { dayBefore, fiscalStartMonth, fyStartFor, stockPosition } from './stock';
+import { accountFilterSql, cutsByAccount, cutsByDimension, isEmptyFilter, lineFilterSql, type LineFilter } from './line-filters';
 
 export type AccountType = 'asset' | 'liability' | 'equity' | 'income' | 'expense';
 
@@ -62,10 +63,39 @@ interface RawBalance {
 async function balances(
   ex: Executor,
   orgId: number,
-  opts: { from?: string; to: string; branchId?: number; basis?: ReportBasis },
+  opts: { from?: string; to: string; branchId?: number; basis?: ReportBasis; filter?: LineFilter | null },
 ): Promise<AccountBalance[]> {
   if (opts.basis === 'cash') return cashBalances(ex, orgId, opts);
   const from = opts.from ?? '1900-01-01';
+  // Customize Report's filters (line-filters.ts): the same sums over only the
+  // lines the filters keep, and only the accounts they keep.
+  if (!isEmptyFilter(opts.filter)) {
+    const f = { ...opts.filter!, branchId: opts.filter!.branchId ?? opts.branchId ?? null };
+    const { rows } = await sql<RawBalance>`
+      SELECT a.id, a.code, a.name, a.type, a.subtype,
+             COALESCE(SUM(x.debit), 0)  AS dr,
+             COALESCE(SUM(x.credit), 0) AS cr
+        FROM accounts a
+        LEFT JOIN (
+          SELECT jl.account_id, jl.debit, jl.credit
+            FROM journal_lines jl
+            JOIN journal_entries e ON e.id = jl.entry_id
+           WHERE jl.org_id = ${orgId} AND jl.entry_date BETWEEN ${from} AND ${opts.to}
+             ${lineFilterSql(orgId, f)}
+        ) x ON x.account_id = a.id
+       WHERE a.org_id = ${orgId} ${accountFilterSql(f)}
+       GROUP BY a.id, a.code, a.name, a.type, a.subtype
+       ORDER BY a.code
+    `.execute(ex);
+    return rows.map((r) => {
+      const debitPaise = toPaiseFromSql(r.dr);
+      const creditPaise = toPaiseFromSql(r.cr);
+      return {
+        accountId: String(r.id), code: r.code, name: r.name, type: r.type, subtype: r.subtype, debitPaise, creditPaise,
+        balancePaise: isDebitNormal(r.type) ? debitPaise - creditPaise : creditPaise - debitPaise,
+      };
+    });
+  }
   const branchFilter = opts.branchId
     ? sql`AND e.branch_id = ${opts.branchId}`
     : sql``;
@@ -129,8 +159,10 @@ export type ReportBasis = 'accrual' | 'cash';
 async function cashBalances(
   ex: Executor,
   orgId: number,
-  opts: { from?: string; to: string; branchId?: number },
+  opts: { from?: string; to: string; branchId?: number; filter?: LineFilter | null },
 ): Promise<AccountBalance[]> {
+  const filtered = !isEmptyFilter(opts.filter);
+  const f = filtered ? { ...opts.filter!, branchId: opts.filter!.branchId ?? opts.branchId ?? null } : null;
   const from = opts.from ?? '1900-01-01';
   const { rows } = await sql<RawBalance>`
     WITH docs AS (
@@ -172,15 +204,15 @@ async function cashBalances(
                   ELSE COALESCE(sh.by_end, 0) - COALESCE(sh.before_start, 0) END AS w
         FROM journal_lines jl
         LEFT JOIN share sh ON sh.entry_id = jl.entry_id
-        ${opts.branchId ? sql`JOIN journal_entries e ON e.id = jl.entry_id AND e.branch_id = ${opts.branchId}` : sql``}
-       WHERE jl.org_id = ${orgId}
+        ${filtered ? sql`JOIN journal_entries e ON e.id = jl.entry_id` : opts.branchId ? sql`JOIN journal_entries e ON e.id = jl.entry_id AND e.branch_id = ${opts.branchId}` : sql``}
+       WHERE jl.org_id = ${orgId} ${filtered ? lineFilterSql(orgId, f) : sql``}
     )
     SELECT a.id, a.code, a.name, a.type, a.subtype,
            ROUND(COALESCE(SUM(x.debit * x.w), 0), 2)  AS dr,
            ROUND(COALESCE(SUM(x.credit * x.w), 0), 2) AS cr
       FROM accounts a
       LEFT JOIN weighted x ON x.account_id = a.id AND x.w <> 0
-     WHERE a.org_id = ${orgId}
+     WHERE a.org_id = ${orgId} ${filtered ? accountFilterSql(f) : sql``}
      GROUP BY a.id, a.code, a.name, a.type, a.subtype
      ORDER BY a.code
   `.execute(ex);
@@ -193,7 +225,7 @@ async function cashBalances(
       balancePaise: isDebitNormal(r.type) ? debitPaise - creditPaise : creditPaise - debitPaise,
     };
   });
-  const residue = out.reduce((t, r) => t + r.debitPaise - r.creditPaise, 0);
+  const residue = filtered ? 0 : out.reduce((t, r) => t + r.debitPaise - r.creditPaise, 0);
   const ar = out.find((r) => r.code === CODE.AR);
   if (residue && ar) {
     if (residue > 0) ar.creditPaise += residue; else ar.debitPaise -= residue;
@@ -246,8 +278,9 @@ export async function trialBalance(
   asOf: string,
   branchId?: number,
   basis: ReportBasis = 'accrual',
+  filter?: LineFilter | null,
 ): Promise<TrialBalance> {
-  const all = await balances(ex, orgId, { to: asOf, branchId, basis });
+  const all = await balances(ex, orgId, { to: asOf, branchId, basis, filter });
 
   const rows = all
     .filter((r) => r.debitPaise !== 0 || r.creditPaise !== 0)
@@ -298,9 +331,10 @@ export async function profitAndLoss(
   to: string,
   branchId?: number,
   basis: ReportBasis = 'accrual',
+  filter?: LineFilter | null,
 ): Promise<ProfitAndLoss> {
   const [all, opening, closing, postedOpening, postedClosing] = await Promise.all([
-    balances(ex, orgId, { from, to, branchId, basis }),
+    balances(ex, orgId, { from, to, branchId, basis, filter }),
     stockPosition(ex, orgId, dayBefore(from), { branchId, includeArchived: true }),
     stockPosition(ex, orgId, to, { branchId, includeArchived: true }),
     inventoryInLedger(ex, orgId, dayBefore(from), branchId),
@@ -326,7 +360,9 @@ export async function profitAndLoss(
   // and adding goods not yet paid for to a profit of money paid and received
   // would count them as profit. (A perpetual book's Inventory account still
   // shows, in the share paid.)
-  const stockCounts = basis !== 'cash';
+  // Nor when the lines are cut by customer, cost centre, project, tag or
+  // account: stock on hand belongs to none of them.
+  const stockCounts = basis !== 'cash' && !cutsByDimension(filter) && !cutsByAccount(filter);
   const openingStockPaise = stockCounts ? opening.totalValuePaise - postedOpening : 0;
   const closingStockPaise = stockCounts ? closing.totalValuePaise - postedClosing : 0;
   const costOfGoodsSoldPaise = directCost + openingStockPaise - closingStockPaise;
@@ -401,13 +437,14 @@ export async function balanceSheet(
   asOf: string,
   branchId?: number,
   basis: ReportBasis = 'accrual',
+  filter?: LineFilter | null,
 ): Promise<BalanceSheet> {
   const fyStart = fyStartFor(asOf, await fiscalStartMonth(ex, orgId));
   const lastYearEnd = dayBefore(fyStart);
 
   const [all, beforeYear, stockNow, stockAtYearStart, postedNow, postedAtYearStart] = await Promise.all([
-    balances(ex, orgId, { to: asOf, branchId, basis }),
-    balances(ex, orgId, { to: lastYearEnd, branchId, basis }),
+    balances(ex, orgId, { to: asOf, branchId, basis, filter }),
+    balances(ex, orgId, { to: lastYearEnd, branchId, basis, filter }),
     stockPosition(ex, orgId, asOf, { branchId, includeArchived: true }),
     stockPosition(ex, orgId, lastYearEnd, { branchId, includeArchived: true }),
     inventoryInLedger(ex, orgId, asOf, branchId),
@@ -418,8 +455,8 @@ export async function balanceSheet(
     rows.filter((r) => r.type === 'income').reduce((t, r) => t + r.balancePaise, 0) -
     rows.filter((r) => r.type === 'expense').reduce((t, r) => t + r.balancePaise, 0);
 
-  // On the cash basis, no stock valued from the documents (see profitAndLoss).
-  const stockCounts = basis !== 'cash';
+  // On the cash basis, no stock valued from the documents (see profitAndLoss); nor on lines cut by a filter.
+  const stockCounts = basis !== 'cash' && !cutsByDimension(filter) && !cutsByAccount(filter);
   const openingStock = stockCounts ? stockNow.bookOpeningValuePaise : 0;
   // The part of stock the Inventory account does not already hold (inventoryInLedger).
   const closingStockPaise = stockCounts ? stockNow.totalValuePaise - postedNow : 0;
@@ -491,7 +528,11 @@ export async function generalLedger(
   accountId: number,
   from: string,
   to: string,
+  filter?: LineFilter | null,
 ): Promise<{ openingPaise: Paise; lines: LedgerLine[]; closingPaise: Paise }> {
+  // The ledger's own account is the account; the rest of a filter narrows its lines.
+  const f = filter ? { ...filter, accountIds: [], accountTypes: [] } : null;
+  const narrowed = !isEmptyFilter(f);
   const account = await ex
     .selectFrom('accounts').select(['id', 'type'])
     .where('id', '=', accountId).where('org_id', '=', orgId).executeTakeFirst();
@@ -499,7 +540,13 @@ export async function generalLedger(
 
   const debitNormal = isDebitNormal(account.type as AccountType);
 
-  const { rows: opening } = await sql<{ dr: string; cr: string }>`
+  const { rows: opening } = narrowed
+    ? await sql<{ dr: string; cr: string }>`
+        SELECT COALESCE(SUM(jl.debit), 0) AS dr, COALESCE(SUM(jl.credit), 0) AS cr
+          FROM journal_lines jl JOIN journal_entries e ON e.id = jl.entry_id
+         WHERE jl.org_id = ${orgId} AND jl.account_id = ${accountId} AND jl.entry_date < ${from} ${lineFilterSql(orgId, f)}
+      `.execute(ex)
+    : await sql<{ dr: string; cr: string }>`
     SELECT COALESCE(SUM(debit), 0) AS dr, COALESCE(SUM(credit), 0) AS cr
       FROM journal_lines
      WHERE org_id = ${orgId} AND account_id = ${accountId} AND entry_date < ${from}
@@ -527,6 +574,8 @@ export async function generalLedger(
     .where('journal_lines.account_id', '=', accountId)
     .where('journal_lines.entry_date', '>=', from)
     .where('journal_lines.entry_date', '<=', to)
+    .$if(narrowed, (qb) => qb.where('journal_lines.id', 'in', sql<number>`(SELECT jl.id FROM journal_lines jl JOIN journal_entries e ON e.id = jl.entry_id
+      WHERE jl.org_id = ${orgId} AND jl.account_id = ${accountId} AND jl.entry_date BETWEEN ${from} AND ${to} ${lineFilterSql(orgId, f)})` as never))
     .orderBy('journal_lines.entry_date')
     .orderBy('journal_entries.entry_no')
     .execute();

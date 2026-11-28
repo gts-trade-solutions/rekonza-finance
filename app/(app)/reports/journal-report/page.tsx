@@ -9,7 +9,8 @@
 // original, linked to it, with the original left exactly as it was. Nothing in
 // the ledger is ever edited or removed.
 
-import { useState } from 'react';
+import { Suspense, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { RotateCcw } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Card } from '@/components/ui/card';
@@ -17,7 +18,7 @@ import { Combobox } from '@/components/ui/combobox';
 import { Money } from '@/components/shared/money';
 import { downloadCsv, ReportShell, useReportRange } from '@/components/shared/report-shell';
 import { AsyncPage, LoadingRows } from '@/components/shared/async-state';
-import { journal, type JournalResponse } from '@/lib/api/client';
+import { api, journal, type JournalResponse } from '@/lib/api/client';
 import { journalRowRef, LedgerEntryActions } from '@/components/reports/ledger-entry-actions';
 import { useApi } from '@/lib/api/use-api';
 import { toRupees } from '@/lib/money';
@@ -33,14 +34,24 @@ const SOURCES = [
   { value: 'transfer', label: 'Transfers' },
   { value: 'manual', label: 'Manual journals' },
   { value: 'opening_balance', label: 'Opening balances' },
+  // Both halves of every reversal pair: the entries reversed and their reversals.
+  { value: 'reversals', label: 'Reversed vouchers (pairs)' },
 ];
 
 export default function JournalReportPage() {
-  const [range, setRange] = useReportRange();
-  const [source, setSource] = useState('all');
+  return <Suspense fallback={<LoadingRows rows={8} />}><JournalReport /></Suspense>;
+}
+
+function JournalReport() {
+  // ?source=reversals&from=&to= opens it on the reversal pairs of a period (from Reversed Vouchers).
+  const params = useSearchParams();
+  const [range, setRange] = useReportRange({ from: params.get('from'), to: params.get('to') });
+  const [source, setSource] = useState(params.get('source') ?? 'all');
 
   const state = useApi<JournalResponse>(
-    () => journal.list({ from: range.from, to: range.to, sourceType: source, limit: 300 }),
+    () => (source === 'reversals'
+      ? api.get<JournalResponse>('/api/journal', { from: range.from, to: range.to, onlyReversals: '1', limit: 300 })
+      : journal.list({ from: range.from, to: range.to, sourceType: source, limit: 300 })),
     [range.from, range.to, source],
   );
 
@@ -60,10 +71,10 @@ export default function JournalReportPage() {
         const d = state.data;
         if (!d) return;
         downloadCsv('journal-report.csv', [
-          ['Entry', 'Date', 'Source', 'Memo', 'Account code', 'Account', 'Description', 'Debit', 'Credit'],
+          ['Entry', 'Date', 'Source', 'Reversal of', 'Reversed by', 'Memo', 'Account code', 'Account', 'Description', 'Debit', 'Credit'],
           ...d.entries.flatMap((e) =>
             e.lines.map((l) => [
-              e.entryNo, e.date, e.sourceType, e.memo ?? '', l.accountCode, l.accountName,
+              e.entryNo, e.date, e.sourceType, e.reversalOfRef?.entryNo ?? '', e.reversedBy ?? '', e.memo ?? '', l.accountCode, l.accountName,
               l.description ?? '', toRupees(l.debitPaise), toRupees(l.creditPaise),
             ]),
           ),
@@ -100,8 +111,13 @@ export default function JournalReportPage() {
                           {e.sourceType.replace(/_/g, ' ')}
                         </Badge>
                         {e.reversalOf && (
-                          <Badge variant="outline" className="gap-1 text-[10px]">
-                            <RotateCcw className="size-2.5" /> Reverses #{e.reversalOf}
+                          <Badge variant="outline" className="gap-1 text-[10px]" data-slot="jr-reversal-of">
+                            <RotateCcw className="size-2.5" /> Reversal of #{e.reversalOfRef?.entryNo ?? e.reversalOf}
+                          </Badge>
+                        )}
+                        {e.reversedBy && (
+                          <Badge variant="outline" className="gap-1 text-[10px]" data-slot="jr-reversed-by">
+                            Reversed by #{e.reversedBy}
                           </Badge>
                         )}
                         <span className="min-w-0 flex-1 truncate text-sm text-muted-foreground">

@@ -63,6 +63,11 @@ const CATALOGUE: { group: string; blurb: string; reports: ReportDef[] }[] = [
       { title: 'Reconciliation Status', href: '/reports/reconciliation-status', description: 'Each bank account: statement lines matched and still to match, and the books against the statement.' },
       { title: 'Realised Exchange Gain or Loss', href: '/reports/realised-fx', description: 'The exchange difference on foreign-currency invoices and bills settled in the period.' },
       { title: 'Unrealised Exchange Gain or Loss', href: '/reports/unrealised-fx', description: 'What open foreign-currency documents would gain or lose at the closing rates.' },
+      // Status review 7 (builder A).
+      { title: 'Budget vs Actuals', href: '/reports/budget-vs-actuals', description: 'Each account against its budget by month, quarter or year: variance in rupees and per cent, favourable or not.' },
+      { title: 'Cost Centre Costing', href: '/accountant/budgets?tab=costing', description: 'Each cost centre’s budget against its own income and expense.' },
+      { title: 'Reversed Vouchers', href: '/accountant/reversed-vouchers', description: 'Every reversal pair with its reason and who did it.' },
+      { title: 'Custom Reports', href: '/reports/custom-reports', description: 'Reports saved from Customize Report with their filters: private or shared with the company.' },
     ],
   },
   {
@@ -288,7 +293,8 @@ export default function ReportsPage() {
             ? `No report data is stored anywhere. Every figure is calculated live from ${entryCount} journal entries, which is why they can never disagree with each other.`
             : 'No report data is stored anywhere. Every figure is calculated live from the journal, which is why they can never disagree with each other.'
         }
-        actions={
+        actions={<div className="flex items-center gap-2">
+          <Link href="/reports/custom-reports" className="inline-flex h-9 items-center rounded-md border px-3 text-sm font-medium hover:bg-accent" data-slot="open-custom-reports">Custom Reports</Link>
           <div className="relative w-[300px] max-w-full">
             <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-primary" />
             <Input
@@ -298,6 +304,7 @@ export default function ReportsPage() {
               className="border-transparent bg-[#f1f1fa] pl-8 dark:bg-muted"
               data-slot="report-search"
             />
+          </div>
           </div>
         }
       />

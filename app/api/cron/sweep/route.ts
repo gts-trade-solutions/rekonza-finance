@@ -50,6 +50,7 @@ export async function GET(req: Request) {
   await step('depreciation', () => runAutoDepreciation());
   await step('stock', () => runStockTrueUp());
   await step('fxFeeds', () => runFxFeeds());
+  await step('auditChain', async () => (await import('@/lib/server/audit-chain')).sealAllAuditChains());
   await step('exceptions', () => runExceptions());
   return NextResponse.json({ ok: true, ...done });
 }

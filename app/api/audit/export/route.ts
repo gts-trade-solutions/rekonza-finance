@@ -1,54 +1,51 @@
 import { z } from 'zod';
+import { db } from '@/lib/server/db';
 import { route, query } from '@/lib/server/http';
 import { logAudit, auditMeta } from '@/lib/server/audit';
-import { AuditFilter, auditRows, changeText, changesIn, istStamp } from '@/lib/server/audit-query';
+import { AuditFilter } from '@/lib/server/audit-query';
+import { auditExportHeader, auditExportRows } from '@/lib/server/audit-export';
+import { chainHead, sealAuditChain } from '@/lib/server/audit-chain';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // The audit trail as a file, for the auditor: every row the screen's filters
-// find (not just the page on screen), newest first, times in Indian time, with
-// the IP address and each field's old and new value. The screen turns the rows
-// into CSV, XLS or XLSX (Zoho's export dialog), and the export itself is
-// recorded in the trail.
+// find (not just the page on screen), built by lib/server/audit-export.ts. The
+// screen turns the rows into CSV, XLS, XLSX or PDF and names the file after
+// the company and the range; the filters come back in words for the file's
+// heading, with the hash chain's head (audit-chain.ts) as it stood. The export
+// itself is recorded in the trail, with the format and the filters it used.
 // ─────────────────────────────────────────────────────────────────────────────
-
-const MAX = 100_000;
-const BATCH = 5_000;
 
 export const GET = route(
   async ({ orgId, user, req }) => {
-    const q = query(req, AuditFilter.extend({ pii: z.enum(['0', '1']).default('1') }));
+    const q = query(req, AuditFilter.extend({ pii: z.enum(['0', '1']).default('1'), format: z.enum(['csv', 'xls', 'xlsx', 'pdf']).optional() }));
     const withIp = q.pii === '1';
-    const header = ['Date and time (IST)', 'User', 'Action', 'Record type', 'Record ID', 'Record', 'Detail', 'Reason', ...(withIp ? ['IP address'] : []), 'Fields changed (old → new)'];
-    const rows: string[][] = [];
-    // Newest first, in batches by (created_at, id), so a long trail is read in pieces, not all at once.
-    let cursor: { at: Date; id: number } | null = null;
-    for (;;) {
-      let qb = auditRows(orgId, q)
-        .select(['id', 'actor_name', 'action', 'target_type', 'target_id', 'target_label', 'detail', 'reason', 'ip', 'created_at', 'payload']);
-      if (cursor) {
-        const c: { at: Date; id: number } = cursor;
-        qb = qb.where((eb) => eb.or([eb('created_at', '<', c.at), eb.and([eb('created_at', '=', c.at), eb('id', '<', c.id)])]));
-      }
-      const batch = await qb.orderBy('created_at', 'desc').orderBy('id', 'desc').limit(BATCH).execute();
-      for (const r of batch) {
-        const at = r.created_at instanceof Date ? r.created_at : new Date(String(r.created_at));
-        rows.push([
-          istStamp(at), r.actor_name ?? 'System', r.action, (r.target_type ?? 'other').replace(/[_-]/g, ' '), r.target_id ?? '',
-          r.target_label ?? '', r.detail ?? '', r.reason ?? '', ...(withIp ? [r.ip ?? ''] : []), changeText(changesIn(r.payload)),
-        ]);
-      }
-      if (batch.length < BATCH || rows.length >= MAX) break;
-      const last = batch[batch.length - 1];
-      cursor = { at: last.created_at instanceof Date ? last.created_at : new Date(String(last.created_at)), id: Number(last.id) };
-    }
-    const truncated = rows.length >= MAX;
+    // Everything recorded up to now is in the chain before it is handed over.
+    await sealAuditChain(orgId, { full: true }).catch(() => 0);
+    const { rows, instants, truncated } = await auditExportRows(db, orgId, q, withIp);
+
+    // What the file covers, in words, for its heading and the trail.
+    const org = await db.selectFrom('organizations').select(['name', 'legal_name']).where('id', '=', orgId).executeTakeFirst();
+    const actor = q.actorUserId ? await db.selectFrom('users').select('name').where('id', '=', Number(q.actorUserId)).where('org_id', '=', orgId).executeTakeFirst() : null;
+    const filters = [
+      `Period (IST): ${q.from ?? 'the start'} to ${q.to ?? 'today'}`,
+      `User: ${actor?.name ?? (q.actorUserId ? `#${q.actorUserId}` : 'everyone')}`,
+      `Action: ${q.action && q.action !== 'all' ? q.action : 'all actions'}`,
+      `Record type: ${q.targetType && q.targetType !== 'all' ? q.targetType.replace(/[_-]/g, ' ') : 'all record types'}`,
+      ...(q.search?.trim() ? [`Search: "${q.search.trim()}"`] : []),
+      `IP addresses: ${withIp ? 'included' : 'left out'}`,
+    ];
+    const head = await chainHead(db, orgId);
     await logAudit({
       orgId, actorUserId: user.userId, actorName: user.name, action: 'export', targetType: 'output', targetId: 'audit-trail',
       targetLabel: 'Audit trail',
-      detail: `Exported the audit trail: ${rows.length} event${rows.length === 1 ? '' : 's'}${q.from || q.to ? ` from ${q.from ?? 'the start'} to ${q.to ?? 'today'}` : ''}`,
+      detail: `Exported the audit trail${q.format ? ` as ${q.format.toUpperCase()}` : ''}: ${rows.length} event${rows.length === 1 ? '' : 's'}. ${filters.join('; ')}`.slice(0, 1000),
       ...auditMeta(req),
     });
-    return { header, rows: rows.slice(0, MAX), truncated };
+    return {
+      header: auditExportHeader(withIp), rows, instants, truncated,
+      company: org?.legal_name ?? org?.name ?? 'Company', filters,
+      chain: { headHash: head.headHash, headSeq: head.headSeq },
+    };
   },
   { permission: { module: 'accountant', action: 'export' } },
 );
