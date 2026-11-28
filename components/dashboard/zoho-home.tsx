@@ -31,13 +31,15 @@ import { formatINR } from '@/lib/money';
 import { cn } from '@/lib/utils';
 import { usePublishPageTitle } from '@/components/layout/page-context';
 
-export type HomeTab = 'dashboard' | 'getting-started' | 'updates' | 'checklist';
+export type HomeTab = 'dashboard' | 'getting-started' | 'updates' | 'checklist' | 'review';
 
 export const HOME_TABS: { value: HomeTab; label: string }[] = [
   { value: 'dashboard', label: 'Dashboard' },
   { value: 'getting-started', label: 'Getting Started' },
   { value: 'updates', label: 'Recent Updates' },
   { value: 'checklist', label: 'Software Checklist' },
+  // The auditors' fourteen items with this company's evidence (components/dashboard/status-review-board.tsx).
+  { value: 'review', label: 'Auditor Review' },
 ];
 
 export interface HomeFigures {

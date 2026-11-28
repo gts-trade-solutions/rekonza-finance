@@ -21,6 +21,7 @@ import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ChecklistBoard } from '@/components/dashboard/checklist-board';
+import { StatusReviewBoard } from '@/components/dashboard/status-review-board';
 import { DateRangePicker } from '@/components/shared/date-range-picker';
 import { StatTile } from '@/components/shared/stat-tile';
 import { Money } from '@/components/shared/money';
@@ -136,8 +137,9 @@ export default function DashboardPage() {
       />
 
       {tab === 'checklist' && <ChecklistBoard />}
+      {tab === 'review' && <StatusReviewBoard />}
 
-      {tab !== 'checklist' && (
+      {tab !== 'checklist' && tab !== 'review' && (
       <AsyncPage state={state} loading={<LoadingRows rows={6} />}>
         {(d) => {
           if (tab === 'getting-started') {
