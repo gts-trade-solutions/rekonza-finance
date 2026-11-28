@@ -26,7 +26,7 @@ import { FetchGstr2bButton } from '@/components/gst/gstn-portal';
 import { Money } from '@/components/shared/money';
 import { StatTile } from '@/components/shared/stat-tile';
 import { AsyncPage } from '@/components/shared/async-state';
-import { api, gst, gstr2b, type ItcMatchRow } from '@/lib/api/client';
+import { api, ApiError, gst, gstr2b, type ItcMatchRow } from '@/lib/api/client';
 import { useApi, useApiAction } from '@/lib/api/use-api';
 import { usePermission } from '@/lib/store/hooks';
 import { cn } from '@/lib/utils';
@@ -178,7 +178,8 @@ export default function ItcReconciliationPage() {
   const canEdit = usePermission('gst', 'edit');
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const fileRef = useRef<HTMLInputElement>(null);
-  const importer = useApiAction(gstr2b.import);
+  // Called directly, so a refusal shows the server's own reason (which file to take), not a generic line.
+  const [importing, setImporting] = useState(false);
   const ims = useApiAction(gstr2b.ims);
 
   const toggle = (id: string) =>
@@ -199,9 +200,17 @@ export default function ItcReconciliationPage() {
       toast.error('That file is not JSON. Download GSTR-2B (or GSTR-2A) as JSON from the portal.');
       return;
     }
-    const r = await importer.run(json);
+    setImporting(true);
+    let r: Awaited<ReturnType<typeof gstr2b.import>> | null = null;
+    try {
+      r = await gstr2b.import(json);
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : 'The file could not be imported.', { duration: 12_000 });
+    } finally {
+      setImporting(false);
+    }
     if (fileRef.current) fileRef.current.value = '';
-    if (!r) { toast.error(importer.error ?? 'The file could not be imported.'); return; }
+    if (!r) return;
     const kinds = Object.entries(r.byType ?? {}).map(([k, n]) => `${n} ${DOC_LABEL[k as ItcMatchRow['docType']]?.toLowerCase() ?? k}${n === 1 ? '' : 's'}`).join(', ');
     toast.success(`GSTR-${r.layout ?? '2B'} for ${r.gstin}, ${r.returnPeriod.slice(0, 2)}/${r.returnPeriod.slice(2)} imported`, {
       description: `${r.inserted} new, ${r.updated} updated${kinds ? ` (${kinds})` : ''}${r.skipped.length ? `. ${r.skipped.length} could not be read: ${r.skipped.slice(0, 2).join('; ')}` : ''}.`,
@@ -253,8 +262,8 @@ export default function ItcReconciliationPage() {
                   onChange={(e) => void onFile(e.target.files?.[0])}
                 />
                 <FetchGstr2bButton period={period} onDone={() => state.refetch()} />
-                <Button size="sm" className="gap-1.5" disabled={importer.busy} onClick={() => fileRef.current?.click()}>
-                  <Upload className="size-3.5" /> {importer.busy ? 'Importing…' : 'Import GSTR-2B / 2A JSON'}
+                <Button size="sm" className="gap-1.5" disabled={importing} onClick={() => fileRef.current?.click()}>
+                  <Upload className="size-3.5" /> {importing ? 'Importing…' : 'Import GSTR-2B / 2A JSON'}
                 </Button>
               </>
             )}
