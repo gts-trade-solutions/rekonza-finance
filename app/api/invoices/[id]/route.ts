@@ -112,6 +112,8 @@ export const POST = route(
       detail: action === 'void'
         ? `Voided invoice ${inv.number}${reason ? ` — ${reason}` : ''}`
         : `Sent invoice ${inv.number}`,
+      // The reason typed for the void is the audit row's reason (the Reversed Vouchers register reads it).
+      reason: action === 'void' ? reason || undefined : undefined,
       ...auditMeta(req),
     });
 
@@ -171,6 +173,7 @@ export const DELETE = route(
         trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'delete',
         targetType: 'invoice', targetId: id, targetLabel: gone.number,
         detail: receipt ? `Deleted sales receipt ${gone.number} with its payment ${gone.payments.join(', ') || '(none left)'}` : `Deleted ${gone.number}`,
+        reason: reason || undefined,
         ...auditMeta(req),
       });
       return gone;
