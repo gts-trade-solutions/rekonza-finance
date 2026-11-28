@@ -171,6 +171,20 @@ try {
   // Drill-down: a run's lines, its entry, the ledger.
   await ic.locator('[data-slot="ic-run"]').first().click();
   await ic.locator('[data-slot="ic-run-line"]').first().waitFor();
+  // Fixes after the auditor check: at a mid-month date both sides read what is posted up to it.
+  // A run dated at its month's end (after the date) is timing, listed with its date, never a difference.
+  const mid = await api('GET', `/api/integration-check?from=${from}&to=2026-11-28`);
+  if (mid.status === 200 && mid.body?.payroll) {
+    check('At 28 November every payroll liability passes (both sides as posted up to that day)', mid.body.payroll.liabilities.every((l) => l.ok),
+      mid.body.payroll.liabilities.filter((l) => !l.ok).map((l) => `${l.label} ${inr(l.differencePaise)}`).join(', ') || 'all pass');
+    check('Runs on the payroll side are those posted by 28 November', /^2026-1[01]-3[01]$/.test(mid.body.payroll.postedThrough), mid.body.payroll.postedThrough);
+    const icMid = await openCheck(from, '2026-11-28');
+    if (mid.body.payroll.timing.length) {
+      check('Documents dated after 28 November are listed as timing, with their dates', (await icMid.locator('[data-slot="ic-timing-item"]').count()) === mid.body.payroll.timing.length);
+      await shot('timing');
+    }
+    check('No Difference shown at 28 November', !/Difference/.test(await icMid.locator('[data-slot="ic-payroll-summary"]').innerText()));
+  } else check('The check reads at 28 November', false, String(mid.status));
   check('Drill-down: the run\'s lines, account by account, register against ledger', (await ic.locator('[data-slot="ic-run-line"]').count()) >= 9);
   await shot('integration-run-lines');
   await ic.locator('[data-slot="ic-run"]').first().getByRole('button', { name: /Entry 1/ }).click();
