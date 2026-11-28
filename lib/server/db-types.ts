@@ -1844,7 +1844,7 @@ export interface Gstr2bEntries {
   cess: Generated<Decimal>;
   cgst: Generated<Decimal>;
   created_at: Generated<Date>;
-  doc_type: Generated<"credit_note" | "debit_note" | "invoice">;
+  doc_type: Generated<"bill_of_entry" | "credit_note" | "debit_note" | "invoice" | "isd" | "isd_credit">;
   id: Generated<number>;
   igst: Generated<Decimal>;
   imported_at: Date | null;

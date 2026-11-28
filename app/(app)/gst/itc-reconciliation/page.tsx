@@ -61,6 +61,12 @@ const BUCKETS = {
 
 type Bucket = keyof typeof BUCKETS;
 
+/** How 2B names each kind of document (its sections: CDNR, ISD, IMPG / IMPGSEZ). */
+const DOC_LABEL: Record<ItcMatchRow['docType'], string> = {
+  invoice: 'Invoice', credit_note: 'Credit note', debit_note: 'Debit note',
+  isd: 'ISD invoice', isd_credit: 'ISD credit note', bill_of_entry: 'Bill of entry',
+};
+
 const thisMonth = () => new Date().toISOString().slice(0, 7);
 const short = (d: string) => new Date(d).toLocaleDateString('en-IN');
 
@@ -133,8 +139,8 @@ function MatchTable({
               <td className="px-3 py-2 font-mono text-xs">
                 {r.invoiceNo}
                 {r.docType !== 'invoice' && (
-                  <Badge variant="secondary" className="ml-1.5 text-[9px]">
-                    {r.docType === 'credit_note' ? 'Credit note' : 'Debit note'}
+                  <Badge variant="secondary" className="ml-1.5 text-[9px]" data-slot="itc-doc-type">
+                    {DOC_LABEL[r.docType]}
                   </Badge>
                 )}
                 {r.isReverseCharge && <Badge variant="secondary" className="ml-1.5 text-[9px]">RCM</Badge>}
@@ -196,8 +202,9 @@ export default function ItcReconciliationPage() {
     const r = await importer.run(json);
     if (fileRef.current) fileRef.current.value = '';
     if (!r) { toast.error(importer.error ?? 'The file could not be imported.'); return; }
-    toast.success(`GSTR-2A/2B for ${r.gstin}, ${r.returnPeriod.slice(0, 2)}/${r.returnPeriod.slice(2)} imported`, {
-      description: `${r.inserted} new, ${r.updated} updated${r.skipped.length ? `, ${r.skipped.length} could not be read` : ''}.`,
+    const kinds = Object.entries(r.byType ?? {}).map(([k, n]) => `${n} ${DOC_LABEL[k as ItcMatchRow['docType']]?.toLowerCase() ?? k}${n === 1 ? '' : 's'}`).join(', ');
+    toast.success(`GSTR-${r.layout ?? '2B'} for ${r.gstin}, ${r.returnPeriod.slice(0, 2)}/${r.returnPeriod.slice(2)} imported`, {
+      description: `${r.inserted} new, ${r.updated} updated${kinds ? ` (${kinds})` : ''}${r.skipped.length ? `. ${r.skipped.length} could not be read: ${r.skipped.slice(0, 2).join('; ')}` : ''}.`,
     });
     const imported = `${r.returnPeriod.slice(2)}-${r.returnPeriod.slice(0, 2)}`;
     if (imported !== period) setPeriod(imported); else state.refetch();

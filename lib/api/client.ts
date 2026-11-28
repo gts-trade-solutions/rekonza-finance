@@ -2011,7 +2011,7 @@ export interface ItcMatchRow {
   vendorGstin: string;
   vendorName: string | null;
   recipientGstin: string | null;
-  docType: 'invoice' | 'credit_note' | 'debit_note';
+  docType: 'invoice' | 'credit_note' | 'debit_note' | 'isd' | 'isd_credit' | 'bill_of_entry';
   invoiceNo: string;
   invoiceDate: string;
   portalTaxPaise: number;
@@ -2030,7 +2030,7 @@ export interface ItcMatchRow {
 export const gstr2b = {
   /** The parsed contents of the GSTR-2B JSON file downloaded from the portal. */
   import: (file: unknown) =>
-    api.post<{ inserted: number; updated: number; skipped: string[]; returnPeriod: string; gstin: string }>(
+    api.post<{ inserted: number; updated: number; skipped: string[]; returnPeriod: string; gstin: string; layout?: '2B' | '2A'; generatedOn?: string | null; byType?: Record<string, number> }>(
       '/api/gst/gstr2b', { action: 'import', file },
     ),
   ims: (ids: string[], imsAction: 'accepted' | 'rejected' | 'pending' | null, note?: string) =>

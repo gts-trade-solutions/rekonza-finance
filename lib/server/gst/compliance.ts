@@ -116,7 +116,8 @@ export interface ItcMatchRow {
   vendorName: string | null;
   /** Which of our registrations the supplier billed. */
   recipientGstin: string | null;
-  docType: 'invoice' | 'credit_note' | 'debit_note';
+  /** isd / isd_credit: an Input Service Distributor's document; bill_of_entry: an import of goods. */
+  docType: 'invoice' | 'credit_note' | 'debit_note' | 'isd' | 'isd_credit' | 'bill_of_entry';
   invoiceNo: string;
   invoiceDate: string;
   portalTaxPaise: Paise;
@@ -183,6 +184,22 @@ export async function itcReconciliation(
   const tax = (r: { cgst: string; sgst: string; igst: string; cess: string }) =>
     toPaiseFromSql(r.cgst) + toPaiseFromSql(r.sgst) + toPaiseFromSql(r.igst) + toPaiseFromSql(r.cess);
 
+  // Imports of goods: 2B's IMPG / IMPGSEZ lines are matched with the bills of
+  // entry recorded in the books (services/bill-of-entry.ts), by the bill of
+  // entry number, which customs gives and both sides carry. Customs IGST and
+  // cess are the credit (GSTR-3B 4(A)(1)).
+  const boes = await ex
+    .selectFrom('bills_of_entry as e')
+    .leftJoin('contacts as c', 'c.id', 'e.vendor_id')
+    .select(['e.id', 'e.boe_no', 'e.boe_date', 'e.port_code', 'e.igst', 'e.cess', 'c.display_name'])
+    .where('e.org_id', '=', orgId)
+    .where('e.status', '=', 'recorded')
+    .where('e.boe_date', '<=', to)
+    .execute();
+  const boeByNo = new Map(boes.map((e) => [e.boe_no.trim(), e]));
+  const boeTax = (e: { igst: string; cess: string }) => toPaiseFromSql(e.igst) + toPaiseFromSql(e.cess);
+  const seenBoe = new Set<string>();
+
   // Matched on the supplier's own invoice number, which is what the portal
   // keys on — our internal number means nothing to them.
   const billByKey = new Map(
@@ -192,13 +209,32 @@ export async function itcReconciliation(
   const rows: ItcMatchRow[] = [];
 
   for (const p of portal) {
+    const portalTax = tax(p);
+    if (p.doc_type === 'bill_of_entry') {
+      const e = boeByNo.get(p.invoice_no.trim());
+      if (e) seenBoe.add(e.boe_no.trim());
+      const booksTax = e ? boeTax(e) : 0;
+      rows.push({
+        id: String(p.id), vendorGstin: p.vendor_gstin, vendorName: p.vendor_name, recipientGstin: p.recipient_gstin,
+        docType: 'bill_of_entry', invoiceNo: p.invoice_no, invoiceDate: String(p.invoice_date).slice(0, 10),
+        portalTaxPaise: portalTax, booksTaxPaise: booksTax, differencePaise: portalTax - booksTax,
+        matchStatus: !e ? 'missing_in_books' : portalTax === booksTax ? 'matched' : 'mismatch',
+        // A bill of entry is not a bill: the claim decision on bills does not apply to it.
+        billId: null, billNo: e ? `Bill of entry ${e.boe_no} (${e.port_code})` : null,
+        itcAvailable: !!p.itc_available, isReverseCharge: false, imsAction: p.ims_action, imsNote: p.ims_note,
+      });
+      continue;
+    }
+
     const key = `${p.vendor_gstin}|${p.invoice_no.trim().toUpperCase()}`;
     // A supplier's credit note is not a bill. It reverses credit, and is
     // recorded in the books as a vendor credit, which carries our number.
-    const bill = p.doc_type === 'credit_note' ? undefined : billByKey.get(key);
+    // So is an ISD credit note (ISDC). An ISD invoice is matched like a
+    // supplier's invoice: a business records the credit its ISD distributes
+    // as a bill from the ISD's registration, under the ISD invoice number.
+    const bill = p.doc_type === 'credit_note' || p.doc_type === 'isd_credit' ? undefined : billByKey.get(key);
     if (bill) seen.add(key);
 
-    const portalTax = tax(p);
     const booksTax = bill ? tax(bill) : 0;
 
     rows.push({
@@ -249,6 +285,22 @@ export async function itcReconciliation(
       isReverseCharge: false,
       imsAction: null,
       imsNote: null,
+    });
+  }
+
+  // Bills of entry of the month that 2B does not show yet: ICEGATE passes
+  // them to the portal, and until it does the credit is not in 2B.
+  for (const e of boes) {
+    const date = String(e.boe_date).slice(0, 10);
+    if (date < from || seenBoe.has(e.boe_no.trim())) continue;
+    const booksTax = boeTax(e);
+    if (booksTax === 0) continue;
+    rows.push({
+      id: null, vendorGstin: '', vendorName: e.display_name ?? `Imported through ${e.port_code}`, recipientGstin: null,
+      docType: 'bill_of_entry', invoiceNo: e.boe_no, invoiceDate: date,
+      portalTaxPaise: 0, booksTaxPaise: booksTax, differencePaise: -booksTax, matchStatus: 'missing_in_portal',
+      billId: null, billNo: `Bill of entry ${e.boe_no} (${e.port_code})`,
+      itcAvailable: false, isReverseCharge: false, imsAction: null, imsNote: null,
     });
   }
 

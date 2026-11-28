@@ -538,6 +538,9 @@ export async function gstr9(ex: Executor, orgId: number, startYear: number, bran
   table7.netAvailable = add(table6.total, neg(table7.total));
 
   // ── Table 8: credit against GSTR-2B ───────────────────────────────────────
+  // 8A compares with 6B (supplier invoices and notes), so it reads 2B's B2B,
+  // B2BA, CDNR and CDNRA parts only: imports (IMPG, IMPGSEZ) are table 8G's
+  // business and ISD credit is 6G's, as the CBIC instructions for 8A say.
   const twoB = await sql<Heads>`
     SELECT COALESCE(SUM(IF(doc_type = 'credit_note', -taxable, taxable)), 0) AS taxable,
            COALESCE(SUM(IF(doc_type = 'credit_note', -cgst, cgst)), 0) AS cgst,
@@ -546,6 +549,7 @@ export async function gstr9(ex: Executor, orgId: number, startYear: number, bran
            COALESCE(SUM(IF(doc_type = 'credit_note', -cess, cess)), 0) AS cess
       FROM gstr2b_entries
      WHERE org_id = ${orgId} AND itc_available = 1 AND is_reverse_charge = 0
+       AND doc_type IN ('invoice', 'credit_note', 'debit_note')
        AND COALESCE(ims_action, 'accepted') = 'accepted'
        AND STR_TO_DATE(CONCAT('01', return_period), '%d%m%Y') BETWEEN ${from} AND ${to}
        ${branchId ? sql`AND recipient_gstin = (SELECT gstin FROM branches WHERE id = ${branchId})` : sql``}

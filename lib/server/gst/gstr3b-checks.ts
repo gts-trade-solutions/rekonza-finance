@@ -100,29 +100,35 @@ async function fromGstr1(ex: Executor, orgId: number, months: string[]) {
   return t;
 }
 
-/** What GSTR-2B carries for the period: credit available, and the reverse-charge supplies. */
+/**
+ * What GSTR-2B carries for the period: credit available, and the reverse-charge supplies,
+ * by the 3B row each part lands in: imports of goods (IMPG, IMPGSEZ) in 4(A)(1),
+ * credit from an Input Service Distributor (ISD, net of ISDC) in 4(A)(4), and
+ * supplier invoices and notes in 4(A)(5) or, under reverse charge, 3.1(d).
+ */
 async function fromGstr2b(ex: Executor, orgId: number, months: string[]) {
   const periods = months.map((m) => `${m.slice(5, 7)}${m.slice(0, 4)}`);
-  const { rows } = await sql<{ rc: number; taxable: string; igst: string; cgst: string; sgst: string; cess: string; n: number }>`
-    SELECT is_reverse_charge AS rc, COUNT(*) AS n,
-           COALESCE(SUM(IF(doc_type = 'credit_note', -taxable, taxable)), 0) AS taxable,
-           COALESCE(SUM(IF(doc_type = 'credit_note', -igst, igst)), 0) AS igst,
-           COALESCE(SUM(IF(doc_type = 'credit_note', -cgst, cgst)), 0) AS cgst,
-           COALESCE(SUM(IF(doc_type = 'credit_note', -sgst, sgst)), 0) AS sgst,
-           COALESCE(SUM(IF(doc_type = 'credit_note', -cess, cess)), 0) AS cess
+  const { rows } = await sql<{ sec: string; rc: number; taxable: string; igst: string; cgst: string; sgst: string; cess: string; n: number }>`
+    SELECT CASE WHEN doc_type = 'bill_of_entry' THEN 'impg' WHEN doc_type IN ('isd', 'isd_credit') THEN 'isd' ELSE 'b2b' END AS sec,
+           is_reverse_charge AS rc, COUNT(*) AS n,
+           COALESCE(SUM(IF(doc_type IN ('credit_note', 'isd_credit'), -taxable, taxable)), 0) AS taxable,
+           COALESCE(SUM(IF(doc_type IN ('credit_note', 'isd_credit'), -igst, igst)), 0) AS igst,
+           COALESCE(SUM(IF(doc_type IN ('credit_note', 'isd_credit'), -cgst, cgst)), 0) AS cgst,
+           COALESCE(SUM(IF(doc_type IN ('credit_note', 'isd_credit'), -sgst, sgst)), 0) AS sgst,
+           COALESCE(SUM(IF(doc_type IN ('credit_note', 'isd_credit'), -cess, cess)), 0) AS cess
       FROM gstr2b_entries
      WHERE org_id = ${orgId} AND return_period IN (${sql.join(periods)}) AND itc_available = 1
        AND COALESCE(ims_action, 'accepted') = 'accepted'
-     GROUP BY is_reverse_charge
+     GROUP BY sec, is_reverse_charge
   `.execute(ex);
-  const h = (rc: number): Gstr3bHeads => {
-    const r = rows.find((x) => Number(x.rc) === rc);
+  const h = (rc: number, sec = 'b2b'): Gstr3bHeads => {
+    const r = rows.find((x) => Number(x.rc) === rc && x.sec === sec);
     return r ? { taxablePaise: p(r.taxable), igstPaise: p(r.igst), cgstPaise: p(r.cgst), sgstPaise: p(r.sgst), cessPaise: p(r.cess) } : ZERO_HEADS;
   };
   const { rows: [held] } = await sql<{ n: number }>`
     SELECT COUNT(*) AS n FROM gstr2b_entries WHERE org_id = ${orgId} AND return_period IN (${sql.join(periods)})
   `.execute(ex);
-  return { forward: h(0), rcm: h(1), lines: Number(held?.n ?? 0) };
+  return { forward: h(0), rcm: h(1), imports: h(0, 'impg'), isd: h(0, 'isd'), lines: Number(held?.n ?? 0) };
 }
 
 export interface TieOutLine {
@@ -191,8 +197,14 @@ export async function gstr3bChecks(ex: Executor, orgId: number, periodKey: strin
 
   // 4(A)(5) against GSTR-2B: what the books hold that the supplier did not file, and the reverse.
   const recon = await Promise.all(period.months.map((m) => itcReconciliation(ex, orgId, m)));
-  const sum = (status: string, k: 'booksTaxPaise' | 'portalTaxPaise' | 'differencePaise') =>
-    recon.flatMap((x) => x.rows).filter((x) => x.matchStatus === status).reduce((t, x) => t + x[k], 0);
+  // Supplier invoices and notes only: bills of entry and ISD documents have rows of their own below.
+  const sum = (status: string, k: 'booksTaxPaise' | 'portalTaxPaise' | 'differencePaise', types: string[] = ['invoice', 'credit_note', 'debit_note']) =>
+    recon.flatMap((x) => x.rows).filter((x) => x.matchStatus === status && types.includes(x.docType)).reduce((t, x) => t + x[k], 0);
+  const boeReasons = () => [
+    ...(sum('missing_in_portal', 'booksTaxPaise', ['bill_of_entry']) ? [`Bills of entry in the books that GSTR-2B does not show yet (ICEGATE passes them on): ${rupees(sum('missing_in_portal', 'booksTaxPaise', ['bill_of_entry']))}.`] : []),
+    ...(sum('missing_in_books', 'portalTaxPaise', ['bill_of_entry']) ? [`Bills of entry in GSTR-2B not recorded in the books (Purchases → Bills of entry): ${rupees(sum('missing_in_books', 'portalTaxPaise', ['bill_of_entry']))}.`] : []),
+    ...(sum('mismatch', 'differencePaise', ['bill_of_entry']) ? [`Bills of entry whose IGST differs from customs: ${rupees(sum('mismatch', 'differencePaise', ['bill_of_entry']))} more in GSTR-2B.`] : []),
+  ];
   const shift = shiftTotal(await claimShifts(ex, orgId, period.months));
   const expenseTax = form.documents.filter((d) => d.row === '4A5' && d.docType === 'expense').reduce((t, d) => t + taxOf(d), 0);
   const itcReasons = () => [
@@ -215,6 +227,13 @@ export async function gstr3bChecks(ex: Executor, orgId: number, periodKey: strin
       'GSTR-2B lists reverse-charge supplies only from registered suppliers who reported them; purchases from unregistered suppliers and imported services are self-assessed and appear only in the books.',
     ]),
     row('4A5', '4(A)(5) All other ITC', 'GSTR-2B', taxOnly(g2.forward), taxOnly(strip(r['4A5'])), itcReasons),
+    // Shown when either side has something, so a book with no imports and no ISD is not crowded.
+    ...(!isZero(g2.imports) || !isZero(strip(r['4A1']))
+      ? [row('4A1', '4(A)(1) Import of goods', 'GSTR-2B', taxOnly(g2.imports), taxOnly(strip(r['4A1'])), boeReasons)] : []),
+    ...(!isZero(g2.isd) || !isZero(strip(r['4A4']))
+      ? [row('4A4', '4(A)(4) Inward supplies from ISD', 'GSTR-2B', taxOnly(g2.isd), taxOnly(strip(r['4A4'])), () => [
+          'Credit an Input Service Distributor gave in GSTR-2B (ISD less ISDC) against what the books took into 4(A)(4).',
+        ])] : []),
   ];
 
   // ── The ledger ──────────────────────────────────────────────────────────
