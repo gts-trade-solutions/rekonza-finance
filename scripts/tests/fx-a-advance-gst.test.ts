@@ -26,6 +26,11 @@ import { gstr1Report } from '../../lib/server/gst/gstr1-report';
 import { gstr3bForm } from '../../lib/server/gst/gstr3b-form';
 import { toPaiseFromSql } from '../../lib/server/money-sql';
 import { advanceGstField, advanceProblem, defaultAdvanceFor, advanceTaxPaise } from '../../lib/gst/advance-for';
+import { gstinCheckChar } from '../../lib/gst/withholding';
+
+// A GSTIN unique to this run: branches.gstin is unique across the whole database,
+// so a fixed one collides with a company an earlier test or e2e run committed.
+const runGstin = (() => { const t = Date.now(); const first14 = `33ADVCE${String(t % 10000).padStart(4, '0')}${'ABCDEFGHJKLMNPQRSTUVWXYZ'[t % 24]}1Z`; return first14 + gstinCheckChar(first14); })();
 
 // ── The receipt form's rules ────────────────────────────────────────────────
 
@@ -63,7 +68,7 @@ async function withFixture(fn: (f: Fixture) => Promise<void>) {
   try {
     await db.transaction().execute(async (trx) => {
       const orgId = Number((await trx.insertInto('organizations').values({ name: 'Auditor Alpha Traders', gst_registration_type: 'regular' } as never).executeTakeFirstOrThrow()).insertId);
-      const branchId = Number((await trx.insertInto('branches').values({ org_id: orgId, name: 'HQ', state_code: '33', is_primary: 1, gstin: '33SNSCG6043U1ZG' }).executeTakeFirstOrThrow()).insertId);
+      const branchId = Number((await trx.insertInto('branches').values({ org_id: orgId, name: 'HQ', state_code: '33', is_primary: 1, gstin: runGstin }).executeTakeFirstOrThrow()).insertId);
       await installChartOfAccounts(trx, orgId);
       const acc = await accountIds(trx, orgId);
       const mk = async (values: Record<string, unknown>) =>
