@@ -21,6 +21,9 @@ import { toRupees } from '@/lib/money';
 import { sourceHref } from '@/lib/source-links';
 import { CustomizeButton, CustomizePanel, CustomReportView, appliedLines, customRows, useCustomReport, useCustomReportData, useOrgName } from '@/components/reports/customize-report';
 
+/** A source kind in words, capital first: stock_adjustment → Stock adjustment. */
+const sourceLabel = (t: string) => { const w = t.replaceAll('_', ' '); return w.charAt(0).toUpperCase() + w.slice(1); };
+
 export default function GeneralLedgerPage() {
   return (
     <Suspense fallback={<LoadingRows rows={10} />}>
@@ -174,7 +177,7 @@ function GeneralLedger() {
                     gl.lines.map((l, i) => {
                       const route = sourceHref(l.sourceType, l.sourceId);
                       return (
-                        <tr key={`${l.entryId}-${i}`} className="border-b last:border-0 hover:bg-accent/40">
+                        <tr key={`${l.entryId}-${i}`} className="border-b last:border-0 hover:bg-accent/40" data-slot="ledger-row">
                           <td className="whitespace-nowrap px-4 py-2 tabular text-xs">
                             {new Date(l.date).toLocaleDateString('en-IN', {
                               day: '2-digit', month: 'short', year: '2-digit',
@@ -183,17 +186,18 @@ function GeneralLedger() {
                           <td className="px-4 py-2 text-xs text-muted-foreground">#{l.entryNo}</td>
                           <td className="min-w-[200px] px-4 py-2 [overflow-wrap:anywhere]">
                             {l.description ?? l.memo ?? '—'}
-                            <span className="ml-2 text-xs capitalize text-muted-foreground">
+                            {/* "Vendor credit", not "vendor Credit" (CSS capitalize met the link's own box). */}
+                            <span className="ml-2 text-xs text-muted-foreground">
                               {route ? (
                                 <Link href={route} className="underline underline-offset-2">
-                                  {l.sourceType.replaceAll('_', ' ')}
+                                  {sourceLabel(l.sourceType)}
                                 </Link>
                               ) : (
-                                l.sourceType.replaceAll('_', ' ')
+                                sourceLabel(l.sourceType)
                               )}
                             </span>
                           </td>
-                          <td className="px-4 py-2 text-sm text-muted-foreground">{l.contactName ?? '—'}</td>
+                          <td className="px-4 py-2 text-sm text-muted-foreground" data-slot="ledger-contact">{l.contactName ?? '—'}</td>
                           <td className="px-4 py-2 text-right"><Money value={l.debitPaise} showZero={false} /></td>
                           <td className="px-4 py-2 text-right"><Money value={l.creditPaise} showZero={false} /></td>
                           <td className="px-4 py-2 text-right font-medium"><Money value={l.runningPaise} /></td>

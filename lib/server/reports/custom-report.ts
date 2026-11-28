@@ -282,7 +282,10 @@ export async function customReport(ex: Executor, orgId: number, spec: CustomSpec
   } else {
     const LIMIT = 10_000;
     const { rows } = await sql<{ entry_date: string; entry_id: number; entry_no: number; code: string; name: string; description: string | null; memo: string | null; contact: string | null; source_type: string; source_id: number | null; debit: string; credit: string }>`
-      SELECT DATE_FORMAT(jl.entry_date, '%Y-%m-%d') AS entry_date, jl.entry_id, e.entry_no, a.code, a.name, jl.description, e.memo, c.display_name AS contact,
+      SELECT DATE_FORMAT(jl.entry_date, '%Y-%m-%d') AS entry_date, jl.entry_id, e.entry_no, a.code, a.name, jl.description, e.memo,
+             -- A line with no party takes its entry's (the invoice's customer, the bill's supplier), as the General Ledger does.
+             COALESCE(c.display_name, (SELECT c2.display_name FROM journal_lines l2 JOIN contacts c2 ON c2.id = l2.contact_id
+               WHERE l2.entry_id = jl.entry_id AND l2.contact_id IS NOT NULL ORDER BY l2.line_no LIMIT 1)) AS contact,
              e.source_type, e.source_id, jl.debit, jl.credit
         FROM journal_lines jl
         JOIN journal_entries e ON e.id = jl.entry_id

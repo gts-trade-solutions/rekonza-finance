@@ -28,6 +28,7 @@ import { statusFor } from './order-release';
 import { removeLandedCost } from './landed-cost';
 import { bankLineMatched, plain, recordDeletion, reverseForChange, unlinkDocument } from './doc-delete';
 import { recordBillOfEntry, type BillOfEntryInput } from './bill-of-entry';
+import { recordDiscardedIfPending } from './approvals';
 
 const locked = (message: string) => new ApiError(409, message, 'locked_document');
 const ymd = (d: unknown) => String(d instanceof Date ? d.toISOString() : d).slice(0, 10);
@@ -276,6 +277,7 @@ export async function deleteBill(trx: Trx, orgId: number, userId: number | null,
   if (blocked) throw locked(blocked);
 
   const snapshot = await billSnapshot(trx, orgId, billId);
+  await recordDiscardedIfPending(trx, orgId, 'bill', billId, userId, reason);
   const reversal = bill.status === 'void' ? null
     : await reverseForChange(trx, orgId, bill.journal_entry_id, { memo: `Bill ${bill.internal_no} deleted`, userId, module: 'purchases' });
   // Landed cost it carried, or gave: off the goods (a void bill's went when it was voided).
