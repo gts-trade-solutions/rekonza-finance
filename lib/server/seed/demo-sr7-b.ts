@@ -60,7 +60,7 @@ export async function seedDemoSr7B(trx: Trx, ids: IdMap) {
 
   // ── 5: the auditors' FIFO scenario on a FIFO item ──────────────────────────
   const fifoItem = Number((await trx.insertInto('items').values({
-    org_id: org, kind: 'goods', name: 'Brake Disc Rotor – Creta (FIFO)', sku: 'BDR-CRETA', hsn_sac: '8708', uqc: 'NOS',
+    org_id: org, kind: 'goods', name: 'Brake Disc Rotor – Creta (FIFO)', description: 'Front brake disc rotor for Hyundai Creta, valued first-in first-out', sku: 'BDR-CRETA', hsn_sac: '8708', uqc: 'NOS',
     sale_price: '200.0000', purchase_price: '100.0000', gst_rate_pct: 18, track_inventory: 1, valuation_method: 'fifo',
     sale_account_id: sales, purchase_account_id: purchases,
   }).executeTakeFirstOrThrow()).insertId);
@@ -163,8 +163,8 @@ export async function seedDemoSr7B(trx: Trx, ids: IdMap) {
   const out = await runImport(trx, ctx, 'contacts', rows);
   await recordImportBatch(trx, org, priya, { module: 'customers', kind: 'contacts', fileName: 'customers-november.xlsx', fileFormat: 'xlsx', mode: 'valid_only', outcome: out });
   const items = await runImport(trx, ctx, 'items', [
-    { name: 'Wheel Bearing – Swift Front', kind: 'goods', hsn_sac: '8482', unit: 'NOS', gst_rate: '18', purchase_price: '650', sale_price: '980', __line: '2' },
-    { name: 'Brake Fluid DOT4 500ml', kind: 'goods', hsn_sac: '3819', unit: 'BTL', gst_rate: '18', purchase_price: '180', sale_price: '260', __line: '3' },
+    { name: 'Wheel Bearing – Swift Front', description: 'Front wheel bearing for Maruti Swift', kind: 'goods', hsn_sac: '8482', unit: 'NOS', gst_rate: '18', purchase_price: '650', sale_price: '980', __line: '2' },
+    { name: 'Brake Fluid DOT4 500ml', description: 'DOT4 brake fluid, 500 ml bottle', kind: 'goods', hsn_sac: '3819', unit: 'BTL', gst_rate: '18', purchase_price: '180', sale_price: '260', __line: '3' },
   ]);
   await recordImportBatch(trx, org, priya, { module: 'items', kind: 'items', fileName: 'new-items.csv', fileFormat: 'csv', mode: 'all', outcome: items });
 }

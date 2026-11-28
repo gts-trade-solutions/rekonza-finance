@@ -137,6 +137,9 @@ check('The menu folds to the 72px rail', Math.round((await box('aside'))?.width 
 await page.getByRole('button', { name: 'Expand the menu' }).click();
 await page.waitForTimeout(400);
 check('…and opens again on the same page', Math.round((await box('aside'))?.width ?? 0) === 220);
+// Items was opened above, so Sales is closed: open it, then choose Invoices from it.
+await page.locator('[data-slot=sidebar] button', { hasText: /^Sales$/ }).first().click();
+await page.waitForTimeout(300);
 await page.locator('[data-slot=sidebar] a[href="/sales/invoices"]').first().click();
 await page.waitForURL('**/sales/invoices');
 await page.waitForTimeout(400);
@@ -561,7 +564,7 @@ check('…and the top bar searches the items beside it', (await page.locator('[d
 check("The item's pencil and More sit in its title band, as Zoho's do", (await page.locator('[data-slot=item-edit]').count()) === 1 && (await page.locator('[data-slot=item-more]').count()) === 1
   && (await page.locator('.split-page > [data-slot=page-header]').count()) === 0);
 const itemTabs = (await page.locator('[data-slot=item-tabs] [role=tab]').allInnerTexts()).map((t) => t.trim());
-check("Zoho's three tabs: Overview, Transactions, History", itemTabs.join('|') === 'Overview|Transactions|History', itemTabs.join('|'));
+check("Zoho's three tabs: Overview, Transactions, History, with Stock Layers for a stocked item", ['Overview|Transactions|History', 'Overview|Transactions|Stock Layers|History'].includes(itemTabs.join('|')), itemTabs.join('|'));
 const detail = await api(`/api/items/${itemId}`);
 const fieldText = await page.locator('[data-slot=item-overview]').innerText();
 check('The overview gives Item Type, SKU, HSN Code, Unit and Tax Preference', ['Item Type', 'SKU', detail.item.kind === 'service' ? 'SAC' : 'HSN Code', 'Unit', 'Tax Preference'].every((l) => fieldText.includes(l)));
@@ -656,7 +659,7 @@ check('Clone Item starts from the item, less its SKU', (await page.locator('#ite
 await open('/dashboard');
 await page.waitForSelector('[data-slot=zoho-home-cards]', { timeout: 60000 }).catch(() => {});
 const tabs = await page.locator('[data-slot=home-tabs] [role=tab]').allInnerTexts();
-check("Home has Zoho's tabs and the Software Checklist", tabs.join('|') === 'Dashboard|Getting Started|Recent Updates|Software Checklist', tabs.join('|'));
+check("Home has Zoho's tabs, the Software Checklist and the Auditor Review", tabs.join('|') === 'Dashboard|Getting Started|Recent Updates|Software Checklist|Auditor Review', tabs.join('|'));
 for (const slot of ['home-receivables', 'home-payables', 'home-cash-flow', 'home-income-expense', 'home-top-expenses', 'home-banks']) {
   check(`Home shows ${slot.replace('home-', '').replace('-', ' ')}`, (await page.locator(`[data-slot=${slot}]`).count()) === 1);
 }
@@ -686,7 +689,8 @@ check('A link to ?tab=checklist opens the board', (await page.locator('[data-slo
 
 // ── G. Reports Center ──────────────────────────────────────────────────────
 await open('/reports');
-check('Reports Center opened from its address is the first page: the menu shows', Math.round((await box('aside'))?.width ?? 0) === 220);
+// Reports Center keeps the menu folded, as Zoho does, even as the first page.
+check('Reports Center folds the sidebar, as Zoho does', Math.round((await box('aside'))?.width ?? 0) === 72);
 check("Reports Center lists Zoho's categories", (await page.locator('[data-slot=report-category]').count()) >= 11);
 const allReports = await page.locator('[data-slot=report-row]').count();
 await page.locator('[data-slot=report-category]', { hasText: /^Receivables$/ }).click();

@@ -135,10 +135,10 @@ export async function seedDemoSr7d(trx: Trx, ids: IdMap): Promise<void> {
 
   const addItem = async (v: Record<string, unknown>) =>
     Number((await trx.insertInto('items').values({ org_id: org, track_inventory: 0, ...v } as never).executeTakeFirstOrThrow()).insertId);
-  const pulses = await addItem({ kind: 'goods', name: 'Tur dal for the staff canteen (unbranded)', hsn_sac: '071360', uqc: 'KGS', gst_rate_pct: '0', tax_pref: 'nil', sale_price: '120' });
-  const vegetables = await addItem({ kind: 'goods', name: 'Fresh vegetables (canteen surplus)', hsn_sac: '070999', uqc: 'KGS', gst_rate_pct: '0', tax_pref: 'exempt', sale_price: '60' });
-  const petrol = await addItem({ kind: 'goods', name: 'Petrol for test drives', hsn_sac: '271012', uqc: 'LTR', gst_rate_pct: '0', tax_pref: 'non_gst', sale_price: '102' });
-  const lubeDrum = await addItem({ kind: 'goods', name: 'Lubricant drum 210L (traded, not stocked)', hsn_sac: '271019', uqc: 'NOS', gst_rate_pct: '18', tax_pref: 'taxable', sale_price: '42000', purchase_price: '42000' });
+  const pulses = await addItem({ kind: 'goods', name: 'Tur dal for the staff canteen (unbranded)', description: 'Unbranded pulses sold on to staff at cost: nil-rated', hsn_sac: '071360', uqc: 'KGS', gst_rate_pct: '0', tax_pref: 'nil', sale_price: '120' });
+  const vegetables = await addItem({ kind: 'goods', name: 'Fresh vegetables (canteen surplus)', description: 'Surplus from the canteen order: exempt from GST', hsn_sac: '070999', uqc: 'KGS', gst_rate_pct: '0', tax_pref: 'exempt', sale_price: '60' });
+  const petrol = await addItem({ kind: 'goods', name: 'Petrol for test drives', description: 'Fuel recharged to customers for test drives: outside GST', hsn_sac: '271012', uqc: 'LTR', gst_rate_pct: '0', tax_pref: 'non_gst', sale_price: '102' });
+  const lubeDrum = await addItem({ kind: 'goods', name: 'Lubricant drum 210L (traded, not stocked)', description: 'Engine oil in 210-litre drums, bought to order and sold on', hsn_sac: '271019', uqc: 'NOS', gst_rate_pct: '18', tax_pref: 'taxable', sale_price: '42000', purchase_price: '42000' });
   const labour = (await trx.selectFrom('items').select('id').where('org_id', '=', org).where('name', '=', 'Fitment & Labour Charges').executeTakeFirstOrThrow()).id;
 
   const sharma = await contactId('Sharma Traders');
