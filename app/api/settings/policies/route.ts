@@ -60,8 +60,8 @@ const Input = z.object({
     escalateAfterDays: z.number().int().min(1).max(60),
     autoDepreciation: z.boolean(),
     timesheetApproval: z.boolean(),
-    adminCodeUndo: z.boolean(),
-    adminCodeInvoiceEdit: z.boolean(),
+    adminApprovalUndo: z.boolean(),
+    adminApprovalInvoiceEdit: z.boolean(),
   }).partial().optional(),
   hsn: z.object({ digits: z.union([z.literal(4), z.literal(6), z.literal(8)]) }).optional(),
   password: z.object({

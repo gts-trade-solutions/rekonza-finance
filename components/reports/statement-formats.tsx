@@ -133,9 +133,13 @@ function ResultRow({ label, value, before, cols, strong }: { label: string; valu
   );
 }
 
+// A report sheet of its own width, in the middle of the page, as Zoho shows a
+// statement: the client (2026-11-28) found the account and its amount too far
+// apart across a wide screen ("much extra space… show the values in the centre
+// of the page"). A comparison column widens it a little.
 function StatementTable({ children, prevLabel }: { children: React.ReactNode; prevLabel?: string }) {
   return (
-    <Card className="overflow-hidden p-0">
+    <Card className={cn('mx-auto w-full overflow-hidden p-0', prevLabel ? 'max-w-[1040px]' : 'max-w-[860px]')} data-slot="statement-sheet">
       <div className="overflow-x-auto thin-scroll">
         <table className="w-full min-w-[520px] text-sm">
           <thead>

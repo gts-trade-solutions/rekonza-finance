@@ -25,7 +25,7 @@ type Enforcement = 'off' | 'warn' | 'block';
 interface Control { key: string; area: string; status: Status; evidence: string; gap: string | null; href: string }
 interface Controls {
   changeReasons: boolean; segregation: Enforcement; autoIrn: boolean; creditHoldDays: number; creditHold: Enforcement;
-  adminCodeUndo?: boolean; adminCodeInvoiceEdit?: boolean;
+  adminApprovalUndo?: boolean; adminApprovalInvoiceEdit?: boolean;
   billsDueDays: number; concentrationPct: number; escalateAfterDays: number; autoDepreciation: boolean; timesheetApproval?: boolean;
 }
 interface Response {
@@ -163,11 +163,11 @@ export function ControlsPanel({ canEdit }: { canEdit: boolean }) {
                 <Row title="Reason required for every change" hint="Editing or removing anything asks why; the answer is kept in the audit trail beside who and when.">
                   <Switch checked={c.changeReasons} disabled={!canEdit || busy} onCheckedChange={(v) => setControl('changeReasons', v)} />
                 </Row>
-                <Row title="Admin code to reverse, void or delete" hint="Anyone who is not an admin needs a one-time code from an admin to reverse a journal, uncategorise a bank line, or void or delete a posted document. The code goes to the admins' notifications (and email, when mail is set up).">
-                  <Switch checked={c.adminCodeUndo ?? true} disabled={!canEdit || busy} onCheckedChange={(v) => setControl('adminCodeUndo', v)} data-slot="control-admin-code-undo" />
+                <Row title="Admin approval to reverse, void or delete" hint="When anyone who is not an admin reverses a journal, uncategorises a bank line, or voids or deletes a posted document, it goes to the admins with Approve and Reject; it is done only when an admin approves.">
+                  <Switch checked={c.adminApprovalUndo ?? true} disabled={!canEdit || busy} onCheckedChange={(v) => setControl('adminApprovalUndo', v)} data-slot="control-admin-approval-undo" />
                 </Row>
-                <Row title="Admin code to change an invoice" hint="Anyone may create an invoice; changing a saved one needs a one-time code from an admin, unless an admin changes it.">
-                  <Switch checked={c.adminCodeInvoiceEdit ?? true} disabled={!canEdit || busy} onCheckedChange={(v) => setControl('adminCodeInvoiceEdit', v)} data-slot="control-admin-code-invoice" />
+                <Row title="Admin approval to change an invoice" hint="Anyone may create an invoice; a change to a saved one by anyone who is not an admin goes to the admins with Approve and Reject.">
+                  <Switch checked={c.adminApprovalInvoiceEdit ?? true} disabled={!canEdit || busy} onCheckedChange={(v) => setControl('adminApprovalInvoiceEdit', v)} data-slot="control-admin-approval-invoice" />
                 </Row>
                 <Row title="Segregation of duties" hint="Paying a bill you entered or approved. Block means the payment must be made by someone else.">
                   <EnforcementPick value={c.segregation} disabled={!canEdit || busy} onChange={(v) => setControl('segregation', v)} />

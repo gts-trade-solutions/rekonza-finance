@@ -117,10 +117,15 @@ try {
   const again = await api('PATCH', '/api/journal', { entryId: posted.id, date: today(), reason: 'again' });
   check('reversing twice is refused', again.status === 409 && /already been reversed/.test(again.body?.error ?? ''), again.body?.error);
   const rent = acc('6100');
-  const pl = (await api('GET', `/api/reports?report=general-ledger&accountId=${rent.id}&from=${today()}&to=${today()}`)).body;
-  const pair = pl.lines.filter((l) => (l.memo ?? '').includes(`Office rent ${tag}`) || (l.memo ?? '').startsWith(`Reversal of #${posted.entryNo}:`));
+  // Undone on its own date, the pair leaves the ledger as it now stands (the client, 2026-11-28), and
+  // comes back with "Show reversed entries".
+  const isPair = (l) => (l.memo ?? '').includes(`Office rent ${tag}`) || (l.memo ?? '').startsWith(`Reversal of #${posted.entryNo}:`);
+  const glNow = (await api('GET', `/api/reports?report=general-ledger&accountId=${rent.id}&from=${today()}&to=${today()}`)).body;
+  check('the GL leaves the pair out by default, saying how many it left out', glNow.lines.filter(isPair).length === 0 && glNow.hiddenReversed >= 2, `${glNow.lines.filter(isPair).length} shown, ${glNow.hiddenReversed} left out`);
+  const pl = (await api('GET', `/api/reports?report=general-ledger&accountId=${rent.id}&from=${today()}&to=${today()}&showReversed=1`)).body;
+  const pair = pl.lines.filter(isPair);
   const netRent = pair.reduce((s, l) => s + l.debitPaise - l.creditPaise, 0);
-  check('the GL shows both halves of the pair', pair.length === 2, String(pair.length));
+  check('with "Show reversed entries" the GL shows both halves of the pair', pair.length === 2, String(pair.length));
   check('rent nets to nil across the pair (GL)', netRent === 0, String(netRent));
   const tb = (await api('GET', `/api/reports?report=trial-balance&to=${today()}`)).body;
   check('the trial balance balances', tb.balanced === true);

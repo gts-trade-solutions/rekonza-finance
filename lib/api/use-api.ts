@@ -123,6 +123,8 @@ export function useApiAction<Args extends unknown[], Result>(
         toast.success('Kept on this device', { description: 'It will be sent when you are back online.' });
         return null;
       }
+      // Sent to an admin for approval: the notice has said so; it is not a failure to show again.
+      if (err instanceof ApiError && err.code === 'sent_for_approval') return null;
       if (err instanceof ApiError) {
         setError(err.message);
         if (err.details) setFieldErrors(err.details);

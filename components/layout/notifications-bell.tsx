@@ -9,7 +9,8 @@ import { Bell } from 'lucide-react';
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { api } from '@/lib/api/client';
+import { adminRequests, api } from '@/lib/api/client';
+import { DecideButtons } from '@/components/approvals/admin-requests-card';
 import { useApi } from '@/lib/api/use-api';
 import { cn } from '@/lib/utils';
 
@@ -33,6 +34,11 @@ export function NotificationsBell() {
   }, [refetch]);
   const unread = state.data?.unread ?? 0;
   const items = state.data?.items ?? [];
+  // A request to undo or change posted work carries Approve and Reject here, for an admin, while it waits.
+  const asks = items.some((n) => n.kind === 'admin_request');
+  const requests = useApi(() => (asks ? adminRequests.list() : Promise.resolve(null)), [asks, state.data]);
+  const waiting = new Set((requests.data?.isAdmin ? requests.data.requests : []).filter((r) => r.status === 'pending').map((r) => r.id));
+  const requestOf = (n: Notice) => (n.kind === 'admin_request' ? /[?&]request=(\d+)/.exec(n.href ?? '')?.[1] ?? null : null);
 
   const open = async (n: Notice) => {
     if (!n.read) await api.post('/api/notifications', { ids: [n.id] }).catch(() => null);
@@ -69,6 +75,9 @@ export function NotificationsBell() {
               <DropdownMenuItem key={n.id} onClick={() => void open(n)} className={cn('flex flex-col items-start gap-0.5 rounded-none border-b px-3 py-2 last:border-0', !n.read && 'bg-primary/5')}>
                 <span className={cn('text-sm', !n.read && 'font-medium')}>{n.title}</span>
                 {n.body && <span className="text-xs text-muted-foreground">{n.body}</span>}
+                {requestOf(n) && waiting.has(requestOf(n)!) && (
+                  <span className="mt-1" data-slot="bell-admin-request"><DecideButtons compact id={requestOf(n)!} onDone={() => { void refetch(); void requests.refetch(); }} /></span>
+                )}
                 <span className="text-[10px] text-muted-foreground">{ago(n.at)}</span>
               </DropdownMenuItem>
             ))}

@@ -23,7 +23,9 @@ import { clientIp } from './client-ip';
 export type AuditAction =
   | 'create' | 'update' | 'delete' | 'void' | 'approve' | 'send' | 'match' | 'login' | 'export' | 'import' | 'comment'
   // Running the audit trail's integrity check (audit-chain.ts): an act worth recording itself.
-  | 'verify';
+  | 'verify'
+  // An admin turning down a request to undo or change posted work (services/admin-requests.ts).
+  | 'reject';
 
 export interface AuditInput {
   orgId: number;

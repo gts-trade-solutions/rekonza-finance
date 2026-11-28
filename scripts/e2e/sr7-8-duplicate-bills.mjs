@@ -96,7 +96,7 @@ if (FRESH) {
   await page.locator('[data-slot="import-next"]').click();
   await page.locator('[data-slot="import-counts"]').waitFor();
   const dupRows = await page.locator('[data-slot="import-skipped"] [data-slot="import-error-row"], [data-slot="import-duplicates-list"] [data-slot="import-error-row"]').evaluateAll((rows) => rows.map((r) => r.getAttribute('title') ?? ''));
-  check(t, 'the import leaves INV/001 out as a duplicate, by its row, naming the first bill', dupRows.some((r) => /^Row 2: INV\/001 from Vendor X Auto Parts is already in your books as BILL/.test(r)), dupRows.join(' | ').slice(0, 200));
+  check(t, 'the import leaves INV/001 out as a duplicate, by its row, naming the first bill', dupRows.some((r) => /^Row 2(, Supplier's bill number)?: INV\/001 from Vendor X Auto Parts is already in your books as BILL/.test(r)), dupRows.join(' | ').slice(0, 200));
   check(t, 'and says so, instead of "all ready"', await page.locator('[data-slot="import-ready-skipping"]').isVisible());
   await shot(t, 'import-duplicates');
 

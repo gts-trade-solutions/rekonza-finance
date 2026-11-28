@@ -39,18 +39,26 @@ export interface Accounts {
   updated_at: Generated<Date>;
 }
 
-export interface AdminCodes {
-  attempts: Generated<number>;
-  code_hash: string;
+export interface AdminRequests {
+  body: string | null;
+  change_reason: string | null;
   created_at: Generated<Date>;
-  expires_at: Date;
+  decided_at: Date | null;
+  decided_by_user_id: number | null;
+  decision_note: string | null;
+  exec_expires_at: Date | null;
+  exec_token_hash: string | null;
   id: Generated<number>;
   kind: string;
   label: string;
+  method: string;
   org_id: number;
+  path: string;
   requested_by_user_id: number;
+  result_message: string | null;
+  result_status: number | null;
   scope: string;
-  used_at: Date | null;
+  status: Generated<"approved" | "done" | "failed" | "pending" | "rejected" | "withdrawn">;
 }
 
 export interface AdvanceTaxAdjustments {
@@ -3976,7 +3984,7 @@ export interface WorkflowRuns {
 
 export interface DB {
   accounts: Accounts;
-  admin_codes: AdminCodes;
+  admin_requests: AdminRequests;
   advance_tax_adjustments: AdvanceTaxAdjustments;
   ai_conversations: AiConversations;
   ai_credit_buckets: AiCreditBuckets;

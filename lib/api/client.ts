@@ -51,16 +51,15 @@ export function setReasonAsker(fn: (() => Promise<string | null>) | null) {
 }
 
 /**
- * Asks for the admin's one-time code, when someone who is not an admin undoes
- * posted work or changes a saved invoice (the server answers 428
- * admin_code_required, having sent the code to the admins). Set by
- * components/layout/admin-code-prompt.tsx. Resolves to the code typed,
- * 'resend' for a new code, or null when the person gives up.
+ * Tells the person their request went to an admin, when someone who is not an
+ * admin undoes posted work or changes a saved invoice (the server answers 409
+ * sent_for_approval, having kept the request and told the admins). Set by
+ * components/layout/approval-sent-notice.tsx.
  */
-export interface AdminCodeAsk { message: string; action?: string; admins?: string; wrong?: boolean }
-let askAdminCode: ((ask: AdminCodeAsk) => Promise<string | null>) | null = null;
-export function setAdminCodeAsker(fn: ((ask: AdminCodeAsk) => Promise<string | null>) | null) {
-  askAdminCode = fn;
+export interface ApprovalSent { message: string; action?: string; admins?: string; requestId?: string }
+let onApprovalSent: ((a: ApprovalSent) => void) | null = null;
+export function setApprovalSentNotice(fn: ((a: ApprovalSent) => void) | null) {
+  onApprovalSent = fn;
 }
 
 interface Options extends Omit<RequestInit, 'body'> {
@@ -125,13 +124,10 @@ async function request<T>(path: string, options: Options = {}): Promise<T> {
       if (!reason) throw new ApiError(0, 'Not saved: a reason is needed for this change.', 'reason_cancelled');
       return request<T>(path, { ...options, headers: { ...(headers as Record<string, string> | undefined), 'X-Change-Reason': encodeURIComponent(reason) } });
     }
-    // An admin has to agree: the code has gone to them; ask for it and send the same request again with it.
-    if (res.status === 428 && (b.code === 'admin_code_required' || b.code === 'admin_code_wrong') && askAdminCode) {
-      const h = { ...(headers as Record<string, string> | undefined) };
-      const typed = await askAdminCode({ message: b.error ?? 'An admin has to agree to this.', action: b.details?.action, admins: b.details?.admins, wrong: b.code === 'admin_code_wrong' });
-      if (!typed) throw new ApiError(0, 'Not done: it needs the code an admin was sent.', 'admin_code_cancelled');
-      if (typed === 'resend') delete h['X-Admin-Code']; else h['X-Admin-Code'] = typed;
-      return request<T>(path, { ...options, headers: h });
+    // Kept for an admin to approve: say so once, plainly, and let the screen stop where it is.
+    if (res.status === 409 && b.code === 'sent_for_approval') {
+      onApprovalSent?.({ message: b.error ?? 'Sent to an admin for approval.', action: b.details?.action, admins: b.details?.admins, requestId: b.details?.requestId });
+      throw new ApiError(409, b.error || 'Sent to an admin for approval.', 'sent_for_approval', b.details);
     }
     throw new ApiError(
       res.status,
@@ -3933,4 +3929,18 @@ export const gstReturns = {
   itcClaims: (period: string) => api.get<{ period: string; shifts: ClaimShiftView[]; decisions: { billId: string; number: string; vendorInvoiceNo: string | null; billDate: string; party: string; gstin: string | null; decision: 'accept' | 'defer' | 'claim_later'; claimPeriod: string | null; note: string | null; by: string | null; taxPaise: number }[] }>(GR, { view: 'itc-claims', period }),
   setClaim: (b: { billIds: string[]; decision: 'accept' | 'defer' | 'claim_later'; claimPeriod?: string | null; note?: string | null }) =>
     api.post<{ changed: number; bills: string[] }>('/api/gst/gstr2b', { action: 'claim', ...b }),
+};
+
+// ── Admin approval of undoing or changing posted work ───────────────────────
+
+export interface AdminRequestRow {
+  id: string; kind: 'undo' | 'invoice_edit'; label: string; status: 'pending' | 'approved' | 'rejected' | 'done' | 'failed' | 'withdrawn';
+  requestedBy: string; requestedById: string; reason: string | null; at: string;
+  decidedBy: string | null; decidedAt: string | null; note: string | null; result: string | null;
+}
+export const adminRequests = {
+  list: () => api.get<{ requests: AdminRequestRow[]; isAdmin: boolean }>('/api/admin-requests'),
+  decide: (id: string, decision: 'approve' | 'reject', note?: string) =>
+    api.post<{ status: string; message: string | null }>('/api/admin-requests', { action: decision, id, note: note ?? null }),
+  withdraw: (id: string) => api.post<{ ok: true }>('/api/admin-requests', { action: 'withdraw', id }),
 };

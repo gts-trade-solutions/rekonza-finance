@@ -99,6 +99,7 @@ export function route(handler: Handler, options: RouteOptions = {}) {
     context: { params: Promise<Record<string, string>> },
   ): Promise<NextResponse> => {
     let user: SessionUser | null = null;
+    let viaApproval = false;
     const path = new URL(req.url).pathname;
     try {
       const params = context?.params ? await context.params : {};
@@ -116,6 +117,11 @@ export function route(handler: Handler, options: RouteOptions = {}) {
             if (keys.overLimit(byKey.apiKeyId)) throw new ApiError(429, 'Too many requests for this key. Wait a minute and try again.', 'rate_limited');
             user = byKey;
           }
+        }
+        // An admin approved this request: it is carried out as the person who asked.
+        if (!user && req.headers.get('x-admin-approval')) {
+          user = await (await import('./services/admin-requests')).approvedRequestUser(req, path);
+          viaApproval = !!user;
         }
         if (!user) throw unauthorized();
         if (user.mfaSetupRequired && !options.duringMfaSetup) {
@@ -154,10 +160,11 @@ export function route(handler: Handler, options: RouteOptions = {}) {
         }
       }
 
-      // Undoing posted work, or changing a saved invoice, needs an admin's one-time
-      // code from anyone who is not an admin (services/admin-codes.ts).
-      if (user && user.role !== 'admin' && req.method !== 'GET' && !NO_REASON.test(path)) {
-        await (await import('./services/admin-codes')).requireAdminCode(req, path, user);
+      // Undoing posted work, or changing a saved invoice, waits for an admin's
+      // Approve when someone else asks (services/admin-requests.ts); the
+      // request an admin approved is carried out under its one-time pass.
+      if (user && !viaApproval && user.role !== 'admin' && req.method !== 'GET' && !NO_REASON.test(path)) {
+        await (await import('./services/admin-requests')).requireAdminApproval(req, path, user);
       }
 
       // The same request sent again under its key gets the first one's reply (idempotency.ts).

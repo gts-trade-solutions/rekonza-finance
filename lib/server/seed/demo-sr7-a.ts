@@ -21,6 +21,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { Trx } from '../db';
+import { logAudit } from '../audit';
 import { bootstrap, type IdMap } from './bootstrap';
 import { DEMO_TODAY } from './demo-book';
 import { CODE, accountIds } from '../ledger/chart-of-accounts';
@@ -51,6 +52,14 @@ export async function seedDemoSr7A(trx: Trx, ids: IdMap): Promise<void> {
   const acc = ids.accounts;
   const fy = fyLabelFor(DEMO_TODAY);
   const fyFrom = `${fy.slice(0, 4)}-04-01`;
+
+  // ── 2. Audit log export ────────────────────────────────────────────────────
+  // The auditors' quarter-end export of the trail, as the screen records one
+  // (app/api/audit/export): the demo's Auditor Review then has it to show.
+  await logAudit({
+    trx, orgId: org, actorUserId: accountant, actorName: 'Priya Raman', action: 'export', targetType: 'output', targetId: 'audit-trail',
+    targetLabel: 'Audit trail', detail: `Exported the audit trail: every event from ${fyFrom} to ${day(1)}, as Excel, for the statutory auditors`,
+  });
 
   // ── 4. Voucher reversals ───────────────────────────────────────────────────
   const accrual = await postManualJournal(trx, org, accountant, {

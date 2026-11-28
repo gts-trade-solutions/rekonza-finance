@@ -20,6 +20,7 @@ import { ReportTable } from '@/components/shared/report-shell';
 import { approvals, type ApprovalDoc, type ApprovalRule, type ApproverRole } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
 import { RowActions, useConfirmDelete } from '@/components/shared/row-actions';
+import { AdminRequestsCard } from '@/components/approvals/admin-requests-card';
 
 const th = 'px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground';
 const DOC_LABEL: Record<ApprovalDoc, string> = { invoice: 'Invoices', bill: 'Bills', journal: 'Manual journals', payment_batch: 'Payment batches', credit_note: 'Credit notes' };
@@ -47,8 +48,10 @@ export default function ApprovalsPage() {
     <>
       <PageHeader
         title="Approvals"
-        description="Invoices, bills, journals and payment batches a rule holds for approval. Whoever submits one cannot approve it."
+        description="Invoices, bills, journals and payment batches a rule holds for approval, and requests to undo or change posted work. Whoever submits one cannot approve it."
       />
+      {/* Reversals, voids, deletions and invoice changes asked for by people who are not admins (2026-11-28). */}
+      <div className="mb-6"><AdminRequestsCard highlight={typeof window === 'undefined' ? null : new URLSearchParams(window.location.search).get('request')} /></div>
       <AsyncPage state={state} loading={<LoadingRows rows={6} />}>
         {(d) => (
           <div className="space-y-6">
