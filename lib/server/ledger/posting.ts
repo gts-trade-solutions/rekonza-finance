@@ -24,6 +24,7 @@ import type { Paise } from '../../types';
 import type { Trx } from '../db';
 import { toPaiseFromSql, toSqlFromPaise } from '../money-sql';
 import { ApiError } from '../http';
+import { changeReason } from '../request-context';
 
 export class UnbalancedEntryError extends Error {
   readonly debits: Paise;
@@ -111,6 +112,12 @@ export interface PostEntryInput {
   /** Which lock to honour. Omit only for opening balances during onboarding. */
   module?: LockModule;
   reversalOfEntryId?: number | null;
+  /**
+   * Why a reversal undoes its entry. Omitted, it is the reason the person gave
+   * for the request (route() reads it from the Void, Delete or Reverse window),
+   * so every reversal says why without each caller passing it (migration 137).
+   */
+  reversalReason?: string | null;
 }
 
 export interface PostedEntry {
@@ -421,6 +428,8 @@ export async function postEntry(trx: Trx, input: PostEntryInput): Promise<Posted
       source_type: input.sourceType,
       source_id: input.sourceId ?? null,
       reversal_of_entry_id: input.reversalOfEntryId ?? null,
+      // Companies (Accounts) Rules, rule 3(1): the books say why an entry was undone, on the entry that undoes it.
+      reversal_reason: input.reversalOfEntryId ? ((input.reversalReason ?? changeReason())?.trim().slice(0, 500) || null) : null,
       total_debit: toSqlFromPaise(totalDebit),
       total_credit: toSqlFromPaise(totalCredit),
       posted_by_user_id: input.userId ?? null,
@@ -475,7 +484,7 @@ export async function reverseEntry(
   trx: Trx,
   orgId: number,
   entryId: number,
-  opts: { date?: string; memo?: string; userId?: number | null; module?: LockModule } = {},
+  opts: { date?: string; memo?: string; userId?: number | null; module?: LockModule; reason?: string | null } = {},
 ): Promise<PostedEntry> {
   const original = await trx
     .selectFrom('journal_entries')
@@ -516,6 +525,7 @@ export async function reverseEntry(
     sourceType: original.source_type,
     sourceId: original.source_id,
     reversalOfEntryId: entryId,
+    reversalReason: opts.reason,
     userId: opts.userId ?? null,
     module: opts.module,
     // Debit becomes credit and credit becomes debit. Nothing else changes.

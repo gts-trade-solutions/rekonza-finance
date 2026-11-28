@@ -37,7 +37,7 @@ import { sql } from 'kysely';
 import type { Executor, Trx } from '../db';
 import { ApiError, badRequest, conflict, notFound } from '../http';
 import { stockPosition } from '../reports/stock';
-import { toPaiseFromSql } from '../money-sql';
+import { toPaiseFromSql, toSqlFromPaise } from '../money-sql';
 import { enforce, getPolicies } from './org-settings';
 import { findOrCreateBatch, type BatchInput } from './batches';
 import { recordSerials } from './serials';
@@ -202,20 +202,64 @@ export async function adjustmentForEdit(ex: Executor, orgId: number, id: number)
   };
 }
 
-/** Record an adjustment: quantity only, as in Tally (see app/api/inventory/route.ts). */
+/** Record an adjustment: quantity only on a periodic book, as in Tally (see app/api/inventory/route.ts); posted on a perpetual one. */
 export async function createAdjustment(trx: Trx, orgId: number, userId: number | null, input: AdjustmentInput) {
   const item = await checkAdjustment(trx, orgId, input);
-  const batchId = item.track_batches && input.batch ? await findOrCreateBatch(trx, orgId, item.id, input.batch) : null;
-  const valueBefore = (await perpetualOn(trx, orgId, input.date)) ? await itemValues(trx, orgId, input.date) : null;
-  const id = Number((await trx.insertInto('stock_adjustments').values({
-    org_id: orgId, batch_id: batchId, warehouse_id: input.warehouseId ?? null, item_id: item.id, adjust_date: input.date,
-    qty_delta: String(input.qtyDelta), reason: input.reason, notes: input.notes ?? null, journal_entry_id: null, created_by_user_id: userId,
-  }).executeTakeFirstOrThrow()).insertId);
-  // Numbered pieces found (opening stock, a count) or written off.
-  await recordSerials(trx, orgId, { type: 'adjustment', id }, input.qtyDelta > 0 ? 1 : -1,
-    [{ lineId: null, itemId: item.id, qty: input.qtyDelta, serials: input.serials }], { check: true });
-  if (valueBefore) await postAdjustment(trx, orgId, userId, id, { ...input, itemName: item.name }, valueBefore);
-  return { id, itemName: item.name };
+  // Goods written off that are not there to write off: the book's negative-stock rule (Settings →
+  // Controls) warns or refuses, measured on the adjustment's day and today, as on every sale.
+  const guard = input.qtyDelta < 0
+    ? await stockGuard(trx, orgId, [{ branchId: await branchOfGodown(trx, orgId, input.warehouseId ?? null), date: input.date }], [item.id])
+    : null;
+  return atomically(trx, async () => {
+    const batchId = item.track_batches && input.batch ? await findOrCreateBatch(trx, orgId, item.id, input.batch) : null;
+    // The stock's value on the day without this adjustment, on either method: what it moves is
+    // measured against it (keepAdjustmentValue below), and on a perpetual book posted.
+    const valueBefore = await itemValues(trx, orgId, input.date);
+    const id = Number((await trx.insertInto('stock_adjustments').values({
+      org_id: orgId, batch_id: batchId, warehouse_id: input.warehouseId ?? null, item_id: item.id, adjust_date: input.date,
+      qty_delta: String(input.qtyDelta), reason: input.reason, notes: input.notes ?? null, journal_entry_id: null, created_by_user_id: userId,
+    }).executeTakeFirstOrThrow()).insertId);
+    // Numbered pieces found (opening stock, a count) or written off.
+    await recordSerials(trx, orgId, { type: 'adjustment', id }, input.qtyDelta > 0 ? 1 : -1,
+      [{ lineId: null, itemId: item.id, qty: input.qtyDelta, serials: input.serials }], { check: true });
+    const valuePaise = await keepAdjustmentValue(trx, orgId, id, item.id, input.date, valueBefore);
+    if (await perpetualOn(trx, orgId, input.date)) await postAdjustment(trx, orgId, userId, id, { ...input, itemName: item.name }, valueBefore);
+    const warnings: string[] = [];
+    if (guard) await guard.check(warnings);
+    return { id, itemName: item.name, valuePaise, warnings };
+  });
+}
+
+/**
+ * What an adjustment took out of stock (negative) or put back (positive), at
+ * the stock valuation's own figures: the item's value on the adjustment's date
+ * with it, less its value without it. For a FIFO item that is the cost of the
+ * oldest units on hand (AS 2 / Ind AS 2: issues come from the earliest
+ * purchases); for an average-cost item, the year's average. It is kept on the
+ * adjustment (migration 137) because a periodic book posts nothing at the
+ * adjustment — the loss reaches the profit and loss through a smaller closing
+ * stock — so there is no entry to read it back from, and the adjustments list,
+ * its export and the window that recorded it must all say the same figure. On a
+ * perpetual book it is exactly what postAdjustment posts to Inventory.
+ */
+async function keepAdjustmentValue(trx: Trx, orgId: number, id: number, itemId: number, date: string, before: Map<number, number>): Promise<number> {
+  const after = await itemValues(trx, orgId, date);
+  const moved = (after.get(itemId) ?? 0) - (before.get(itemId) ?? 0);
+  await trx.updateTable('stock_adjustments').set({ value: toSqlFromPaise(moved) }).where('id', '=', id).execute();
+  return moved;
+}
+
+/** A date no report reaches: an adjustment moved there is out of the stock for a moment, to measure it. */
+const OUT_OF_RANGE = '2999-12-31';
+
+/** Work an adjustment's value out again from the stock as it stands (seeded or older adjustments, migration 137). */
+export async function refreshAdjustmentValue(trx: Trx, orgId: number, id: number): Promise<number> {
+  const row = await trx.selectFrom('stock_adjustments').select(['item_id', 'adjust_date', 'qty_delta']).where('id', '=', id).where('org_id', '=', orgId).executeTakeFirstOrThrow();
+  const date = ymd(row.adjust_date);
+  await trx.updateTable('stock_adjustments').set({ adjust_date: OUT_OF_RANGE }).where('id', '=', id).execute();
+  const before = await itemValues(trx, orgId, date);
+  await trx.updateTable('stock_adjustments').set({ adjust_date: date }).where('id', '=', id).execute();
+  return keepAdjustmentValue(trx, orgId, id, row.item_id, date, before);
 }
 
 /**
@@ -265,25 +309,25 @@ export async function updateAdjustment(trx: Trx, orgId: number, userId: number |
     await reverseForChange(trx, orgId, row.journal_entry_id, { memo: `Stock adjustment of ${before.itemName} edited: the entry as it was, reversed`, userId, module: 'accountant' });
     await trx.deleteFrom('serial_moves').where('org_id', '=', orgId).where('doc_type', '=', 'adjustment').where('doc_id', '=', id).execute();
     const batchId = item.track_batches && input.batch ? await findOrCreateBatch(trx, orgId, item.id, input.batch) : null;
-    // On a perpetual book: the stock's value without this adjustment, for what the new one posts.
-    let valueBefore: Map<number, number> | null = null;
-    if (await perpetualOn(trx, orgId, input.date)) {
-      await trx.updateTable('stock_adjustments').set({ qty_delta: '0', journal_entry_id: null }).where('id', '=', id).execute();
-      valueBefore = await itemValues(trx, orgId, input.date);
-    }
+    // The stock's value without this adjustment, for what the new version moves (and, on a perpetual book, posts).
+    const perpetual = await perpetualOn(trx, orgId, input.date);
+    // Out of the way for the measurement: dated past any report (a quantity of nil is not allowed, ck_adj_nonzero).
+    await trx.updateTable('stock_adjustments').set({ adjust_date: OUT_OF_RANGE, journal_entry_id: null }).where('id', '=', id).execute();
+    const valueBefore = await itemValues(trx, orgId, input.date);
     await trx.updateTable('stock_adjustments').set({
       batch_id: batchId, warehouse_id: input.warehouseId ?? null, item_id: item.id, adjust_date: input.date,
       qty_delta: String(input.qtyDelta), reason: input.reason, notes: input.notes ?? null, journal_entry_id: null,
     }).where('id', '=', id).execute();
     await recordSerials(trx, orgId, { type: 'adjustment', id }, input.qtyDelta > 0 ? 1 : -1,
       [{ lineId: null, itemId: item.id, qty: input.qtyDelta, serials: input.serials }], { check: true });
-    if (valueBefore) await postAdjustment(trx, orgId, userId, id, { ...input, itemName: item.name }, valueBefore);
+    const valuePaise = await keepAdjustmentValue(trx, orgId, id, item.id, input.date, valueBefore);
+    if (perpetual) await postAdjustment(trx, orgId, userId, id, { ...input, itemName: item.name }, valueBefore);
     const oldDay = ymd(row.adjust_date);
-    if (oldDay < input.date || !valueBefore) await afterStockMoved(trx, orgId, userId, oldDay < input.date ? oldDay : input.date, `stock adjustment ADJ-${id} edited`);
+    if (oldDay < input.date || !perpetual) await afterStockMoved(trx, orgId, userId, oldDay < input.date ? oldDay : input.date, `stock adjustment ADJ-${id} edited`);
 
     const warnings: string[] = [];
     await guard.check(warnings);
-    return { id, itemName: item.name, before, after: await adjustmentForEdit(trx, orgId, id), warnings };
+    return { id, itemName: item.name, before, after: await adjustmentForEdit(trx, orgId, id), valuePaise, warnings };
   });
 }
 

@@ -23,7 +23,7 @@ import { allocateOrgNumber, postEntry, reverseEntry, type DraftLine } from '../l
 import { CODE, accountIds, requireAccount } from '../ledger/chart-of-accounts';
 import { ApiError, badRequest, notFound } from '../http';
 import { fyLabelFor } from './sales';
-import { checkCashPayment, checkCashReceipt, checkSegregation } from './guards';
+import { checkCashBalance, checkCashPayment, checkCashReceipt, checkSegregation } from './guards';
 import { voidReason, voidStamp } from './void-reason';
 import { bankLineMatched, plain, recordDeletion, reverseForChange, unlinkDocument } from './doc-delete';
 
@@ -213,6 +213,11 @@ async function recordPayment(
   if (input.mode === 'cash' || bank.kind === 'cash') {
     if (kind === 'received') await checkCashReceipt(trx, orgId, input.contactId, input.date, input.amountPaise, warnings);
     else await checkCashPayment(trx, orgId, input.contactId, input.date, input.amountPaise, warnings);
+  }
+  // Money paid out of Cash in Hand that is not there (guards.ts): an edit is measured without its old self.
+  if (kind === 'made') {
+    await checkCashBalance(trx, orgId, bank.id, input.date, input.amountPaise + (input.bankChargesPaise ?? 0), warnings,
+      replace ? { sourceTypes: ['payment_made'], sourceId: replace.id } : null);
   }
 
   const tds = input.tdsPaise ?? 0;

@@ -35,7 +35,7 @@ import { seriesFor } from './voucher-types';
 import { costLines, type DocumentLineInput } from './lines';
 import { roundToRupee } from '../../money';
 import { toPaiseFromSql, toSqlFromPaise } from '../money-sql';
-import { assertApproved, ruleFor, submitForApproval } from './approvals';
+import { assertApproved, recordDiscardedIfPending, ruleFor, submitForApproval } from './approvals';
 import { allocateNumber, assertGstDocNumber, postEntry, reverseEntry, type DraftLine } from '../ledger/posting';
 import { CODE, accountIds, requireAccount } from '../ledger/chart-of-accounts';
 import { ApiError, badRequest, notFound } from '../http';
@@ -975,6 +975,7 @@ export async function deleteInvoice(trx: Trx, orgId: number, userId: number | nu
   if (await trx.selectFrom('journal_allocations').select('id').where('org_id', '=', orgId).where('target_type', '=', 'invoice').where('target_id', '=', invoiceId).executeTakeFirst()) refuse('a journal entry is set against it.');
 
   const snapshot = await invoiceSnapshot(trx, orgId, invoiceId);
+  if (inv.doc_kind !== 'debit_note') await recordDiscardedIfPending(trx, orgId, 'invoice', invoiceId, userId, reason);
   const reversal = await reverseForChange(trx, orgId, inv.journal_entry_id, {
     memo: `${inv.doc_kind === 'debit_note' ? 'Debit note' : 'Invoice'} ${inv.number} deleted`, userId, module: 'sales',
   });
@@ -1004,17 +1005,26 @@ export async function markInvoiceSent(
   orgId: number,
   userId: number | null,
   invoiceId: number,
-): Promise<void> {
+): Promise<{ warnings: string[] }> {
   const inv = await trx
     .selectFrom('invoices')
-    .select(['id', 'status', 'journal_entry_id'])
+    .select(['id', 'status', 'journal_entry_id', 'branch_id', 'invoice_date'])
     .where('id', '=', invoiceId)
     .where('org_id', '=', orgId)
     .executeTakeFirst();
   if (!inv) throw notFound('Invoice not found.');
   if (inv.status === 'void') throw badRequest('A void invoice cannot be sent.');
 
+  // A draft becomes a sale here: its goods leave stock now, so the negative-stock rule is asked
+  // now, as it is when an invoice is saved straight away (guards.ts).
+  const warnings: string[] = [];
+  if (inv.status === 'draft') {
+    const lines = await trx.selectFrom('invoice_lines').select(['item_id', 'qty']).where('invoice_id', '=', invoiceId).execute();
+    await checkStock(trx, orgId, inv.branch_id, String(inv.invoice_date).slice(0, 10), lines.map((l) => ({ itemId: l.item_id, qty: Number(l.qty) })), warnings);
+  }
+
   if (!inv.journal_entry_id) await postInvoice(trx, orgId, userId, invoiceId);
 
   await trx.updateTable('invoices').set({ status: 'sent' }).where('id', '=', invoiceId).execute();
+  return { warnings };
 }

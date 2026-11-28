@@ -22,6 +22,7 @@ import { seedDemoSr7B } from '../lib/server/seed/demo-sr7-b';
 import { seedSr7c, seedSr7cBefore } from '../lib/server/seed/demo-sr7-c';
 import { seedDemoSr7d } from '../lib/server/seed/demo-sr7-d';
 import { seedDemoFxB } from '../lib/server/seed/demo-fx-b';
+import { seedDemoFxC } from '../lib/server/seed/demo-fx-c';
 import { wipeOrganizations } from '../lib/server/seed/wipe';
 import { verifyLedgerBalances } from '../lib/server/ledger/posting';
 
@@ -77,6 +78,7 @@ async function main() {
     // Status review 7, builder B: FIFO, duplicate bills, credit notes, bulk payments, import history.
     if (!masters) await seedDemoSr7B(trx, created);
     if (!masters) await seedSr7c(trx, created); // status review 7, items 9/10/14: disposals, deposits, an import, the stock true-up
+    if (!masters) await seedDemoFxC(trx, created); // fixes from the independent check (fx-c): adjustment values, reasons, a discarded journal
     // And the reminders and audit trail the book would carry by its date.
     if (!masters) await seedDemoHistory(trx, created);
     if (!masters) await seedDemoFxB(trx, created); // fixes after the auditor check: audit-trail edits with old → new and the IP

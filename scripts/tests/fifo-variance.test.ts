@@ -114,7 +114,8 @@ async function scenario(f: Fixture, perpetual: boolean) {
     branchId: f.branchId, vendorId: f.vendorId, date: '2026-04-06', reason: 'Goods returned - damaged', againstBillId: b2.id,
     amountPaise: 0, lines: [{ itemId: f.itemId, billLineId: b2Line.id, qty: 2 }],
   });
-  assert.ok([24_000, 28_300].includes(vc.totalPaise), `two at ₹120, with GST as the supply has it: ${vc.totalPaise}`);
+  // Exact, as the bill is: 2 × ₹120 + 18% = ₹283.20, not rounded to the rupee (fx-c, 2026-11-28).
+  assert.ok([24_000, 28_320].includes(vc.totalPaise), `two at ₹120, with GST as the supply has it: ${vc.totalPaise}`);
   await agree('2026-04-06', 3, 36_000, 160_000);
   // More than came in on the bill cannot go back.
   await assert.rejects(createVendorCredit(f.trx, f.orgId, null, {

@@ -210,6 +210,8 @@ export function route(handler: Handler, options: RouteOptions = {}) {
   };
 }
 
+/** A POST body's `action` that undoes something, as services/admin-requests.ts reads it. */
+const UNDO_ACTION_RE = /(^|-)(void|undo|unmatch|uncategori[sz]e|reverse|reopen|unreconcile|take-back|unpost)(-|$)/;
 /** Requests that change something, and so may be asked why. */
 const CHANGES = new Set(['PATCH', 'PUT', 'DELETE']);
 /** Changes that are not to the books: reading a notification, one's own sign-in, the assistant. */
@@ -220,9 +222,13 @@ export async function readReason(req: Request): Promise<string | null> {
   // on the deleted record too); it counts as the change's reason, so the person is not asked twice.
   // So does a `reason` in the body: the Reverse, Void and Undo windows send the one typed there.
   const raw = req.headers.get('x-change-reason') ?? (req.method === 'DELETE' ? new URL(req.url).searchParams.get('reason') : null);
-  if (!raw && CHANGES.has(req.method) && (req.headers.get('content-type') ?? '').includes('application/json')) {
-    const body = await req.clone().json().catch(() => null) as { reason?: unknown } | null;
-    if (body && typeof body.reason === 'string' && body.reason.trim()) return body.reason.trim().slice(0, 500);
+  if (!raw && (CHANGES.has(req.method) || req.method === 'POST') && (req.headers.get('content-type') ?? '').includes('application/json')) {
+    const body = await req.clone().json().catch(() => null) as { reason?: unknown; action?: unknown } | null;
+    // A POST counts its body's reason only when it undoes something (action void-credit-note,
+    // void-vendor-credit, reverse…): a new credit note's or adjustment's own "reason" field says
+    // what the document is for, not why a change is made.
+    const undoes = req.method !== 'POST' || (typeof body?.action === 'string' && UNDO_ACTION_RE.test(body.action));
+    if (undoes && body && typeof body.reason === 'string' && body.reason.trim()) return body.reason.trim().slice(0, 500);
   }
   if (!raw) return null;
   let text = raw;

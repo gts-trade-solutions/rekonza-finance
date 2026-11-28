@@ -85,6 +85,7 @@ export default function ExpensesPage() {
   const [savingEdit, setSavingEdit] = useState(false);
   const [deleting, setDeleting] = useState<ExpenseListItem | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteReason, setDeleteReason] = useState('');
   const [deleteError, setDeleteError] = useState<string | null>(null);
   // ?edit=<id>: arrived from a ledger row's ⋯ → Edit — that expense opens for editing.
   const editParam = useSearchParams().get('edit');
@@ -438,15 +439,18 @@ export default function ExpensesPage() {
             <DialogTitle>Delete expense {deleting?.number}?</DialogTitle>
             <DialogDescription>It is removed and its entry is reversed in the ledger. The audit trail keeps a copy of it as it was.</DialogDescription>
           </DialogHeader>
+          {/* Its entry is reversed, and the reversal says why (Accountant → Reversed Vouchers). */}
+          <Input value={deleteReason} onChange={(e) => setDeleteReason(e.target.value)} maxLength={300}
+            placeholder="Reason (needed): entered in error" data-slot="delete-expense-reason" />
           {deleteError && <p className="text-sm text-destructive" data-slot="delete-expense-error">{deleteError}</p>}
           <DialogFooter>
             <Button variant="outline" onClick={() => setDeleting(null)}>Cancel</Button>
-            <Button variant="destructive" disabled={deleteBusy} className="gap-1.5" data-slot="confirm-delete-expense"
+            <Button variant="destructive" disabled={deleteBusy || deleteReason.trim().length < 4} className="gap-1.5" data-slot="confirm-delete-expense"
               onClick={async () => {
                 if (!deleting) return;
                 setDeleteBusy(true); setDeleteError(null);
                 try {
-                  await expenseApi.remove(deleting.id);
+                  await expenseApi.remove(deleting.id, deleteReason.trim()); setDeleteReason('');
                   toast.success(`Expense ${deleting.number} deleted`);
                   setDeleting(null);
                   await state.refetch();

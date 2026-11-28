@@ -10,6 +10,7 @@
 // department asks about, with interest.
 
 import { FoldNav } from '@/components/layout/nav-state';
+import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { FileMinus, Plus, Undo2 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -57,6 +58,9 @@ const today = () => new Date().toISOString().slice(0, 10);
  */
 interface GoodsLine { key: string; itemId: string; billLineId: string | null; name: string; cameIn: number | null; qty: number; ratePaise: number; gstRatePct: number }
 const short = (d: string) => new Date(d).toLocaleDateString('en-IN');
+
+/** The list row with the bill it is against, by number (api/purchase-documents). */
+type BillLinked = PurchaseDocRow & { linkedNumber?: string | null; linkedRef?: string | null };
 
 export default function VendorCreditsPage() {
   const canCreate = usePermission('purchases', 'create');
@@ -119,7 +123,7 @@ export default function VendorCreditsPage() {
     setGoods(bill.data.lines.filter((l) => l.itemId).map((l) => ({
       key: `b${l.id}`, itemId: String(l.itemId), billLineId: l.id,
       // A line entered by item has no description of its own: the item's name stands for it.
-      name: l.description?.trim() || '', cameIn: l.qty, qty: 0, ratePaise: l.ratePaise, gstRatePct: l.gstRatePct,
+      name: l.description?.trim() || l.itemName || 'Item', cameIn: l.qty, qty: 0, ratePaise: l.ratePaise, gstRatePct: l.gstRatePct,
     })));
   }, [bill.data, mode, editing]);
   const goodsTaxable = goods.reduce((t, g) => t + Math.round(g.qty * g.ratePaise), 0);
@@ -192,8 +196,16 @@ export default function VendorCreditsPage() {
       cell: (r) => <span className="text-xs text-muted-foreground">{r.reason}</span>,
     },
     {
-      key: 'against', header: 'Against bill', sortValue: (r) => r.linkedId ?? '',
-      cell: (r) => <span className="text-xs">{r.linkedId ? `Bill #${r.linkedId}` : 'Standalone'}</span>,
+      key: 'against', header: 'Against bill', sortValue: (r) => (r as BillLinked).linkedNumber ?? '',
+      cell: (r) => {
+        const l = r as BillLinked;
+        if (!r.linkedId) return <span className="text-xs">Standalone</span>;
+        return (
+          <Link href={`/purchases/bills/${r.linkedId}`} className="text-xs text-link hover:underline" data-slot="vc-against-bill" onClick={(e) => e.stopPropagation()}>
+            {l.linkedNumber ?? 'Bill'}{l.linkedRef ? <span className="block text-[11px] text-muted-foreground">{l.linkedRef}</span> : null}
+          </Link>
+        );
+      },
     },
     { key: 'status', header: 'Status', sortValue: (r) => r.status, cell: (r) => <StatusBadge status={r.status} /> },
     {

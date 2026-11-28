@@ -15,6 +15,7 @@
 // cost of what was actually sold: add the stock the period began with, take
 // off the stock it ended with. Every account opens its ledger for the period.
 
+import { BelowZeroNotice, type BelowZeroData } from '@/components/reports/below-zero-notice';
 import { Suspense, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { TrendingDown, TrendingUp } from 'lucide-react';
@@ -100,6 +101,7 @@ function ProfitAndLoss() {
           const margin = income > 0 ? (pl.netProfitPaise / income) * 100 : 0;
           return (
             <>
+              <BelowZeroNotice data={(pl as { belowZero?: BelowZeroData }).belowZero} />
               {/* Compact figure boxes: the figures at a glance, the statement below them in view. */}
               <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4" data-slot="pl-figures">
                 {[

@@ -130,12 +130,16 @@ export default function ApprovalsPage() {
                       <tr key={`${r.documentType}-${r.id}-${r.at}-${i}`} className="border-b last:border-0" data-slot="approval-decision">
                         <td className="px-3 py-2 text-xs text-muted-foreground tabular">{new Date(r.at).toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</td>
                         <td className="px-3 py-2 text-sm">
-                          <Link href={href(r.documentType, r.id)} className="font-medium hover:underline">{r.number}</Link>
+                          {/* A discarded draft is gone: named, not linked. */}
+                          {(r.action as string) === 'discarded'
+                            ? <span className="font-medium">{r.number}</span>
+                            : <Link href={href(r.documentType, r.id)} className="font-medium hover:underline">{r.number}</Link>}
                           <Badge variant="outline" className="ml-2 text-[10px]">{r.documentType.replaceAll('_', ' ')}</Badge>
                         </td>
                         <td className="px-3 py-2 text-xs">
-                          <Badge variant="outline" className={r.action === 'approved' ? 'border-emerald-500/40 text-emerald-700 dark:text-emerald-300' : r.action === 'rejected' ? 'border-red-500/40 text-red-700 dark:text-red-300' : ''}>
-                            {r.action === 'approved' ? 'Approved' : r.action === 'rejected' ? 'Sent back' : 'Submitted'}
+                          <Badge variant="outline" data-slot="approval-decision-action"
+                            className={r.action === 'approved' ? 'border-emerald-500/40 text-emerald-700 dark:text-emerald-300' : r.action === 'rejected' ? 'border-red-500/40 text-red-700 dark:text-red-300' : (r.action as string) === 'discarded' ? 'border-amber-500/40 text-amber-700 dark:text-amber-300' : ''}>
+                            {r.action === 'approved' ? 'Approved' : r.action === 'rejected' ? 'Sent back' : (r.action as string) === 'discarded' ? 'Discarded' : 'Submitted'}
                           </Badge>
                         </td>
                         <td className="px-3 py-2 text-xs">{r.by ?? '—'}</td>

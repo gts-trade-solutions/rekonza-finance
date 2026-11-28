@@ -206,6 +206,8 @@ export async function itemLayers(ex: Executor, orgId: number, itemId: number, as
       document: b ? `${b.internal_no} (${b.vendor_invoice_no})` : p ? p.number : '', party: b?.display_name ?? null,
       receivedQty: l.receivedQty ?? l.qty, returnedQty: l.returnedQty ?? 0, qty: l.qty, onHandQty: onHand,
       ratePaise: Math.round(unit), valuePaise: Math.round(unit * onHand),
+      // The layer's whole cost, unrounded per unit: what the adjustment window's FIFO figure is worked from.
+      costPaise: l.cost,
     };
   });
   // Units older than every layer (opening stock) are valued at the opening rate.

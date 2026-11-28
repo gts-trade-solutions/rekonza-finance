@@ -124,10 +124,23 @@ async function load(trx: Trx, orgId: number, doc: ApprovalDoc, id: number) {
   return row;
 }
 
-export async function recordApprovalAction(trx: Trx, orgId: number, doc: RuleDoc, id: number, action: 'submitted' | 'approved' | 'rejected', userId: number | null, note?: string | null) {
+export async function recordApprovalAction(trx: Trx, orgId: number, doc: RuleDoc, id: number, action: 'submitted' | 'approved' | 'rejected' | 'discarded', userId: number | null, note?: string | null) {
   await trx.insertInto('approval_actions').values({
     org_id: orgId, document_type: doc, document_id: id, action, user_id: userId, note: note ?? null,
   }).execute();
+}
+
+/**
+ * A draft that went in for approval and is deleted before anyone decides is a
+ * decision too: the approval history records it as 'discarded', so nothing that
+ * was submitted simply disappears from Approvals → Recent decisions.
+ */
+export async function recordDiscardedIfPending(
+  trx: Trx, orgId: number, doc: 'invoice' | 'bill' | 'credit_note', id: number, userId: number | null, note?: string | null,
+) {
+  const table = doc === 'invoice' ? 'invoices' : doc === 'bill' ? 'bills' : 'credit_notes';
+  const row = await trx.selectFrom(table).select('approval_status').where('id', '=', id).where('org_id', '=', orgId).executeTakeFirst();
+  if (row?.approval_status === 'pending') await recordApprovalAction(trx, orgId, doc, id, 'discarded', userId, note?.trim() || 'Deleted while waiting for approval');
 }
 
 export async function submitForApproval(trx: Trx, orgId: number, userId: number | null, doc: ApprovalDoc, id: number) {
@@ -251,7 +264,7 @@ export async function pendingApprovals(ex: Executor, orgId: number): Promise<Pen
 }
 
 export interface ApprovalDecision {
-  documentType: RuleDoc; id: string; number: string; action: 'submitted' | 'approved' | 'rejected'; note: string | null; by: string | null; at: string;
+  documentType: RuleDoc; id: string; number: string; action: 'submitted' | 'approved' | 'rejected' | 'discarded'; note: string | null; by: string | null; at: string;
 }
 
 /** The latest submissions and decisions across every kind of document: the approval history at a glance. */
@@ -264,14 +277,17 @@ export async function recentDecisions(ex: Executor, orgId: number, limit = 25): 
     .leftJoin('credit_notes as cn', (j) => j.onRef('cn.id', '=', 'a.document_id').on('a.document_type', '=', 'credit_note'))
     .leftJoin('held_journals as hj', (j) => j.onRef('hj.id', '=', 'a.document_id').on('a.document_type', '=', 'journal'))
     .leftJoin('journal_entries as je', 'je.id', 'hj.entry_id')
+    // A draft deleted while it waited keeps its number in the record of deleted documents.
+    .leftJoin('deleted_documents as dd', (j) => j.onRef('dd.doc_id', '=', 'a.document_id').onRef('dd.doc_type', '=', 'a.document_type').onRef('dd.org_id', '=', 'a.org_id'))
     .select(['a.document_type', 'a.document_id', 'a.action', 'a.note', 'a.created_at', 'u.name', 'b.internal_no', 'i.number as invoice_no', 'p.number as batch_no',
-      'cn.number as credit_note_no', 'je.entry_no as journal_no'])
+      'cn.number as credit_note_no', 'je.entry_no as journal_no', 'dd.number as deleted_no', 'hj.memo as journal_memo'])
     .where('a.org_id', '=', orgId).orderBy('a.created_at', 'desc').orderBy('a.id', 'desc').limit(limit).execute();
   return rows.map((r) => ({
     documentType: r.document_type as RuleDoc, id: String(r.document_id),
-    number: r.internal_no ?? r.invoice_no ?? r.batch_no ?? r.credit_note_no
+    number: r.internal_no ?? r.invoice_no ?? r.batch_no ?? r.credit_note_no ?? r.deleted_no
       ?? (r.document_type === 'journal' ? (r.journal_no ? `Journal #${r.journal_no}` : `Journal H-${r.document_id}`) : `${String(r.document_type).replace(/_/g, ' ')} ${r.document_id}`),
-    action: r.action, note: r.note, by: r.name, at: new Date(r.created_at).toISOString(),
+    // A discarded journal with no note says what it was.
+    action: r.action, note: r.note ?? (r.action === 'discarded' && r.journal_memo ? r.journal_memo : null), by: r.name, at: new Date(r.created_at).toISOString(),
   }));
 }
 

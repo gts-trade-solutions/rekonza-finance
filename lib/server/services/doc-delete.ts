@@ -16,6 +16,8 @@ import type { Trx } from '../db';
 import { reverseEntry } from '../ledger/posting';
 import type { LockModule } from '../ledger/posting';
 import { toSqlFromPaise } from '../money-sql';
+import { ApiError } from '../http';
+import { changeReason, inRequest } from '../request-context';
 
 export interface DeletedDoc {
   orgId: number;
@@ -33,8 +35,23 @@ export interface DeletedDoc {
   snapshot: unknown;
 }
 
-/** Keep the record of a document that is about to go. */
+/**
+ * Keep the record of a document that is about to go.
+ *
+ * Deleting a posted document posts a reversing entry, and the books must say
+ * why (Companies (Accounts) Rules, rule 3(1); Accountant → Reversed Vouchers
+ * shows it). So when a person's delete reverses an entry and no reason came
+ * with it — in the window's reason box (?reason=), or answered to the browser's
+ * own question (X-Change-Reason) — the request is answered 428
+ * reason_required: the browser asks for one and sends the delete again
+ * (lib/api/client.ts), so no screen can delete posted work without a reason.
+ * A service called outside a request (a test, a seed) is not asked.
+ */
 export async function recordDeletion(trx: Trx, d: DeletedDoc): Promise<void> {
+  const reason = (d.reason?.trim() || changeReason()?.trim() || '').slice(0, 300) || null;
+  if (!reason && d.reversalEntryId && inRequest()) {
+    throw new ApiError(428, 'Say why you are deleting it: its entry is reversed in the ledger, and the reason is kept with the reversal and in the audit trail.', 'reason_required');
+  }
   await trx.insertInto('deleted_documents').values({
     org_id: d.orgId,
     branch_id: d.branchId ?? null,
@@ -46,7 +63,7 @@ export async function recordDeletion(trx: Trx, d: DeletedDoc): Promise<void> {
     contact_id: d.contactId ?? null,
     journal_entry_id: d.journalEntryId ?? null,
     reversal_entry_id: d.reversalEntryId ?? null,
-    reason: d.reason?.trim().slice(0, 300) || null,
+    reason,
     snapshot: JSON.stringify(d.snapshot, (_k, v) => (typeof v === 'bigint' ? Number(v) : v)),
     deleted_by_user_id: d.userId,
   }).execute();

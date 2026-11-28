@@ -30,7 +30,7 @@ export const PUT = route(
       });
       return r;
     });
-    return { id: asId(id), entryNo: done.entryNo };
+    return { id: asId(id), entryNo: done.entryNo, warnings: done.warnings };
   },
   { permission: { module: 'banking', action: 'edit' } },
 );

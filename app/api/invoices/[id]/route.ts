@@ -92,8 +92,9 @@ export const POST = route(
       return { id: asId(id) };
     }
 
+    const warnings: string[] = [];
     await transaction(async (trx) => {
-      if (action === 'send') await markInvoiceSent(trx, orgId, user.userId, id);
+      if (action === 'send') warnings.push(...(await markInvoiceSent(trx, orgId, user.userId, id)).warnings);
       else await voidInvoice(trx, orgId, user.userId, id, reason);
     });
 
@@ -117,7 +118,7 @@ export const POST = route(
       ...auditMeta(req),
     });
 
-    return { id: asId(id), status: inv.status };
+    return { id: asId(id), status: inv.status, warnings };
   },
   { permission: { module: 'sales', action: 'edit' } },
 );

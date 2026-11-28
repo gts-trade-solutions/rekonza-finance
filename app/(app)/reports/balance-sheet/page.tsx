@@ -14,6 +14,7 @@
 // either out and the sheet fails to balance by exactly that profit. Closing
 // stock is valued from the documents rather than read from a ledger.
 
+import { BelowZeroNotice, type BelowZeroData } from '@/components/reports/below-zero-notice';
 import { Suspense, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { Scale } from 'lucide-react';
@@ -91,6 +92,7 @@ function BalanceSheet() {
       <AsyncPage state={state} loading={<LoadingRows rows={10} />}>
         {(bs) => (
           <>
+            <BelowZeroNotice data={(bs as { belowZero?: BelowZeroData }).belowZero} />
             <Card className={'flex items-center gap-3 p-4 ' + (bs.balanced ? 'border-emerald-500/40 bg-emerald-500/5' : 'border-destructive bg-destructive/5')}>
               <Scale className={'size-5 shrink-0 ' + (bs.balanced ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')} />
               <div className="min-w-0 flex-1">

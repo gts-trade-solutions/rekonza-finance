@@ -31,7 +31,7 @@ import { computeLineTax, hsnRateOn, sumTax, totalTaxPaise } from '../../tax/gst'
 import { computeTds, parseSections } from '../../tax/tds';
 import { hsnRateHistory, tdsRateOn } from '../tax/rates';
 import { certificateRate } from '../tax/tds-certificates';
-import { checkCashPayment } from './guards';
+import { checkCashBalance, checkCashPayment } from './guards';
 import { afterStockMoved, stockPurchaseAccount } from './stock-ledger';
 import { voidReason, voidStamp } from './void-reason';
 import { registrationOn } from './statutory';
@@ -685,6 +685,9 @@ export async function createExpense(
   const warnings: string[] = [];
   if (bank.kind === 'cash') {
     await checkCashPayment(trx, orgId, input.vendorId ?? null, input.date, input.amountPaise, warnings);
+    // Paid out of cash that is not in hand (guards.ts); an edit is measured without its old self.
+    await checkCashBalance(trx, orgId, bank.id, input.date, input.amountPaise, warnings,
+      opts.replace ? { sourceTypes: ['expense'], sourceId: opts.replace.id } : null);
   }
 
   const expenseAccount = await trx

@@ -99,6 +99,7 @@ export function InvoiceKindList({ kind }: { kind: 'receipt' | 'debit_note' }) {
           ? 'The sale and the money taken for it both go: the payment and the invoice entries are reversed in the ledger, and the number is kept as cancelled for GSTR-1. The audit trail keeps a copy. Refused if it has an IRN or an e-way bill, or the payment is matched in Banking.'
           : 'It is removed and its entry reversed; the number is kept as cancelled for GSTR-1. Refused once anything is received against it.'}
         doneMessage={`${deleting?.number ?? ''} deleted`}
+        reasonRequired={!!deleting && deleting.status !== 'draft'}
         onConfirm={(reason) => invoices.remove(deleting!.id, reason)}
         onDone={() => void state.refetch()}
       />

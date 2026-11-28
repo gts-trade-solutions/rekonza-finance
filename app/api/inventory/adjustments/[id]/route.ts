@@ -27,7 +27,7 @@ export const PUT = route(
         detail: `Edited stock adjustment: ${input.qtyDelta > 0 ? '+' : ''}${input.qtyDelta} ${done.itemName} (${input.reason}) on ${input.date}`,
         payload: { before: done.before, after: done.after }, ...auditMeta(req),
       });
-      return { id: asId(id), warnings: done.warnings };
+      return { id: asId(id), valuePaise: done.valuePaise, warnings: done.warnings };
     });
   },
   { permission: { module: 'inventory', action: 'edit' } },

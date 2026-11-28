@@ -481,7 +481,7 @@ export default function BillDetailPage() {
                     The audit trail keeps a copy of it as it was.
                   </DialogDescription>
                 </DialogHeader>
-                <Field label="Reason" hint="Optional. Kept with the record of what was deleted">
+                <Field label="Reason" hint={bill.journalEntryId && bill.status !== 'void' ? 'Required. Kept with the reversing entry and the record of what was deleted' : 'Optional. Kept with the record of what was deleted'}>
                   <Input value={deleteReason} onChange={(e) => setDeleteReason(e.target.value)} placeholder="Entered twice" data-slot="delete-reason" />
                 </Field>
                 {removeIt.error && <p className="text-sm text-destructive" data-slot="delete-error">{removeIt.error}</p>}
@@ -489,7 +489,7 @@ export default function BillDetailPage() {
                   <Button variant="outline" onClick={() => setDeleting(false)}>Cancel</Button>
                   <Button
                     variant="destructive"
-                    disabled={removeIt.busy}
+                    disabled={removeIt.busy || (!!bill.journalEntryId && bill.status !== 'void' && deleteReason.trim().length < 4)}
                     data-slot="confirm-delete"
                     onClick={async () => {
                       const ok = await removeIt.run(bill.id, deleteReason.trim() || undefined);

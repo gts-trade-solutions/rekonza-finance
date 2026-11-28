@@ -160,7 +160,8 @@ export async function postReversal(
 ) {
   await assertReversalDateOpen(trx, orgId, o.date);
   const e = await trx.selectFrom('journal_entries').select('entry_no').where('id', '=', entryId).where('org_id', '=', orgId).executeTakeFirstOrThrow();
-  const reversal = await reverseJournal(trx, orgId, o.postedBy, entryId, { date: o.date, memo: o.memo ?? `Reversal of #${e.entry_no}: ${o.reason}`.slice(0, 500) });
+  // The reason asked for goes on the reversing entry itself: an approved or scheduled reversal posts outside the asker's request.
+  const reversal = await reverseJournal(trx, orgId, o.postedBy, entryId, { date: o.date, memo: o.memo ?? `Reversal of #${e.entry_no}: ${o.reason}`.slice(0, 500), reason: o.reason });
   await trx.insertInto('journal_reversals').values({
     org_id: orgId, entry_id: entryId, reversal_entry_id: reversal.id, reverse_on: o.date, reason: o.reason.slice(0, 500),
     kind: o.kind, requested_by_user_id: o.requestedBy, approved_by_user_id: o.approvedBy,
@@ -192,14 +193,26 @@ export async function reversalRegister(ex: Executor, orgId: number, opts: { from
     entry_id: number; entry_no: number; entry_date: string; memo: string | null; source_type: string; source_id: number | null;
     reversal_id: number; reversal_no: number; reversal_date: string; amount: string;
     jr_reason: string | null; jr_kind: string | null; requested_by: string | null; approved_by: string | null; posted_by: string | null;
-    doc_reason: string | null; audit_reason: string | null;
+    doc_reason: string | null; audit_reason: string | null; entry_reason: string | null; void_reason: string | null;
   }>`
     SELECT o.id AS entry_id, o.entry_no, DATE_FORMAT(o.entry_date, '%Y-%m-%d') AS entry_date, o.memo, o.source_type, o.source_id,
            r.id AS reversal_id, r.entry_no AS reversal_no, DATE_FORMAT(r.entry_date, '%Y-%m-%d') AS reversal_date, o.total_debit AS amount,
            jr.reason AS jr_reason, jr.kind AS jr_kind, ru.name AS requested_by, au.name AS approved_by, pu.name AS posted_by,
-           dd.reason AS doc_reason,
+           dd.reason AS doc_reason, r.reversal_reason AS entry_reason,
+           -- A voided document keeps its reason on itself (migration 048).
+           CASE o.source_type
+             WHEN 'invoice' THEN (SELECT d.void_reason FROM invoices d WHERE d.id = o.source_id AND d.org_id = o.org_id AND d.journal_entry_id = o.id)
+             WHEN 'bill' THEN (SELECT d.void_reason FROM bills d WHERE d.id = o.source_id AND d.org_id = o.org_id AND d.journal_entry_id = o.id)
+             WHEN 'credit_note' THEN (SELECT d.void_reason FROM credit_notes d WHERE d.id = o.source_id AND d.org_id = o.org_id AND d.journal_entry_id = o.id)
+             WHEN 'vendor_credit' THEN (SELECT d.void_reason FROM vendor_credits d WHERE d.id = o.source_id AND d.org_id = o.org_id AND d.journal_entry_id = o.id)
+             WHEN 'payment_received' THEN (SELECT d.void_reason FROM payments d WHERE d.id = o.source_id AND d.org_id = o.org_id AND d.journal_entry_id = o.id)
+             WHEN 'payment_made' THEN (SELECT d.void_reason FROM payments d WHERE d.id = o.source_id AND d.org_id = o.org_id AND d.journal_entry_id = o.id)
+           END AS void_reason,
+           -- The audit trail names some documents with a hyphen (credit-note) or by a shorter kind (payment).
            (SELECT a.reason FROM audit_log a
-             WHERE a.org_id = o.org_id AND a.target_type = o.source_type AND a.target_id = CAST(o.source_id AS CHAR)
+             WHERE a.org_id = o.org_id AND a.target_id = CAST(o.source_id AS CHAR)
+               AND (REPLACE(a.target_type, '-', '_') = o.source_type
+                    OR (a.target_type = 'payment' AND o.source_type IN ('payment_received', 'payment_made')))
                AND a.action IN ('void', 'delete') AND a.reason IS NOT NULL
              ORDER BY a.id DESC LIMIT 1) AS audit_reason
       FROM journal_entries r
@@ -228,7 +241,7 @@ export async function reversalRegister(ex: Executor, orgId: number, opts: { from
     ...rows.map((r): ReversalPair => ({
       entryId: String(r.entry_id), entryNo: r.entry_no, entryDate: r.entry_date, memo: r.memo, sourceType: r.source_type,
       sourceId: r.source_id ? String(r.source_id) : null, reversalId: String(r.reversal_id), reversalNo: r.reversal_no, reversalDate: r.reversal_date,
-      amountPaise: toPaiseFromSql(r.amount), reason: r.jr_reason ?? r.doc_reason ?? r.audit_reason ?? null,
+      amountPaise: toPaiseFromSql(r.amount), reason: r.jr_reason ?? r.entry_reason ?? r.doc_reason ?? r.void_reason ?? r.audit_reason ?? null,
       requestedBy: r.requested_by ?? r.posted_by, approvedBy: r.approved_by,
       kind: (r.jr_kind as ReversalPair['kind'] | null) ?? (REVERSIBLE.has(r.source_type) ? 'manual' : 'document'), heldId: null,
     })),

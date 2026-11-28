@@ -44,7 +44,7 @@ const DELETABLE: Partial<Record<PrintKind, (id: string, reason?: string) => Prom
 export const EDITABLE_KINDS: PrintKind[] = ['estimate', 'sales-order', 'challan', 'credit-note', 'payment-received', 'payment-made'];
 export type { EditableSalesKind };
 
-/** Zoho's Delete, asked once: what happens, and an optional reason kept with the record. */
+/** Zoho's Delete, asked once: what happens, and a reason kept with the record (needed for a posted document). */
 export function DeleteDocumentDialog({ kind, id, number, open, onOpenChange, onDeleted }: {
   kind: PrintKind; id: string; number: string; open: boolean; onOpenChange: (v: boolean) => void; onDeleted?: () => void;
 }) {
@@ -64,12 +64,14 @@ export function DeleteDocumentDialog({ kind, id, number, open, onOpenChange, onD
               : 'It is removed. Nothing was posted for it, so the ledger does not change. The audit trail keeps a copy of it as it was.'}
           </DialogDescription>
         </DialogHeader>
-        <Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Reason (optional): raised in error" data-slot="delete-document-reason" />
+        {/* A posted document's entry is reversed, and the reversal says why (Accountant → Reversed Vouchers). */}
+        <Input value={reason} onChange={(e) => setReason(e.target.value)} maxLength={300}
+          placeholder={posted ? 'Reason (needed): raised in error' : 'Reason (optional): raised in error'} data-slot="delete-document-reason" />
         {error && <p className="text-sm text-destructive" data-slot="delete-document-error">{error}</p>}
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
           <Button
-            variant="destructive" disabled={busy || !del} data-slot="delete-document-confirm" className="gap-1.5"
+            variant="destructive" disabled={busy || !del || (posted && reason.trim().length < 4)} data-slot="delete-document-confirm" className="gap-1.5"
             onClick={async () => {
               if (!del) return;
               setBusy(true); setError(null);

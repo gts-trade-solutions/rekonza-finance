@@ -40,6 +40,8 @@ export interface OrgPolicies {
   negativeStock: Enforcement;
   /** Cash over the limits of sections 269ST and 40A(3). */
   cashLimits: Enforcement;
+  /** A payment, expense or transfer that would take a cash account (Cash in Hand, petty cash) below nil. */
+  negativeCash: Enforcement;
   /** Sign a user out after this many minutes without a request. 0 keeps the session's own lifetime. */
   sessionIdleMinutes: number;
   /** Who must sign in with a code from an authenticator app as well as the password. */
@@ -130,6 +132,7 @@ export const DEFAULT_POLICIES: OrgPolicies = {
   creditLimit: 'warn',
   negativeStock: 'warn',
   cashLimits: 'warn',
+  negativeCash: 'warn',
   sessionIdleMinutes: 0,
   requireMfa: 'off',
   msmeBankRatePct: 5.5,
@@ -155,7 +158,7 @@ function parsed(value: unknown): unknown {
 const SCOPE = 'policy';
 // stockAccounting is not here: switching it posts stock into the ledger, so only
 // services/stock-ledger.ts writes it.
-const KEYS = ['features', 'creditLimit', 'negativeStock', 'cashLimits', 'sessionIdleMinutes', 'requireMfa', 'msmeBankRatePct', 'overdueInterestPct', 'overdueGraceDays', 'stockValuation', 'signIn', 'reminders', 'recovery', 'controls', 'password', 'hsn'] as const;
+const KEYS = ['features', 'creditLimit', 'negativeStock', 'cashLimits', 'negativeCash', 'sessionIdleMinutes', 'requireMfa', 'msmeBankRatePct', 'overdueInterestPct', 'overdueGraceDays', 'stockValuation', 'signIn', 'reminders', 'recovery', 'controls', 'password', 'hsn'] as const;
 const ENFORCEMENTS = ['off', 'warn', 'block'];
 
 export async function getPolicies(ex: Executor, orgId: number): Promise<OrgPolicies> {
@@ -166,7 +169,7 @@ export async function getPolicies(ex: Executor, orgId: number): Promise<OrgPolic
     const v = parsed(r.value);
     switch (r.setting_key) {
       case 'features': out.features = { ...out.features, ...(v as Partial<OrgPolicies['features']>) }; break;
-      case 'creditLimit': case 'negativeStock': case 'cashLimits':
+      case 'creditLimit': case 'negativeStock': case 'cashLimits': case 'negativeCash':
         if (['off', 'warn', 'block'].includes(v as string)) out[r.setting_key] = v as Enforcement;
         break;
       case 'sessionIdleMinutes': out.sessionIdleMinutes = Number(v) || 0; break;

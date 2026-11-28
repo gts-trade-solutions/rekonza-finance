@@ -584,7 +584,11 @@ export async function generalLedger(
       'journal_lines.entry_id', 'journal_lines.debit', 'journal_lines.credit',
       'journal_lines.description', 'journal_lines.entry_date',
       'journal_entries.entry_no', 'journal_entries.memo', 'journal_entries.source_type', 'journal_entries.source_id',
-      'contacts.display_name as contact_name',
+      // A line with no party of its own (cost of goods sold, sales, tax, stock) takes its entry's:
+      // the customer or supplier on the receivable or payable line of the same invoice, bill or
+      // payment, so every row of a document says whose it is.
+      sql<string | null>`COALESCE(contacts.display_name, (SELECT c2.display_name FROM journal_lines l2 JOIN contacts c2 ON c2.id = l2.contact_id
+        WHERE l2.entry_id = journal_lines.entry_id AND l2.contact_id IS NOT NULL ORDER BY l2.line_no LIMIT 1))`.as('contact_name'),
       'journal_entries.reversal_of_entry_id',
       sql<number | null>`(SELECT o.entry_no FROM journal_entries o WHERE o.id = journal_entries.reversal_of_entry_id)`.as('reversal_of_no'),
       sql<number | null>`(SELECT r.id FROM journal_entries r WHERE r.org_id = journal_entries.org_id AND r.reversal_of_entry_id = journal_entries.id ORDER BY r.id LIMIT 1)`.as('reversed_by_id'),

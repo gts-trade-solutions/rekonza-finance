@@ -8,6 +8,7 @@ import { route, body, query, asId } from '@/lib/server/http';
 import { toPaiseFromSql } from '@/lib/server/money-sql';
 import { stockByGodown, stockPosition } from '@/lib/server/reports/stock';
 import { logAudit, auditMeta } from '@/lib/server/audit';
+import { adjustmentValuesNow } from '@/lib/server/services/stock-ledger';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Stock.
@@ -80,7 +81,7 @@ export const GET = route(
           'a.id', 'a.adjust_date', 'a.qty_delta', 'a.reason', 'a.notes',
           'a.journal_entry_id', 'a.item_id',
           'i.name as item_name', 'i.sku', 'i.uqc', 'i.purchase_price',
-          'w.name as warehouse_name', 'u.name as user_name',
+          'w.name as warehouse_name', 'u.name as user_name', 'a.value',
           // What the adjustment moved in the Inventory account, when it posted (a perpetual book posts on the day).
           sql<string | null>`(SELECT SUM(jl.debit - jl.credit) FROM journal_lines jl JOIN accounts ac ON ac.id = jl.account_id
             WHERE jl.entry_id = a.journal_entry_id AND ac.code = ${CODE.INVENTORY})`.as('posted_value'),
@@ -92,6 +93,11 @@ export const GET = route(
         .limit(300)
         .execute();
 
+      // An adjustment from before its value was kept (migration 137), and not posted: worked out
+      // from the stock as it stands on its date, as the valuation does — never the catalogue price.
+      const legacy = rows.filter((a) => a.value === null && (a.posted_value === null || a.posted_value === undefined));
+      const legacyValue = await adjustmentValuesNow(db, orgId,
+        legacy.map((a) => ({ id: Number(a.id), itemId: Number(a.item_id), date: String(a.adjust_date).slice(0, 10), qtyDelta: Number(a.qty_delta) })));
       return {
         view: q.view,
         adjustments: rows.map((a) => ({
@@ -106,8 +112,11 @@ export const GET = route(
           notes: a.notes,
           warehouseName: a.warehouse_name,
           userName: a.user_name,
-          // The value posted (the FIFO or average cost that left stock); with nothing posted, the catalogue price.
-          valuePaise: a.posted_value !== null && a.posted_value !== undefined ? toPaiseFromSql(a.posted_value) : Math.round(Number(a.qty_delta) * toPaiseFromSql(a.purchase_price)),
+          // What left stock (or came back), at the FIFO or average cost on its date: kept with the
+          // adjustment on either method (on a perpetual book it is the figure posted to Inventory).
+          valuePaise: a.value !== null ? toPaiseFromSql(a.value)
+            : a.posted_value !== null && a.posted_value !== undefined ? toPaiseFromSql(a.posted_value)
+            : legacyValue.get(Number(a.id)) ?? Math.round(Number(a.qty_delta) * toPaiseFromSql(a.purchase_price)),
           valuePosted: a.posted_value !== null && a.posted_value !== undefined,
           journalEntryId: a.journal_entry_id === null ? null : asId(a.journal_entry_id),
         })),
@@ -190,19 +199,12 @@ export const POST = route(
     const input = await body(req, AdjustInput);
     return transaction(async (trx) => {
       const made = await createAdjustment(trx, orgId, user.userId, toAdjustment(input));
-      // The value it posted, on a book that posts stock as it moves (perpetual); otherwise, for
-      // information, the value at the catalogue price (the statements value the stock at period end).
+      // What it took out of stock (or put back), at the stock valuation's own figure on its date —
+      // the FIFO cost of the units that left, or the average — kept on the adjustment on either
+      // method, so this reply, the adjustments list and the valuation all say the same.
       const row = await trx.selectFrom('stock_adjustments').select('journal_entry_id').where('id', '=', Number(made.id)).executeTakeFirst();
       const journalEntryId = row?.journal_entry_id ?? null;
-      let valuePaise: number;
-      if (journalEntryId) {
-        const posted = await sql<{ v: string | null }>`SELECT SUM(jl.debit - jl.credit) AS v FROM journal_lines jl JOIN accounts ac ON ac.id = jl.account_id
-          WHERE jl.entry_id = ${journalEntryId} AND ac.code = ${CODE.INVENTORY}`.execute(trx);
-        valuePaise = Math.abs(toPaiseFromSql(posted.rows[0]?.v ?? '0'));
-      } else {
-        const item = await trx.selectFrom('items').select('purchase_price').where('id', '=', Number(input.itemId)).executeTakeFirstOrThrow();
-        valuePaise = Math.round(Math.abs(input.qtyDelta) * toPaiseFromSql(item.purchase_price));
-      }
+      const valuePaise = Math.abs(made.valuePaise);
       await logAudit({
         trx, orgId, actorUserId: user.userId, actorName: user.name, action: 'create',
         targetType: 'stock_adjustment', targetId: made.id, targetLabel: made.itemName,
@@ -210,7 +212,7 @@ export const POST = route(
           `value ${(valuePaise / 100).toFixed(2)}`,
         ...auditMeta(req),
       });
-      return { id: asId(made.id), valuePaise, journalEntryId: journalEntryId ? asId(journalEntryId) : null };
+      return { id: asId(made.id), valuePaise, signedValuePaise: made.valuePaise, journalEntryId: journalEntryId ? asId(journalEntryId) : null, warnings: made.warnings };
     });
   },
   { permission: { module: 'inventory', action: 'edit' } },

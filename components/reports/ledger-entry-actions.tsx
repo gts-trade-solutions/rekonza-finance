@@ -192,9 +192,10 @@ export function LedgerEntryActions({ row, onChanged }: { row: LedgerRowRef; onCh
                 : 'Its entry is reversed in the ledger and the document is removed; its number is kept as deleted. Refused if money has been applied to it or its period is locked.'}
             </DialogDescription>
           </DialogHeader>
-          {!bank && <Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Reason (optional): raised in error" data-slot="ledger-reason" />}
+          {/* The entry is reversed: the reversal says why (Accountant → Reversed Vouchers). */}
+          {!bank && <Input value={reason} onChange={(e) => setReason(e.target.value)} maxLength={300} placeholder="Reason (needed): raised in error" data-slot="ledger-reason" />}
           <DialogFooter>
-            <Button variant={confirm === 'delete' ? 'destructive' : 'default'} disabled={busy} onClick={() => void run()} data-slot="ledger-confirm-go">
+            <Button variant={confirm === 'delete' ? 'destructive' : 'default'} disabled={busy || (!bank && reason.trim().length < 4)} onClick={() => void run()} data-slot="ledger-confirm-go">
               {busy ? 'Working…' : bank && confirm === 'edit' ? 'Undo and re-categorise' : 'Delete'}
             </Button>
             <Button variant="outline" onClick={() => { setConfirm(null); setReason(''); }}>Cancel</Button>

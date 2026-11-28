@@ -21,8 +21,13 @@ import { conflict } from '../http';
 import { stockPosition } from '../reports/stock';
 import { enforce, getPolicies } from './org-settings';
 import { explodeKits } from './kits';
+import { dayLabel } from '../../date-range';
 
 const rupees = (p: Paise) => `₹${(p / 100).toLocaleString('en-IN')}`;
+const rupees2 = (p: Paise) => `₹${(p / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const q4 = (n: number) => Math.round(n * 10_000) / 10_000;
+/** Today in India (held-journals.ts has the same; not imported, to keep this module free of the journal services). */
+const indiaToday = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date());
 export const CASH_RECEIPT_LIMIT_PAISE = 2_00_000_00;
 export const CASH_PAYMENT_LIMIT_PAISE = 10_000_00;
 export const CASH_PAYMENT_LIMIT_TRANSPORT_PAISE = 35_000_00;
@@ -52,7 +57,17 @@ export async function checkCreditLimit(
     warnings, conflict);
 }
 
-/** Lines that take tracked stock out: would any go below zero at this branch, on this date? */
+/**
+ * Lines that take tracked stock out: would any go below zero at this branch,
+ * on the document's date or on any day since? Goods cannot be sold, written off
+ * or moved that are not there: under AS 2 / Ind AS 2 stock is never less than
+ * nothing, and a negative quantity carried to the year end becomes a negative
+ * closing stock in the profit and loss and the balance sheet. Measured on the
+ * document's date and on today (a back-dated sale can leave later sales short),
+ * before the document counts; the message names each item, what is in stock,
+ * what is going out and the shortfall. The book's negative-stock rule decides:
+ * off, a warning, or a refusal.
+ */
 export async function checkStock(
   ex: Executor, orgId: number, branchId: number, date: string, lines: { itemId?: number | null; qty: number }[], warnings: string[],
 ) {
@@ -60,18 +75,76 @@ export async function checkStock(
   // A kit takes its components out of stock, so those are what must be there.
   for (const l of await explodeKits(ex, orgId, lines)) if (l.itemId && l.qty > 0) out.set(l.itemId, (out.get(l.itemId) ?? 0) + l.qty);
   if (!out.size) return;
-  const tracked = await ex.selectFrom('items').select(['id', 'name']).where('org_id', '=', orgId)
+  const tracked = await ex.selectFrom('items').select(['id', 'name', 'uqc']).where('org_id', '=', orgId)
     .where('id', 'in', [...out.keys()]).where('track_inventory', '=', 1).where('kind', '=', 'goods').execute();
   if (!tracked.length) return;
   const policy = (await getPolicies(ex, orgId)).negativeStock;
   if (policy === 'off') return;
-  const pos = await stockPosition(ex, orgId, date, { branchId, includeArchived: true });
+  const today = indiaToday();
+  const days = date < today ? [date, today] : [date];
+  const worst = new Map<number, { have: number; date: string }>();
+  for (const day of days) {
+    const pos = await stockPosition(ex, orgId, day, { branchId, includeArchived: true });
+    for (const t of tracked) {
+      const have = pos.lines.find((l) => l.itemId === String(t.id))?.qty ?? 0;
+      const w = worst.get(t.id);
+      if (!w || have < w.have) worst.set(t.id, { have, date: day });
+    }
+  }
   const short = tracked.flatMap((t) => {
-    const have = pos.lines.find((l) => l.itemId === String(t.id))?.qty ?? 0;
+    const w = worst.get(t.id)!;
     const want = out.get(t.id)!;
-    return have - want < 0 ? [`${t.name}: ${have} in stock, ${want} going out`] : [];
+    const left = w.have - want;
+    if (left >= -1e-9) return [];
+    const unit = (t.uqc ?? '').toLowerCase();
+    return [`${t.name}: ${q4(w.have)} in stock${w.date !== date ? ` on ${dayLabel(w.date)}` : ''}, ${q4(want)} going out, short by ${q4(-left)}${unit ? ` ${unit}` : ''}`];
   });
-  if (short.length) enforce(policy, `Not enough stock — ${short.join('; ')}.`, warnings, conflict);
+  if (short.length) {
+    enforce(policy, `Not enough stock — ${short.join('; ')}. Stock below zero would show as a negative closing stock in the profit and loss and the balance sheet: record the purchase first, or change the quantity.`, warnings, conflict);
+  }
+}
+
+/**
+ * Money going out of a cash account (Cash in Hand, petty cash): would the
+ * account go below nil on the document's date or since? Cash in hand cannot be
+ * less than nothing — a negative cash balance in the books means a receipt or a
+ * withdrawal from the bank was never recorded, or the payment was not made from
+ * cash — and an auditor reads it as a sign the cash book is not kept as the
+ * money moves (Companies Act, 2013, s.128: books that give a true and fair
+ * view). The balance is the account's own ledger balance, before this document
+ * (and without an earlier version of it, on an edit); the message names the
+ * account, what is in hand, what is going out and the shortfall. The book's
+ * negative-cash rule decides: off, a warning, or a refusal. A bank account may
+ * be overdrawn on an overdraft or cash credit limit, so only cash is checked.
+ */
+export async function checkCashBalance(
+  ex: Executor, orgId: number, bankAccountId: number, date: string, outPaise: Paise, warnings: string[],
+  exclude?: { sourceTypes: string[]; sourceId: number } | null,
+) {
+  if (outPaise <= 0) return;
+  const bank = await ex.selectFrom('bank_accounts').select(['name', 'kind', 'ledger_account_id'])
+    .where('id', '=', bankAccountId).where('org_id', '=', orgId).executeTakeFirst();
+  if (!bank || bank.kind !== 'cash') return;
+  const policy = (await getPolicies(ex, orgId)).negativeCash;
+  if (policy === 'off') return;
+  const today = indiaToday();
+  const days = date < today ? [date, today] : [date];
+  let worst: { have: Paise; date: string } | null = null;
+  for (const day of days) {
+    const { rows } = await sql<{ v: string | null }>`
+      SELECT COALESCE(SUM(jl.debit - jl.credit), 0) AS v FROM journal_lines jl JOIN journal_entries e ON e.id = jl.entry_id
+       WHERE jl.org_id = ${orgId} AND jl.account_id = ${bank.ledger_account_id} AND jl.entry_date <= ${day}
+         ${exclude ? sql`AND NOT (e.source_type IN (${sql.join(exclude.sourceTypes)}) AND e.source_id = ${exclude.sourceId})` : sql``}
+    `.execute(ex);
+    const have = toPaiseFromSql(rows[0]?.v ?? '0');
+    if (!worst || have < worst.have) worst = { have, date: day };
+  }
+  const left = worst!.have - outPaise;
+  if (left >= 0) return;
+  enforce(policy,
+    `${bank.name} would go below nil: ${rupees2(worst!.have)} in hand on ${dayLabel(worst!.date)}, ${rupees2(outPaise)} going out — short by ${rupees2(-left)}. ` +
+      'Cash in hand cannot be less than nothing: record the cash that came in (a receipt, or a withdrawal from the bank) first, or pay from a bank account.',
+    warnings, conflict);
 }
 
 /**

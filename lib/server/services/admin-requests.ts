@@ -148,7 +148,12 @@ export async function requireAdminApproval(req: Request, path: string, user: Ses
     const reasonRaw = req.headers.get('x-change-reason');
     let headerReason: string | null = null;
     if (reasonRaw) { try { headerReason = decodeURIComponent(reasonRaw); } catch { headerReason = reasonRaw; } }
-    const reason = bodyReason ?? url.searchParams.get('reason')?.trim() ?? headerReason;
+    const reason = bodyReason ?? (url.searchParams.get('reason')?.trim() || null) ?? headerReason;
+    // Undoing posted work says why, before it goes to an admin: the admin decides on the reason,
+    // and the reversal carries it once approved (the browser asks for it on a 428).
+    if (a.kind === 'undo' && !reason) {
+      throw new ApiError(428, 'Say why you are undoing it. The admin who approves it sees the reason, and it is kept with the reversal.', 'reason_required');
+    }
     const r = await db.insertInto('admin_requests').values({
       org_id: user.orgId, requested_by_user_id: user.userId, kind: a.kind, label: a.label.slice(0, 200),
       method: req.method, path: `${path}${url.search}`.slice(0, 500), body: a.body, change_reason: reason?.slice(0, 500) ?? null, scope: a.scope,

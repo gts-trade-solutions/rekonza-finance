@@ -24,7 +24,7 @@ import 'server-only';
 import type { Insertable, Updateable } from 'kysely';
 import type { DB } from '../db-types';
 import type { Executor, Trx } from '../db';
-import { recordApprovalAction, ruleFor } from './approvals';
+import { recordApprovalAction, recordDiscardedIfPending, ruleFor } from './approvals';
 import type { Paise, SupplyType } from '../../types';
 import { exportTaxFor, exportTaxOf, isExportSupply, resolveSupplyType, totalTaxPaise } from '../../tax/gst';
 import { tradeProfile } from './trade-profile';
@@ -1571,6 +1571,7 @@ export async function deleteSalesDocument(trx: Trx, orgId: number, userId: numbe
       await trx.updateTable('sales_order_lines').set((eb) => ({ qty_delivered: eb('qty_delivered', '-', String(l.qty)) })).where('id', '=', Number(l.so_line_id)).execute();
     }
   } else {
+    await recordDiscardedIfPending(trx, orgId, 'credit_note', id, userId, reason);
     if (row.status !== 'void') {
       reversal = await reverseForChange(trx, orgId, row.journal_entry_id ?? null, { memo: `Credit note ${row.number} deleted`, userId, module: 'sales' });
       await takeBackCredit(trx, orgId, id);

@@ -182,12 +182,19 @@ export async function rejectHeldJournal(trx: Trx, orgId: number, user: { userId:
   await recordApprovalAction(trx, orgId, 'journal', id, 'rejected', user.userId, reason);
 }
 
-/** Drop a held entry. Nothing was ever posted, so nothing needs reversing. */
+/**
+ * Drop a held entry. Nothing was ever posted, so nothing needs reversing. One
+ * that was waiting for approval leaves a 'discarded' decision in the approval
+ * history (Approvals → Recent decisions), beside approved and sent back: the
+ * maker-checker trail shows every journal that went in for approval and what
+ * became of it, so none simply vanishes (migration 137).
+ */
 export async function discardHeldJournal(trx: Trx, orgId: number, userId: number | null, id: number, reason?: string | null) {
-  await load(trx, orgId, id);
+  const row = await load(trx, orgId, id);
   await trx.updateTable('held_journals').set({
     status: 'discarded', note: reason?.trim() || null, decided_by_user_id: userId, decided_at: new Date(),
   }).where('id', '=', id).execute();
+  if (row.kind === 'approval') await recordApprovalAction(trx, orgId, 'journal', id, 'discarded', userId, reason?.trim() || null);
 }
 
 export interface HeldJournal {

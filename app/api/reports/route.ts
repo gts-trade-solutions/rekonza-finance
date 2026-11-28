@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { belowZero } from '@/lib/server/reports/below-zero';
 import { db } from '@/lib/server/db';
 import { route, query, badRequest, forbidden } from '@/lib/server/http';
 import { hasPermission } from '@/lib/rbac';
@@ -86,19 +87,19 @@ export const GET = route(
 
       case 'balance-sheet': {
         const bs = await balanceSheet(db, orgId, q.to, branchId, q.basis);
-        return { report: q.report, ...bs };
+        return { report: q.report, ...bs, belowZero: await belowZero(db, orgId, q.to, branchId) };
       }
 
       case 'balance-sheet-grouped':
-        return { report: q.report, ...(await groupedBalanceSheet(db, orgId, q.to, branchId, q.basis)) };
+        return { report: q.report, ...(await groupedBalanceSheet(db, orgId, q.to, branchId, q.basis)), belowZero: await belowZero(db, orgId, q.to, branchId) };
 
       case 'profit-and-loss-grouped': {
         if (!q.from) throw badRequest('A profit and loss needs a start date — it covers a period.');
-        return { report: q.report, ...(await groupedProfitAndLoss(db, orgId, q.from, q.to, branchId, q.basis)) };
+        return { report: q.report, ...(await groupedProfitAndLoss(db, orgId, q.from, q.to, branchId, q.basis)), belowZero: await belowZero(db, orgId, q.to, branchId) };
       }
 
       case 'schedule-iii-balance-sheet':
-        return { report: q.report, ...(await scheduleIIIBalanceSheet(db, orgId, q.to, branchId, q.basis)) };
+        return { report: q.report, ...(await scheduleIIIBalanceSheet(db, orgId, q.to, branchId, q.basis)), belowZero: await belowZero(db, orgId, q.to, branchId) };
 
       case 'pending-sales-orders':
         return { report: q.report, ...(await pendingSalesOrders(db, orgId, q.to, branchId)) };
@@ -108,13 +109,13 @@ export const GET = route(
 
       case 'schedule-iii-profit-and-loss': {
         if (!q.from) throw badRequest('A profit and loss needs a start date — it covers a period.');
-        return { report: q.report, ...(await scheduleIIIProfitAndLoss(db, orgId, q.from, q.to, branchId, q.basis)) };
+        return { report: q.report, ...(await scheduleIIIProfitAndLoss(db, orgId, q.from, q.to, branchId, q.basis)), belowZero: await belowZero(db, orgId, q.to, branchId) };
       }
 
       case 'profit-and-loss': {
         if (!q.from) throw badRequest('A profit and loss needs a start date — it covers a period.');
         const pl = await profitAndLoss(db, orgId, q.from, q.to, branchId, q.basis);
-        return { report: q.report, ...pl };
+        return { report: q.report, ...pl, belowZero: await belowZero(db, orgId, q.to, branchId) };
       }
 
       case 'general-ledger': {
