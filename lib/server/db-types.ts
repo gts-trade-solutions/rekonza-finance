@@ -248,7 +248,7 @@ export interface ApiTokens {
 }
 
 export interface ApprovalActions {
-  action: "approved" | "rejected" | "submitted";
+  action: "approved" | "discarded" | "rejected" | "submitted";
   created_at: Generated<Date>;
   document_id: number;
   document_type: "bill" | "credit_note" | "invoice" | "journal" | "payment_batch";
@@ -2420,6 +2420,7 @@ export interface JournalEntries {
   posted_at: Generated<Date>;
   posted_by_user_id: number | null;
   reversal_of_entry_id: number | null;
+  reversal_reason: string | null;
   source_id: number | null;
   source_type: Generated<string>;
   total_credit: Decimal;
@@ -3502,6 +3503,7 @@ export interface StockAdjustments {
   org_id: number;
   qty_delta: Decimal;
   reason: Generated<"damage" | "expiry" | "issued" | "opening" | "other" | "sample" | "stocktake" | "theft">;
+  value: Decimal | null;
   warehouse_id: number | null;
 }
 

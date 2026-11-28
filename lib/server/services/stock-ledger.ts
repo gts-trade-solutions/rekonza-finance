@@ -111,6 +111,38 @@ async function costByItem(
   return out;
 }
 
+/**
+ * What adjustments recorded before their value was kept (migration 137) moved,
+ * worked out from the stock as it stands on each one's date, the way a sale's
+ * cost is: the valuation with the adjustment's units less without them (FIFO
+ * from the oldest units; average at the year's cost). Read only; a list shows
+ * it. Negative for goods written off, positive for goods found.
+ */
+export async function adjustmentValuesNow(
+  ex: Executor, orgId: number, rows: { id: number; itemId: number; date: string; qtyDelta: number }[],
+): Promise<Map<number, Paise>> {
+  const out = new Map<number, Paise>();
+  const byDate = new Map<string, typeof rows>();
+  for (const r of rows) if (r.qtyDelta) byDate.set(r.date, [...(byDate.get(r.date) ?? []), r]);
+  for (const [date, list] of byDate) {
+    // One valuation per day and direction for the items that move once that day; an item moved
+    // twice on one day is measured adjustment by adjustment.
+    for (const direction of ['out', 'in'] as const) {
+      const mine = list.filter((r) => (r.qtyDelta < 0) === (direction === 'out'));
+      const once = mine.filter((r) => mine.filter((x) => x.itemId === r.itemId).length === 1);
+      const groups = [once, ...mine.filter((r) => !once.includes(r)).map((r) => [r])].filter((g) => g.length);
+      for (const g of groups) {
+        const cost = await costByItem(ex, orgId, date, g.map((r) => ({ itemId: r.itemId, qty: Math.abs(r.qtyDelta) })), { direction, counted: true });
+        for (const r of g) {
+          const c = cost.get(r.itemId);
+          if (c !== undefined) out.set(r.id, direction === 'out' ? -c : c);
+        }
+      }
+    }
+  }
+  return out;
+}
+
 /** Inventory lines item by item against one account: `delta` is the change in each item's stock value. */
 function inventoryLines(inventory: number, counter: number, delta: Map<number, Paise>, what: { in: string; out: string; counter: string }): DraftLine[] {
   const lines: DraftLine[] = [];

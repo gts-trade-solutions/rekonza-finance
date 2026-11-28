@@ -31,7 +31,7 @@ import { AsyncPage } from '@/components/shared/async-state';
 import { Field } from '@/components/shared/form-bits';
 import { DeleteConfirmDialog, RowActions, withReasonQuery } from '@/components/shared/row-actions';
 import {
-  api, inventory, type StockAdjustmentRow, type StockResponse, type WarehouseRow,
+  api, inventory, stockReconciliation, type ItemLayersResponse, type StockAdjustmentRow, type StockResponse, type WarehouseRow,
 } from '@/lib/api/client';
 import { toastWarnings } from '@/lib/api/warnings';
 import { useApi, useApiAction } from '@/lib/api/use-api';
@@ -52,6 +52,38 @@ const REASONS = [
 const today = () => new Date().toISOString().slice(0, 10);
 
 const BLANK = { itemId: '', warehouseId: '', date: today(), qtyDelta: -1, reason: 'stocktake', notes: '', batchNo: '', expiryDate: '', serials: '' };
+
+/**
+ * What the adjustment will take out of stock (negative) or put back, as the
+ * server works it out (services/stock-changes.ts keepAdjustmentValue): for a
+ * FIFO item, the value of the layers on the day with the change less without
+ * it — units leaving go from the oldest; units found come back as the ones
+ * that went out last; for an average item, the average cost.
+ */
+function adjustmentPreview(
+  picked: StockResponse['items'][number] | undefined, layers: ItemLayersResponse | null, qtyDelta: number,
+): number | null {
+  if (!picked || !qtyDelta) return null;
+  if (picked.valuation === 'fifo' && layers) {
+    const stack = layers.layers as (ItemLayersResponse['layers'][number] & { costPaise?: number })[];
+    const value = (qty: number) => {
+      let left = Math.max(0, qty);
+      let v = 0;
+      for (const l of stack) {
+        if (left <= 0) break;
+        if (l.qty <= 0) continue;
+        const take = Math.min(left, l.qty);
+        v += ((l.costPaise ?? l.ratePaise * l.qty) / l.qty) * take;
+        left -= take;
+      }
+      return Math.round(v + left * layers.olderRatePaise);
+    };
+    const now = layers.qty;
+    if (now + qtyDelta < 0 && qtyDelta < 0) return -value(now);
+    return value(now + qtyDelta) - value(now);
+  }
+  return picked.unitCostPaise > 0 ? Math.round(qtyDelta * picked.unitCostPaise) : null;
+}
 
 export default function StockAdjustmentsPage() {
   const canEdit = usePermission('inventory', 'edit');
@@ -98,6 +130,13 @@ export default function StockAdjustmentsPage() {
   };
 
   const picked = stock.data?.items.find((i) => i.itemId === f.itemId);
+  // A FIFO item's layers on the adjustment's date: units written off leave from the oldest, so
+  // their value is what the stack loses, the figure the adjustment is saved with (migration 137).
+  const layers = useApi<ItemLayersResponse | null>(
+    async () => (f.itemId && picked?.valuation === 'fifo' && !editingId ? stockReconciliation.layers(f.itemId, f.date) : null),
+    [f.itemId, f.date, picked?.valuation, editingId],
+  );
+  const previewPaise = adjustmentPreview(picked, layers.data, f.qtyDelta);
   // Batch- and serial-tracked items say which batch, and which pieces.
   const master = useAppStore((s) => s.items).find((i) => i.id === f.itemId);
   const serialList = f.serials.split(/[\n,]+/).map((x) => x.trim()).filter(Boolean);
@@ -145,11 +184,14 @@ export default function StockAdjustmentsPage() {
       toast.error(adjust.error ?? 'The adjustment was not recorded');
       return;
     }
+    const value = `₹${(done.valuePaise / 100).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+    const verb = payload.qtyDelta < 0 ? 'written off' : 'added back';
     toast.success('Stock adjusted', {
       description: done.journalEntryId
-        ? `Value of ${(done.valuePaise / 100).toLocaleString('en-IN')} posted to the ledger.`
-        : 'Quantity changed. This book values stock at the period end (periodic): the loss reaches the profit and loss through closing stock, not by an entry now.',
+        ? `${value} ${verb}, posted to the ledger.`
+        : `${value} ${verb}. This book values stock at the period end (periodic): the loss reaches the profit and loss through closing stock, not by an entry now.`,
     });
+    toastWarnings(done);
     setOpen(false);
     setF(BLANK);
     state.refetch();
@@ -194,7 +236,7 @@ export default function StockAdjustmentsPage() {
     },
     {
       key: 'value', header: 'Value', align: 'right', sortValue: (r) => r.valuePaise,
-      cell: (r) => <Money value={r.valuePaise} colored />,
+      cell: (r) => <span data-slot="adjustment-value"><Money value={r.valuePaise} colored /></span>,
     },
     {
       key: 'actions', header: '', align: 'right',
@@ -264,11 +306,12 @@ export default function StockAdjustmentsPage() {
                       <Input
                         type="number"
                         value={f.qtyDelta}
+                        data-slot="adjust-qty"
                         onChange={(e) => setF({ ...f, qtyDelta: Number(e.target.value) || 0 })}
                       />
                     </Field>
                     <Field label="Date" required>
-                      <Input type="date" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} />
+                      <Input type="date" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} data-slot="adjust-date" />
                     </Field>
                   </div>
                   <Field label="Reason" required>
@@ -305,18 +348,29 @@ export default function StockAdjustmentsPage() {
                   )}
 
                   {picked && !editingId && (
-                    <div className="rounded-md border bg-muted/40 p-3 text-xs text-muted-foreground">
-                      {picked.name}: {picked.qty} on hand → {picked.qty + f.qtyDelta} after this.
-                      {picked.unitCostPaise > 0 && (
-                        <>
-                          {' '}Value{' '}
-                          <Money
-                            value={Math.abs(f.qtyDelta) * picked.unitCostPaise}
-                            className="font-medium text-foreground"
-                          />{' '}
-                          {f.qtyDelta < 0 ? 'written off' : 'added back'}.
-                        </>
-                      )}
+                    <div className="rounded-md border bg-muted/40 p-3 text-xs text-muted-foreground" data-slot="adjust-preview">
+                      {(() => {
+                        const onHand = layers.data ? layers.data.qty : picked.qty;
+                        const after = onHand + f.qtyDelta;
+                        return (
+                          <>
+                            {picked.name}: {onHand} on hand{layers.data ? ` on ${new Date(`${f.date}T00:00:00`).toLocaleDateString('en-IN')}` : ''} → {after} after this.
+                            {previewPaise !== null && previewPaise !== 0 && (
+                              <>
+                                {' '}Value{' '}
+                                <span data-slot="adjust-preview-value"><Money value={Math.abs(previewPaise)} className="font-medium text-foreground" /></span>{' '}
+                                {f.qtyDelta < 0 ? 'written off' : 'added back'}
+                                {picked.valuation === 'fifo' ? ' at FIFO cost (the oldest units first).' : ' at the average cost.'}
+                              </>
+                            )}
+                            {after < 0 && (
+                              <span className="mt-1 block font-medium text-destructive" data-slot="adjust-preview-short">
+                                Only {onHand} in stock: this would leave {picked.name} short by {-after}.
+                              </span>
+                            )}
+                          </>
+                        );
+                      })()}
                     </div>
                   )}
                   {(editingId ? editError : adjust.error) && <p className="text-sm text-destructive">{editingId ? editError : adjust.error}</p>}
