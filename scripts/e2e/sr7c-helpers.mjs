@@ -56,7 +56,7 @@ export async function start(item) {
   };
   /** JSON from the app's own API, as the signed-in user. */
   const api = async (method, url, body) => page.evaluate(async ({ method, url, body }) => {
-    const r = await fetch(url, { method, headers: body ? { 'content-type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });
+    const r = await fetch(url, { method, headers: { 'X-Change-Reason': encodeURIComponent('End-to-end test'), ...(body ? { 'content-type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined });
     const text = await r.text();
     let json = null;
     try { json = JSON.parse(text); } catch { /* not json */ }

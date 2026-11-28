@@ -65,7 +65,7 @@ export async function api(t, method, url, body) {
   let r;
   for (let attempt = 0; ; attempt++) {
     try {
-      r = await t.page.request.fetch(`${BASE}${url}`, { method, data: body, headers: { 'content-type': 'application/json' }, failOnStatusCode: false, timeout: 240_000 });
+      r = await t.page.request.fetch(`${BASE}${url}`, { method, data: body, headers: { 'content-type': 'application/json', 'X-Change-Reason': encodeURIComponent('End-to-end test') }, failOnStatusCode: false, timeout: 240_000 });
       break;
     } catch (e) {
       // Only a request the server never received is sent again, so nothing is posted twice.
